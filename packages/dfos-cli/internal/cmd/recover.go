@@ -1,0 +1,930 @@
+package cmd
+
+// `dfos recover` — the disaster path. The machine is gone; what survives is a
+// vault's 24-word phrase. This command rebuilds what that phrase controls.
+//
+// It is a two-stage walk, and the second stage is the whole difficulty:
+//
+//	Stage 1 — DERIVE. Rederive keypairs from the seed at m/1684434803'/i' for
+//	  i = 0, 1, 2, … . This is pure local arithmetic and it can go on forever, so
+//	  something has to say when to stop.
+//	Stage 2 — ASK. For each derived PUBLIC key, ask a relay's identity index
+//	  which identities have ever declared it. That answer is what makes an index
+//	  "used" or "unused", and a run of unused indices is what stops the scan.
+//
+// The predicate "index i is unused" is NOT locally decidable. A key exists the
+// moment it is derived; what makes it MEAN anything is an identity operation
+// that declared it, and that lives on a chain, in an index, somewhere else. So
+// this command is built around one rule, which every branch below serves:
+//
+//	NEVER conclude "no more keys" from silence.
+//
+// A relay that does not serve the index (501), a relay that cannot be reached, a
+// relay that answers something unreadable, and — worst of all — a relay
+// predating the `key=` filter, which IGNORES the unknown parameter and answers
+// with an unfiltered page that would make every derived key look used: each of
+// these is a loud failure naming the relay and what went wrong. None of them is
+// an empty result. The operator can then point at a different relay, or ask
+// explicitly for the degraded manifest-only recovery with --manifest-only, which
+// announces in a banner that the scan did not run.
+//
+// The oracle is always NAMED in the output. "Used" and "unused" here are one
+// relay's answers, and one relay's index-absence is not global absence.
+
+import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
+)
+
+// defaultScanDepth is N: the number of CONSECUTIVE unused indices that ends a
+// scan. It is a gap limit, not a ceiling — a hole shorter than N does not stop
+// the walk, which is what makes it safe against the gaps the burn-on-failure
+// counter leaves behind. 20 is the BIP-44 convention and is generous against a
+// mint-side counter that allocates sequentially and never reuses.
+const defaultScanDepth = 20
+
+// maxScanIndices bounds the walk against a relay that answers "used" to
+// everything. The sentinel probe below is the real defense; this is the backstop
+// that keeps a pathological answer from turning into an unbounded loop, and it
+// fails loudly rather than truncating silently.
+const maxScanIndices = 10000
+
+// indexKeyProbeSeed is hashed into the sentinel public key. The string is
+// arbitrary; what matters is that it is fixed and published, so the 32 bytes are
+// demonstrably a hash rather than a generated public key.
+const indexKeyProbeSeed = "dfos-cli:index-key-filter-probe:v1"
+
+// indexKeyProbeMultibase is a syntactically REAL multikey that no chain can have
+// declared: `z` + base58btc of the ed25519 multicodec prefix over
+// SHA-256(indexKeyProbeSeed). A relay sees a well-formed key rather than
+// something it might one day reject, and nobody holds the private key because
+// there is none — the bytes are a published hash.
+//
+// It exists for one query, made once per run before the scan: ask for a key
+// nothing ever declared and see whether rows come back. Rows mean the relay
+// ignored `key=` entirely, which is the failure mode with no status code to
+// catch (WEB-RELAY.md specifies `key=` as an opaque match with no format
+// validation, so there is no invalid value to provoke a 400 with).
+func indexKeyProbeMultibase() string {
+	sum := sha256.Sum256([]byte(indexKeyProbeSeed))
+	return protocol.EncodeMultikey(ed25519.PublicKey(sum[:]))
+}
+
+// --- result shapes ---
+
+// recoveredKey is one derived index that something declared, and what became of
+// the private key it produced.
+type recoveredKey struct {
+	Index     uint32   `json:"index"`
+	Path      string   `json:"derivationPath"`
+	PublicKey string   `json:"publicKey"`
+	DID       string   `json:"did"`
+	KeyID     string   `json:"keyId,omitempty"`
+	Account   string   `json:"account,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
+	// Outcome is what this run did with the key: "recovered" (written into the
+	// keystore), "already-present" (the keystore already held it), or
+	// "not-installed" (the chain that would name it could not be read, so there
+	// is no account to store it under).
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason,omitempty"`
+	// Superseded records that the chain no longer names this key in any current
+	// role. It is still real and still recovered: the index answers
+	// has-ever-declared precisely so a rotated-out key is findable.
+	Superseded bool `json:"superseded,omitempty"`
+}
+
+// recoveredIdentity is one identity the scan found, and its end state locally.
+type recoveredIdentity struct {
+	DID     string `json:"did"`
+	Name    string `json:"name,omitempty"`
+	Deleted bool   `json:"deleted,omitempty"`
+	// Status: "recovered" (the chain was pulled and at least one key installed),
+	// "already-present" (chain and keys were already here), or
+	// "found-but-not-fetched" (the index named it and the chain could not be
+	// read — the identity is real, and this machine still cannot act as it).
+	Status     string   `json:"status"`
+	Operations int      `json:"operations,omitempty"`
+	Keys       []string `json:"keys,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	// FromManifest marks an identity this machine's own vault records named,
+	// independently of what the oracle said.
+	FromManifest bool `json:"fromManifest,omitempty"`
+}
+
+// recoverResult is the whole run: what was asked, who answered, what was found,
+// and what was written.
+type recoverResult struct {
+	Vault            string `json:"vault"`
+	VaultSource      string `json:"vaultSource"`
+	Fingerprint      string `json:"fingerprint"`
+	DerivationPath   string `json:"derivationPathTemplate"`
+	Oracle           string `json:"oracle,omitempty"`
+	OracleURL        string `json:"oracleURL,omitempty"`
+	OracleSource     string `json:"oracleSource,omitempty"`
+	ScanDepth        int    `json:"scanDepth"`
+	IndicesScanned   int    `json:"indicesScanned"`
+	HighestUsedIndex int64  `json:"highestUsedIndex"`
+	// Scanned is false when the derivation scan did not run at all — the
+	// manifest-only degradation. Nothing in this document then says anything
+	// about indices this machine has no record of.
+	Scanned       bool                `json:"scanned"`
+	ManifestOnly  bool                `json:"manifestOnly,omitempty"`
+	DryRun        bool                `json:"dryRun,omitempty"`
+	Keys          []recoveredKey      `json:"keys"`
+	Identities    []recoveredIdentity `json:"identities"`
+	MintedAdded   int                 `json:"mintedRecordsAdded"`
+	CounterBefore uint32              `json:"counterBefore"`
+	CounterAfter  uint32              `json:"counterAfter"`
+	Backend       string              `json:"keystoreBackend"`
+}
+
+// --- the command ---
+
+func newRecoverCmd() *cobra.Command {
+	var vaultName string
+	var peerName string
+	var scanDepth int
+	var dryRun bool
+	var manifestOnly bool
+
+	cmd := &cobra.Command{
+		Use:     "recover",
+		Short:   "Rebuild the identities and keys a vault's recovery phrase controls",
+		GroupID: "identity",
+		Long: "Rederive a vault's keys from its seed and ask a relay's identity index which of them any " +
+			"identity has ever declared, then pull those identities' chains into the local relay and put " +
+			"the matching private keys back in the keystore.\n\n" +
+			"The scan walks m/1684434803'/<index>' from 0 and stops after --scan-depth consecutive " +
+			"UNUSED indices. Used and unused are one relay's answers, and that relay is named in the " +
+			"output: a relay that does not serve the index, cannot be reached, or predates the key lookup " +
+			"is a loud failure, never an empty result.\n\n" +
+			"After a machine is lost the whole path is: 'dfos vault import <name>' to adopt the phrase, " +
+			"then 'dfos recover --vault <name>'. It writes by default and is idempotent — re-running " +
+			"converges. --dry-run scans and reports without writing anything.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if scanDepth < 1 {
+				return fmt.Errorf("--scan-depth must be at least 1, got %d", scanDepth)
+			}
+			return runRecover(recoverOptions{
+				vaultFlag:    vaultName,
+				peerFlag:     peerName,
+				scanDepth:    scanDepth,
+				dryRun:       dryRun,
+				manifestOnly: manifestOnly,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&vaultName, "vault", "", "Vault whose phrase is being recovered from (default: config default-vault)")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Relay to ask the used/unused question — the oracle (default: the resolved peer)")
+	cmd.Flags().IntVar(&scanDepth, "scan-depth", defaultScanDepth, "Stop after this many consecutive unused indices")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Scan and report, writing nothing: no keys, no config, no chain pulls")
+	cmd.Flags().BoolVar(&manifestOnly, "manifest-only", false, "Skip the scan entirely and recover only what this vault's own minted-key records name")
+	return cmd
+}
+
+type recoverOptions struct {
+	vaultFlag    string
+	peerFlag     string
+	scanDepth    int
+	dryRun       bool
+	manifestOnly bool
+}
+
+func runRecover(opts recoverOptions) error {
+	name, source, err := resolveVault(opts.vaultFlag, false)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errNoVaultToRecover()
+	}
+	meta, err := getVaults().Load(name)
+	if err != nil {
+		return err
+	}
+
+	result := &recoverResult{
+		Vault:            name,
+		VaultSource:      source,
+		Fingerprint:      meta.Fingerprint,
+		DerivationPath:   vault.DerivationPath(0),
+		ScanDepth:        opts.scanDepth,
+		HighestUsedIndex: -1,
+		ManifestOnly:     opts.manifestOnly,
+		DryRun:           opts.dryRun,
+		CounterBefore:    meta.NextIndex,
+		CounterAfter:     meta.NextIndex,
+		Backend:          keys.Backend(),
+		Keys:             []recoveredKey{},
+		Identities:       []recoveredIdentity{},
+	}
+
+	// The oracle. Resolved and PROVEN before a single index is derived: a scan
+	// that starts against a relay it has not verified can answer the question is
+	// a scan whose result means nothing.
+	var oracle *client.Client
+	if !opts.manifestOnly {
+		ctx, c, err := requirePeer(opts.peerFlag)
+		if err != nil {
+			return err
+		}
+		result.Oracle, result.OracleURL, result.OracleSource = ctx.RelayName, ctx.RelayURL, ctx.RelaySource
+		if err := proveOracle(c, result.Oracle, result.OracleURL); err != nil {
+			return err
+		}
+		oracle = c
+	}
+
+	// Stage 1 + 2. Every hit carries the private key so the write phase can
+	// install it once the chain has named the account it belongs under.
+	hits, scanned, err := scanVault(name, meta, oracle, opts)
+	if err != nil {
+		return err
+	}
+	result.IndicesScanned = scanned
+	result.Scanned = !opts.manifestOnly
+	for _, h := range hits {
+		if int64(h.index) > result.HighestUsedIndex {
+			result.HighestUsedIndex = int64(h.index)
+		}
+	}
+
+	if err := restoreFromHits(result, hits, oracle, meta, name, opts); err != nil {
+		return err
+	}
+
+	if jsonFlag {
+		outputJSON(result)
+		return nil
+	}
+	printRecoverResult(result, opts)
+	return nil
+}
+
+// errNoVaultToRecover is the mint-side errNoVault, reworded for the one moment
+// an operator reaches this command: they hold a phrase and a bare machine.
+func errNoVaultToRecover() error {
+	return fmt.Errorf("no vault to recover from — name one:\n" +
+		"  --vault <name>                       for this invocation\n" +
+		"  dfos config set default-vault <name> as the standing default\n" +
+		"Holding a recovery phrase and nothing else? Adopt it first:\n" +
+		"  dfos vault import <name>             reads the phrase from stdin, then 'dfos recover --vault <name>'")
+}
+
+// --- the oracle ---
+
+// proveOracle establishes, before any scan, that this relay can actually answer
+// "has any identity ever declared this key". Three ways it cannot, all loud:
+//
+//	501            — it does not serve the index family at all.
+//	any other error — it is unreachable, or answered something unreadable.
+//	rows returned   — it IGNORED `key=` and answered with an unfiltered page.
+//
+// The third is the dangerous one and the reason this probe exists. A relay
+// predating the `key=` filter returns 200 with a page of identities that have
+// nothing to do with the key asked about. Every index would then look used,
+// every identity on that relay would be reported as one this phrase controls,
+// and a scan would never stop. There is no status code to catch it by, so the
+// probe reads the BODY: query a sentinel key no chain can have declared, and
+// treat rows coming back as proof the filter was not applied.
+//
+// A served empty page means the filter WAS applied — including on a relay that
+// simply holds no identities, where the answer is empty either way and the
+// eventual report states a true absence rather than inventing rows.
+func proveOracle(c *client.Client, name, url string) error {
+	rows, err := c.IdentitiesByKey(indexKeyProbeMultibase(), 1)
+	if errors.Is(err, client.ErrIndexUnavailable) {
+		return oracleFailure(name, url,
+			"it answered 501 Not Implemented — capabilities.index is off, or this relay predates the index family",
+			"GET /index/v0/identities?key=")
+	}
+	if err != nil {
+		return oracleFailure(name, url, err.Error(), "GET /index/v0/identities?key=")
+	}
+	if len(rows) > 0 {
+		return oracleFailure(name, url,
+			"it answered an UNFILTERED page to a key no chain can have declared, which means it ignored the 'key=' parameter entirely — this relay predates the key lookup (needs web-relay >= 0.39.0)",
+			"the 'key=' filter on GET /index/v0/identities")
+	}
+	return nil
+}
+
+// oracleFailure is the one shape every "the oracle cannot answer" error takes.
+// It names the relay, names the capability, and says out loud that the failure
+// is not an absence of keys — because the whole hazard of this command is a
+// silence being read as an answer.
+func oracleFailure(name, url, why, missing string) error {
+	label := url
+	if name != "" {
+		label = fmt.Sprintf("%s (%s)", name, url)
+	}
+	return fmt.Errorf("the oracle cannot answer the used/unused question, so no scan was run.\n"+
+		"  Oracle:  %s\n"+
+		"  Needs:   %s\n"+
+		"  Got:     %s\n"+
+		"This is NOT 'no keys found'. Nothing here says anything about what this phrase controls.\n"+
+		"Point --peer at a relay that serves the identity index, or re-run with --manifest-only to\n"+
+		"recover only what this machine's own vault records already name.", label, missing, why)
+}
+
+// --- the scan ---
+
+// scanHit is one derivation index something declared, with the key material
+// that index produced.
+type scanHit struct {
+	index     uint32
+	publicKey string
+	private   ed25519.PrivateKey
+	// rows is the oracle's answer. Empty on a manifest-only hit.
+	rows []client.IndexIdentityRow
+	// minted are this vault's own records at this index — what the manifest
+	// already knew, which is primary and needs no oracle to be true.
+	minted []vault.MintedKey
+}
+
+// scanVault runs the walk and returns every used index. In manifest-only mode it
+// does not walk at all: it folds the vault's own records, which is a different
+// and much smaller claim, and the caller banners it as such.
+func scanVault(name string, meta *vault.Metadata, oracle *client.Client, opts recoverOptions) ([]scanHit, int, error) {
+	mnemonic, err := getVaults().Mnemonic(name)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read vault '%s': %w", name, err)
+	}
+	seed, err := vault.MnemonicSeed(mnemonic)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// This machine's own record of what the seed minted, keyed by index. The
+	// manifest is the PRIMARY record: a key it names is used whatever any relay
+	// says, and a hole it fills does not end the scan.
+	mintedAt := map[uint32][]vault.MintedKey{}
+	for _, r := range meta.Minted {
+		mintedAt[r.Index] = append(mintedAt[r.Index], r)
+	}
+
+	if opts.manifestOnly {
+		indices := make([]uint32, 0, len(mintedAt))
+		for i := range mintedAt {
+			indices = append(indices, i)
+		}
+		sort.Slice(indices, func(a, b int) bool { return indices[a] < indices[b] })
+		hits := make([]scanHit, 0, len(indices))
+		for _, i := range indices {
+			priv, pub, err := vault.DeriveKey(seed, i)
+			if err != nil {
+				return nil, 0, err
+			}
+			hits = append(hits, scanHit{index: i, publicKey: protocol.EncodeMultikey(pub), private: priv, minted: mintedAt[i]})
+		}
+		return hits, 0, nil
+	}
+
+	var hits []scanHit
+	gap := 0
+	scanned := 0
+	for i := uint32(0); gap < opts.scanDepth; i++ {
+		if scanned >= maxScanIndices {
+			return nil, scanned, fmt.Errorf("scanned %d indices without %d consecutive unused ones — stopping rather than walking forever.\n"+
+				"A relay answering 'used' to every key would look exactly like this; check the oracle before trusting a partial result", scanned, opts.scanDepth)
+		}
+		priv, pub, err := vault.DeriveKey(seed, i)
+		if err != nil {
+			return nil, scanned, err
+		}
+		scanned++
+		mb := protocol.EncodeMultikey(pub)
+
+		rows, err := oracle.IdentitiesByKey(mb, 100)
+		if err != nil {
+			// A partition mid-scan is the same class of failure as a partition
+			// before it: the remaining indices are UNKNOWN, not unused. Fail on
+			// the spot rather than return a prefix that reads like a whole answer.
+			return nil, scanned, fmt.Errorf("the oracle stopped answering at index %d (%s), so the scan is incomplete: %w\n"+
+				"Indices past %d are UNKNOWN, not unused. Re-run when the relay is reachable", i, vault.DerivationPath(i), err, i)
+		}
+
+		minted := mintedAt[i]
+		if len(rows) == 0 && len(minted) == 0 {
+			gap++
+			continue
+		}
+		gap = 0
+		hits = append(hits, scanHit{index: i, publicKey: mb, private: priv, rows: rows, minted: minted})
+	}
+	return hits, scanned, nil
+}
+
+// --- the restore ---
+
+// restoreFromHits turns the scan's findings into local state: chains in the
+// local relay, private keys in the keystore, provenance in the vault, names in
+// config. Under --dry-run it computes and reports the same thing and writes
+// none of it.
+func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Client, meta *vault.Metadata, vaultName string, opts recoverOptions) error {
+	lr, err := getRelay()
+	if err != nil {
+		return err
+	}
+
+	// Which identities to look at, in a stable order, with the evidence for each.
+	type identityWork struct {
+		deleted      bool
+		profileName  string
+		fromManifest bool
+	}
+	order := []string{}
+	work := map[string]*identityWork{}
+	note := func(did string) *identityWork {
+		if w, ok := work[did]; ok {
+			return w
+		}
+		w := &identityWork{}
+		work[did] = w
+		order = append(order, did)
+		return w
+	}
+	for _, h := range hits {
+		for _, row := range h.rows {
+			w := note(row.DID)
+			// Sticky, not last-write-wins: several of a chain's keys produce
+			// several rows, and one row omitting the flag must not un-delete an
+			// identity another row reported as deleted.
+			w.deleted = w.deleted || row.IsDeleted
+			if row.Profile != nil && w.profileName == "" {
+				w.profileName = row.Profile.Name
+			}
+		}
+		for _, m := range h.minted {
+			note(m.DID).fromManifest = true
+		}
+	}
+
+	// Pull each chain, then read it back from the local relay — so every key id
+	// this command installs comes from an operation the local relay ACCEPTED,
+	// never from an index row.
+	chains := map[string]*chainFacts{}
+	for _, did := range order {
+		w := work[did]
+		entry := recoveredIdentity{DID: did, Deleted: w.deleted, FromManifest: w.fromManifest}
+		entry.Name = config.FindIdentityName(cfg, did)
+
+		facts, ops, err := loadChainFacts(lr, oracle, did, opts.dryRun)
+		if err != nil {
+			entry.Status = "found-but-not-fetched"
+			entry.Reason = err.Error()
+			result.Identities = append(result.Identities, entry)
+			continue
+		}
+		chains[did] = facts
+		entry.Operations = ops
+		entry.Deleted = entry.Deleted || facts.deleted
+		result.Identities = append(result.Identities, entry)
+	}
+
+	// Install the keys. A key's ACCOUNT is `<did>#<keyId>`, and the key id lives
+	// only in the chain — which is why the fetch has to come first, and why an
+	// identity that could not be fetched leaves its key uninstallable rather than
+	// stored under a name this machine invented.
+	var records []vault.MintedKey
+	installed := map[string][]string{}
+	for _, h := range hits {
+		dids := map[string]bool{}
+		for _, row := range h.rows {
+			dids[row.DID] = true
+		}
+		for _, m := range h.minted {
+			dids[m.DID] = true
+		}
+		ordered := make([]string, 0, len(dids))
+		for did := range dids {
+			ordered = append(ordered, did)
+		}
+		sort.Strings(ordered)
+
+		if len(ordered) == 0 {
+			continue
+		}
+		for _, did := range ordered {
+			key := recoveredKey{
+				Index:     h.index,
+				Path:      vault.DerivationPath(h.index),
+				PublicKey: h.publicKey,
+				DID:       did,
+			}
+			facts, ok := chains[did]
+			if !ok {
+				key.Outcome = "not-installed"
+				key.Reason = "the chain that names this key could not be read, so there is no account to store it under"
+				result.Keys = append(result.Keys, key)
+				continue
+			}
+			keyID, found := facts.keyIDFor(h.publicKey)
+			if !found {
+				// The index said this identity declared the key and the chain this
+				// machine holds does not show it. Do not guess an account.
+				key.Outcome = "not-installed"
+				key.Reason = "no operation in the chain this machine holds declares this public key"
+				result.Keys = append(result.Keys, key)
+				continue
+			}
+			account := did + "#" + keyID
+			key.KeyID, key.Account = keyID, account
+			key.Roles = facts.currentRoles[keyID]
+			key.Superseded = len(key.Roles) == 0
+
+			switch {
+			case keys.HasKey(account):
+				key.Outcome = "already-present"
+			case opts.dryRun:
+				key.Outcome = "recovered"
+				key.Reason = "dry run — nothing was written"
+			default:
+				if _, err := keys.PutKey(account, h.private); err != nil {
+					key.Outcome = "not-installed"
+					key.Reason = fmt.Sprintf("write to %s: %v", keys.Backend(), err)
+					result.Keys = append(result.Keys, key)
+					continue
+				}
+				key.Outcome = "recovered"
+			}
+			installed[did] = append(installed[did], keyID)
+			role := "auth"
+			if len(key.Roles) > 0 {
+				role = key.Roles[0]
+			}
+			records = append(records, vault.MintedKey{
+				Index: h.index, DID: did, KeyID: keyID, Role: role, PublicKey: h.publicKey,
+			})
+			result.Keys = append(result.Keys, key)
+		}
+	}
+
+	// Identity end state, and the names. A DID this machine already names keeps
+	// that name — recovery does not rename anything an operator chose.
+	for i := range result.Identities {
+		entry := &result.Identities[i]
+		if entry.Status == "found-but-not-fetched" {
+			continue
+		}
+		entry.Keys = installed[entry.DID]
+		switch {
+		case len(entry.Keys) == 0:
+			entry.Status = "found-but-not-fetched"
+			if entry.Reason == "" {
+				entry.Reason = "the chain is local, and no key this phrase derives is installable under it"
+			}
+		case allAlreadyPresent(result.Keys, entry.DID):
+			entry.Status = "already-present"
+		default:
+			entry.Status = "recovered"
+		}
+		if entry.Name != "" {
+			continue
+		}
+		entry.Name = pickIdentityName(cfg, work[entry.DID].profileName, entry.DID)
+		if !opts.dryRun {
+			cfg.Identities[entry.Name] = config.IdentityConfig{DID: entry.DID}
+		}
+	}
+	if !opts.dryRun && len(result.Identities) > 0 {
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("register recovered identities in config: %w", err)
+		}
+	}
+
+	// The vault's own metadata, last: provenance for what was found, and a
+	// counter raised past every index now known to be in use. An imported vault
+	// starts at 0 knowing nothing about what the seed minted elsewhere, and
+	// minting from it before this point would hand a used index out twice.
+	minNext := uint32(0)
+	if result.HighestUsedIndex >= 0 {
+		minNext = uint32(result.HighestUsedIndex) + 1
+	}
+	if opts.dryRun {
+		result.MintedAdded = countNewRecords(meta, records)
+		result.CounterAfter = maxU32(meta.NextIndex, minNext)
+		return nil
+	}
+	added, next, err := getVaults().Reconcile(vaultName, minNext, records...)
+	if err != nil {
+		return fmt.Errorf("reconcile vault '%s': %w", vaultName, err)
+	}
+	result.MintedAdded, result.CounterAfter = added, next
+	return nil
+}
+
+func maxU32(a, b uint32) uint32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func countNewRecords(meta *vault.Metadata, records []vault.MintedKey) int {
+	have := map[string]bool{}
+	for _, r := range meta.Minted {
+		have[r.DID+"#"+r.KeyID] = true
+	}
+	n := 0
+	for _, r := range records {
+		k := r.DID + "#" + r.KeyID
+		if !have[k] {
+			have[k] = true
+			n++
+		}
+	}
+	return n
+}
+
+func allAlreadyPresent(all []recoveredKey, did string) bool {
+	seen := false
+	for _, k := range all {
+		if k.DID != did || k.Account == "" {
+			continue
+		}
+		seen = true
+		if k.Outcome != "already-present" {
+			return false
+		}
+	}
+	return seen
+}
+
+// chainFacts is everything the write phase needs from one identity chain: the
+// key id every public key was EVER declared under, and which of them are current.
+type chainFacts struct {
+	deleted bool
+	// keyIDByPublic maps a public multikey to the key id an accepted operation
+	// declared it under. Built from the whole log, not just current state,
+	// because the index's `key=` is has-ever-declared and the keys most worth
+	// recovering are exactly the ones a rotation left behind.
+	keyIDByPublic map[string]string
+	currentRoles  map[string][]string
+}
+
+func (f *chainFacts) keyIDFor(publicKey string) (string, bool) {
+	id, ok := f.keyIDByPublic[publicKey]
+	return id, ok
+}
+
+// loadChainFacts gets a DID's chain into the local relay and folds it.
+//
+// The pull is unconditional when there is an oracle: ingestion is idempotent, and
+// a chain this machine happens to already hold may be behind the one the index
+// just pointed at. Under --dry-run nothing is pulled at all — the fold runs
+// against whatever the local relay already holds, so an identity the scan found
+// and this machine has never seen reports as found-but-not-fetched. That is the
+// honest dry-run answer: a chain it did not fetch is a chain it cannot read key
+// ids out of.
+func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string, dryRun bool) (*chainFacts, int, error) {
+	if oracle != nil && !dryRun {
+		log, err := oracle.GetIdentityLog(did)
+		if err != nil {
+			return nil, 0, fmt.Errorf("pull chain from the oracle: %v", err)
+		}
+		for _, res := range lr.Relay.Ingest(log) {
+			if res.Status == "rejected" {
+				fmt.Fprintf(os.Stderr, "  Warning: %s operation %s rejected by the local relay: %s\n", did, res.CID, res.Error)
+			}
+		}
+	}
+
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read chain from the local relay: %v", err)
+	}
+	if chain == nil {
+		if dryRun {
+			return nil, 0, fmt.Errorf("not in the local relay, and --dry-run pulls nothing")
+		}
+		return nil, 0, fmt.Errorf("not in the local relay after the pull")
+	}
+
+	facts := &chainFacts{
+		deleted:       chain.State.IsDeleted,
+		keyIDByPublic: map[string]string{},
+		currentRoles:  map[string][]string{},
+	}
+	// Every accepted operation, not just the head. The index answers
+	// has-ever-declared, and a key a rotation left behind is exactly the one an
+	// operator recovering from a phrase is most likely to hold.
+	for _, token := range chain.Log {
+		payload, err := protocol.PayloadFromJWS(token)
+		if err != nil {
+			continue
+		}
+		for _, field := range []string{"controllerKeys", "authKeys", "assertKeys"} {
+			set, ok := payload[field].([]any)
+			if !ok {
+				continue
+			}
+			for _, item := range set {
+				entry, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				id, _ := entry["id"].(string)
+				pub, _ := entry["publicKeyMultibase"].(string)
+				if id == "" || pub == "" {
+					continue
+				}
+				if _, seen := facts.keyIDByPublic[pub]; !seen {
+					facts.keyIDByPublic[pub] = id
+				}
+			}
+		}
+	}
+	for role, set := range map[string][]protocol.MultikeyPublicKey{
+		"controller": chain.State.ControllerKeys,
+		"auth":       chain.State.AuthKeys,
+		"assert":     chain.State.AssertKeys,
+	} {
+		for _, k := range set {
+			facts.currentRoles[k.ID] = append(facts.currentRoles[k.ID], role)
+			if _, seen := facts.keyIDByPublic[k.PublicKeyMultibase]; !seen {
+				facts.keyIDByPublic[k.PublicKeyMultibase] = k.ID
+			}
+		}
+	}
+	// Role order is fixed rather than map-iteration order, so two runs over one
+	// chain print the same line.
+	for id := range facts.currentRoles {
+		facts.currentRoles[id] = orderRoles(facts.currentRoles[id])
+	}
+	return facts, len(chain.Log), nil
+}
+
+// orderRoles puts a key's roles in controller→auth→assert order.
+func orderRoles(roles []string) []string {
+	rank := map[string]int{"controller": 0, "auth": 1, "assert": 2}
+	sort.SliceStable(roles, func(i, j int) bool { return rank[roles[i]] < rank[roles[j]] })
+	return roles
+}
+
+// pickIdentityName chooses a local name for a recovered identity. It prefers the
+// relay's projected profile name — amber, but it is what the operator called the
+// identity — and falls back to a DID-derived label. A collision takes a numeric
+// suffix rather than displacing a name already in config: recovery adds, it does
+// not overwrite what an operator chose.
+func pickIdentityName(c *config.Config, projected, did string) string {
+	base := sanitizeIdentityName(projected)
+	if base == "" {
+		tail := did
+		if i := strings.LastIndex(did, ":"); i >= 0 {
+			tail = did[i+1:]
+		}
+		if len(tail) > 8 {
+			tail = tail[:8]
+		}
+		base = "recovered-" + strings.ToLower(tail)
+	}
+	if _, taken := c.Identities[base]; !taken {
+		return base
+	}
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s-%d", base, n)
+		if _, taken := c.Identities[candidate]; !taken {
+			return candidate
+		}
+	}
+}
+
+var identityNameUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// sanitizeIdentityName reduces a projected profile name to something usable as a
+// config key and a --as argument. A projection is a relay's amber restatement of
+// a document it holds; it can be anything, so it is squeezed to a conservative
+// alphabet rather than trusted into config verbatim.
+func sanitizeIdentityName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	// A projection that is itself a DID becomes no name at all. Registering a
+	// DID-shaped config key would make `--as <that>` ambiguous between the name
+	// tier and the bare-DID tier of the resolution stack.
+	if strings.HasPrefix(s, "did:") {
+		return ""
+	}
+	s = strings.Trim(identityNameUnsafe.ReplaceAllString(s, "-"), "-._")
+	if len(s) > 32 {
+		s = strings.Trim(s[:32], "-._")
+	}
+	return s
+}
+
+// --- output ---
+
+func printRecoverResult(r *recoverResult, opts recoverOptions) {
+	fmt.Printf("Recovery:\n")
+	fmt.Printf("  Vault:      %s [%s] — via %s\n", r.Vault, r.Fingerprint, r.VaultSource)
+	fmt.Printf("  Derivation: m/%d'/<index>'\n", vault.DfosPurpose)
+	if r.Scanned {
+		fmt.Printf("  Oracle:     %s (%s) — via %s\n", r.Oracle, r.OracleURL, r.OracleSource)
+		fmt.Printf("  Scan:       %d indices, stopped after %d consecutive unused\n", r.IndicesScanned, r.ScanDepth)
+	}
+	fmt.Printf("  Keystore:   %s\n", r.Backend)
+	if r.DryRun {
+		fmt.Printf("  Mode:       dry run — nothing was written\n")
+	}
+	if !r.Scanned {
+		fmt.Printf("\n! MANIFEST ONLY — the derivation scan did NOT run, and no relay was asked.\n")
+		fmt.Printf("  This report covers exactly the keys this machine's vault records already name.\n")
+		fmt.Printf("  It says NOTHING about keys this seed minted elsewhere. Re-run without\n")
+		fmt.Printf("  --manifest-only against a relay serving the identity index for the full scan.\n")
+	}
+
+	if len(r.Keys) == 0 {
+		fmt.Printf("\nNo keys found.\n")
+	} else {
+		fmt.Printf("\n%s %s %s %s\n", pad("INDEX", 6), pad("PUBLIC KEY", 18), pad("OUTCOME", 16), "DECLARED BY")
+		for _, k := range r.Keys {
+			label := truncateMiddle(k.DID, 30)
+			switch {
+			case len(k.Roles) > 0:
+				label += " — " + strings.Join(k.Roles, ", ")
+			case k.Superseded && k.Account != "":
+				label += " — rotated out, still recovered"
+			}
+			fmt.Printf("%s %s %s %s\n",
+				pad(fmt.Sprintf("%d", k.Index), 6),
+				pad(truncateMiddle(k.PublicKey, 18), 18),
+				pad(k.Outcome, 16),
+				label)
+			if k.Reason != "" {
+				fmt.Printf("%s %s\n", pad("", 6), k.Reason)
+			}
+		}
+	}
+
+	if len(r.Identities) > 0 {
+		fmt.Printf("\n%s %s %s %s\n", pad("IDENTITY", 20), pad("DID", 30), pad("STATUS", 22), "KEYS")
+		for _, id := range r.Identities {
+			label := id.Name
+			if id.Deleted {
+				label += " (deleted)"
+			}
+			fmt.Printf("%s %s %s %d\n",
+				pad(truncateMiddle(orDash(label), 20), 20),
+				pad(truncateMiddle(id.DID, 30), 30),
+				pad(id.Status, 22),
+				len(id.Keys))
+			if id.Reason != "" {
+				fmt.Printf("%s %s\n", pad("", 20), id.Reason)
+			}
+		}
+	}
+
+	verb := "added"
+	if r.DryRun {
+		verb = "would be added"
+	}
+	fmt.Printf("\nVault records: %d %s\n", r.MintedAdded, verb)
+	switch {
+	case r.CounterAfter == r.CounterBefore:
+		fmt.Printf("Counter:       %d — unchanged\n", r.CounterBefore)
+	case r.DryRun:
+		fmt.Printf("Counter:       %d — would rise to %d so the next mint cannot reuse a recovered index\n", r.CounterBefore, r.CounterAfter)
+	default:
+		fmt.Printf("Counter:       %d → %d — the next mint from this vault cannot reuse a recovered index\n", r.CounterBefore, r.CounterAfter)
+	}
+
+	fmt.Printf("\nWhat this scan cannot see:\n")
+	if r.Scanned {
+		fmt.Printf("  - One relay answered. '%s' not knowing a key is that relay's answer, not the world's.\n", r.Oracle)
+		fmt.Printf("  - A derived key no identity operation ever declared is invisible to any index. It is\n")
+		fmt.Printf("    still derivable from the phrase; nothing can find it for you.\n")
+	}
+	fmt.Printf("  - Keys minted OUTSIDE a vault are not derivable from any phrase. This command says\n")
+	fmt.Printf("    nothing about them — 'dfos keys list' shows what this machine holds.\n")
+	if r.DryRun {
+		fmt.Printf("\nNothing was written. Re-run without --dry-run to restore.\n")
+		return
+	}
+	if hasOutcome(r.Keys, "recovered") {
+		fmt.Fprintf(os.Stderr, "\nRecovered keys are in %s. Signing resolves the identity and uses the key this device holds, so 'dfos --as <name> …' works again.\n", keys.Backend())
+	}
+}
+
+func hasOutcome(all []recoveredKey, outcome string) bool {
+	for _, k := range all {
+		if k.Outcome == outcome {
+			return true
+		}
+	}
+	return false
+}

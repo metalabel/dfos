@@ -227,7 +227,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 **Auth** (`dfos auth …`) — `proof` · `status`
 **Config** (`dfos config …`) — `list` · `get` · `set`
 **Inspect & attest** — `dfos operation show <cid>` (alias `op`) · `dfos witness <opCID>` · `dfos countersigs <cid>`
-**Top-level** — `whoami` · `status` · `version` · `serve` · `sync` · `api` · `skill`
+**Top-level** — `whoami` · `status` · `version` · `recover` · `serve` · `sync` · `api` · `skill`
 
 ## Key distinctions (the things that bite)
 
@@ -389,6 +389,35 @@ never leaves it), then from a device holding a controller key run
 `dfos identity add-key` with the printed public key. Now losing one device is not
 losing the identity. This must be done _before_ a loss, while you still hold a
 controller key.
+
+_Restoring the backup_ is `dfos recover`. After a machine is lost, the whole path
+is two commands: `dfos vault import restored` to adopt the phrase, then
+`dfos recover --vault restored --peer <relay>`. It rederives keys at
+`m/1684434803'/<index>'`, asks the relay's identity index which of them any
+identity has ever declared (`GET /index/v0/identities?key=`, has-ever-declared, so
+keys a rotation left behind are found too), pulls those chains into the local
+relay, writes the private keys back into the keystore, rebuilds the vault's
+minted-key records, and raises the vault's derivation counter past every index it
+found in use — without which the next mint would hand a recovered index to a
+second identity. Only public keys go on the wire.
+
+Four things about it are worth knowing before you run it:
+
+- **The scan stops after 20 consecutive unused indices** (`--scan-depth N`
+  changes it). A hole shorter than that does not end the walk.
+- **The relay that answered is named in the output, and its silence is never an
+  answer.** A relay serving no index (501), an unreachable one, one that quits
+  mid-scan, and one predating the `key=` filter (which would ignore the parameter
+  and answer an unfiltered page — caught by a sentinel probe before the scan) are
+  all loud failures, never "no keys found". `--manifest-only` is the deliberate
+  degradation, and it banners that no scan ran.
+- **It writes by default** and is idempotent; `--dry-run` reports without writing
+  (and, pulling no chains, cannot name key ids, so it reports identities as
+  found-but-not-fetched).
+- **What it cannot see:** a derived key no identity operation ever declared is
+  invisible to any index, one relay's absence is not global absence, and keys
+  minted with `--no-vault` are not derivable from any phrase at all
+  (`dfos keys list` is what shows those).
 
 ## Error recovery
 
