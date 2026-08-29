@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,57 @@ func TestPutKeyStoresDerivedMaterial(t *testing.T) {
 
 			if _, err := store.PutKey(account, ed25519.PrivateKey("too short")); err == nil {
 				t.Error("PutKey accepted something that is not an ed25519 private key")
+			}
+		})
+	}
+}
+
+// TestGetPrivateKeyRefusesATruncatedEntry: ed25519.NewKeyFromSeed PANICS on
+// anything but 32 bytes, and every read path fed it whatever the backend held.
+// A key file a crash truncated, or a keychain entry someone edited, took the
+// whole CLI down with a stack trace instead of naming the bad entry.
+//
+// The mint-time calls are not covered here and do not need to be: they feed it
+// rand.Read output and cannot be short.
+func TestGetPrivateKeyRefusesATruncatedEntry(t *testing.T) {
+	const account = "key:z6MkTruncated"
+
+	// Half a seed, a seed with a byte appended, and an entry that decodes to
+	// nothing. All three are "something is there and it is not a key".
+	for _, tc := range []struct {
+		name    string
+		seedHex string
+		wantLen string
+	}{
+		{"half a seed", "0102030405060708090a0b0c0d0e0f10", "16"},
+		{"one byte over", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "33"},
+		{"empty", "", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			file := NewFileStore(dir)
+			if err := os.WriteFile(filepath.Join(dir, fileName(account)), []byte(tc.seedHex), 0o600); err != nil {
+				t.Fatalf("write truncated key file: %v", err)
+			}
+
+			mem := NewMemoryStore()
+			mem.keys[account] = tc.seedHex
+
+			for backend, store := range map[string]Store{"file": file, "memory": mem} {
+				// HasKey still says yes: something IS filed there. The error has to
+				// come from the read, which is the only thing that sees the bytes.
+				if !store.HasKey(account) {
+					t.Fatalf("%s: HasKey should still find the entry", backend)
+				}
+				priv, err := store.GetPrivateKey(account)
+				if err == nil {
+					t.Fatalf("%s: GetPrivateKey accepted a %s-byte seed and returned %d bytes", backend, tc.wantLen, len(priv))
+				}
+				for _, want := range []string{account, tc.wantLen} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s: the error must name %q: %v", backend, want, err)
+					}
+				}
 			}
 		})
 	}

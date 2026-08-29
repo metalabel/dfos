@@ -109,6 +109,24 @@ func IsReservedAccount(account string) bool {
 	return false
 }
 
+// keyFromStoredSeed turns a seed READ BACK OUT of a backend into a private key,
+// after checking it is the length a seed has.
+//
+// ed25519.NewKeyFromSeed PANICS on anything but 32 bytes. Every mint-time call
+// feeds it rand.Read output and is safe by construction; every call on the read
+// path feeds it whatever the backend handed over, and a keychain entry a user
+// edited, a key file a crash truncated, or a partially-written seed is not a
+// reason for a CLI to abort with a stack trace. The account and the actual
+// length go in the message because between them they say which entry to look at
+// and what is wrong with it.
+func keyFromStoredSeed(account string, seed []byte) (ed25519.PrivateKey, error) {
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("unreadable key %s: stored seed is %d byte(s), want %d — the entry is truncated or is not a key seed",
+			account, len(seed), ed25519.SeedSize)
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
+
 // New returns the appropriate keystore.
 //
 // Follows the gh CLI pattern:
@@ -177,7 +195,7 @@ func (k *KeychainStore) GetPrivateKey(account string) (ed25519.PrivateKey, error
 	if err != nil {
 		return nil, fmt.Errorf("decode key: %w", err)
 	}
-	return ed25519.NewKeyFromSeed(seed), nil
+	return keyFromStoredSeed(account, seed)
 }
 
 func (k *KeychainStore) HasKey(account string) bool {
@@ -423,7 +441,7 @@ func (f *FileStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode key: %w", err)
 	}
-	return ed25519.NewKeyFromSeed(seed), nil
+	return keyFromStoredSeed(account, seed)
 }
 
 func (f *FileStore) HasKey(account string) bool {
@@ -510,8 +528,11 @@ func (m *MemoryStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) 
 	if !ok {
 		return nil, fmt.Errorf("key not found: %s", account)
 	}
-	seed, _ := hex.DecodeString(seedHex)
-	return ed25519.NewKeyFromSeed(seed), nil
+	seed, err := hex.DecodeString(seedHex)
+	if err != nil {
+		return nil, fmt.Errorf("decode key: %w", err)
+	}
+	return keyFromStoredSeed(account, seed)
 }
 
 func (m *MemoryStore) HasKey(account string) bool {

@@ -252,11 +252,24 @@ func resolveCtx() (*config.ResolvedContext, error) {
 }
 
 // requirePeer resolves the pair and ensures a peer is configured. peerOverride
-// is a command-local --peer flag, which sits at the flag tier like the global one.
+// is a command-local --peer flag.
+//
+// THE CLOSEST NAME WINS. A --peer typed on this command outranks a global
+// --relay outright, because specificity is what the whole resolution stack
+// orders by and a command-local flag is the most specific statement available.
+// The global tier ranks --relay above the --peer alias, which is right for two
+// global flags and inverted the moment one of them is a command's own: `dfos
+// --relay stale recover --peer authoritative` talked to `stale`.
+//
+// The mechanism is deliberately the smallest one that says it: clear the global
+// --relay for the PEER half only. Nothing else reads ov.Relay (the identity half
+// is built from ov.As and ov.Identity), and the plain aliases' global ordering
+// is untouched — this only fires when a command-local flag was actually typed.
 func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, error) {
 	ov := overrides()
 	if peerOverride != "" {
 		ov.Peer = peerOverride
+		ov.Relay = ""
 	}
 	ctx, err := config.ResolveContext(cfg, ov)
 	if err != nil {

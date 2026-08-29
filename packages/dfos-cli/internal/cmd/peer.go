@@ -100,6 +100,17 @@ func newPeerAddCmd() *cobra.Command {
 				rc.Gossip, rc.ReadThrough, rc.Sync = existing.Gossip, existing.ReadThrough, existing.Sync
 				rc.Content, rc.Proof, rc.Log = existing.Content, existing.Proof, existing.Log
 			}
+			// The DID pin is posture too, and the strongest kind: it is what a peer
+			// NAME means on this machine. Re-registering the same URL carries it
+			// forward, so a re-add that cannot reach the peer does not quietly
+			// un-pin it and leave the next successful contact free to TOFU-pin
+			// whoever answers there. A CHANGED URL is a new registration and
+			// inherits nothing — a different address is a different relay until
+			// something says otherwise.
+			sameRelay := reRegistration && samePeerURL(existing.URL, url)
+			if sameRelay {
+				rc.DID = existing.DID
+			}
 			if cmd.Flags().Changed("no-sync") {
 				enabled := !noSync
 				rc.Sync = &enabled
@@ -117,6 +128,7 @@ func newPeerAddCmd() *cobra.Command {
 					outputJSON(map[string]any{
 						"name":      name,
 						"url":       url,
+						"did":       rc.DID,
 						"reachable": false,
 						"warning":   err.Error(),
 						"sync":      config.BulkSyncDisabledReason(rc) == "",
@@ -124,7 +136,12 @@ func newPeerAddCmd() *cobra.Command {
 				} else {
 					fmt.Printf("Peer '%s' added: %s\n", name, url)
 					fmt.Printf("  Warning: %s\n", err)
-					fmt.Printf("           Registered unverified — no DID pinned, no capabilities recorded.\n")
+					if rc.DID != "" {
+						fmt.Printf("           Registered unverified — no capabilities recorded.\n")
+						fmt.Printf("           Pin retained: %s\n", rc.DID)
+					} else {
+						fmt.Printf("           Registered unverified — no DID pinned, no capabilities recorded.\n")
+					}
 					printPeerSyncPosture(name, rc)
 				}
 				return nil
@@ -135,7 +152,6 @@ func newPeerAddCmd() *cobra.Command {
 			// re-keyed relay or a different relay, and which one it is decides
 			// whether to trust it. `peer repin` is that decision, made out loud.
 			// A changed URL is a new registration, so its pin is written fresh.
-			sameRelay := reRegistration && samePeerURL(existing.URL, url)
 			if sameRelay && existing.DID != "" && existing.DID != info.DID {
 				return errPeerPinMismatch(name, existing.DID, info.DID)
 			}

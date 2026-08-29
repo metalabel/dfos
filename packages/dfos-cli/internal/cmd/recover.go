@@ -602,6 +602,32 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 		result.ScanComplete = false
 	}
 
+	// THE COUNTER GOES FIRST — before a single private key is written.
+	//
+	// Everything after this point can fail: a keystore write, a vault record, a
+	// config.Save registering the recovered names. The old order put all of it
+	// ahead of the counter, so a config.Save that returned an error left installed
+	// keys standing over a counter that had never moved — and the next mint from
+	// this vault handed out an index a recovered identity already spent. One
+	// Ed25519 private key, two DIDs, no way to see it.
+	//
+	// Raising it first inverts which failure is possible. A failure after the
+	// floor is on disk BURNS indices, and a burned index is a hole the gap limit
+	// already walks through by design; a failure before it produces a reusable
+	// one. The write is idempotent and the floor only ascends, so re-running
+	// converges exactly as it did.
+	minNext := uint32(0)
+	if result.HighestUsedIndex >= 0 {
+		minNext = uint32(result.HighestUsedIndex) + 1
+	}
+	if !opts.dryRun {
+		next, err := getVaults().RaiseCounter(vaultName, minNext)
+		if err != nil {
+			return fmt.Errorf("raise the derivation counter for vault '%s' before installing keys: %w", vaultName, err)
+		}
+		result.CounterAfter = next
+	}
+
 	// Install the keys. A key's ACCOUNT is its own public key, which the seed
 	// already derived — but the key ID a chain declares it under is not, and a key
 	// this machine cannot tie to an accepted operation is a key it declines to
@@ -666,15 +692,33 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 			key.Roles = facts.currentRoles[keyID]
 			key.Superseded = len(key.Roles) == 0
 
+			// A machine that wrote this key under the pre-content-addressing
+			// account may already hold it — but the LABEL is not the evidence.
+			// `<did>#<key_id>` is a name a machine chose, not a claim about the
+			// bytes behind it, so what the legacy entry actually holds is read and
+			// compared against the key this seed derives.
+			legacy := legacyKeyAccount(did, keyID)
+			legacyVerdict, legacyDetail := legacyKeyVerdict(legacy, h.publicKey)
+
 			switch {
 			case keys.HasKey(account):
 				key.Outcome = "already-present"
-			// A machine that wrote this key under the pre-content-addressing
-			// account already holds it. Recovery converges rather than writes a
+			// Same key under the old name. Recovery converges rather than writes a
 			// second copy of the same seed under a second name.
-			case keys.HasKey(legacyKeyAccount(did, keyID)):
-				key.Account = legacyKeyAccount(did, keyID)
+			case legacyVerdict == legacyKeyMatches:
+				key.Account = legacy
 				key.Outcome = "already-present"
+			// Something else is filed under that name. Reporting it as
+			// already-present would tell an operator this key is recovered when
+			// this machine holds a DIFFERENT key there, and recording provenance
+			// for it would write that lie into the vault trail. Say what is there
+			// and let the operator resolve it.
+			case legacyVerdict == legacyKeyDiffers, legacyVerdict == legacyKeyUnreadable:
+				key.Outcome = "not-installed"
+				key.Reason = fmt.Sprintf("the pre-content-addressing account '%s' holds %s — this key is NOT recovered. "+
+					"Resolve it ('dfos keys list' shows what this machine holds), then re-run", legacy, legacyDetail)
+				result.Keys = append(result.Keys, key)
+				continue
 			case opts.dryRun:
 				key.Outcome = "recovered"
 				key.Reason = "dry run — nothing was written"
@@ -723,30 +767,34 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 			cfg.Identities[entry.Name] = config.IdentityConfig{DID: entry.DID}
 		}
 	}
-	if !opts.dryRun && len(result.Identities) > 0 {
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("register recovered identities in config: %w", err)
-		}
-	}
-
-	// The vault's own metadata, last: provenance for what was found, and a
-	// counter raised past every index now known to be in use. An imported vault
-	// starts at 0 knowing nothing about what the seed minted elsewhere, and
-	// minting from it before this point would hand a used index out twice.
-	minNext := uint32(0)
-	if result.HighestUsedIndex >= 0 {
-		minNext = uint32(result.HighestUsedIndex) + 1
-	}
+	// A dry run computes the same numbers and writes none of them. The math is
+	// unchanged: the floor this run would install, over the counter as it stands.
 	if opts.dryRun {
 		result.MintedAdded = countNewRecords(meta, records)
 		result.CounterAfter = maxU32(meta.NextIndex, minNext)
 		return nil
 	}
+
+	// The vault's provenance, and the floor re-applied over it. Reconcile is
+	// idempotent and its counter half is the same floor RaiseCounter already
+	// wrote, so this is the trail catching up to a counter that is already safe
+	// — not the moment the counter becomes safe.
 	added, next, err := getVaults().Reconcile(vaultName, minNext, records...)
 	if err != nil {
 		return fmt.Errorf("reconcile vault '%s': %w", vaultName, err)
 	}
 	result.MintedAdded, result.CounterAfter = added, next
+
+	// Names LAST. It is the step most likely to fail for a reason that has
+	// nothing to do with custody (a read-only config, a full disk), and it is
+	// the only one whose loss costs nothing but a label: the keys are installed,
+	// the provenance is written, and the counter cleared every index before any
+	// of it. A re-run picks the names back up.
+	if len(result.Identities) > 0 {
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("register recovered identities in config: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -835,6 +883,48 @@ func probeBeyondScan(seed []byte, chains map[string]*chainFacts, scanned []scanH
 		})
 	}
 	return found
+}
+
+// The four things a pre-content-addressing keystore account can be, relative to
+// the key a recovery just derived.
+const (
+	// legacyKeyAbsent: nothing is filed under that name.
+	legacyKeyAbsent = "absent"
+	// legacyKeyMatches: the same key, under the old name. Converge on it.
+	legacyKeyMatches = "matches"
+	// legacyKeyDiffers: a DIFFERENT key under that name. The name was never
+	// evidence — one key declared by two identities was two entries, and a
+	// hand-edited or half-migrated store can put anything here.
+	legacyKeyDiffers = "differs"
+	// legacyKeyUnreadable: something is there and this machine cannot read it.
+	// Indistinguishable from a conflict for our purposes: not this key.
+	legacyKeyUnreadable = "unreadable"
+)
+
+// legacyKeyVerdict reads what the legacy account actually holds and compares its
+// derived public key against the one this run derived from the seed. detail is
+// prose for the report, empty unless the verdict is a problem.
+//
+// Existence is not identity. `HasKey` answers "is a name taken", and recovery's
+// question is "does this machine already hold THIS key" — the two agree in the
+// ordinary case and diverge in exactly the case worth catching.
+func legacyKeyVerdict(account, wantPublicKey string) (verdict, detail string) {
+	if !keys.HasKey(account) {
+		return legacyKeyAbsent, ""
+	}
+	priv, err := keys.GetPrivateKey(account)
+	if err != nil {
+		return legacyKeyUnreadable, fmt.Sprintf("a key this machine cannot read (%v)", err)
+	}
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok || len(priv) != ed25519.PrivateKeySize {
+		return legacyKeyUnreadable, fmt.Sprintf("a key of %d bytes, which is not an ed25519 private key", len(priv))
+	}
+	got := protocol.EncodeMultikey(pub)
+	if got == wantPublicKey {
+		return legacyKeyMatches, ""
+	}
+	return legacyKeyDiffers, fmt.Sprintf("a DIFFERENT key (%s, not %s)", got, wantPublicKey)
 }
 
 func maxU32(a, b uint32) uint32 {

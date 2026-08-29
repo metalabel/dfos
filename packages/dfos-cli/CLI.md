@@ -128,6 +128,8 @@ The stack has no mutable pointer in it. The config tier is written by exactly on
 
 A verb that takes its subject as a positional argument — `identity update <name|did>`, like `delete`, `restore`, `show`, `log`, `forget`, and `remove` before it — acts on that identity, ahead of the whole stack. A target typed on the command line is the most explicit statement of intent available, so it outranks `--as`, `DFOS_AS`, and `default-identity`, and the disclosure line names `positional argument` as the mechanism it resolved through. With no positional the stack resolves as it always does.
 
+The same rule governs the peer half: **the closest name wins.** A few commands carry a `--peer` of their own — `recover` names the relay it asks the used/unused question of, `identity fetch` names the relay it pulls from — and that flag outranks the whole peer stack, the global `--relay` included. `dfos --relay stale recover --peer authoritative` asks `authoritative`. The global aliases keep their own ordering between themselves: `--relay` still outranks the deprecated global `--peer`.
+
 ### Disclosure
 
 A command about to sign says who it is signing as, on stderr, before it signs:

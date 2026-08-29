@@ -262,7 +262,10 @@ func TestRecordAndFindMinted(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	meta, rec, ok := s.FindMinted(did, "key_auth")
+	meta, rec, ok, err := s.FindMinted(did, "key_auth")
+	if err != nil {
+		t.Fatalf("FindMinted: %v", err)
+	}
 	if !ok {
 		t.Fatal("FindMinted did not find a recorded key")
 	}
@@ -273,21 +276,107 @@ func TestRecordAndFindMinted(t *testing.T) {
 		t.Error("Record did not stamp a mint time")
 	}
 
-	if _, _, ok := s.FindMinted(did, "key_unknown"); ok {
+	if _, _, ok, _ := s.FindMinted(did, "key_unknown"); ok {
 		t.Error("FindMinted matched a key nothing minted")
 	}
-	if _, _, ok := s.FindMinted("did:dfos:other", "key_auth"); ok {
+	if _, _, ok, _ := s.FindMinted("did:dfos:other", "key_auth"); ok {
 		t.Error("FindMinted matched on key id alone, ignoring the DID")
 	}
 
 	// Rotation stickiness: the vault that minted the current keys is found from
 	// the identity's key ids, in the order the caller considers authoritative.
-	found, ok := s.FindMintingVault(did, []string{"key_nope", "key_ctrl"})
+	found, ok, err := s.FindMintingVault(did, []string{"key_nope", "key_ctrl"})
+	if err != nil {
+		t.Fatalf("FindMintingVault: %v", err)
+	}
 	if !ok || found.Name != "personal" {
 		t.Errorf("FindMintingVault = %v %v, want personal", found, ok)
 	}
-	if _, ok := s.FindMintingVault("did:dfos:unminted", []string{"key_ctrl"}); ok {
+	if _, ok, _ := s.FindMintingVault("did:dfos:unminted", []string{"key_ctrl"}); ok {
 		t.Error("FindMintingVault claimed a vault for an identity it never minted")
+	}
+}
+
+// TestProvenanceLookupsSurfaceAnUnreadableVaultFile is the custody half of the
+// error return. One malformed sibling .toml fails List() wholesale, and the old
+// signatures folded that into "no provenance" — indistinguishable, to a caller,
+// from an identity no vault ever minted. Rotation reads this answer to decide
+// whether a recovery phrase still covers the identity, so the two must not look
+// alike here.
+func TestProvenanceLookupsSurfaceAnUnreadableVaultFile(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Create("personal"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+	if err := s.Record("personal",
+		MintedKey{Index: 0, DID: did, KeyID: "key_ctrl", Roles: []string{"controller"}, PublicKey: "z6Mkctrl"},
+	); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	// An unrelated vault file, corrupt. It says nothing about `personal` and
+	// must not be able to answer for it either way.
+	corrupt := filepath.Join(s.Dir(), "burner.toml")
+	if err := os.WriteFile(corrupt, []byte("this is not toml = = ["), 0o600); err != nil {
+		t.Fatalf("write corrupt vault: %v", err)
+	}
+
+	if _, _, _, err := s.FindMinted(did, "key_ctrl"); err == nil {
+		t.Error("FindMinted returned no error over an unreadable vault file")
+	} else if !strings.Contains(err.Error(), "burner") {
+		t.Errorf("the error must name the unreadable file: %v", err)
+	}
+
+	meta, ok, err := s.FindMintingVault(did, []string{"key_ctrl"})
+	if err == nil {
+		t.Fatal("FindMintingVault returned no error over an unreadable vault file")
+	}
+	if ok || meta != nil {
+		t.Errorf("FindMintingVault answered %v/%v alongside an error", meta, ok)
+	}
+	if !strings.Contains(err.Error(), corrupt) {
+		t.Errorf("the error must name the unreadable file's path: %v", err)
+	}
+}
+
+// TestRaiseCounterIsAFloor: the counter-only write recovery makes before it
+// touches any key material. Same floor semantics as Reconcile, and no other
+// field moves.
+func TestRaiseCounterIsAFloor(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Create("personal"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		give uint32
+		want uint32
+	}{
+		{"raises from zero", 7, 7},
+		{"a lower floor does not lower it", 3, 7},
+		{"an equal floor is a no-op", 7, 7},
+		{"a higher floor raises it again", 9, 9},
+	} {
+		got, err := s.RaiseCounter("personal", tc.give)
+		if err != nil {
+			t.Fatalf("%s: RaiseCounter: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: RaiseCounter(%d) = %d, want %d", tc.name, tc.give, got, tc.want)
+		}
+		meta, err := s.Load("personal")
+		if err != nil {
+			t.Fatalf("%s: Load: %v", tc.name, err)
+		}
+		if meta.NextIndex != tc.want {
+			t.Errorf("%s: on-disk NextIndex = %d, want %d", tc.name, meta.NextIndex, tc.want)
+		}
+		if len(meta.Minted) != 0 {
+			t.Errorf("%s: RaiseCounter wrote provenance: %+v", tc.name, meta.Minted)
+		}
 	}
 }
 
