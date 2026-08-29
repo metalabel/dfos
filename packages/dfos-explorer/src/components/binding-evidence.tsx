@@ -14,8 +14,19 @@
   ordinary shape of a healthy binding (either method suffices), and its row says
   what was observed, not that something is wrong.
 
+  A row may also carry its VANTAGE — who established it. The domain view checks
+  what it can from the tab itself (DNS over DNS-over-HTTPS, the well-known
+  document directly where the origin permits a cross-origin read) and falls back
+  to the explorer's own route for what it cannot, so "your browser read this" and
+  "our route read this for you" are different claims and the row says which. A
+  channel NEITHER could read is `not checkable from this browser`: neutral, and
+  the one row state that overrides the reading underneath it, because there is no
+  reading underneath it. It is not an absence and not a failure of the binding —
+  nothing was observed, so nothing follows.
+
 */
 
+import type { ChannelVantage } from '../lib/binding-browser';
 import type { AppAttestation, BindingMethodResult, FallbackResult } from '../lib/origin-binding';
 import { Check, type CheckState } from './checks';
 
@@ -90,6 +101,37 @@ const fallbackRow = (
   }
 };
 
+/** Where the reading came from, said in the row. Plain, and short enough to sit
+ *  at the end of a note without burying what was actually observed. */
+const VANTAGE_NOTE: Record<'browser' | 'route', string> = {
+  browser: 'read by your browser',
+  route: "read by the explorer's lookup route",
+};
+
+/**
+ * One channel's row. Without a vantage this is the reading alone — the identity
+ * view's single-vantage probe, unchanged.
+ *
+ * With one, `not-checkable` takes over the whole row: no vantage read this
+ * channel, so there is nothing to state about the domain, and the row says
+ * exactly that in neutral terms. Every other vantage appends who did the reading.
+ */
+const channelRow = (
+  result: BindingMethodResult,
+  did: string | null,
+  settled: boolean,
+  vantage: ChannelVantage | undefined,
+): { state: CheckState; note: string } => {
+  if (vantage?.kind === 'not-checkable') {
+    return { state: 'pend', note: `not checkable from this browser — ${vantage.reason}` };
+  }
+  const note = methodNote(result, did);
+  return {
+    state: methodState(result, did, settled),
+    note: vantage === undefined ? note : `${note} · ${VANTAGE_NOTE[vantage.kind]}`,
+  };
+};
+
 /** The two attest-back channels, plus the app-description fallback on the rows
  *  where it was consulted. `fallback` is null when the well-known document was
  *  present — the fallback applies only on ABSENCE, so there is nothing to show. */
@@ -101,21 +143,20 @@ export const BindingEvidence = (props: {
   /** the binding is BOUND — a channel's silence is then evidence detail, not a
    *  warning, because another channel already attested */
   settled: boolean;
+  /** per-channel vantage, where the caller checked from more than one. Omitted by
+   *  a single-vantage caller, whose rows then read exactly as before. */
+  vantage?: { https: ChannelVantage; dns: ChannelVantage };
 }) => {
   const fallback =
     props.fallback === null ? null : fallbackRow(props.fallback, props.did, props.settled);
+  const https = channelRow(props.https, props.did, props.settled, props.vantage?.https);
+  const dns = channelRow(props.dns, props.did, props.settled, props.vantage?.dns);
   return (
     <>
-      <Check
-        state={methodState(props.https, props.did, props.settled)}
-        note={methodNote(props.https, props.did)}
-      >
+      <Check state={https.state} note={https.note}>
         https attest-back <code>/.well-known/dfos-did</code>
       </Check>
-      <Check
-        state={methodState(props.dns, props.did, props.settled)}
-        note={methodNote(props.dns, props.did)}
-      >
+      <Check state={dns.state} note={dns.note}>
         dns attest-back <code>_dfos</code> TXT
       </Check>
       {fallback !== null ? (

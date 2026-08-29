@@ -16,6 +16,8 @@ const VERDICT_KEYS = [
   'bindingBound',
   'bindingStale',
   'bindingBroken',
+  'bindingVantage',
+  'bindingNotCheckable',
   'appDescription',
   'domainAttestation',
   'relayDiverged',

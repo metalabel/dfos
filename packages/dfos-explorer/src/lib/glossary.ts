@@ -77,6 +77,16 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'Domain contradicts it: the domain answered with a different identity’s DID. Only the domain claim is contradicted — the identity and its history are untouched.',
   },
   {
+    key: 'bindingVantage',
+    term: 'vantage (origin binding)',
+    def: 'Who read a channel. Your browser reads the _dfos TXT record over DNS-over-HTTPS, and reads /.well-known/dfos-did directly from origins that permit a cross-origin read; where a browser cannot reach, the explorer’s own lookup route reads that channel for you. Every row says which, because "your browser saw this" and "our route saw this" are different claims. The verdict is folded in your browser either way.',
+  },
+  {
+    key: 'bindingNotCheckable',
+    term: 'not checkable from this browser',
+    def: 'Nothing was observed on this channel: the origin sends no cross-origin permission, or the lookup failed, and the explorer’s own route could not stand in. Not an answer, not an absence, and not a failure of the binding — being unable to look is not a finding about the domain.',
+  },
+  {
     key: 'appDescription',
     term: 'app description',
     def: 'The document at /.well-known/dfos-app.json: a domain describes an app (name, client DID, optionally its identity chain). Checked on the domain page. Distinct from the domain attestation.',

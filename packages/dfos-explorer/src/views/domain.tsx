@@ -23,10 +23,16 @@
   So an absent app description on a bound origin is a NEUTRAL fact, not a failure
   headline — this origin describes no app, which is nothing at all to fix.
 
-  Both reachability beats run through the explorer's own serverless routes, so a
-  failure there is OUR failure, and says so — never "this origin has no app
-  description" or "this domain is silent", which are claims about someone else's
-  server we did not observe.
+  The binding's two channels are checked from the TAB wherever a tab can: `_dfos`
+  TXT over DNS-over-HTTPS, and `/.well-known/dfos-did` fetched directly from
+  origins that permit a cross-origin read. The explorer's own serverless routes
+  fill in what the browser cannot reach — the app-description beats above, and
+  whichever binding channel came back unreadable — so each binding row says its
+  vantage, and a channel NEITHER could read says exactly that.
+
+  Whatever the vantage, a failure to reach is OUR failure and says so — never
+  "this origin has no app description" or "this domain is silent", which are
+  claims about someone else's server we did not observe.
 
 */
 
@@ -50,6 +56,11 @@ import {
   TruncId,
   type PillState,
 } from '../components/ui';
+import {
+  probeBindingChannels,
+  probeFromChannels,
+  type DualChannelProbe,
+} from '../lib/binding-browser';
 import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
 import { toOpRows, type OpRow } from '../lib/op-rows';
@@ -58,11 +69,9 @@ import {
   attestedCandidate,
   domainBindingSpeaks,
   fallbackEligible,
-  fetchBindingAttestation,
   readAppAttestation,
   type AppAttestation,
   type AttestedChain,
-  type BindingMethodResult,
   type DomainBinding,
 } from '../lib/origin-binding';
 import {
@@ -85,16 +94,17 @@ type RelayBeat =
   | { phase: 'absent'; error: string }
   | { phase: 'held'; log: string[]; rows: OpRow[]; resolved: Resolved<VerifiedIdentity> };
 
-/** The origin-binding beat. The probe is kept beside the verdict because the
+/** The origin-binding beat. The channels are kept beside the verdict because the
  *  panel renders BOTH — the verdict, and the per-channel evidence it was folded
  *  from — and a verdict without its evidence is the bare checkmark the spec's
- *  display discipline forbids. */
+ *  display discipline forbids. Each channel carries its VANTAGE, so a row can say
+ *  whether the tab read it or the explorer's route did. */
 type BindingBeat =
   | { phase: 'checking' }
   | {
       phase: 'done';
       binding: DomainBinding;
-      probe: { https: BindingMethodResult; dns: BindingMethodResult } | null;
+      channels: DualChannelProbe;
       fallback: AppAttestation | null;
     };
 
@@ -129,11 +139,18 @@ export const Domain = (props: { host: string }) => {
   // the DID they attest, resolve and VERIFY that identity here, and require its
   // chain to name this exact host back. Independent of the document beats above —
   // a domain can be a bound origin, an app host, both, or neither.
+  //
+  // Both channels are checked from the TAB first — `_dfos` TXT over
+  // DNS-over-HTTPS, and the well-known document directly wherever the origin
+  // permits a cross-origin read — and the explorer's own route fills in only what
+  // the browser could not reach. A channel neither vantage could read is neutral,
+  // never a verdict about the domain (src/lib/binding-browser.ts).
   useEffect(() => {
     let dead = false;
     setBinding({ phase: 'checking' });
     void (async () => {
-      const probe = await fetchBindingAttestation(props.host);
+      const channels = await probeBindingChannels(props.host);
+      const probe = probeFromChannels(channels);
       // the app-description fallback is a MUST, and ONLY on absence. Here it can
       // also SUPPLY the candidate: an origin that publishes nothing but a SIWD
       // app description already publishes its DID, and this reads it.
@@ -164,7 +181,7 @@ export const Domain = (props: { host: string }) => {
       setBinding({
         phase: 'done',
         binding: assessDomainBinding(props.host, probe, fallback, chain),
-        probe: probe.kind === 'answered' ? { https: probe.https, dns: probe.dns } : null,
+        channels,
         fallback: fallback ?? null,
       });
     })();
@@ -480,8 +497,8 @@ const bindingPill = (binding: DomainBinding): { state: PillState; text: string; 
     case 'proxy-unavailable':
       return {
         state: 'warn',
-        text: 'verifier unavailable',
-        def: 'The explorer’s own route failed, so nothing at all was learned about this domain. This is our failure — it says nothing either way about whether the domain attests an identity.',
+        text: 'not checkable from here',
+        def: GLOSSARY['bindingNotCheckable'] ?? '',
       };
   }
 };
@@ -497,7 +514,8 @@ const QuietBinding = (props: { beat: BindingBeat }) => {
   if (binding.kind === 'proxy-unavailable') {
     return (
       <span class="muted">
-        the explorer's own binding route did not answer — nothing was learned about this domain
+        neither channel could be checked — your browser could not read them and the explorer's
+        lookup route did not answer either, so nothing was learned about this domain
       </span>
     );
   }
@@ -512,7 +530,7 @@ const OriginBindingPanel = (props: {
   beat: Extract<BindingBeat, { phase: 'done' }>;
   onRecheck: () => void;
 }) => {
-  const { binding, probe, fallback } = props.beat;
+  const { binding, channels, fallback } = props.beat;
   const pill = bindingPill(binding);
   // the DID the rows are judged against. Null on a domain that contradicts
   // ITSELF: there is no identity yet to compare answers to, and each answer is
@@ -534,13 +552,16 @@ const OriginBindingPanel = (props: {
         </>
       }
       accent={accent}
-      right={<span class="lbl">checked in your browser</span>}
+      right={<span class="lbl">browser first, route where it can't reach</span>}
       orient={
         <>
           The domain attests an identity and that identity's chain names the domain back — an{' '}
           <Term word="origin binding" def={GLOSSARY['originBinding'] ?? ''} />. It proves{' '}
           <b>control of this domain</b> at check time: never personhood, endorsement, or notability.
           The domain is the credential, so both halves are shown, never summarized into a badge.
+          Each channel below says its <Term word="vantage" def={GLOSSARY['bindingVantage'] ?? ''} />{' '}
+          — whether your browser read it, or the explorer's lookup route read it for you where a
+          browser can't.
         </>
       }
     >
@@ -564,15 +585,14 @@ const OriginBindingPanel = (props: {
       </div>
 
       <Checks>
-        {probe !== null ? (
-          <BindingEvidence
-            https={probe.https}
-            dns={probe.dns}
-            fallback={fallback}
-            did={did}
-            settled={binding.kind === 'bound'}
-          />
-        ) : null}
+        <BindingEvidence
+          https={channels.https.result}
+          dns={channels.dns.result}
+          fallback={fallback}
+          did={did}
+          settled={binding.kind === 'bound'}
+          vantage={{ https: channels.https.vantage, dns: channels.dns.vantage }}
+        />
         <BindingChainChecks binding={binding} />
       </Checks>
 
