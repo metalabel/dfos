@@ -645,6 +645,71 @@ func hexOf(b []byte) string {
 	return string(out)
 }
 
+// A superseded key's role is not in current state — that is what superseded
+// means — but it is in the log that retired it. The ledger reports it, so
+// "which role did that rotation retire" is answered by the list rather than by
+// a second command.
+func TestKeysListReportsWhatARotationRetired(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+
+	create := newIdentityCreateCmd()
+	mustSetFlag(t, create, "name", "alice")
+	mustSetFlag(t, create, "no-vault", "true")
+	var created struct {
+		DID           string `json:"did"`
+		ControllerKey string `json:"controllerKey"`
+		AuthKey       string `json:"authKey"`
+	}
+	runJSON(t, create, nil, &created)
+	identityFlag = "alice"
+
+	rotate := newIdentityUpdateCmd()
+	mustSetFlag(t, rotate, "rotate-auth", "true")
+	runJSON(t, rotate, nil, nil)
+
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("build ledger: %v", err)
+	}
+
+	retired := entryFor(t, ledger, created.DID+"#"+created.AuthKey)
+	if retired.Status != statusSuperseded {
+		t.Fatalf("the rotated-out key is %s, want %s", retired.Status, statusSuperseded)
+	}
+	if len(retired.Roles) != 1 || retired.Roles[0] != "auth" {
+		t.Fatalf("superseded roles = %v, want [auth]", retired.Roles)
+	}
+	if row := declaredBy(retired); !strings.Contains(row, "was auth") || !strings.Contains(row, "no longer current") {
+		t.Fatalf("the table row does not say which role was retired: %q", row)
+	}
+
+	// The role a rotation did NOT touch still reads as current.
+	held := entryFor(t, ledger, created.DID+"#"+created.ControllerKey)
+	if held.Status != statusDeclared {
+		t.Fatalf("the untouched controller key is %s, want %s", held.Status, statusDeclared)
+	}
+	if len(held.Roles) != 1 || held.Roles[0] != "controller" {
+		t.Fatalf("declared roles = %v, want [controller]", held.Roles)
+	}
+
+	// Every other status carries no roles at all — the field is present when a
+	// chain says what the key is for, and absent when nothing does.
+	orphan := "did:dfos:2222222222222222222222222222222#key_x"
+	candidate := candidateAccountPrefix + "z6MkExampleCandidateKey"
+	plantKey(t, storeA, orphan)
+	plantKey(t, storeA, candidate)
+	ledger, err = buildKeyLedger()
+	if err != nil {
+		t.Fatalf("rebuild ledger: %v", err)
+	}
+	for _, account := range []string{orphan, candidate} {
+		if roles := entryFor(t, ledger, account).Roles; len(roles) != 0 {
+			t.Fatalf("%s reported roles %v; only a declaring chain names a role", account, roles)
+		}
+	}
+}
+
 func writeLoginClientFile(t *testing.T, did, keyID string) {
 	t.Helper()
 	body, err := json.Marshal(loginClient{DID: did, KeyID: keyID, Chain: []string{}})

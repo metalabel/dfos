@@ -434,19 +434,29 @@ func planOriginBinding(services []protocol.ServiceEntry, domain, idOverride stri
 // probes (network)
 // ---------------------------------------------------------------------------
 
+// refusedRedirectError marks a redirect the attestation rules REFUSED, as
+// distinct from a domain that could not be reached. The two are different facts
+// about a deployment — one is "nothing answered", the other is "something
+// answered and it was not the named domain" — and reporting the second as the
+// first sends an operator to look at DNS and uptime for a redirect they
+// configured.
+type refusedRedirectError struct{ reason string }
+
+func (e *refusedRedirectError) Error() string { return e.reason }
+
 // refuseForeignRedirect is the HTTPS method's redirect rule: the attestation
 // must come from the named domain, so a redirect to a different host — or off
 // HTTPS — attests nothing and is refused. Same-host HTTPS redirects are
 // followed, up to a bounded hop count.
 func refuseForeignRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirectHops {
-		return fmt.Errorf("stopped after %d redirects", maxRedirectHops)
+		return &refusedRedirectError{fmt.Sprintf("stopped after %d redirects", maxRedirectHops)}
 	}
 	if req.URL.Scheme != "https" {
-		return fmt.Errorf("refusing redirect off HTTPS to %s://%s", req.URL.Scheme, req.URL.Host)
+		return &refusedRedirectError{fmt.Sprintf("refusing redirect off HTTPS to %s://%s", req.URL.Scheme, req.URL.Host)}
 	}
 	if !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
-		return fmt.Errorf("refusing cross-origin redirect to %s", req.URL.Host)
+		return &refusedRedirectError{fmt.Sprintf("refusing cross-origin redirect to %s", req.URL.Host)}
 	}
 	return nil
 }
@@ -455,22 +465,46 @@ func attestationClient() *http.Client {
 	return &http.Client{Timeout: attestationTimeout, CheckRedirect: refuseForeignRedirect}
 }
 
-// fetchCapped GETs url and reads at most limit bytes. over reports that the
-// body exceeded the cap (the read is abandoned, not truncated into a parse).
-func fetchCapped(c *http.Client, url string, limit int64) (status int, body []byte, over bool, err error) {
+// fetchResult is one attestation fetch. `final` is the URL the reply actually
+// came from, which is the URL asked for unless a redirect was followed — the
+// one fact that separates "this path serves the wrong thing" from "this path
+// serves nothing and something else answered for it".
+type fetchResult struct {
+	status int
+	body   []byte
+	over   bool // the body exceeded the cap; the read was abandoned, not truncated
+	final  string
+}
+
+// redirected reports whether the reply came from a URL other than the one asked
+// for. A same-host HTTPS redirect is legal and followed, so this is not itself a
+// failure — it is the explanation to reach for when what came back is not an
+// attestation.
+func (f fetchResult) redirected(requested string) bool {
+	return f.final != "" && f.final != requested
+}
+
+// fetchCapped GETs url and reads at most limit bytes.
+func fetchCapped(c *http.Client, url string, limit int64) (fetchResult, error) {
 	resp, err := c.Get(url)
 	if err != nil {
-		return 0, nil, false, err
+		return fetchResult{}, err
 	}
 	defer resp.Body.Close()
+	out := fetchResult{status: resp.StatusCode, final: url}
+	if resp.Request != nil && resp.Request.URL != nil {
+		out.final = resp.Request.URL.String()
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return resp.StatusCode, nil, false, err
+		return fetchResult{status: resp.StatusCode, final: out.final}, err
 	}
 	if int64(len(data)) > limit {
-		return resp.StatusCode, nil, true, nil
+		out.over = true
+		return out, nil
 	}
-	return resp.StatusCode, data, false, nil
+	out.body = data
+	return out, nil
 }
 
 // probeHTTPS runs the HTTPS half: the well-known document, with the SIWD
@@ -481,27 +515,50 @@ func probeHTTPS(domain string) methodResult {
 	res := methodResult{Name: "https", Source: wellKnownDIDPath}
 	client := attestationClient()
 
-	status, body, over, err := fetchCapped(client, "https://"+domain+wellKnownDIDPath, wellKnownDIDCap)
+	requested := "https://" + domain + wellKnownDIDPath
+	got, err := fetchCapped(client, requested, wellKnownDIDCap)
+	// A redirect is the explanation whenever the reply did not come from the
+	// path the attestation must be served at: a site that answers its SPA for
+	// every unknown path returns 200 and HTML, and calling that a size-cap
+	// overrun reports the symptom and hides the cause.
+	redirectNote := ""
+	if got.redirected(requested) {
+		redirectNote = fmt.Sprintf(" — redirected to %s; the attestation must be served at %s on %s itself", got.final, wellKnownDIDPath, domain)
+	}
 	switch {
 	case err != nil:
+		var refused *refusedRedirectError
+		if errors.As(err, &refused) {
+			res.Detail = fmt.Sprintf("silent (%s redirected off %s: %s — the attestation must come from the named domain)",
+				wellKnownDIDPath, domain, refused.reason)
+			return res
+		}
 		res.Detail = fmt.Sprintf("silent (%s unreachable: %s)", wellKnownDIDPath, condenseFetchError(err))
 		return res
-	case status == http.StatusOK && over:
+	case got.status == http.StatusOK && got.over:
+		if redirectNote != "" {
+			res.Detail = fmt.Sprintf("silent (%s%s)", wellKnownDIDPath, redirectNote)
+			return res
+		}
 		res.Detail = fmt.Sprintf("silent (%s exceeds %d bytes)", wellKnownDIDPath, wellKnownDIDCap)
 		return res
-	case status == http.StatusOK:
-		did, ok := didFromWellKnownBody(body)
+	case got.status == http.StatusOK:
+		did, ok := didFromWellKnownBody(got.body)
 		if !ok {
+			if redirectNote != "" {
+				res.Detail = fmt.Sprintf("silent (%s%s)", wellKnownDIDPath, redirectNote)
+				return res
+			}
 			res.Detail = fmt.Sprintf("silent (%s present but not a DFOS DID — app fallback blocked)", wellKnownDIDPath)
 			return res
 		}
 		res.DID = did
 		res.Detail = fmt.Sprintf("attests %s (%s)", did, wellKnownDIDPath)
 		return res
-	case status == http.StatusNotFound || status == http.StatusGone:
-		return probeAppDescription(domain, client, status)
+	case got.status == http.StatusNotFound || got.status == http.StatusGone:
+		return probeAppDescription(domain, client, got.status)
 	default:
-		res.Detail = fmt.Sprintf("silent (HTTP %d from %s)", status, wellKnownDIDPath)
+		res.Detail = fmt.Sprintf("silent (HTTP %d from %s)", got.status, wellKnownDIDPath)
 		return res
 	}
 }
@@ -512,9 +569,16 @@ func probeHTTPS(domain string) methodResult {
 func probeAppDescription(domain string, client *http.Client, wellKnownStatus int) methodResult {
 	res := methodResult{Name: "https", Source: appDescriptionPath, Fallback: true}
 
-	status, body, over, err := fetchCapped(client, "https://"+domain+appDescriptionPath, appDescriptionCap)
+	got, err := fetchCapped(client, "https://"+domain+appDescriptionPath, appDescriptionCap)
+	status, body, over := got.status, got.body, got.over
 	switch {
 	case err != nil:
+		var refused *refusedRedirectError
+		if errors.As(err, &refused) {
+			res.Detail = fmt.Sprintf("silent (%d on %s, %s redirected off %s: %s — the attestation must come from the named domain)",
+				wellKnownStatus, wellKnownDIDPath, appDescriptionPath, domain, refused.reason)
+			return res
+		}
 		res.Detail = fmt.Sprintf("silent (%d on %s, %s unreachable: %s)", wellKnownStatus, wellKnownDIDPath, appDescriptionPath, condenseFetchError(err))
 		return res
 	case status == http.StatusOK && !over:

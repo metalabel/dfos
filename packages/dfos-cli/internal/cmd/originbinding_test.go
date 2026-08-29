@@ -7,6 +7,7 @@ package cmd
 // DNS or HTTPS: the probes are thin wrappers over these folds by construction.
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -348,6 +349,60 @@ func TestRefuseForeignRedirect(t *testing.T) {
 	}
 	if err := refuseForeignRedirect(&http.Request{URL: mustURL(t, "https://example.com/x")}, via); err == nil {
 		t.Fatal("redirect chain past the hop cap was followed")
+	}
+}
+
+// A refused redirect is a REFUSAL, not an unreachable domain: something
+// answered, and it was not the named domain. The two get different sentences,
+// so the typed error has to survive the http.Client's own wrapping.
+func TestRefusedRedirectIsTypedDistinctlyFromUnreachable(t *testing.T) {
+	origin := &http.Request{URL: mustURL(t, "https://example.com/.well-known/dfos-did")}
+
+	for _, target := range []string{"https://evil.example/did.txt", "http://example.com/did.txt"} {
+		err := refuseForeignRedirect(&http.Request{URL: mustURL(t, target)}, []*http.Request{origin})
+		var refused *refusedRedirectError
+		if !errors.As(err, &refused) {
+			t.Fatalf("redirect to %s produced %T, want a refusedRedirectError", target, err)
+		}
+		if refused.reason == "" {
+			t.Fatalf("refusal for %s carries no reason", target)
+		}
+		// The client wraps CheckRedirect errors in *url.Error; the probe reads
+		// through that wrapper, so the test does too.
+		wrapped := &url.Error{Op: "Get", URL: target, Err: err}
+		if !errors.As(error(wrapped), &refused) {
+			t.Fatalf("refusal for %s did not survive url.Error wrapping", target)
+		}
+	}
+
+	// A plain transport failure stays a plain transport failure.
+	if errors.As(error(&url.Error{Op: "Get", URL: "https://example.com", Err: errors.New("no such host")}),
+		new(*refusedRedirectError)) {
+		t.Fatal("an unreachable domain was classified as a refused redirect")
+	}
+}
+
+// A followed same-host redirect is legal, so it is not itself a failure — but
+// when what comes back is not an attestation, the redirect is the fact worth
+// reporting rather than the size of the HTML that arrived.
+func TestFetchResultRedirected(t *testing.T) {
+	requested := "https://example.com/.well-known/dfos-did"
+	cases := map[string]struct {
+		final string
+		want  bool
+	}{
+		"same url":       {requested, false},
+		"unset":          {"", false},
+		"redirected":     {"https://example.com/", true},
+		"other path":     {"https://example.com/index.html", true},
+		"query appended": {requested + "?x=1", true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := (fetchResult{final: tc.final}).redirected(requested); got != tc.want {
+				t.Fatalf("redirected(%q) = %v, want %v", tc.final, got, tc.want)
+			}
+		})
 	}
 }
 

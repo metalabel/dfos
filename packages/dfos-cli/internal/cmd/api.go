@@ -43,12 +43,15 @@ func apiFetcher() apispec.Fetcher {
 	return apispec.HTTPFetcher()
 }
 
-// legacyDeprecation is the line the raw `dfos api <METHOD> <path>` form prints,
-// byte-identical to the one cobra emitted when the whole command was marked
-// Deprecated. The marker moved off the command itself so `api` — and therefore
-// `api add` / `list` / `rm` / `refresh` / `call` — appears in help at all; a
-// deprecated command is hidden from it, subcommands and all.
-const legacyDeprecation = `Command "api" is deprecated, use "dfos relay call <METHOD> <path>"` + "\n"
+// legacyDeprecation is the line the raw `dfos api <METHOD> <path>` form prints.
+// The marker lives here rather than on the command itself so `api` — and
+// therefore `api add` / `list` / `rm` / `refresh` / `call` — appears in help at
+// all; a deprecated command is hidden from it, subcommands and all.
+//
+// `relay call` is the spelling CLI.md documents, and `relay` is the peer
+// group's alias — so the replacement is named both ways rather than sending a
+// reader to a top-level `relay` command that `dfos --help` does not list.
+const legacyDeprecation = `Command "api" is deprecated, use "dfos relay call <METHOD> <path>" ("relay" is the peer group's alias, so "dfos peer call" is the same command)` + "\n"
 
 func newAPICmd() *cobra.Command {
 	f := &relayCallFlags{}
@@ -62,7 +65,7 @@ func newAPICmd() *cobra.Command {
 			"proof, or a request proof with the credential it binds — and this client signs accordingly. " +
 			"The document is discovery, never authority: the host's own verdict decides every request.\n\n" +
 			"'dfos api <METHOD> <path>' is the deprecated raw passthrough to the active peer; " +
-			"'dfos relay call' is its spelling.\n\n" +
+			"'dfos relay call' is its spelling, and 'dfos peer call' is that same command under the group's own name.\n\n" +
 			"Normative spec: https://protocol.dfos.com/api-auth",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
