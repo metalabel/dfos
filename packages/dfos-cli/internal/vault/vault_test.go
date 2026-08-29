@@ -107,14 +107,89 @@ func TestImportValidatesChecksum(t *testing.T) {
 		t.Error("an imported vault is not marked imported")
 	}
 
-	// Importing the same words under a second name yields the same fingerprint:
-	// the fingerprint identifies the SEED, not the vault.
-	twin, err := s.Import("twin", strings.ToUpper(good))
+	// The fingerprint identifies the SEED, not the vault: the same words in a
+	// different case reach the same fingerprint on a store that has never seen
+	// them.
+	elsewhere := newTestStore(t)
+	twin, err := elsewhere.Import("twin", strings.ToUpper(good))
 	if err != nil {
 		t.Fatalf("Import twin: %v", err)
 	}
 	if twin.Fingerprint != meta.Fingerprint {
 		t.Error("the same mnemonic fingerprinted differently under two names")
+	}
+}
+
+// One seed, one vault. Two vaults over one phrase would each hand out
+// derivation indices from a counter keyed by NAME, so index 0 of the second is
+// index 0 of the first — two identities holding byte-identical private keys.
+// The refusal is by fingerprint, so a re-cased or re-spaced form of the same
+// phrase does not slip past it, and it names the vault already holding the
+// seed so the operator can go look at it.
+func TestImportRefusesASeedAVaultAlreadyHolds(t *testing.T) {
+	s := newTestStore(t)
+	const phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+	first, err := s.Import("personal", phrase)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	for _, variant := range []string{phrase, strings.ToUpper(phrase), "  " + phrase + "  "} {
+		_, err := s.Import("twin", variant)
+		if err == nil {
+			t.Fatalf("a second vault was imported over the seed of '%s'", first.Name)
+		}
+		if !strings.Contains(err.Error(), "personal") {
+			t.Errorf("refusal does not name the existing vault: %v", err)
+		}
+		if !strings.Contains(err.Error(), first.Fingerprint) {
+			t.Errorf("refusal does not name the fingerprint: %v", err)
+		}
+		if s.Has("twin") {
+			t.Fatal("a refused duplicate import left a vault behind")
+		}
+	}
+
+	// The refused import touched nothing: the existing vault's counter and its
+	// stored phrase are exactly what they were.
+	after, err := s.Load("personal")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after.NextIndex != first.NextIndex {
+		t.Errorf("NextIndex = %d after refused imports, want %d", after.NextIndex, first.NextIndex)
+	}
+	if back, err := s.Mnemonic("personal"); err != nil || back != phrase {
+		t.Errorf("the existing vault's phrase did not survive: %q (%v)", back, err)
+	}
+
+	// A DIFFERENT seed under a different name is untouched by the rule.
+	if _, _, err := s.Create("burner"); err != nil {
+		t.Fatalf("Create a second, distinct vault: %v", err)
+	}
+}
+
+// Create runs the same check. A crypto/rand collision is astronomically
+// unlikely, which is exactly why the check is cheap: it closes the class rather
+// than the one path an operator can reach by hand.
+func TestCreateRefusesASeedAVaultAlreadyHolds(t *testing.T) {
+	s := newTestStore(t)
+	meta, mnemonic, err := s.Create("personal")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Stand in for the collision by importing what Create just generated.
+	if _, err := s.Import("collision", mnemonic); err == nil {
+		t.Fatal("a generated seed was adoptable a second time")
+	} else if !strings.Contains(err.Error(), meta.Fingerprint) {
+		t.Errorf("refusal does not name the fingerprint: %v", err)
+	}
+	if err := s.refuseDuplicateSeed(meta.Fingerprint); err == nil {
+		t.Fatal("refuseDuplicateSeed passed a fingerprint a vault already holds")
+	}
+	if err := s.refuseDuplicateSeed("00000000"); err != nil {
+		t.Fatalf("refuseDuplicateSeed rejected an unheld fingerprint: %v", err)
 	}
 }
 

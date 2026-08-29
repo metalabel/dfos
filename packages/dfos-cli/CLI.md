@@ -109,7 +109,7 @@ The CLI has four layers of state:
 - **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain.
 - **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
 
-`DFOS_CONFIG` names the config file, and everything on disk sits beside it: point it at another directory and the relay database, the credentials, the vaults, and the file-backed keys all move with it.
+`DFOS_CONFIG` names the config **file**, not the directory — `DFOS_CONFIG=/tmp/scratch/config.toml`, not `DFOS_CONFIG=/tmp/scratch`. A path naming a directory is refused with the contract rather than a bare "is a directory". Everything on disk sits beside that file: point it at another directory and the relay database, the credentials, the vaults, and the file-backed keys all move with it.
 
 ---
 
@@ -181,7 +181,11 @@ dfos config set default-identity alice     # or a bare did:dfos: identifier
 dfos config set default-peer prod          # the peer must already be registered
 dfos config set default-vault personal     # the vault must already exist
 dfos config get default-identity
+dfos config list                           # every key, the peers, and the identities
+dfos config list --json                    # the same, key for key with the TOML
 ```
+
+`config list` reads like the rest of the CLI: a plain report by default, naming every writable key including the ones that are unset, and under `--json` the config document itself — the same snake_case namespace the TOML uses, so `jq` output round-trips back into `config set`.
 
 `default-vault` is the same tier for minting that `default-identity` is for signing: the fallback when no `--vault` names one. `dfos config set` is the only thing that writes it, with the one exception that creating the first vault on a machine with none sets it.
 
@@ -240,7 +244,7 @@ With no vault selected — none exists, no default is set, or `--no-vault` is pa
 
 `dfos config set default-vault <name>` writes the default, and it is the only thing that writes it, with one exception: creating the **first** vault on a machine that has none sets it, because there is nothing there to displace.
 
-Rotation is sticky. `identity update --rotate-auth` and `--rotate-controller` draw their replacements from the vault that minted the identity's **current** keys, so an identity stays on one seed and its phrase does not silently stop covering it. `default-vault` is not consulted — that would move an identity onto a different seed the moment someone changed a default. `--vault` overrides the stickiness; an identity whose keys came from no vault rotates into standalone keys.
+Rotation is sticky. `identity update --rotate-auth` and `--rotate-controller` draw their replacements from the vault that minted the identity's **current** keys, so an identity stays on one seed and its phrase does not silently stop covering it. `default-vault` is not consulted — that would move an identity onto a different seed the moment someone changed a default. `--vault` overrides the stickiness for **that invocation only** — it moves no pointer, so a later bare rotate resolves the seed afresh from whichever vault minted the identity's controller key at that moment. An identity whose keys came from no vault rotates into standalone keys.
 
 ### Derivation
 
@@ -264,15 +268,28 @@ This path is fixed. A vault's mnemonic and this path are together the full descr
 
 The mnemonic follows the same probe-and-fall-back rule as the keystore: the OS keychain when one is reachable, a `0600` file when it is not, and the file store directly under `DFOS_NO_KEYCHAIN`. The metadata file holds no secret — a fingerprint and a list of public key ids — and is readable by hand.
 
-The fingerprint is the first four bytes of SHA-256 over the seed's SLIP-0010 master key, hex-encoded. It identifies the **seed**, so two vaults holding the same phrase under different names fingerprint identically.
+The fingerprint is the first four bytes of SHA-256 over the seed's SLIP-0010 master key, hex-encoded. It identifies the **seed**, not the name it is filed under: the same phrase reaches the same fingerprint on every machine that holds it.
+
+### One seed, one vault
+
+A machine holds a given seed once. `vault import` refuses a phrase some vault here already holds, and the refusal names that vault and its fingerprint:
+
+```
+this phrase is already vault 'personal' [d1f9f14b] — one seed, one vault:
+a second vault over the same phrase would mint identical keys from its own counter
+```
+
+The refusal is by fingerprint, so a re-cased or re-spaced form of the phrase does not slip past it. `vault create` runs the same check on the seed it generates.
+
+The rule is a custody rule, not a bookkeeping one. The derivation counter belongs to the vault, so two vaults over one phrase each hand out indices from their own counter starting at 0 — mint an identity from each and the two identities hold **byte-identical** controller and auth private keys, with nothing on screen to say so. There is no `--force`: several accounts branching under one mnemonic is a shape that is refused by design, because a phrase whose holder cannot tell which identity it controls has stopped being a backup. A second identity gets a second phrase.
 
 ### Seeing the phrase
 
-`vault create` prints the mnemonic once, to **stderr**, fenced and numbered. It never goes to stdout and never into `--json` output, so a redirected or piped invocation does not write a seed into a file by accident.
+The mnemonic goes to **stderr**, always, from every command that prints it: `vault create` when it generates one, and `vault show --reveal-mnemonic` when it reveals one. It never goes to stdout and never into `--json` output, so a redirected or piped invocation does not write a seed into a file by accident — `dfos vault show personal --reveal-mnemonic > report.txt` writes a report, and the phrase stays on the terminal.
 
-`vault show` does not print it. `vault show <name> --reveal-mnemonic` does, behind a typed confirmation — the vault's own name, not a `y` — because the phrase then lives in that terminal's scrollback and in anything recording the session. Under `--json`, the reveal flag is the only thing that puts a `mnemonic` field in the document.
+`vault create` prints it once, fenced and numbered. `vault show` does not print it at all unless asked: `vault show <name> --reveal-mnemonic` does, behind a typed confirmation — the vault's own name, not a `y` — because the phrase then lives in that terminal's scrollback and in anything recording the session. The confirmation is read from stdin, so a non-interactive invocation fails closed rather than revealing anything. No flag puts a `mnemonic` field in a `--json` document; a script that needs the phrase captures stderr.
 
-`vault import` reads the phrase from stdin — a prompt at a terminal, a piped line otherwise. It is never an argument: argv lands in shell history and is readable in the process list. The words are checked against the BIP-39 English wordlist and their checksum before anything is stored.
+`vault import` reads the phrase from stdin — a prompt at a terminal, a piped line otherwise. It is never an argument: argv lands in shell history and is readable in the process list. The words are checked against the BIP-39 English wordlist and their checksum, and the seed against every vault this machine already holds, before anything is stored.
 
 A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel. What that phrase gets you back is [Recovery](#recovery).
 

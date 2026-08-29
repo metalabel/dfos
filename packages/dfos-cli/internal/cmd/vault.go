@@ -111,7 +111,7 @@ func newVaultCreateCmd() *cobra.Command {
 		Long: "Generate a 24-word BIP-39 mnemonic from system entropy, store it, and print it ONCE. " +
 			"The mnemonic goes to stderr, never to stdout and never into --json output, so a redirected " +
 			"or piped invocation does not write a seed into a file by accident. " +
-			"'dfos vault show <name> --reveal-mnemonic' prints it again on demand.",
+			"'dfos vault show <name> --reveal-mnemonic' prints it again on demand, to stderr by the same rule.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -159,7 +159,9 @@ func newVaultImportCmd() *cobra.Command {
 		Short: "Adopt an existing BIP-39 mnemonic as a vault",
 		Long: "Read a mnemonic from the terminal or from stdin, check it against the BIP-39 English " +
 			"wordlist and its checksum, and store it under a name. The mnemonic is never an argument: " +
-			"argv lands in shell history and is readable in the process list.",
+			"argv lands in shell history and is readable in the process list. A phrase some vault on " +
+			"this machine already holds is refused by fingerprint, and the refusal names that vault: " +
+			"one seed, one vault, because two vaults over one phrase mint identical keys.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -275,8 +277,9 @@ func newVaultShowCmd() *cobra.Command {
 		Use:   "show <name>",
 		Short: "Show a vault's fingerprint, counter, and minted keys",
 		Long: "Report one vault: its fingerprint, its derivation counter, and every key it minted. " +
-			"The mnemonic is NOT printed. --reveal-mnemonic prints it, behind a typed confirmation, " +
-			"for writing down a backup.",
+			"The mnemonic is NOT printed. --reveal-mnemonic prints it to stderr, behind a typed " +
+			"confirmation, for writing down a backup — the same route 'vault create' takes, so a " +
+			"redirected or piped invocation does not write a seed into a file by accident.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -296,7 +299,10 @@ func newVaultShowCmd() *cobra.Command {
 			}
 
 			if jsonFlag {
-				out := map[string]any{
+				// The mnemonic is not a field of this document under any flag.
+				// --json is a stream something redirects into a file, and the
+				// one invariant the phrase has is that it never lands in one.
+				outputJSON(map[string]any{
 					"name":           meta.Name,
 					"fingerprint":    meta.Fingerprint,
 					"createdAt":      meta.CreatedAt,
@@ -306,13 +312,10 @@ func newVaultShowCmd() *cobra.Command {
 					"backend":        getVaults().Backend(),
 					"default":        meta.Name == cfg.DefaultVault,
 					"minted":         meta.Minted,
-				}
-				// The mnemonic reaches --json only through the explicit reveal flag,
-				// and never otherwise.
+				})
 				if reveal {
-					out["mnemonic"] = mnemonic
+					printMnemonicBlock(os.Stderr, meta.Name, mnemonic)
 				}
-				outputJSON(out)
 				return nil
 			}
 
@@ -336,12 +339,12 @@ func newVaultShowCmd() *cobra.Command {
 				}
 			}
 			if reveal {
-				printMnemonicBlock(os.Stdout, meta.Name, mnemonic)
+				printMnemonicBlock(os.Stderr, meta.Name, mnemonic)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&reveal, "reveal-mnemonic", false, "Print the mnemonic, after a typed confirmation")
+	cmd.Flags().BoolVar(&reveal, "reveal-mnemonic", false, "Print the mnemonic to stderr, after a typed confirmation")
 	return cmd
 }
 

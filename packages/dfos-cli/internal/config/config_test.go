@@ -246,6 +246,41 @@ func TestResolve_UnknownPeerNamesTheMechanism(t *testing.T) {
 	}
 }
 
+// DFOS_CONFIG names the config FILE, but everything on disk sits beside it, so
+// "point DFOS_CONFIG at a scratch directory" invites naming the directory. The
+// bare syscall error there is "is a directory", which reports the symptom and
+// not the contract.
+func TestConfigPathThatNamesADirectoryStatesTheContract(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DFOS_CONFIG", dir)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("a DFOS_CONFIG naming a directory loaded without complaint")
+	}
+	for _, want := range []string{"DFOS_CONFIG", "config.toml", dir} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("load error %q does not name %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "is a directory:") && !strings.Contains(err.Error(), "FILE") {
+		t.Errorf("load error is still the bare syscall message: %v", err)
+	}
+
+	if err := Save(&Config{}); err == nil {
+		t.Fatal("Save wrote through a DFOS_CONFIG naming a directory")
+	} else if !strings.Contains(err.Error(), "DFOS_CONFIG") {
+		t.Errorf("save error does not name the variable: %v", err)
+	}
+
+	// The ordinary case still loads: a path whose file does not exist yet is an
+	// empty config, not an error.
+	t.Setenv("DFOS_CONFIG", dir+"/config.toml")
+	if _, err := Load(); err != nil {
+		t.Fatalf("a normal DFOS_CONFIG file path: %v", err)
+	}
+}
+
 func TestResolve_UnknownIdentityNameIsNotAResolutionError(t *testing.T) {
 	// A name with no config registration resolves to a name and no DID. The
 	// signing site is what rejects it, with a message that can name the source.

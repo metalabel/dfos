@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -27,11 +27,59 @@ func newConfigListCmd() *cobra.Command {
 		Short:   "Show full configuration",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, _ := json.MarshalIndent(cfg, "", "  ")
-			fmt.Println(string(data))
+			// --json is the round-trippable TOML namespace, unchanged. The bare
+			// form is the house plain rendering every other command has: a
+			// JSON document under both flags made `--json` mean nothing here.
+			if jsonFlag {
+				outputJSON(cfg)
+				return nil
+			}
+			fmt.Printf("Config: %s\n", config.ConfigPath())
+
+			fmt.Printf("\nDefaults:\n")
+			for _, key := range configKeys {
+				value, _ := configValue(key)
+				if value == "" {
+					value = "(unset)"
+				}
+				fmt.Printf("  %-24s %s\n", key, value)
+			}
+			if cfg.ActiveContext != "" {
+				fmt.Printf("  %-24s %s (inert — 'dfos use' is gone; nothing resolves through it)\n", "active_context", cfg.ActiveContext)
+			}
+
+			fmt.Printf("\nPeers: %d\n", len(cfg.Relays))
+			for _, name := range sortedKeys(cfg.Relays) {
+				fmt.Printf("  %-24s %s\n", name, cfg.Relays[name].URL)
+			}
+
+			fmt.Printf("\nIdentities: %d\n", len(cfg.Identities))
+			for _, name := range sortedKeys(cfg.Identities) {
+				fmt.Printf("  %-24s %s\n", name, cfg.Identities[name].DID)
+			}
+
+			if len(cfg.Contexts) > 0 {
+				fmt.Printf("\nContexts: %d\n", len(cfg.Contexts))
+				for _, name := range sortedKeys(cfg.Contexts) {
+					c := cfg.Contexts[name]
+					fmt.Printf("  %-24s %s @ %s\n", name, c.Identity, c.Relay)
+				}
+			}
 			return nil
 		},
 	}
+}
+
+// sortedKeys orders a config map's names so the plain rendering is stable
+// across invocations — Go map iteration is not, and a listing that reshuffles
+// itself cannot be diffed.
+func sortedKeys[V any](m map[string]V) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // configKeys are the writable keys, in the spelling `dfos config set` documents.
@@ -51,6 +99,26 @@ func unknownConfigKey(key string) error {
 	return fmt.Errorf("unknown config key: %s (known keys: %s)", key, strings.Join(configKeys, ", "))
 }
 
+// configValue reads one canonical key, reporting whether it is a known key at
+// all. `config get` and the plain `config list` both read through it, so the
+// two cannot drift into disagreeing about what a key holds.
+func configValue(key string) (string, bool) {
+	switch key {
+	case "default-identity":
+		return cfg.DefaultIdentity, true
+	case "default-peer":
+		return cfg.DefaultPeer, true
+	case "default-vault":
+		return cfg.DefaultVault, true
+	case "defaults.credential_ttl":
+		if cfg.Defaults != nil {
+			return cfg.Defaults.CredentialTTL, true
+		}
+		return "", true
+	}
+	return "", false
+}
+
 func newConfigGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <key>",
@@ -58,19 +126,8 @@ func newConfigGetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := normalizeConfigKey(args[0])
-			var value string
-			switch key {
-			case "default-identity":
-				value = cfg.DefaultIdentity
-			case "default-peer":
-				value = cfg.DefaultPeer
-			case "default-vault":
-				value = cfg.DefaultVault
-			case "defaults.credential_ttl":
-				if cfg.Defaults != nil {
-					value = cfg.Defaults.CredentialTTL
-				}
-			default:
+			value, known := configValue(key)
+			if !known {
 				return unknownConfigKey(args[0])
 			}
 			if jsonFlag {

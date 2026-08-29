@@ -522,7 +522,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Mint a new controller key and rotate out old one(s)")
 	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable); REPLACES the entire services set")
 	cmd.Flags().BoolVar(&clearServices, "clear-services", false, "Empty the discovery services set")
-	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the replacements from this vault instead of the one that minted the current keys")
+	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the replacements from this vault for THIS rotation only; a later bare rotate returns to the vault behind the identity's current controller key")
 	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Rotate into standalone keys, from no vault")
 	return cmd
 }

@@ -149,7 +149,8 @@ func (s *Store) Create(name string) (*Metadata, string, error) {
 }
 
 // Import adopts a mnemonic the operator already holds, after checking it is
-// well-formed English BIP-39 with a valid checksum.
+// well-formed English BIP-39 with a valid checksum and that no vault on this
+// machine already holds the same seed (see refuseDuplicateSeed).
 func (s *Store) Import(name, mnemonic string) (*Metadata, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
@@ -164,12 +165,17 @@ func (s *Store) Import(name, mnemonic string) (*Metadata, error) {
 	return s.adopt(name, normalized, true)
 }
 
-// adopt stores the mnemonic and writes the initial metadata. The secret is
-// written first: metadata pointing at a mnemonic that was never stored would
-// describe a vault that cannot derive anything.
+// adopt stores the mnemonic and writes the initial metadata. The fingerprint is
+// checked for uniqueness FIRST, before anything is written; then the secret,
+// because metadata pointing at a mnemonic that was never stored would describe
+// a vault that cannot derive anything.
 func (s *Store) adopt(name, mnemonic string, imported bool) (*Metadata, error) {
 	seed, err := MnemonicSeed(mnemonic)
 	if err != nil {
+		return nil, err
+	}
+	fingerprint := Fingerprint(seed)
+	if err := s.refuseDuplicateSeed(fingerprint); err != nil {
 		return nil, err
 	}
 	if err := s.secrets.Put(name, mnemonic); err != nil {
@@ -177,7 +183,7 @@ func (s *Store) adopt(name, mnemonic string, imported bool) (*Metadata, error) {
 	}
 	meta := &Metadata{
 		Name:        name,
-		Fingerprint: Fingerprint(seed),
+		Fingerprint: fingerprint,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 		Imported:    imported,
 		NextIndex:   0,
@@ -187,6 +193,31 @@ func (s *Store) adopt(name, mnemonic string, imported bool) (*Metadata, error) {
 		return nil, err
 	}
 	return meta, nil
+}
+
+// refuseDuplicateSeed is the one-seed-one-vault rule. A vault's derivation
+// counter is keyed by NAME, so two vaults over one phrase each hand out indices
+// from their own counter starting at 0: mint an identity from each and the two
+// identities hold byte-identical controller and auth private keys, with nothing
+// on screen to say so. The counters cannot be shared either — that would
+// legitimize the same shape by another route.
+//
+// There is no --force. Several accounts branching under one mnemonic is not an
+// ergonomic gap this refusal happens to close; it is a custody shape that was
+// considered and rejected, because a phrase whose holder cannot tell which
+// identity it controls is a phrase that has stopped being a backup. One seed
+// per vault, one vault per seed; a second identity gets a second phrase.
+func (s *Store) refuseDuplicateSeed(fingerprint string) error {
+	existing, err := s.List()
+	if err != nil {
+		return err
+	}
+	for _, meta := range existing {
+		if meta.Fingerprint == fingerprint {
+			return fmt.Errorf("this phrase is already vault '%s' [%s] — one seed, one vault: a second vault over the same phrase would mint identical keys from its own counter", meta.Name, meta.Fingerprint)
+		}
+	}
+	return nil
 }
 
 func (s *Store) save(meta *Metadata) error {

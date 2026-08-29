@@ -187,16 +187,86 @@ func TestVaultShowHidesTheMnemonicUntilAskedAndConfirmed(t *testing.T) {
 		t.Fatal("a refused reveal printed the mnemonic anyway")
 	}
 
-	// The right answer reveals it.
+	// The right answer reveals it — to STDERR, the route `vault create` takes.
+	// stdout stays the machine-readable half, so `dfos vault show x
+	// --reveal-mnemonic > file` writes a report and not a seed.
 	right := newVaultShowCmd()
 	mustSetFlag(t, right, "reveal-mnemonic", "true")
 	right.SetIn(strings.NewReader("personal\n"))
-	stdout, _, err = runCapturing(t, right, []string{"personal"})
+	stdout, stderr, err = runCapturing(t, right, []string{"personal"})
 	if err != nil {
 		t.Fatalf("confirmed reveal: %v", err)
 	}
-	if extractMnemonic(t, stdout) != mnemonic {
+	if extractMnemonic(t, stderr) != mnemonic {
 		t.Fatal("the revealed phrase is not the one the vault was created with")
+	}
+	assertNoPhrase(t, stdout, mnemonic, "a confirmed reveal wrote the phrase to stdout")
+
+	// Under --json the same holds, and the document has no mnemonic field at
+	// all: --json is what something redirects into a file.
+	revealJSON := newVaultShowCmd()
+	mustSetFlag(t, revealJSON, "reveal-mnemonic", "true")
+	revealJSON.SetIn(strings.NewReader("personal\n"))
+	var doc map[string]any
+	stdout, stderr, err = runCapturingJSON(t, revealJSON, []string{"personal"}, &doc)
+	if err != nil {
+		t.Fatalf("confirmed reveal --json: %v", err)
+	}
+	if _, ok := doc["mnemonic"]; ok {
+		t.Fatalf("--reveal-mnemonic put a mnemonic field in the --json document: %v", doc)
+	}
+	assertNoPhrase(t, stdout, mnemonic, "--reveal-mnemonic --json wrote the phrase to stdout")
+	if extractMnemonic(t, stderr) != mnemonic {
+		t.Fatal("--reveal-mnemonic --json did not print the phrase to stderr at all")
+	}
+	if doc["fingerprint"] == nil || doc["nextIndex"] == nil {
+		t.Fatalf("the --json document lost its reporting fields: %v", doc)
+	}
+}
+
+// assertNoPhrase checks a stream for the phrase as a whole AND for any single
+// word of it, because the fenced block wraps at six words: a stream holding
+// the row "1. abandon abandon …" carries the seed without carrying the string.
+func assertNoPhrase(t *testing.T, stream, mnemonic, msg string) {
+	t.Helper()
+	if strings.Contains(stream, mnemonic) {
+		t.Fatalf("%s:\n%s", msg, stream)
+	}
+	words := strings.Fields(mnemonic)
+	if strings.Contains(stream, strings.Join(words[:6], "  ")) {
+		t.Fatalf("%s (first row of the fenced block):\n%s", msg, stream)
+	}
+	if strings.Contains(stream, "RECOVERY PHRASE") {
+		t.Fatalf("%s (the fenced block itself):\n%s", msg, stream)
+	}
+}
+
+func TestVaultImportRefusesAPhraseAVaultAlreadyHolds(t *testing.T) {
+	setupDevices(t)
+	mnemonic := createVault(t, "personal")
+
+	dup := newVaultImportCmd()
+	dup.SetIn(strings.NewReader(mnemonic + "\n"))
+	_, _, err := runCapturing(t, dup, []string{"twin"})
+	if err == nil {
+		t.Fatal("a second vault was imported over the phrase of 'personal'")
+	}
+	if !strings.Contains(err.Error(), "personal") {
+		t.Errorf("the refusal does not name the existing vault: %v", err)
+	}
+	if getVaults().Has("twin") {
+		t.Fatal("a refused duplicate import left a vault behind")
+	}
+
+	// The existing single-vault flow is untouched: a DIFFERENT phrase still
+	// imports, and 'personal' is still the machine's default.
+	other := newVaultImportCmd()
+	other.SetIn(strings.NewReader(testMnemonic + "\n"))
+	if _, _, err := runCapturing(t, other, []string{"recovered"}); err != nil {
+		t.Fatalf("importing a distinct phrase: %v", err)
+	}
+	if cfg.DefaultVault != "personal" {
+		t.Errorf("default-vault = %q, want it unmoved", cfg.DefaultVault)
 	}
 }
 
