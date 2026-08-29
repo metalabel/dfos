@@ -268,6 +268,112 @@ describe('openapi', () => {
     expect((await app.request('http://localhost/openapi.json')).status).toBe(404);
   });
 
+  it('refuses a configured route that would shadow a route this relay serves', async () => {
+    // Hono answers FIRST-MATCH and the document route is registered before every
+    // plane, so a colliding route serves the OpenAPI document where data belongs
+    // — a total, silent capability outage that answers 200 to a probe. A typo in
+    // a deployment config must fail the deployment, not the protocol.
+    const colliding = [
+      '/proof/v1/log',
+      '/proof/v1',
+      '/index/v0/identities',
+      '/revocations/v1/issuer',
+      '/signing/v0/requests',
+      '/content/abc/blob',
+      '/1.0/identifiers',
+      '/.well-known/dfos-relay',
+    ];
+    for (const route of colliding) {
+      await expect(
+        createRelay({
+          store: new MemoryRelayStore(),
+          openapi: { document: openapiDocument, route },
+        }),
+        `route ${route}`,
+      ).rejects.toThrow(/falls under/);
+    }
+
+    // A route MATCHER is the shadowing bug in its most total form, and a relative
+    // path is not a route at all.
+    for (const route of ['/*', '/docs/:name', '/openapi.json?v=1']) {
+      await expect(
+        createRelay({
+          store: new MemoryRelayStore(),
+          openapi: { document: openapiDocument, route },
+        }),
+        `route ${route}`,
+      ).rejects.toThrow(/must be a literal path/);
+    }
+    await expect(
+      createRelay({
+        store: new MemoryRelayStore(),
+        openapi: { document: openapiDocument, route: 'openapi.json' },
+      }),
+    ).rejects.toThrow(/must be an absolute path/);
+  });
+
+  it('serves the default route and a benign custom route alike', async () => {
+    // The default is unaffected by the guard, and a route outside every reserved
+    // surface still serves and is still what the well-known advertises.
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { document: openapiDocument, route: '/schema.json' },
+    });
+    expect((await app.request('http://localhost/schema.json')).status).toBe(200);
+    expect((await app.request('http://localhost/openapi.json')).status).toBe(404);
+    const wellKnown = (await (
+      await app.request('http://localhost/.well-known/dfos-relay')
+    ).json()) as { openapi?: string };
+    expect(wellKnown.openapi).toBe('/schema.json');
+
+    // and the planes it sits alongside still answer with data, not a document
+    const log = await app.request('http://localhost/proof/v1/log');
+    expect(log.status).toBe(200);
+    expect(await log.json()).toHaveProperty('entries');
+  });
+
+  it('relocates the document self-entry to the route it is actually served at', async () => {
+    // The `servers` rewrite fixes the ORIGIN every operation resolves against,
+    // not the PATH of this one: without relocating the entry, a relay serving at
+    // /schema.json advertised /schema.json while the document it served claimed
+    // the document lived at /openapi.json, which 404s.
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { document: openapiDocument, route: '/schema.json' },
+    });
+    const served = (await (await app.request('http://localhost/schema.json')).json()) as {
+      paths: Record<string, unknown>;
+    };
+    const canonicalPaths = openapi.paths;
+
+    expect(served.paths).not.toHaveProperty('/openapi.json');
+    expect(served.paths['/schema.json']).toEqual(canonicalPaths['/openapi.json']);
+
+    // Rekeyed IN PLACE — same position in the path list, and nothing else moved.
+    expect(Object.keys(served.paths)).toEqual(
+      Object.keys(canonicalPaths).map((path) => (path === '/openapi.json' ? '/schema.json' : path)),
+    );
+    for (const [path, item] of Object.entries(canonicalPaths)) {
+      if (path === '/openapi.json') continue;
+      expect(served.paths[path], `path ${path}`).toEqual(item);
+    }
+
+    // and the caller's shared document is untouched, as with `servers`
+    expect(openapiDocument.paths).toHaveProperty('/openapi.json');
+    expect(openapiDocument.paths).not.toHaveProperty('/schema.json');
+  });
+
+  it('leaves the paths byte-identical at the default route', async () => {
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { document: openapiDocument },
+    });
+    const served = (await (await app.request('http://localhost/openapi.json')).json()) as {
+      paths: Record<string, unknown>;
+    };
+    expect(served.paths).toEqual(openapi.paths);
+  });
+
   it('documents the index filters the routes actually parse', () => {
     const parameters = object(openapi.paths['/index/v0/identities']!['get'])[
       'parameters'

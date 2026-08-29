@@ -364,6 +364,46 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     ).toBe('schema');
   });
 
+  it('rejects a timestamp that is SPELLED right but is not a calendar date', () => {
+    // The twin contract's sharpest edge: `Date.parse('2026-02-30T00:00:00.000Z')`
+    // NORMALIZES to March 2 and returns a finite number, where the Go twin's
+    // `time.Parse` refuses the date outright. A finiteness-only check therefore
+    // VERIFIED a correctly-signed proof in TypeScript that Go rejects — two
+    // byte-twins disagreeing about whether a proof verifies. The same four
+    // fixtures are pinned in key_proof_test.go's Go verify-side mirror.
+    for (const [timestamp, unix] of [
+      ['2026-02-30T00:00:00.000Z', 1_772_409_600], // February has no 30th
+      ['2027-02-29T00:00:00.000Z', 1_803_859_200], // 2027 is not a leap year
+    ] as const) {
+      const impossible = forge(
+        { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+        {
+          ...vectorPayload(),
+          timestamp,
+        },
+      );
+      expect(reasonOf(() => verifyKeyProof(impossible, expectAt({ now: at(unix) })))).toBe(
+        'schema',
+      );
+    }
+
+    // ...and the neighbouring REAL dates still verify, so the gate is a calendar
+    // check and not a blanket refusal of February.
+    for (const [timestamp, unix] of [
+      ['2026-02-28T00:00:00.000Z', 1_772_236_800],
+      ['2028-02-29T00:00:00.000Z', 1_835_395_200], // 2028 IS a leap year
+    ] as const) {
+      const real = forge(
+        { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+        {
+          ...vectorPayload(),
+          timestamp,
+        },
+      );
+      expect(() => verifyKeyProof(real, expectAt({ now: at(unix) }))).not.toThrow();
+    }
+  });
+
   it('rejects a payload that is not a JSON object', () => {
     for (const payload of [[1, 2, 3], 'a string', 7, null]) {
       expect(
@@ -430,6 +470,34 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     );
     expect(() => verifyKeyProof(VECTOR_JWS, expectAt({ maxSkewSeconds: 1.5 }))).toThrow(
       /non-negative integer/,
+    );
+  });
+
+  it('refuses an EMPTY expectedTyp — the gate must name a purpose', async () => {
+    // An empty expectation byte-equals an artifact carrying `"typ":""`, so a
+    // verifier configured with one admits an envelope scoped to no ceremony at
+    // all. Both halves refuse: `signKeyProof` on the producer side, and this on
+    // the verifier side. A MISCONFIGURATION, never a verdict — a plain Error, not
+    // a KeyProofVerifyError, so a caller branching on `reason` cannot read a
+    // broken deployment as a bad envelope. The Go twin pins the same pair.
+    await expect(
+      signKeyProof({
+        typ: '',
+        nonce: VECTOR_NONCE,
+        audience: VECTOR_AUDIENCE,
+        privateKey: VECTOR_SEED,
+        timestamp: VECTOR_TIMESTAMP,
+      }),
+    ).rejects.toThrow(/registered purpose value/);
+
+    // A REAL signature over a header whose typ is the empty string — the artifact
+    // an empty expectation would otherwise wave through.
+    const emptyTyp = forge({ alg: 'EdDSA', typ: '' }, vectorPayload());
+    expect(() => verifyKeyProof(emptyTyp, expectAt({ expectedTyp: '' }))).toThrow(
+      /registered purpose value/,
+    );
+    expect(reasonOf(() => verifyKeyProof(emptyTyp, expectAt({ expectedTyp: '' })))).toMatch(
+      /^not-a-KeyProofVerifyError/,
     );
   });
 

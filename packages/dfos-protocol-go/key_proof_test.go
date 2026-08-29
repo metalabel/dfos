@@ -386,6 +386,76 @@ func TestVerifyKeyProofRejectsMissingAndNonStringMembers(t *testing.T) {
 	}
 }
 
+// keyProofCalendarCase is a spelled-correctly timestamp and the instant a
+// verifier would be holding when it arrives.
+type keyProofCalendarCase struct {
+	timestamp string
+	unix      int64
+}
+
+// TestVerifyKeyProofRejectsANonCalendarTimestamp is the twin contract's sharpest
+// edge, from the verify side. time.Parse refuses 2026-02-30 outright, where
+// JavaScript's Date.parse NORMALIZES it to March 2 and returns a finite number —
+// so a TS verifier checking only finiteness VERIFIED a correctly-signed proof
+// this one rejects, which is the one thing two byte-twins may never do. The four
+// fixtures below are pinned identically in dfos-protocol/tests/key-proof.spec.ts.
+func TestVerifyKeyProofRejectsANonCalendarTimestamp(t *testing.T) {
+	for _, tc := range []keyProofCalendarCase{
+		{"2026-02-30T00:00:00.000Z", 1772409600}, // February has no 30th
+		{"2027-02-29T00:00:00.000Z", 1803859200}, // 2027 is not a leap year
+	} {
+		payload := keyProofVectorPayload2()
+		payload["timestamp"] = tc.timestamp
+		proof := forgeKeyProof(t, keyProofHeader(), payload, keyProofVectorKey())
+		_, err := VerifyKeyProof(proof, keyProofVectorExpect(), time.Unix(tc.unix, 0).UTC())
+		if reason := keyProofReason(t, err); reason != KeyProofFailureSchema {
+			t.Fatalf("%s reason: %s", tc.timestamp, reason)
+		}
+	}
+
+	// ...and the neighbouring REAL dates still verify, so the gate is a calendar
+	// check and not a blanket refusal of February.
+	for _, tc := range []keyProofCalendarCase{
+		{"2026-02-28T00:00:00.000Z", 1772236800},
+		{"2028-02-29T00:00:00.000Z", 1835395200}, // 2028 IS a leap year
+	} {
+		payload := keyProofVectorPayload2()
+		payload["timestamp"] = tc.timestamp
+		proof := forgeKeyProof(t, keyProofHeader(), payload, keyProofVectorKey())
+		if _, err := VerifyKeyProof(proof, keyProofVectorExpect(), time.Unix(tc.unix, 0).UTC()); err != nil {
+			t.Fatalf("%s: expected acceptance, got %v", tc.timestamp, err)
+		}
+	}
+}
+
+// TestKeyProofRefusesAnEmptyPurposeOnBothSides pins the producer and verifier
+// halves of one rule: the typ gate is only a gate when the expectation NAMES a
+// purpose. An empty expectation byte-equals an artifact carrying "typ":"", so a
+// verifier configured with one would admit an envelope scoped to no ceremony at
+// all. Both refusals are MISCONFIGURATIONS rather than verdicts — a plain error,
+// never wrapping ErrKeyProofInvalid, so a caller branching on Reason cannot read
+// a broken deployment as a bad envelope. The TS twin pins the same pair.
+func TestKeyProofRefusesAnEmptyPurposeOnBothSides(t *testing.T) {
+	if _, _, err := SignKeyProof("", keyProofVectorNonce, keyProofVectorAudience,
+		keyProofVectorKey(), KeyProofOptions{Timestamp: keyProofVectorTimestamp}); err == nil {
+		t.Fatalf("expected SignKeyProof to refuse an empty typ")
+	}
+
+	// A REAL signature over a header whose typ is the empty string — the artifact
+	// an empty expectation would otherwise wave through.
+	proof := forgeKeyProof(t, map[string]any{"alg": "EdDSA", "typ": ""},
+		keyProofVectorPayload2(), keyProofVectorKey())
+	expect := keyProofVectorExpect()
+	expect.Typ = ""
+	_, err := VerifyKeyProof(proof, expect, keyProofVectorNow())
+	if err == nil {
+		t.Fatalf("expected VerifyKeyProof to refuse an empty expectation")
+	}
+	if errors.Is(err, ErrKeyProofInvalid) {
+		t.Fatalf("an empty expectation is a misconfiguration, not a proof verdict: %v", err)
+	}
+}
+
 func TestVerifyKeyProofAudienceIsByteEquality(t *testing.T) {
 	// Near-misses are misses: no port normalization, no case folding, no suffix match.
 	for _, authority := range []string{"evil.example", "keys.dfos.com:443", "KEYS.DFOS.COM", "dfos.com", "a.keys.dfos.com"} {
