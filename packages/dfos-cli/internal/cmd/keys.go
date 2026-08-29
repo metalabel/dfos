@@ -169,20 +169,31 @@ func buildKeyLedger() (*keyLedger, error) {
 	// published the key succeeded, so this is provenance for keys that exist in
 	// a chain — and, when a chain has since gone missing from this relay, the
 	// evidence that a written-down phrase still covers the key.
+	// Each record is filed under BOTH accounts a key can answer to — its content
+	// address and the DID-scoped account earlier versions wrote — so provenance
+	// reaches a key whichever shape this machine holds it under. The record is
+	// also the cheapest thing that can say which identity a content-addressed key
+	// belongs to, which is why mintedDID exists.
 	mintedBy := map[string]*keyVaultProvenance{}
 	mintedPublic := map[string]string{}
+	mintedDID := map[string]string{}
+	mintedKeyID := map[string]string{}
 	if vaults, err := getVaults().List(); err == nil {
 		for _, meta := range vaults {
 			for _, rec := range meta.Minted {
-				account := rec.DID + "#" + rec.KeyID
-				mintedBy[account] = &keyVaultProvenance{
+				prov := &keyVaultProvenance{
 					Name:        meta.Name,
 					Fingerprint: meta.Fingerprint,
 					Index:       rec.Index,
 					Path:        vault.DerivationPath(rec.Index),
 				}
-				if rec.PublicKey != "" {
-					mintedPublic[account] = rec.PublicKey
+				for _, account := range keyAccountsFor(rec.DID, rec.KeyID, rec.PublicKey) {
+					mintedBy[account] = prov
+					if rec.PublicKey != "" {
+						mintedPublic[account] = rec.PublicKey
+					}
+					mintedDID[account] = rec.DID
+					mintedKeyID[account] = rec.KeyID
 				}
 			}
 		}
@@ -277,83 +288,149 @@ func buildKeyLedger() (*keyLedger, error) {
 	}
 
 	// What the chains declare — resolved outward from the held keys, one point
-	// lookup per DID they name, not a fold over every chain this relay has
-	// synced. `declaredRoles` is keyed by account (`<did>#<keyId>`) so a key
-	// bound to several roles is one entry with several roles, which is the common
-	// production shape.
+	// lookup per DID, not a fold over every chain this relay has synced.
+	// `declaredRoles` is keyed by account so a key bound to several roles is one
+	// entry with several roles, which is the shape `identity create` mints.
+	//
+	// A DID-scoped account NAMES its DID, so it is a point lookup on sight. A
+	// content-addressed one does not — the address is a property of the key, and
+	// which identity declares it is a property of a chain — so its DID comes from
+	// a vault record or from the identity roster in config, both of which this
+	// machine already holds. Only a held key NEITHER can place sends this to the
+	// whole corpus, and it says so before it goes.
 	declaredRoles := map[string][]string{}
 	declaredPublic := map[string]string{}
+	accountDID := map[string]string{}
+	accountKeyID := map[string]string{}
 	knownDID := map[string]bool{}
 	deletedDID := map[string]bool{}
 	chainByDID := map[string]*relay.StoredIdentityChain{}
 	resolved := map[string]bool{}
-	for _, h := range order {
-		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) ||
-			!strings.Contains(h.account, "#") {
-			continue
-		}
-		did := didFromKid(h.account)
-		if resolved[did] {
-			continue
-		}
-		resolved[did] = true
-		chain, err := lr.Store.GetIdentityChain(did)
-		if err != nil {
-			return nil, fmt.Errorf("read the identity chain for %s from the local relay: %w", did, err)
-		}
-		if chain == nil {
-			// No chain for this DID here. classifyKey reads that absence off
-			// knownDID and calls the key an orphan — the same answer the fold over
-			// every chain gave, reached without reading them.
-			continue
-		}
+
+	declareChain := func(chain *relay.StoredIdentityChain) {
 		knownDID[chain.DID] = true
 		deletedDID[chain.DID] = chain.State.IsDeleted
 		chainByDID[chain.DID] = chain
 		declare := func(set []protocol.MultikeyPublicKey, role string) {
 			for _, k := range set {
-				account := chain.DID + "#" + k.ID
-				declaredRoles[account] = append(declaredRoles[account], role)
-				declaredPublic[account] = k.PublicKeyMultibase
+				for _, account := range keyAccountsFor(chain.DID, k.ID, k.PublicKeyMultibase) {
+					declaredRoles[account] = append(declaredRoles[account], role)
+					declaredPublic[account] = k.PublicKeyMultibase
+					accountDID[account] = chain.DID
+					accountKeyID[account] = k.ID
+				}
 			}
 		}
 		declare(chain.State.ControllerKeys, "controller")
 		declare(chain.State.AuthKeys, "auth")
 		declare(chain.State.AssertKeys, "assert")
 	}
+	lookupDID := func(did string) error {
+		if did == "" || resolved[did] {
+			return nil
+		}
+		resolved[did] = true
+		chain, err := lr.Store.GetIdentityChain(did)
+		if err != nil {
+			return fmt.Errorf("read the identity chain for %s from the local relay: %w", did, err)
+		}
+		if chain == nil {
+			// No chain for this DID here. classifyKey reads that absence off
+			// knownDID and calls the key an orphan — the same answer the fold over
+			// every chain gave, reached without reading them.
+			return nil
+		}
+		declareChain(chain)
+		return nil
+	}
+
+	for _, h := range order {
+		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) {
+			continue
+		}
+		switch {
+		case strings.Contains(h.account, "#"):
+			if err := lookupDID(didFromKid(h.account)); err != nil {
+				return nil, err
+			}
+		case strings.HasPrefix(h.account, keyAccountPrefix):
+			if err := lookupDID(mintedDID[h.account]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// The identity roster: every DID this machine has a name for. That is the set
+	// whose keys it plausibly holds, and it covers the one case a vault record
+	// cannot — an identity minted with --no-vault, whose key has no provenance
+	// record to be found through.
+	for _, ic := range cfg.Identities {
+		if err := lookupDID(ic.DID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Anything still unplaced. A content-addressed key no chain here declares may
+	// be an orphan, or may belong to a chain this relay holds under a DID nothing
+	// local names — and those two are not the same answer, so the corpus is read
+	// rather than guessed at. See declaredAccounts for why this is the expensive
+	// path and why it is gated.
+	unplaced := 0
+	for _, h := range order {
+		if h.account == "" || !strings.HasPrefix(h.account, keyAccountPrefix) {
+			continue
+		}
+		if _, ok := declaredRoles[h.account]; !ok {
+			unplaced++
+		}
+	}
+	if unplaced > 0 {
+		if !jsonFlag {
+			fmt.Fprintf(os.Stderr, "Reading the local relay's identity chains to place %d key(s) nothing local names…\n", unplaced)
+		}
+		chains, err := lr.Store.ListIdentityChains()
+		if err != nil {
+			return nil, fmt.Errorf("read identity chains from the local relay: %w", err)
+		}
+		for i := range chains {
+			if resolved[chains[i].DID] {
+				continue
+			}
+			resolved[chains[i].DID] = true
+			declareChain(&chains[i])
+		}
+	}
 
 	// What a SUPERSEDED key used to be. Current state cannot say — that is what
 	// superseded means — but the operation that retired the key is still in the
 	// log, and a rotation the ledger reports without naming the role it retired
-	// is a fact with its subject removed. So the log is read back, for exactly
-	// the held accounts current state could not place and no others: a chain
-	// with nothing superseded on this machine is never walked.
+	// is a fact with its subject removed. The log is also the only place that can
+	// say WHICH identity a retired content-addressed key belonged to: the account
+	// is a property of the key, and the relationship it lost lives in an
+	// operation, not in a name.
+	//
+	// So the logs are read back, for exactly the held accounts current state
+	// could not place and no others: with nothing superseded on this machine, no
+	// chain is walked at all.
 	supersededRoles := map[string][]string{}
-	wantByDID := map[string]map[string]bool{}
+	want := map[string]bool{}
 	for _, h := range order {
-		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) ||
-			!strings.Contains(h.account, "#") {
+		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) {
 			continue
 		}
 		if _, declared := declaredRoles[h.account]; declared {
 			continue
 		}
-		did := didFromKid(h.account)
-		if !knownDID[did] {
-			continue
-		}
-		if wantByDID[did] == nil {
-			wantByDID[did] = map[string]bool{}
-		}
-		wantByDID[did][h.account] = true
+		want[h.account] = true
 	}
-	for did, want := range wantByDID {
-		chain := chainByDID[did]
-		if chain == nil {
-			continue
-		}
-		for account, roles := range rolesFromLog(chain, want) {
-			supersededRoles[account] = roles
+	if len(want) > 0 {
+		for _, chain := range chainByDID {
+			for account, p := range placementsFromLog(chain, want) {
+				supersededRoles[account] = p.roles
+				if accountDID[account] == "" {
+					accountDID[account] = p.did
+					accountKeyID[account] = p.keyID
+				}
+			}
 		}
 	}
 
@@ -380,6 +457,10 @@ func buildKeyLedger() (*keyLedger, error) {
 			supersededRoles: supersededRoles,
 			mintedBy:        mintedBy,
 			mintedPublic:    mintedPublic,
+			accountDID:      accountDID,
+			accountKeyID:    accountKeyID,
+			mintedDID:       mintedDID,
+			mintedKeyID:     mintedKeyID,
 			knownDID:        knownDID,
 			deletedDID:      deletedDID,
 			loginAccount:    loginAccount,
@@ -416,7 +497,7 @@ func declaredAccounts(lr *localrelay.LocalRelay) ([]string, error) {
 			chain.State.ControllerKeys, chain.State.AuthKeys, chain.State.AssertKeys,
 		} {
 			for _, k := range set {
-				accounts = append(accounts, chain.DID+"#"+k.ID)
+				accounts = append(accounts, keyAccountsFor(chain.DID, k.ID, k.PublicKeyMultibase)...)
 			}
 		}
 	}
@@ -442,23 +523,32 @@ func statusRank(status string) int {
 	}
 }
 
-// rolesFromLog reads an identity's operation log and reports, for each of the
-// wanted accounts, every role that identity ever declared the key in. The
-// role sets are full-state on each operation, so a key that appears in one and
-// not the next was rotated out — but this asks only what it WAS, which no later
-// operation can take back.
+// logPlacement is where one key sat in one identity's history: the identity, the
+// id it was declared under there, and every role it ever held.
+type logPlacement struct {
+	did   string
+	keyID string
+	roles []string
+}
+
+// placementsFromLog reads an identity's operation log and reports, for each of
+// the wanted accounts, the identity and every role that identity ever declared
+// the key in. The role sets are full-state on each operation, so a key that
+// appears in one and not the next was rotated out — but this asks only what it
+// WAS, which no later operation can take back.
 //
 // A malformed or undecodable operation is skipped rather than fatal: the log
 // was already verified when it was ingested, and a ledger that refuses to
 // report because one historical operation reads oddly is worse than one that
 // reports what the rest of the log says.
-func rolesFromLog(chain *relay.StoredIdentityChain, want map[string]bool) map[string][]string {
+func placementsFromLog(chain *relay.StoredIdentityChain, want map[string]bool) map[string]logPlacement {
 	roleFields := [...]struct{ field, role string }{
 		{"controllerKeys", "controller"},
 		{"authKeys", "auth"},
 		{"assertKeys", "assert"},
 	}
 	held := map[string]map[string]bool{}
+	keyIDFor := map[string]string{}
 	for _, token := range chain.Log {
 		_, payload, err := protocol.DecodeJWSUnsafe(token)
 		if err != nil || payload == nil {
@@ -478,26 +568,33 @@ func rolesFromLog(chain *relay.StoredIdentityChain, want map[string]bool) map[st
 				if id == "" {
 					continue
 				}
-				account := chain.DID + "#" + id
-				if !want[account] {
-					continue
+				pub, _ := item["publicKeyMultibase"].(string)
+				// The log carries the public key beside the id, so a retired key
+				// is findable under either addressing without a second source.
+				for _, account := range keyAccountsFor(chain.DID, id, pub) {
+					if !want[account] {
+						continue
+					}
+					if held[account] == nil {
+						held[account] = map[string]bool{}
+						keyIDFor[account] = id
+					}
+					held[account][rf.role] = true
 				}
-				if held[account] == nil {
-					held[account] = map[string]bool{}
-				}
-				held[account][rf.role] = true
 			}
 		}
 	}
 	// Emitted in the same order the current-state fold emits declared roles, so
 	// one key's roles read the same whichever side of a rotation it is on.
-	out := make(map[string][]string, len(held))
+	out := make(map[string]logPlacement, len(held))
 	for account, roles := range held {
+		p := logPlacement{did: chain.DID, keyID: keyIDFor[account]}
 		for _, rf := range roleFields {
 			if roles[rf.role] {
-				out[account] = append(out[account], rf.role)
+				p.roles = append(p.roles, rf.role)
 			}
 		}
+		out[account] = p
 	}
 	return out
 }
@@ -511,10 +608,17 @@ type classifyInputs struct {
 	supersededRoles map[string][]string
 	mintedBy        map[string]*keyVaultProvenance
 	mintedPublic    map[string]string
-	knownDID        map[string]bool
-	deletedDID      map[string]bool
-	loginAccount    string
-	loginDID        string
+	// accountDID and accountKeyID place a CONTENT-ADDRESSED account: the account
+	// is a property of the key alone, so which identity declares it and under
+	// which key id are looked up rather than parsed out of the name.
+	accountDID   map[string]string
+	accountKeyID map[string]string
+	mintedDID    map[string]string
+	mintedKeyID  map[string]string
+	knownDID     map[string]bool
+	deletedDID   map[string]bool
+	loginAccount string
+	loginDID     string
 }
 
 // classifyKey decides what ONE key is, and whether prune may touch it.
@@ -551,18 +655,29 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		} else {
 			entry.Reason = "a sign-in client key; " + loginClientFileName + " names a different one"
 		}
-	case strings.Contains(account, "#"):
-		entry.DID = didFromKid(account)
-		entry.KeyID = account[strings.Index(account, "#")+1:]
+	case strings.HasPrefix(account, keyAccountPrefix), strings.Contains(account, "#"):
+		// Two addressings, one classification. A DID-scoped account carries its
+		// DID and key id in the name; a content-addressed one carries its public
+		// key, and the DID and key id are whatever a chain or a provenance record
+		// says. Everything after this point reads the same fields either way.
+		if pub, ok := publicKeyFromAccount(account); ok {
+			entry.PublicKey = pub
+			entry.DID = firstNonEmpty(in.accountDID[account], in.mintedDID[account])
+			entry.KeyID = firstNonEmpty(in.accountKeyID[account], in.mintedKeyID[account])
+		} else {
+			entry.DID = didFromKid(account)
+			entry.KeyID = account[strings.Index(account, "#")+1:]
+		}
 		entry.Identity = config.FindIdentityName(cfg, entry.DID)
 		entry.Deleted = in.deletedDID[entry.DID]
-		if roles, ok := in.declaredRoles[account]; ok {
+		switch {
+		case len(in.declaredRoles[account]) > 0:
 			entry.Status = statusDeclared
-			entry.Roles = roles
+			entry.Roles = in.declaredRoles[account]
 			if entry.Deleted {
 				entry.Reason = "declared by a DELETED identity's chain — deletion is not revocation, and 'identity restore' is real"
 			}
-		} else if in.knownDID[entry.DID] {
+		case entry.DID != "" && in.knownDID[entry.DID]:
 			entry.Status = statusSuperseded
 			entry.Roles = in.supersededRoles[account]
 			entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation left it behind"
@@ -570,9 +685,15 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 				entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation retired it from " +
 					strings.Join(entry.Roles, ", ")
 			}
-		} else {
+		case entry.DID != "":
 			entry.Status = statusOrphan
 			entry.Reason = "no chain for " + entry.DID + " in the local relay"
+		default:
+			// A content-addressed key nothing places. Every chain in the local
+			// relay was read to get here (see buildKeyLedger), so no identity
+			// this machine holds declares it and no vault records minting it.
+			entry.Status = statusOrphan
+			entry.Reason = "no identity in the local relay declares this key, and no vault records minting it"
 		}
 	case strings.HasPrefix(account, pendingAccountPrefix):
 		entry.Origin = originPending
@@ -601,11 +722,14 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.Origin = originStandalone
 	}
 
-	// The public key: from the chain, then from the vault's record, then — only
-	// when nothing else can say — from the seed itself. Deriving it is also the
-	// proof that the backend really holds a key here, which is why a failure
-	// downgrades the entry to uncertain instead of being ignored.
-	entry.PublicKey = in.declaredPublic[account]
+	// The public key: from the account itself where the account IS the public key,
+	// then from the chain, then from the vault's record, then — only when nothing
+	// else can say — from the seed. Deriving it is also the proof that the backend
+	// really holds a key here, which is why a failure downgrades the entry to
+	// uncertain instead of being ignored.
+	if entry.PublicKey == "" {
+		entry.PublicKey = in.declaredPublic[account]
+	}
 	if entry.PublicKey == "" {
 		entry.PublicKey = in.mintedPublic[account]
 	}
@@ -1045,6 +1169,15 @@ func printPruneResult(r pruneResult, l *keyLedger) {
 }
 
 // --- small helpers ---
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
 
 func orDash(s string) string {
 	if s == "" {

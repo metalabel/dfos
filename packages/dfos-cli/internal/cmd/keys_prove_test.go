@@ -360,8 +360,9 @@ func TestKeysProve_HappyPath(t *testing.T) {
 	}
 }
 
-// An operator that names the identity its ceremony added the key to lets the key
-// be filed under the account that identity's chain names it by.
+// A completion that names the identity that adopted the key moves the key out of
+// the candidate namespace and into its ordinary address — its own public key —
+// and writes the vault provenance the DID and key id make possible.
 func TestKeysProve_AdoptedKeyIsFiledUnderItsIdentity(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
@@ -374,12 +375,15 @@ func TestKeysProve_AdoptedKeyIsFiledUnderItsIdentity(t *testing.T) {
 	if _, _, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result); err != nil {
 		t.Fatalf("keys prove: %v", err)
 	}
-	want := stub.answerDID + "#key_ceremony"
+	want := keyAccount(result.PublicKey)
 	if result.Account != want {
 		t.Fatalf("account: %q, want %q", result.Account, want)
 	}
 	if !keys.HasKey(want) {
 		t.Fatalf("no key under %q", want)
+	}
+	if keys.HasKey(candidateAccountPrefix + result.PublicKey) {
+		t.Fatal("the candidate account was left behind after adoption")
 	}
 	// The vault now records the provenance, so the phrase covers the key.
 	meta, err := getVaults().Load("personal")

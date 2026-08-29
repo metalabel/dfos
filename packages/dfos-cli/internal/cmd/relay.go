@@ -118,17 +118,17 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 			return err
 		}
 
-		kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+		signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 		if err != nil {
 			return err
 		}
-		privKey, err := keys.GetPrivateKey(kid)
+		privKey, err := keys.GetPrivateKey(signer.Account)
 		if err != nil {
 			return err
 		}
 
 		authorization, err := c.AuthorizationFor(
-			&client.Signer{Kid: kid, PrivateKey: privKey}, method, path, bodyBytes, true)
+			&client.Signer{Kid: signer.KID, PrivateKey: privKey}, method, path, bodyBytes, true)
 		if err != nil {
 			return err
 		}

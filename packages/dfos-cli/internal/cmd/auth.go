@@ -78,18 +78,18 @@ Write-shaped surfaces — POST /proof/v1/operations and PUT blob — require --j
 				}
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return err
 			}
 
 			c := client.New(peerURL)
 			authorization, err := c.AuthorizationFor(
-				&client.Signer{Kid: kid, PrivateKey: privKey}, method, path, body, jti)
+				&client.Signer{Kid: signer.KID, PrivateKey: privKey}, method, path, body, jti)
 			if err != nil {
 				return err
 			}

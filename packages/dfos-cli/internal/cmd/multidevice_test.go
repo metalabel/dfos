@@ -165,13 +165,20 @@ func TestMultiDevice_HappyPath(t *testing.T) {
 	if dev.Role != "auth" {
 		t.Fatalf("device-pubkey default role = %q, want auth", dev.Role)
 	}
-	bKid := did + "#" + dev.ID
-	if !storeB.HasKey(bKid) {
-		t.Fatalf("expected B to hold private key %s", bKid)
+	// The key is filed by its own content address, which B can compute before
+	// any chain names it — and the id it will be published under is derived from
+	// the same public key, so A and B name it identically without exchanging one.
+	bAccount := keyAccount(dev.PublicKeyMultibase)
+	if !storeB.HasKey(bAccount) {
+		t.Fatalf("expected B to hold private key %s", bAccount)
 	}
-	if storeA.HasKey(bKid) {
+	if storeA.HasKey(bAccount) {
 		t.Fatalf("device B's private key must NOT be on device A")
 	}
+	if want := protocol.DeriveKeyID(dev.PublicKeyMultibase); dev.ID != want {
+		t.Fatalf("device-pubkey id = %q, want the derived %q", dev.ID, want)
+	}
+	bKid := did + "#" + dev.ID
 
 	// --- device A: add B's public key to the auth set ---
 	keys = storeA
@@ -197,12 +204,15 @@ func TestMultiDevice_HappyPath(t *testing.T) {
 
 	// selectHeldKey resolves to B's key when B's keystore is active
 	keys = storeB
-	gotKid, err := selectHeldKey(did, chain.State.AuthKeys, "auth")
+	got, err := selectHeldKey(did, chain.State.AuthKeys, "auth")
 	if err != nil {
 		t.Fatalf("selectHeldKey for B: %v", err)
 	}
-	if gotKid != bKid {
-		t.Fatalf("selectHeldKey returned %s, want %s", gotKid, bKid)
+	if got.KID != bKid {
+		t.Fatalf("selectHeldKey returned kid %s, want %s", got.KID, bKid)
+	}
+	if got.Account != bAccount {
+		t.Fatalf("selectHeldKey returned account %s, want %s", got.Account, bAccount)
 	}
 
 	// --- device B publishes content signed with its own key ---

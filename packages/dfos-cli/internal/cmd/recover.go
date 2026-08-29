@@ -602,10 +602,12 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 		result.ScanComplete = false
 	}
 
-	// Install the keys. A key's ACCOUNT is `<did>#<keyId>`, and the key id lives
-	// only in the chain — which is why the fetch has to come first, and why an
-	// identity that could not be fetched leaves its key uninstallable rather than
-	// stored under a name this machine invented.
+	// Install the keys. A key's ACCOUNT is its own public key, which the seed
+	// already derived — but the key ID a chain declares it under is not, and a key
+	// this machine cannot tie to an accepted operation is a key it declines to
+	// install rather than one it files under a name it invented. So the fetch
+	// still comes first, and an identity that could not be fetched still leaves
+	// its key uninstalled.
 	var records []vault.MintedKey
 	installed := map[string][]string{}
 	for _, h := range hits {
@@ -654,13 +656,24 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 				result.Keys = append(result.Keys, key)
 				continue
 			}
-			account := did + "#" + keyID
+			// The account is the key's own content address, which this run can
+			// compute from the derived public key alone. The chain is still read
+			// first, and still decides whether the key is installable at all: a
+			// key no operation this machine holds declares is a key this command
+			// refuses to name, whatever the seed derives.
+			account := keyAccount(h.publicKey)
 			key.KeyID, key.Account = keyID, account
 			key.Roles = facts.currentRoles[keyID]
 			key.Superseded = len(key.Roles) == 0
 
 			switch {
 			case keys.HasKey(account):
+				key.Outcome = "already-present"
+			// A machine that wrote this key under the pre-content-addressing
+			// account already holds it. Recovery converges rather than writes a
+			// second copy of the same seed under a second name.
+			case keys.HasKey(legacyKeyAccount(did, keyID)):
+				key.Account = legacyKeyAccount(did, keyID)
 				key.Outcome = "already-present"
 			case opts.dryRun:
 				key.Outcome = "recovered"
@@ -675,12 +688,9 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 				key.Outcome = "recovered"
 			}
 			installed[did] = append(installed[did], keyID)
-			role := "auth"
-			if len(key.Roles) > 0 {
-				role = key.Roles[0]
-			}
 			records = append(records, vault.MintedKey{
-				Index: h.index, DID: did, KeyID: keyID, Role: role, PublicKey: h.publicKey,
+				Index: h.index, DID: did, KeyID: keyID,
+				Roles: key.Roles, PublicKey: h.publicKey,
 			})
 			result.Keys = append(result.Keys, key)
 		}

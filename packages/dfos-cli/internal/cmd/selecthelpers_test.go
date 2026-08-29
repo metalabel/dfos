@@ -20,6 +20,8 @@ func mkSet(ids ...string) []protocol.MultikeyPublicKey {
 	return out
 }
 
+// The accounts here are the LEGACY `<did>#<keyId>` shape on purpose: this is the
+// read-compat case, a key written before keys were addressed by their content.
 func TestSelectHeldKey_FirstHeldInPublishedOrder(t *testing.T) {
 	did := "did:dfos:test"
 	store := keystore.NewMemoryStore()
@@ -31,12 +33,40 @@ func TestSelectHeldKey_FirstHeldInPublishedOrder(t *testing.T) {
 	keys = store
 	defer func() { keys = prev }()
 
-	kid, err := selectHeldKey(did, mkSet("key0", "key1", "key2"), "auth")
+	got, err := selectHeldKey(did, mkSet("key0", "key1", "key2"), "auth")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if kid != did+"#key1" {
-		t.Fatalf("got %s, want %s", kid, did+"#key1")
+	if got.KID != did+"#key1" {
+		t.Fatalf("got kid %s, want %s", got.KID, did+"#key1")
+	}
+	if got.Account != did+"#key1" {
+		t.Fatalf("got account %s, want the legacy account %s", got.Account, did+"#key1")
+	}
+}
+
+// A key written under its content address resolves through the same call, and
+// the kid it reports is still the DID URL a signature has to carry.
+func TestSelectHeldKey_ContentAddressedAccount(t *testing.T) {
+	did := "did:dfos:test"
+	store := keystore.NewMemoryStore()
+	set := mkSet("key0", "key1")
+	if _, _, err := store.GenerateKey(keyAccount(set[1].PublicKeyMultibase)); err != nil {
+		t.Fatal(err)
+	}
+	prev := keys
+	keys = store
+	defer func() { keys = prev }()
+
+	got, err := selectHeldKey(did, set, "auth")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.KID != did+"#key1" {
+		t.Fatalf("got kid %s, want %s", got.KID, did+"#key1")
+	}
+	if got.Account != keyAccount(set[1].PublicKeyMultibase) {
+		t.Fatalf("got account %s, want the content address", got.Account)
 	}
 }
 
@@ -50,12 +80,12 @@ func TestSelectHeldKey_FirstWhenMultipleHeld(t *testing.T) {
 	defer func() { keys = prev }()
 
 	// holds key0 and key2 — published order picks key0 first (deterministic)
-	kid, err := selectHeldKey(did, mkSet("key0", "key1", "key2"), "auth")
+	got, err := selectHeldKey(did, mkSet("key0", "key1", "key2"), "auth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kid != did+"#key0" {
-		t.Fatalf("got %s, want first-held %s", kid, did+"#key0")
+	if got.KID != did+"#key0" {
+		t.Fatalf("got %s, want first-held %s", got.KID, did+"#key0")
 	}
 }
 

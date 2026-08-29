@@ -90,16 +90,16 @@ func newContentCreateCmd() *cobra.Command {
 				return fmt.Errorf("compute document CID: %w", err)
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, contentID, opCID, err := protocol.SignContentCreate(chain.DID, documentCID, kid, privKey)
+			jwsToken, contentID, opCID, err := protocol.SignContentCreate(chain.DID, documentCID, signer.KID, privKey)
 			if err != nil {
 				return fmt.Errorf("sign content: %w", err)
 			}
@@ -124,7 +124,7 @@ func newContentCreateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
+				c.Signer = &client.Signer{Kid: signer.KID, PrivateKey: privKey}
 				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
 					return err
 				}
@@ -322,16 +322,16 @@ func newContentDownloadCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
+			c.Signer = &client.Signer{Kid: signer.KID, PrivateKey: privKey}
 
 			blob, _, err := c.DownloadBlob(contentID, credential, ref)
 			if err != nil {
@@ -387,15 +387,15 @@ func newContentPublishCmd() *cobra.Command {
 			// The blob upload below needs an identity proof, and so may the
 			// submission if this peer's admission is proof-required; resolve the
 			// key once, up front, and let the client sign whatever it must.
-			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
-			c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
+			c.Signer = &client.Signer{Kid: signer.KID, PrivateKey: privKey}
 
 			if err := publishIdentityIfNeeded(idChain, rn, c); err != nil {
 				return err
@@ -642,17 +642,17 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return err
 			}
 
 			jwsToken, opCID, err := protocol.SignContentUpdateWithOptions(
-				idChain.DID, contentChain.State.HeadCID, documentCID, kid, privKey,
+				idChain.DID, contentChain.State.HeadCID, documentCID, signer.KID, privKey,
 				protocol.ContentUpdateOptions{
 					BaseDocumentCID: baseDocumentCID,
 					Authorization:   authorization,
@@ -679,7 +679,7 @@ func newContentUpdateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
+				c.Signer = &client.Signer{Kid: signer.KID, PrivateKey: privKey}
 				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return err
@@ -734,16 +734,16 @@ func newContentDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, opCID, err := protocol.SignContentDelete(idChain.DID, contentChain.State.HeadCID, kid, authorization, privKey)
+			jwsToken, opCID, err := protocol.SignContentDelete(idChain.DID, contentChain.State.HeadCID, signer.KID, authorization, privKey)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
 			}

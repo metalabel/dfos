@@ -13,6 +13,8 @@ package cmd
 // because nothing local leaks upward.
 
 import (
+	"golang.org/x/term"
+
 	"bufio"
 	"fmt"
 	"io"
@@ -158,7 +160,9 @@ func newVaultImportCmd() *cobra.Command {
 		Use:   "import <name>",
 		Short: "Adopt an existing BIP-39 mnemonic as a vault",
 		Long: "Read a mnemonic from the terminal or from stdin, check it against the BIP-39 English " +
-			"wordlist and its checksum, and store it under a name. The mnemonic is never an argument: " +
+			"wordlist and its checksum, and store it under a name. On a terminal the phrase is read " +
+			"WITHOUT ECHO — nothing appears as it is typed, and nothing of it stays in the scrollback. " +
+			"The mnemonic is never an argument: " +
 			"argv lands in shell history and is readable in the process list. A phrase some vault on " +
 			"this machine already holds is refused by fingerprint, and the refusal names that vault: " +
 			"one seed, one vault, because two vaults over one phrase mint identical keys.",
@@ -335,7 +339,7 @@ func newVaultShowCmd() *cobra.Command {
 			} else {
 				fmt.Printf("  Minted keys: %d\n", len(meta.Minted))
 				for _, m := range meta.Minted {
-					fmt.Printf("    %-4d %-11s %s#%s\n", m.Index, m.Role, m.DID, m.KeyID)
+					fmt.Printf("    %-4d %-26s %s#%s\n", m.Index, joinComma(m.RoleList()), m.DID, m.KeyID)
 				}
 			}
 			if reveal {
@@ -374,14 +378,36 @@ func wrapWords(mnemonic string, n int) []string {
 	return lines
 }
 
-// readMnemonic reads a mnemonic from stdin — a prompt on a terminal, a piped
-// line otherwise. It is never read from argv: an argument lands in shell history
-// and is visible to every process on the box while the command runs.
+// readMnemonic reads a mnemonic from stdin — a NO-ECHO prompt on a terminal, a
+// piped line otherwise. It is never read from argv: an argument lands in shell
+// history and is visible to every process on the box while the command runs.
+//
+// On a terminal the phrase is read with the echo bit off, which is the posture
+// every wallet takes for the same reason: a phrase typed in clear text stays in
+// the scrollback, in tmux's history, in whatever is recording the session, and
+// over the shoulder of whoever is standing there. Piping remains the way to
+// script an import; it stopped being the way to avoid an echo.
+//
+// A terminal that will not give up its echo bit is a hard failure rather than a
+// quiet fall-through to echoing input. The whole point of the prompt is that the
+// phrase does not appear, so a prompt that cannot promise that does not run.
 func readMnemonic(in io.Reader) (string, error) {
 	if stdinIsInteractive() {
 		fmt.Fprintf(os.Stderr, "Paste the recovery phrase (12–24 words), then press enter.\n")
-		fmt.Fprintf(os.Stderr, "It is echoed to this terminal — do this where nobody is reading over your shoulder.\n")
+		fmt.Fprintf(os.Stderr, "It is NOT echoed — the terminal will look like nothing is happening.\n")
 		fmt.Fprintf(os.Stderr, "Phrase: ")
+		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", fmt.Errorf("read mnemonic without echoing it: %w\n"+
+				"This terminal would not turn its echo off, and the phrase is not worth typing in clear text.\n"+
+				"Pipe it instead: printf '%%s' \"$PHRASE\" | dfos vault import <name>", err)
+		}
+		mnemonic := strings.TrimSpace(string(raw))
+		if mnemonic == "" {
+			return "", fmt.Errorf("no mnemonic given")
+		}
+		return mnemonic, nil
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && (err != io.EOF || strings.TrimSpace(line) == "") {

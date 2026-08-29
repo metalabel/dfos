@@ -239,6 +239,63 @@ func TestGenerateKeyID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 8a. DeriveKeyID — PINNED VECTOR. These bytes are forever.
+// ---------------------------------------------------------------------------
+
+// deriveKeyIDVectorPublicKey is the multibase public key of the ed25519 key
+// whose 32-byte seed is all zeroes. It is a fixed, reproducible input from
+// nothing but a constant, which is what a vector wants.
+const (
+	deriveKeyIDVectorPublicKey = "z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp"
+	deriveKeyIDVectorKeyID     = "key_v8ctratnzd9dfz4azdr2acdvh633f74"
+)
+
+// TestDeriveKeyIDVector pins the derivation. A key id is how a recovered machine
+// names a key it rederived from a phrase, so this mapping is load-bearing for
+// recovery on every machine that ever computes it: changing it orphans key ids
+// already written into chains and keystores.
+//
+// The algorithm is DeriveID — sha256 over the multibase STRING, then one
+// character per digest byte from the 19-symbol protocol alphabet by byte%19 —
+// which is the same walk that derives a DID and a content id. Nothing about key
+// ids is a second encoding.
+//
+// CROSS-SYSTEM PREFIX PROPERTY: the platform computes a 22-character id over the
+// same basis, same alphabet, same %19 walk, truncated at 22. Its id for a key is
+// therefore characters 1–22 of the suffix here — a strict prefix, so an id from
+// either system is recognizable in the other's logs by sight.
+func TestDeriveKeyIDVector(t *testing.T) {
+	got := DeriveKeyID(deriveKeyIDVectorPublicKey)
+	if got != deriveKeyIDVectorKeyID {
+		t.Fatalf("DeriveKeyID vector: got %q, want %q", got, deriveKeyIDVectorKeyID)
+	}
+	if len(got) != 35 {
+		t.Fatalf("key id length: got %d, want 35 (4 + %d)", len(got), idLength)
+	}
+	for _, c := range got[4:] {
+		if !strings.ContainsRune(idAlphabet, c) {
+			t.Fatalf("key id suffix contains invalid char %q", string(c))
+		}
+	}
+
+	// The platform's 22-char id for the same key, asserted as a prefix.
+	const platformKeyID = "v8ctratnzd9dfz4azdr2ac"
+	if got[4:4+len(platformKeyID)] != platformKeyID {
+		t.Fatalf("platform prefix: got %q, want %q", got[4:4+len(platformKeyID)], platformKeyID)
+	}
+
+	// Deterministic: the same key always names itself the same way, on every
+	// machine, with no shared secret. That is the whole point.
+	if DeriveKeyID(deriveKeyIDVectorPublicKey) != got {
+		t.Fatal("DeriveKeyID is not deterministic")
+	}
+	// A different key is a different id.
+	if DeriveKeyID("z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd") == got {
+		t.Fatal("two different public keys derived the same key id")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // 9. JWS create + verify round-trip
 // ---------------------------------------------------------------------------
 

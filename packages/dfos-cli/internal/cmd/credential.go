@@ -57,11 +57,11 @@ func newCredentialGrantCmd() *cobra.Command {
 				return fmt.Errorf("--ttl must be positive, got %q (a non-positive TTL mints an already-expired credential)", ttl)
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -74,7 +74,7 @@ func newCredentialGrantCmd() *cobra.Command {
 			}
 			resource := "chain:" + scope
 
-			token, err := protocol.CreateCredential(chain.DID, subjectDID, kid, resource, action, dur, privKey)
+			token, err := protocol.CreateCredential(chain.DID, subjectDID, signer.KID, resource, action, dur, privKey)
 			if err != nil {
 				return fmt.Errorf("create credential: %w", err)
 			}
@@ -175,16 +175,16 @@ func newCredentialRevokeCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, revocationCID, err := protocol.SignRevocation(chain.DID, credentialCID, kid, privKey)
+			jwsToken, revocationCID, err := protocol.SignRevocation(chain.DID, credentialCID, signer.KID, privKey)
 			if err != nil {
 				return fmt.Errorf("sign revocation: %w", err)
 			}

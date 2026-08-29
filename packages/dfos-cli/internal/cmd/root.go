@@ -613,52 +613,63 @@ func didFromKid(kid string) string {
 	return kid
 }
 
-// distinctKeyIDs returns the unique key ids across all role sets, in
-// controller→auth→assert order. The common production shape is ONE physical key
-// bound to all three roles; counting per-role membership made that read "0/3"
-// (or "3/3"), so tallies dedupe by id and report it as "0/1" / "1/1".
-func distinctKeyIDs(chain *relay.StoredIdentityChain) []string {
+// distinctChainKeys returns the unique keys across all role sets, in
+// controller→auth→assert order. The production shape is ONE physical key bound to
+// all three roles — that is what `identity create` mints — so counting per-role
+// membership made a single-key identity read "0/3" (or "3/3"); tallies dedupe by
+// id and report it as "0/1" / "1/1".
+func distinctChainKeys(chain *relay.StoredIdentityChain) []protocol.MultikeyPublicKey {
 	seen := map[string]bool{}
-	var ids []string
+	var out []protocol.MultikeyPublicKey
 	add := func(set []protocol.MultikeyPublicKey) {
 		for _, k := range set {
 			if !seen[k.ID] {
 				seen[k.ID] = true
-				ids = append(ids, k.ID)
+				out = append(out, k)
 			}
 		}
 	}
 	add(chain.State.ControllerKeys)
 	add(chain.State.AuthKeys)
 	add(chain.State.AssertKeys)
+	return out
+}
+
+// distinctKeyIDs is distinctChainKeys reduced to ids, for display.
+func distinctKeyIDs(chain *relay.StoredIdentityChain) []string {
+	dk := distinctChainKeys(chain)
+	ids := make([]string, 0, len(dk))
+	for _, k := range dk {
+		ids = append(ids, k.ID)
+	}
 	return ids
 }
 
 // countKeysInChain counts the distinct keys this device actually holds.
 func countKeysInChain(chain *relay.StoredIdentityChain) int {
 	count := 0
-	for _, id := range distinctKeyIDs(chain) {
-		if keys.HasKey(chain.DID + "#" + id) {
+	for _, k := range distinctChainKeys(chain) {
+		if holdsDeclaredKey(chain.DID, k) {
 			count++
 		}
 	}
 	return count
 }
 
-// selectHeldKey returns the kid (DID#keyID) of the first key in set whose
-// private material this device holds locally. This is the spine of multi-device
-// 1-of-N availability: any one held key in a role set is enough to act, so the
-// signer side iterates the published set and picks the first one this device
-// actually has. role is used only for the error message. Returns an error
-// (never panics) when the set is empty or this device holds none of the keys.
-func selectHeldKey(did string, set []protocol.MultikeyPublicKey, role string) (string, error) {
+// selectHeldKey returns the first key in set whose private material this device
+// holds locally — its kid for the signature, and the account its seed is under.
+// This is the spine of multi-device 1-of-N availability: any one held key in a
+// role set is enough to act, so the signer side iterates the published set and
+// picks the first one this device actually has. role is used only for the error
+// message. Returns an error (never panics) when the set is empty or this device
+// holds none of the keys.
+func selectHeldKey(did string, set []protocol.MultikeyPublicKey, role string) (heldKey, error) {
 	for _, k := range set {
-		candidate := did + "#" + k.ID
-		if keys.HasKey(candidate) {
-			return candidate, nil
+		if account, held := heldKeyAccount(did, k.ID, k.PublicKeyMultibase); held {
+			return heldKey{KID: did + "#" + k.ID, Account: account, PublicKey: k.PublicKeyMultibase}, nil
 		}
 	}
-	return "", fmt.Errorf("no held %s key for %s on this device (holds none of %d published %s key(s))", role, did, len(set), role)
+	return heldKey{}, fmt.Errorf("no held %s key for %s on this device (holds none of %d published %s key(s))", role, did, len(set), role)
 }
 
 func joinComma(ss []string) string {

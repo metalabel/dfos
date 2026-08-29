@@ -121,7 +121,7 @@ func TestKeyLedgerFoldsEveryOriginClass(t *testing.T) {
 	if err != nil || chain == nil {
 		t.Fatalf("get alice's chain: %v", err)
 	}
-	authAccount := vaultDID + "#" + chain.State.AuthKeys[0].ID
+	authAccount := keyAccount(chain.State.AuthKeys[0].PublicKeyMultibase)
 	auth := entryFor(t, ledger, authAccount)
 	if auth.Origin != originVault {
 		t.Fatalf("a vault-minted key reported origin %q", auth.Origin)
@@ -144,7 +144,7 @@ func TestKeyLedgerFoldsEveryOriginClass(t *testing.T) {
 
 	// Standalone, declared, no provenance.
 	bobChain, _ := localRelayInstance.Relay.GetIdentity(standaloneDID)
-	standalone := entryFor(t, ledger, standaloneDID+"#"+bobChain.State.AuthKeys[0].ID)
+	standalone := entryFor(t, ledger, keyAccount(bobChain.State.AuthKeys[0].PublicKeyMultibase))
 	if standalone.Origin != originStandalone || standalone.Vault != nil || standalone.Recoverable {
 		t.Fatalf("a standalone key came out %+v", standalone)
 	}
@@ -256,7 +256,7 @@ func TestPruneIsADryRunUntilArmed(t *testing.T) {
 	// The identity's own keys are untouched.
 	chain, _ := localRelayInstance.Relay.GetIdentity(did)
 	for _, k := range chain.State.AuthKeys {
-		if !storeA.HasKey(did + "#" + k.ID) {
+		if !storeA.HasKey(keyAccount(k.PublicKeyMultibase)) {
 			t.Fatalf("prune removed a declared key %s", k.ID)
 		}
 	}
@@ -315,13 +315,18 @@ func TestRotatedOutKeysAreSupersededNotOrphans(t *testing.T) {
 	keys = storeA
 
 	before, _ := localRelayInstance.Relay.GetIdentity(did)
-	oldAuth := did + "#" + before.State.AuthKeys[0].ID
+	oldAuth := keyAccount(before.State.AuthKeys[0].PublicKeyMultibase)
 
+	// Every role, so the genesis key is left declared in none of them. Rotating
+	// one role would leave it current in the other two — see
+	// TestKeysListReportsWhatARotationRetired.
 	identityFlag = "alice"
 	update := newIdentityUpdateCmd()
 	mustSetFlag(t, update, "rotate-auth", "true")
+	mustSetFlag(t, update, "rotate-controller", "true")
+	mustSetFlag(t, update, "rotate-assert", "true")
 	if err := update.RunE(update, nil); err != nil {
-		t.Fatalf("identity update --rotate-auth: %v", err)
+		t.Fatalf("identity update --rotate-*: %v", err)
 	}
 
 	ledger, err := buildKeyLedger()
@@ -418,7 +423,7 @@ func TestALedgerOnANonEnumeratingBackendSaysItIsPartial(t *testing.T) {
 	}
 	// The declared keys are all still found, by name, through the candidates.
 	chain, _ := localRelayInstance.Relay.GetIdentity(did)
-	entryFor(t, ledger, did+"#"+chain.State.AuthKeys[0].ID)
+	entryFor(t, ledger, keyAccount(chain.State.AuthKeys[0].PublicKeyMultibase))
 	for _, e := range ledger.Entries {
 		if e.Account == "pending:key_invisible" {
 			t.Fatal("a leftover nothing names cannot be found on a blind backend; the ledger invented it")
@@ -578,7 +583,7 @@ func TestABlindBackendStillFindsDeclaredKeysOnASyncedRelay(t *testing.T) {
 		t.Fatal("a backend that cannot list itself reported a complete ledger")
 	}
 	chain, _ := localRelayInstance.Relay.GetIdentity(did)
-	entry := entryFor(t, ledger, did+"#"+chain.State.AuthKeys[0].ID)
+	entry := entryFor(t, ledger, keyAccount(chain.State.AuthKeys[0].PublicKeyMultibase))
 	if entry.Status != statusDeclared {
 		t.Fatalf("a declared key on a blind backend came back %q", entry.Status)
 	}
@@ -592,12 +597,13 @@ func TestKeysShowReportsOneKeyAndNeverItsSeed(t *testing.T) {
 
 	chain, _ := localRelayInstance.Relay.GetIdentity(did)
 	keyID := chain.State.AuthKeys[0].ID
-	priv, err := storeA.GetPrivateKey(did + "#" + keyID)
+	publicKey := chain.State.AuthKeys[0].PublicKeyMultibase
+	priv, err := storeA.GetPrivateKey(keyAccount(publicKey))
 	if err != nil {
 		t.Fatalf("get private key: %v", err)
 	}
 
-	for _, selector := range []string{keyID, did + "#" + keyID, chain.State.AuthKeys[0].PublicKeyMultibase} {
+	for _, selector := range []string{keyID, keyAccount(publicKey), publicKey} {
 		cmd := newKeysShowCmd()
 		var entry keyLedgerEntry
 		runJSON(t, cmd, []string{selector}, &entry)
@@ -658,39 +664,54 @@ func TestKeysListReportsWhatARotationRetired(t *testing.T) {
 	mustSetFlag(t, create, "no-vault", "true")
 	var created struct {
 		DID           string `json:"did"`
+		Key           string `json:"key"`
+		PublicKey     string `json:"publicKey"`
 		ControllerKey string `json:"controllerKey"`
 		AuthKey       string `json:"authKey"`
 	}
 	runJSON(t, create, nil, &created)
 	identityFlag = "alice"
 
+	// A genesis key is one key in three roles, so rotating ONE role does not
+	// retire it: it is still the controller and the assert key, and the ledger
+	// has to say so rather than report it as rotated out.
+	genesisAccount := keyAccount(created.PublicKey)
 	rotate := newIdentityUpdateCmd()
 	mustSetFlag(t, rotate, "rotate-auth", "true")
 	runJSON(t, rotate, nil, nil)
+
+	partial, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("build ledger: %v", err)
+	}
+	stillHeld := entryFor(t, partial, genesisAccount)
+	if stillHeld.Status != statusDeclared {
+		t.Fatalf("after --rotate-auth the genesis key is %s, want %s", stillHeld.Status, statusDeclared)
+	}
+	if got := strings.Join(stillHeld.Roles, ","); got != "controller,assert" {
+		t.Fatalf("roles after --rotate-auth = %q, want controller,assert", got)
+	}
+
+	// Rotating the roles it kept is what actually retires it.
+	rest := newIdentityUpdateCmd()
+	mustSetFlag(t, rest, "rotate-controller", "true")
+	mustSetFlag(t, rest, "rotate-assert", "true")
+	runJSON(t, rest, nil, nil)
 
 	ledger, err := buildKeyLedger()
 	if err != nil {
 		t.Fatalf("build ledger: %v", err)
 	}
 
-	retired := entryFor(t, ledger, created.DID+"#"+created.AuthKey)
+	retired := entryFor(t, ledger, genesisAccount)
 	if retired.Status != statusSuperseded {
 		t.Fatalf("the rotated-out key is %s, want %s", retired.Status, statusSuperseded)
 	}
-	if len(retired.Roles) != 1 || retired.Roles[0] != "auth" {
-		t.Fatalf("superseded roles = %v, want [auth]", retired.Roles)
+	if got := strings.Join(retired.Roles, ","); got != "controller,auth,assert" {
+		t.Fatalf("superseded roles = %q, want everything the log ever declared it in", got)
 	}
-	if row := declaredBy(retired); !strings.Contains(row, "was auth") || !strings.Contains(row, "no longer current") {
-		t.Fatalf("the table row does not say which role was retired: %q", row)
-	}
-
-	// The role a rotation did NOT touch still reads as current.
-	held := entryFor(t, ledger, created.DID+"#"+created.ControllerKey)
-	if held.Status != statusDeclared {
-		t.Fatalf("the untouched controller key is %s, want %s", held.Status, statusDeclared)
-	}
-	if len(held.Roles) != 1 || held.Roles[0] != "controller" {
-		t.Fatalf("declared roles = %v, want [controller]", held.Roles)
+	if row := declaredBy(retired); !strings.Contains(row, "was controller") || !strings.Contains(row, "no longer current") {
+		t.Fatalf("the table row does not say which roles were retired: %q", row)
 	}
 
 	// Every other status carries no roles at all — the field is present when a
