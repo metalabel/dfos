@@ -185,6 +185,77 @@ describe('openapi', () => {
     expect((await app.request('http://localhost/openapi.json')).status).toBe(404);
   });
 
+  it('names no host in the canonical document or its committed artifact', () => {
+    // The document describes the surface EVERY relay serves, not the address of
+    // one. A hardcoded host is wrong for every deployment but the one it names —
+    // a client that read `http://localhost:3000` out of a document fetched from
+    // a real relay would resolve all 28 operations against localhost. Consumers
+    // that import this artifact and serve it from their own origin get OpenAPI's
+    // document-URL default, which is right for them; a relay that knows its own
+    // authority overwrites the absence at serve time.
+    expect(openapi).not.toHaveProperty('servers');
+    expect(openapiDocument).not.toHaveProperty('servers');
+  });
+
+  it('serves a document whose servers names the relay itself', async () => {
+    const cases: [string, string][] = [
+      ['relay.example.com', 'https://relay.example.com'],
+      ['Relay.Example.com:8443', 'https://relay.example.com:8443'],
+      // loopback is the one authority served in the clear
+      ['localhost:3000', 'http://localhost:3000'],
+      ['127.0.0.1:3000', 'http://127.0.0.1:3000'],
+      ['[::1]:3000', 'http://[::1]:3000'],
+    ];
+    for (const [authority, expected] of cases) {
+      const { app } = await createRelay({
+        store: new MemoryRelayStore(),
+        authority,
+        openapi: { document: openapiDocument },
+      });
+      const served = (await (await app.request('http://localhost/openapi.json')).json()) as {
+        servers?: { url: string }[];
+      };
+      expect(served.servers, `servers for authority ${authority}`).toEqual([{ url: expected }]);
+    }
+  });
+
+  it('omits servers entirely when no authority is configured', async () => {
+    // Nothing honest to write, so nothing is written — and OpenAPI resolves
+    // operations against the URL the document was fetched from, which for a
+    // self-served document is this relay either way. Absent, not null, not [].
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { document: openapiDocument },
+    });
+    const served = (await (await app.request('http://localhost/openapi.json')).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(served).not.toHaveProperty('servers');
+  });
+
+  it('never mutates the caller document while self-describing', async () => {
+    // The document a caller passes is very often the shared module-level import
+    // of `@metalabel/dfos-web-relay/openapi.json`; two relays in one process must
+    // not overwrite each other's self-description through it.
+    await createRelay({
+      store: new MemoryRelayStore(),
+      authority: 'first.example.com',
+      openapi: { document: openapiDocument },
+    });
+    expect(openapiDocument).not.toHaveProperty('servers');
+
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      authority: 'second.example.com',
+      openapi: { document: openapiDocument },
+    });
+    const served = (await (await app.request('http://localhost/openapi.json')).json()) as {
+      servers?: { url: string }[];
+    };
+    expect(served.servers).toEqual([{ url: 'https://second.example.com' }]);
+  });
+
   it('advertises a url-form document without registering a route', async () => {
     const { app } = await createRelay({
       store: new MemoryRelayStore(),
