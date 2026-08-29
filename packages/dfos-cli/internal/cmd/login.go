@@ -102,6 +102,8 @@ type storedLoginCredential struct {
 
 func newLoginCmd() *cobra.Command {
 	var scope string
+	var allScopes bool
+	var hostFlag string
 	var authorizeURLFlag string
 	var noBrowser bool
 	var timeoutFlag string
@@ -116,6 +118,10 @@ func newLoginCmd() *cobra.Command {
 			"tier — a per-install client identity whose key control is proven at ask-time — so a scope that returns " +
 			"a credential has something to be issued to. Credentials land in ~/.dfos/credentials/, and nothing is " +
 			"stored unless the signature verifies against a current authentication key of the signer's chain.\n\n" +
+			"--host names the API the credential is for, by registered name or by host. Its OpenAPI document's " +
+			"action catalog is read and presented, and what you select becomes the scope — asked for verbatim, " +
+			"since action tokens are the host's vocabulary and never this client's. An explicit --scope is used as " +
+			"typed instead; --all-scopes takes the whole catalog without asking.\n\n" +
 			"Key control is all this proves about the asking software: its origin and authorship are unverifiable " +
 			"from the host's side, which is why a credential minted here carries a hard expiry ceiling.\n\n" +
 			"Normative spec: https://protocol.dfos.com/siwd",
@@ -131,9 +137,24 @@ func newLoginCmd() *cobra.Command {
 			// Scope is an OPAQUE passthrough. It is not parsed, enumerated, or
 			// checked against any registry here: which scopes exist is the
 			// authorize host's business, and a CLI that validated them would go
-			// stale the moment the host registered one more.
-			if scope == "" {
-				return fmt.Errorf("--scope must be non-empty (it is passed through to the authorize host verbatim)")
+			// stale the moment the host registered one more. --host changes only
+			// where the string is CHOSEN — the tokens are still copied verbatim.
+			//
+			// TYPED, not merely non-default: a flag's default is this client's
+			// guess, and only the ask may be overridden by an instruction. Reading
+			// Changed rather than the value is what separates the two.
+			explicitScope := ""
+			if cmd.Flags().Changed("scope") {
+				if strings.TrimSpace(scope) == "" {
+					return fmt.Errorf("--scope must be non-empty (it is passed through to the authorize host verbatim)")
+				}
+				explicitScope = scope
+			}
+			if allScopes && explicitScope != "" {
+				return fmt.Errorf("pass --scope or --all-scopes, not both — an explicit scope is not a subset to be widened")
+			}
+			if allScopes && hostFlag == "" {
+				return fmt.Errorf("--all-scopes needs --host <name-or-host>: the catalog it takes is an API document's, and no API is named")
 			}
 			timeout, err := time.ParseDuration(timeoutFlag)
 			if err != nil {
@@ -167,6 +188,23 @@ func newLoginCmd() *cobra.Command {
 			authorizeURL, err := resolveAuthorizeURL(peer, subjectDID, authorizeURLFlag)
 			if err != nil {
 				return err
+			}
+
+			// The scope is settled BEFORE the challenge is minted and the browser
+			// opens: a person choosing what to grant should be doing it in the
+			// terminal, not while a consent screen waits on the other side of a
+			// listener with a timeout running.
+			var target *loginTarget
+			if hostFlag != "" {
+				interactive := stdinIsInteractive()
+				target, err = resolveLoginTarget(hostFlag, cmd.InOrStdin(), os.Stderr, interactive)
+				if err != nil {
+					return err
+				}
+				scope, err = resolveLoginScope(target, explicitScope, allScopes, cmd.InOrStdin(), os.Stderr, interactive)
+				if err != nil {
+					return err
+				}
 			}
 
 			lc, clientPriv, err := ensureLoginClient()
@@ -256,8 +294,19 @@ func newLoginCmd() *cobra.Command {
 				}
 			}
 
+			// Said once, on the artifact that was actually stored: the credential
+			// is found by its `api:<host>` attenuation, so one naming another host
+			// is one `api call` will never select for this one.
+			if callback.Credential != "" {
+				warnCredentialHostMismatch(callback.Credential, target, os.Stderr)
+			}
+
 			if jsonFlag {
-				out := map[string]any{"did": signerDID, "clientDid": lc.DID}
+				out := map[string]any{"did": signerDID, "clientDid": lc.DID, "scope": scope}
+				if target != nil {
+					out["host"] = target.Authority
+					out["resource"] = target.Resource()
+				}
 				if callback.Credential != "" {
 					out["credentialPath"] = credentialPath
 					out["credential"] = callback.Credential
@@ -274,6 +323,9 @@ func newLoginCmd() *cobra.Command {
 			fmt.Printf("  Signing key:    %s\n", keyID)
 			fmt.Printf("  Client DID:     %s\n", lc.DID)
 			fmt.Printf("  Authorize host: %s\n", authorizeURL)
+			if target != nil {
+				fmt.Printf("  For API:        %s\n", target.Resource())
+			}
 			fmt.Printf("  Scope:          %s\n", scope)
 			if callback.Credential == "" {
 				fmt.Printf("  Credential:     none returned for this scope — identity verified, nothing stored\n")
@@ -296,6 +348,8 @@ func newLoginCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&scope, "scope", "identity", "Scope to request, passed to the authorize host verbatim (space-separated for several)")
+	cmd.Flags().StringVar(&hostFlag, "host", "", "API the credential is for — a registered name or a host — whose advertised actions are offered")
+	cmd.Flags().BoolVar(&allScopes, "all-scopes", false, "With --host, ask for every action the document advertises without prompting")
 	cmd.Flags().StringVar(&authorizeURLFlag, "authorize-url", "", "Authorize endpoint to use when the identity's chain names none")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the URL and wait without attempting to open a browser")
 	cmd.Flags().StringVar(&timeoutFlag, "timeout", "5m", "How long to wait for the callback (e.g. 90s, 5m)")

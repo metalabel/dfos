@@ -377,10 +377,11 @@ func selectCredentialForHost(host string) (*spendableCredential, error) {
 
 	if len(candidates) == 0 {
 		if len(expired) > 0 {
-			return nil, fmt.Errorf("the stored credential for %s expired at %s — sign in again with 'dfos login --as %s --scope <scope>'",
-				resource, time.Unix(expired[0].expiry, 0).UTC().Format("2006-01-02 15:04:05 UTC"), expired[0].record.SubjectDID)
+			return nil, fmt.Errorf("the stored credential for %s expired at %s — sign in again with 'dfos login --host %s --as %s'",
+				resource, time.Unix(expired[0].expiry, 0).UTC().Format("2006-01-02 15:04:05 UTC"), host, expired[0].record.SubjectDID)
 		}
-		return nil, fmt.Errorf("no stored credential covers %s — sign in against that host with 'dfos login --as <name|did> --scope <scope>' ('dfos creds list' shows what is stored)", resource)
+		return nil, fmt.Errorf("no stored credential covers %s — sign in against that host with 'dfos login --host %s --as <name|did>', which offers the actions that host advertises ('dfos creds list' shows what is stored)",
+			resource, host)
 	}
 
 	ctx, _ := resolveCtx()
@@ -390,8 +391,8 @@ func selectCredentialForHost(host string) (*spendableCredential, error) {
 				return candidate, nil
 			}
 		}
-		return nil, fmt.Errorf("no stored credential for %s covers %s (%d other credential(s) do) — sign in as that identity, or name one that is stored with --as",
-			ctx.Principal(), resource, len(candidates))
+		return nil, fmt.Errorf("no stored credential for %s covers %s (%d other credential(s) do) — sign in as that identity with 'dfos login --host %s --as %s', or name one that is stored with --as",
+			ctx.Principal(), resource, len(candidates), host, ctx.Principal())
 	}
 	if len(candidates) > 1 {
 		subjects := make([]string, 0, len(candidates))
@@ -601,7 +602,8 @@ func apiCallFailure(status int, headers http.Header, body []byte,
 		fmt.Fprintf(&b, "\n  host says: %s", detail)
 		fmt.Fprintf(&b, "\n  %s requires: %s", operation.Label(), apispec.DescribeActions(profile.actions))
 		fmt.Fprintf(&b, "\n  the presented credential grants on api:%s: %s", request.Authority, describeGranted(profile.granted))
-		fmt.Fprintf(&b, "\n  Action tokens are the host's vocabulary, not this client's — obtain a grant carrying what the route requires.")
+		fmt.Fprintf(&b, "\n  Action tokens are the host's vocabulary, not this client's — obtain a grant carrying what the route requires:")
+		fmt.Fprintf(&b, "\n  'dfos login --host %s' lists what that host advertises and asks which of it to request.", request.Authority)
 		return fmt.Errorf("%s", b.String())
 
 	case http.StatusServiceUnavailable:

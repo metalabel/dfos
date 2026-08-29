@@ -67,6 +67,36 @@ func (d *Doc) InfoVersion() string {
 	return d.model.Model.Info.Version
 }
 
+// Authorities returns the distinct authorities the document's operations
+// resolve to, in first-seen operation order — the `<host>` half of the
+// `api:<host>` resource a credential for this API names.
+//
+// A list rather than a value because nothing in OpenAPI says a document
+// describes one host: `servers` is per-document, per-path, and per-operation,
+// and a document spanning two authorities names two resources. The caller
+// decides what to do with more than one; this only refuses to pick.
+func (d *Doc) Authorities(fallbackOrigin string) ([]string, error) {
+	var authorities []string
+	seen := map[string]bool{}
+	for _, op := range d.Operations() {
+		server, err := op.ServerURL(fallbackOrigin)
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := url.Parse(server)
+		if err != nil {
+			return nil, fmt.Errorf("server URL %q does not parse: %w", server, err)
+		}
+		authority := NormalizeAuthority(parsed.Scheme, parsed.Host)
+		if authority == "" || seen[authority] {
+			continue
+		}
+		seen[authority] = true
+		authorities = append(authorities, authority)
+	}
+	return authorities, nil
+}
+
 // Operation is one (method, path) the document describes.
 type Operation struct {
 	ID     string
