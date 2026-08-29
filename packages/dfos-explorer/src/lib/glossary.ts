@@ -52,6 +52,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'A key is its public key — the multibase string (z6Mk…), identical on every chain that ever declared it. A key id like key_1 is a slot name on one identity document: two identities can both use key_1 for different keys, and one identity can rotate key_1 and mean a different key than before. So surfaces lead with the public key and keep the id beside it; both open the key’s own page.',
   },
   {
+    key: 'signerKey',
+    term: 'signed by this key',
+    def: 'The relay records, for every operation it accepts, the public key whose signature it actually verified — so it can list the operations one key signed, across every chain and every kind. That is a different question from which identities have ever DECLARED the key: a key can sign on a content chain no identity document of its own mentions, and an identity can declare a key that never signs anything. Declaring is a claim in state; signing is a fact the relay checked.',
+  },
+  {
     key: 'services',
     term: 'services',
     def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile); DfosAuthorizationServer entries name the server where this identity’s person signs in, so a client holding only the DID can find it. The vocabulary is open — an unrecognized type is still a legible claim, just one this explorer has no special reading for.',
