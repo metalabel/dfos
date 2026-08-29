@@ -184,6 +184,34 @@ the surface is built around:
   can forge the DNS half for that verifier; the HTTPS method is unaffected by
   resolver spoofing beyond denial (ORIGIN-BINDING.md "Security Considerations").
 
+### Key proofs — possession is the whole claim
+
+A key proof (KEY-PROOF.md, an optional `0.x` capability) is a single-shot,
+challenge-bound JWS in which a candidate key signs `{nonce, audience, its own public
+key, timestamp}` to demonstrate possession and consent to one named ceremony
+(KEY-PROOF.md "The Envelope", `specs/KEY-PROOF.md`). The threat consequences the
+surface is built around:
+
+- **Challenge relay is defeated by audience binding, not carriage secrecy.** The
+  signer names the completion authority its human confirmed inside the signed bytes,
+  and the verifier compares against its own configured authority — so a phished or
+  re-displayed challenge yields a proof that is dead bytes everywhere but the host
+  the victim actually initiated (KEY-PROOF.md "Audience Binding").
+- **The carriage names no identity.** A shoulder-surfed code or intercepted QR learns
+  where a ceremony completes, never whom it is for; completing still requires the
+  candidate key's signature plus the operator's own ceremony authorization
+  (KEY-PROOF.md "Carriage").
+- **The payload is closed, so a key proof cannot be socially engineered into
+  "signing something".** There is no member in which to smuggle a transaction or an
+  instruction; a proof proves a key and conveys no intent (KEY-PROOF.md pin 1).
+- **Nothing persists to hijack.** Ceremonies are single-shot: no session, pairing, or
+  channel outlives completion, and the nonce is consumed atomically (KEY-PROOF.md
+  pin 2, "Verification").
+- **Cross-DID key reuse is a permanent public link.** The has-ever-declared `key=`
+  index survives rotation and deletion, so declaring one key in two chains publishes
+  their association irreversibly — which is why holder tooling refuses by default
+  before any signature exists (KEY-PROOF.md "Holder Obligations").
+
 ### Countersignatures live on the public proof plane
 
 A countersignature is a proof-plane object (PROTOCOL.md "Countersignatures",

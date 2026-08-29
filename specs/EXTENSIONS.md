@@ -35,6 +35,7 @@ Every DFOS JWS envelope is typ-scoped: the protected header names exactly one re
 | `did:dfos:siwd-ask`       | [SIWD](https://protocol.dfos.com/siwd#the-ask-proof)  | no    | Loopback client ask proofs — the client's key-control proof over its own authorize request.                                   |
 | `did:dfos:request-proof`  | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API request proofs — ride the `Authorization` header of a credential-gated API request and die with the freshness window.     |
 | `did:dfos:identity-proof` | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API identity proofs — the request proof's credential-less sibling: bind one exact request to a bare DID, authentication only. |
+| `did:dfos:key-add`        | [KEY-PROOF](https://protocol.dfos.com/key-proof)      | no    | Key-add ceremony proofs — the candidate key's single-shot possession-and-consent proof; self-signed, never relay-ingested.    |
 
 ## Registries That Live in Their Owner Spec
 
@@ -44,5 +45,6 @@ Names whose grammar is inseparable from their owner's machinery register there, 
 - **API action tokens** (`read:profile`, `read:email`, `read:memberships`) — [API-AUTH's action registry](https://protocol.dfos.com/api-auth).
 - **SIWD scope tokens** — [SIWD → Scopes and Credentials](https://protocol.dfos.com/siwd).
 - **Sign-request `payloadTyp` families** — [SIGNING](https://protocol.dfos.com/signing).
+- **Key-proof ceremony purposes** — [KEY-PROOF → Purpose Registry](https://protocol.dfos.com/key-proof#purpose-registry) (each purpose `typ` also lands a row above).
 - **App description members** — [SIWD → The App Description Document](https://protocol.dfos.com/siwd) (the member table is the registry).
 - **Content schemas** (`$schema` vocabulary) — [CONTENT-MODEL](https://protocol.dfos.com/content-model), hosted at [schemas.dfos.com](https://schemas.dfos.com).
