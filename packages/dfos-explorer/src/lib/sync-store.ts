@@ -294,6 +294,51 @@ const persistLastSync = (ms: number): void => {
   }
 };
 
+/**
+ * Clear the local index and everything derived from it, so the next sync starts
+ * from nothing. LOCAL ONLY — nothing is submitted, deleted, or retracted on any
+ * relay; this drops a cache.
+ *
+ * Why it has to exist: the index is append-only by design (a relay must not be
+ * able to make you forget what it served you), so a relay that DROPS operations
+ * leaves the tab holding history no relay carries any more — and the local
+ * figures, which are preferred precisely because they are locally counted, then
+ * describe a corpus that isn't there. Resetting is the only way back.
+ *
+ * Refuses while a run is in flight rather than wiping under it — the caller
+ * stops the sync first (the reset control is disabled until then).
+ *
+ * `lastSyncAt` is cleared alongside the store, not merely zeroed in memory: a
+ * surviving timestamp would tell auto-sync the emptied index is fresh and it
+ * would never rebuild (same reasoning as the db upgrade path in db.ts).
+ */
+export const resetLocalIndex = async (): Promise<boolean> => {
+  if (controller) return false;
+  const db = await getDb();
+  await db.wipe();
+  try {
+    globalThis.localStorage?.removeItem(LS_LAST_SYNC);
+  } catch {
+    // storage unavailable — the in-memory reset below still holds this session
+  }
+  set({
+    phase: 'idle',
+    relay: '',
+    ops: 0,
+    chains: 0,
+    added: 0,
+    resolved: 0,
+    publicDocs: 0,
+    status: 'local data cleared',
+    error: '',
+    startedAt: 0,
+    lastSyncAt: 0,
+    trigger: null,
+    dbEpoch: state.dbEpoch + 1,
+  });
+  return true;
+};
+
 // -----------------------------------------------------------------------------
 // auto-sync — a single heartbeat that fires a background sync when the index
 // is older than the configured cadence. A 30s tick keeps it simple: setting

@@ -33,6 +33,11 @@ describe('parseRoute — query is not part of the path', () => {
     });
   });
 
+  it('local sync is a route, not a sidebar', () => {
+    expect(parseRoute('#/sync')).toEqual({ view: 'sync' });
+    expect(parseRoute('#sync')).toEqual({ view: 'sync' });
+  });
+
   it('an unknown route still falls back to home', () => {
     expect(parseRoute('#/nope')).toEqual({ view: 'home' });
   });

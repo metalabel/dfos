@@ -15,6 +15,7 @@
     #/cred/<cid>       credential
     #/glossary         glossary
     #/relays           relay management
+    #/sync             local sync — the local index's controls and footprint
 
   A route may carry a QUERY STRING after the path (`#/documents?after=…&pub=0`).
   Every pageable / filterable surface writes its position there so a view can be
@@ -32,6 +33,7 @@ export type Route =
   | { view: 'search' }
   | { view: 'glossary' }
   | { view: 'relays' }
+  | { view: 'sync' }
   | { view: 'identities' }
   | { view: 'documents' }
   | { view: 'artifacts' }
@@ -56,6 +58,7 @@ export const parseRoute = (hash: string): Route => {
   if (head === 'search') return { view: 'search' };
   if (head === 'glossary') return { view: 'glossary' };
   if (head === 'relays') return { view: 'relays' };
+  if (head === 'sync') return { view: 'sync' };
   if (head === 'identities') return { view: 'identities' };
   if (head === 'documents') return { view: 'documents' };
   if (head === 'artifacts') return { view: 'artifacts' };

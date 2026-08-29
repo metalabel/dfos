@@ -310,71 +310,13 @@ header {
 
 /* ---------------------------------------------------------------- layout */
 
-.cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-}
+/* Every route is full width. The local index used to occupy a 340px sidebar
+   here (with a slide-in drawer on mobile); it is a page of its own now
+   (#/sync), so there is no second column and no drawer to toggle. */
 
 @media (min-width: 900px) {
-  .cols {
-    grid-template-columns: minmax(0, 1fr) 340px;
-  }
-}
-
-/* detail pages drop the sidebar and go full width (IA: the sidebar is a
-   home/browse activity panel, detail pages get crosslink panels instead).
-   Higher specificity than the width-breakpoint rule, so it wins at every
-   width. */
-.cols.solo {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* mobile: the local index becomes a slide-in drawer toggled from the header */
-@media (max-width: 899px) {
-  .cols aside {
-    display: none;
-  }
-
-  .cols aside.open {
-    display: block;
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(340px, 92vw);
-    z-index: 30;
-    overflow-y: auto;
-    background: var(--bg);
-    border-left: 1px solid var(--line);
-    box-shadow: -6px 0 18px rgba(0, 0, 0, 0.18);
-    padding: 10px;
-  }
-
-  .cols aside.open .panel {
-    margin-bottom: 0;
-  }
-
-  .drawer-close {
-    text-align: right;
-    padding: 2px 0 8px;
-    font-size: 11px;
-  }
-}
-
-@media (min-width: 900px) {
-  .drawer-close {
-    display: none;
-  }
-
   .index-rows {
     max-height: none;
-  }
-}
-
-@media (min-width: 900px) {
-  .index-toggle {
-    display: none;
   }
 }
 
@@ -480,7 +422,7 @@ header {
    Tapping a term (or a defined pill) opens its plain-language rendering in a
    dialog: a fullscreen sheet on mobile, a centered panel over a shadowbox at
    width — one component, one breakpoint. Same hairline-panel vocabulary as
-   everything else; it sits above the mobile index drawer (z-index 30). */
+   everything else, and above every other layer in the app. */
 
 .termmodal {
   position: fixed;
