@@ -188,7 +188,7 @@ paths:
 // ---------------------------------------------------------------------------
 
 func TestAuthoritiesFoldsTheDocumentsServers(t *testing.T) {
-	authorities, err := mustParse(t, catalogDoc).Authorities("")
+	authorities, _, err := mustParse(t, catalogDoc).Authorities(ServerPolicy{})
 	if err != nil {
 		t.Fatalf("Authorities: %v", err)
 	}
@@ -200,12 +200,12 @@ func TestAuthoritiesFoldsTheDocumentsServers(t *testing.T) {
 // The default port is dropped, matching the `host` a proof binds — a credential
 // naming `api:host:443` is one no proof would ever match.
 func TestAuthoritiesDropsTheDefaultPort(t *testing.T) {
-	authorities, err := mustParse(t, `openapi: 3.1.0
+	authorities, _, err := mustParse(t, `openapi: 3.1.0
 info: {title: t, version: "1"}
 servers: [{url: "https://API.Example.test:443/v1"}]
 paths:
   /thing: {get: {operationId: getThing}}
-`).Authorities("")
+`).Authorities(ServerPolicy{})
 	if err != nil {
 		t.Fatalf("Authorities: %v", err)
 	}
@@ -215,9 +215,11 @@ paths:
 }
 
 // A relative server URL resolves against the origin the document came from —
-// what `"url": "/v1"` means — and a per-operation server is its own authority.
-func TestAuthoritiesResolvesRelativeAndPerOperationServers(t *testing.T) {
-	authorities, err := mustParse(t, `openapi: 3.1.0
+// what `"url": "/v1"` means. A per-operation server naming ANOTHER origin does
+// NOT become a second authority: the fetch origin decides, so a document cannot
+// widen the set of hosts a credential for it would be minted against.
+func TestAuthoritiesRefusesToLetTheDocumentNameAnotherAuthority(t *testing.T) {
+	doc := mustParse(t, `openapi: 3.1.0
 info: {title: t, version: "1"}
 servers: [{url: "/v1"}]
 paths:
@@ -226,11 +228,69 @@ paths:
     get:
       operationId: getB
       servers: [{url: "https://other.example.test"}]
-`).Authorities("https://api.example.test")
+`)
+	authorities, notes, err := doc.Authorities(ServerPolicy{FetchOrigin: "https://api.example.test"})
 	if err != nil {
 		t.Fatalf("Authorities: %v", err)
 	}
-	if len(authorities) != 2 || authorities[0] != "api.example.test" || authorities[1] != "other.example.test" {
-		t.Fatalf("authorities = %v", authorities)
+	if len(authorities) != 1 || authorities[0] != "api.example.test" {
+		t.Fatalf("authorities = %v — an off-origin servers entry must name no authority", authorities)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "other.example.test") {
+		t.Fatalf("the ignored entry must be disclosed, got notes %v", notes)
+	}
+
+	// --trust-servers is the spelling that opts back in, and it is the only one.
+	trusted, _, err := doc.Authorities(ServerPolicy{
+		FetchOrigin: "https://api.example.test", TrustServers: true,
+	})
+	if err != nil {
+		t.Fatalf("Authorities: %v", err)
+	}
+	if len(trusted) != 2 || trusted[1] != "other.example.test" {
+		t.Fatalf("--trust-servers must honor the document's authority, got %v", trusted)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// bundles — the structure a flat catalog loses
+// ---------------------------------------------------------------------------
+
+func TestActionBundlesKeepsTheANDAlternatives(t *testing.T) {
+	bundles, err := mustParse(t, catalogDoc).ActionBundles()
+	if err != nil {
+		t.Fatalf("ActionBundles: %v", err)
+	}
+	// Only createPost's [[write:posts, read:profile]] is a combination;
+	// getProfile's [read:profile, read:email] is an OR of single tokens and has
+	// no structure to keep.
+	if len(bundles) != 1 {
+		t.Fatalf("bundles = %+v, want exactly the one AND-alternative", bundles)
+	}
+	if bundles[0].Label() != "write:posts AND read:profile" {
+		t.Fatalf("bundle label = %q", bundles[0].Label())
+	}
+	if len(bundles[0].Operations) != 1 || bundles[0].Operations[0] != "createPost" {
+		t.Fatalf("bundle must name the route requiring it: %+v", bundles[0].Operations)
+	}
+}
+
+// The same combination on two routes is ONE bundle naming both: it is one
+// choice to make, not two.
+func TestActionBundlesDedupesAcrossOperations(t *testing.T) {
+	bundles, err := mustParse(t, `openapi: 3.1.0
+info: {title: t, version: "1"}
+servers: [{url: "https://api.example.test"}]
+paths:
+  /a:
+    get: {operationId: getA, x-dfos-actions: [[read:profile, read:email]]}
+  /b:
+    get: {operationId: getB, x-dfos-actions: [[read:profile, read:email]]}
+`).ActionBundles()
+	if err != nil {
+		t.Fatalf("ActionBundles: %v", err)
+	}
+	if len(bundles) != 1 || len(bundles[0].Operations) != 2 {
+		t.Fatalf("bundles = %+v", bundles)
 	}
 }

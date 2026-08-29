@@ -45,18 +45,60 @@ const scopeDoc = `{
   }
 }`
 
-func scopeTarget(t *testing.T) *loginTarget {
+// bundleDoc is the same API with one route that needs a COMBINATION — the shape
+// an alphabetized token list cannot express.
+const bundleDoc = `{
+  "openapi": "3.1.1",
+  "info": {"title": "Scoped API", "version": "1"},
+  "servers": [{"url": "https://api.example.test/v1"}],
+  "paths": {
+    "/profile": {
+      "get": {
+        "operationId": "getProfile",
+        "x-dfos-actions": [["read:profile", "read:email"]],
+        "security": [{"popProof": [], "theGrant": []}]
+      }
+    },
+    "/posts": {
+      "post": {
+        "operationId": "createPost",
+        "x-dfos-actions": ["write:posts"],
+        "security": [{"popProof": [], "theGrant": []}]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "popProof": {
+        "type": "http", "scheme": "dfos", "x-dfos-typ": "did:dfos:request-proof",
+        "x-dfos-actions": {
+          "read:profile": "Read the granting user's own profile",
+          "read:email": "Read the granting user's account email address"
+        }
+      },
+      "theGrant": {"type": "apiKey", "in": "header", "name": "X-Credential"}
+    }
+  }
+}`
+
+func targetFromDoc(t *testing.T, body string) *loginTarget {
 	t.Helper()
-	doc, err := apispec.Parse([]byte(scopeDoc))
+	doc, err := apispec.Parse([]byte(body))
 	if err != nil {
 		t.Fatalf("parse fixture: %v", err)
 	}
-	catalog, err := doc.ActionCatalog()
+	catalog, bundles, err := documentActions(doc)
 	if err != nil {
 		t.Fatalf("catalog: %v", err)
 	}
-	return &loginTarget{Name: "scoped", Authority: "api.example.test", Document: "memory", Catalog: catalog}
+	return &loginTarget{
+		Name: "scoped", Authority: "api.example.test", Document: "memory",
+		Catalog: catalog, Bundles: bundles,
+	}
 }
+
+func scopeTarget(t *testing.T) *loginTarget  { return targetFromDoc(t, scopeDoc) }
+func bundleTarget(t *testing.T) *loginTarget { return targetFromDoc(t, bundleDoc) }
 
 // A refusing reader proves the ask was never reached. A path that "happens not
 // to read" and one that cannot read are different guarantees, and this is the
@@ -156,7 +198,7 @@ func TestSelectCatalogActions(t *testing.T) {
 		{"2,write:posts\n", "read:email write:posts"}, // mixed
 		{"1,1,1\n", "read:profile"},                   // a set, not a list
 	} {
-		got, err := selectCatalogActions(catalog, tc.answer)
+		got, err := selectCatalogActions(catalog, nil, tc.answer)
 		if err != nil {
 			t.Fatalf("select(%q): %v", tc.answer, err)
 		}
@@ -171,11 +213,94 @@ func TestSelectCatalogActionsRejections(t *testing.T) {
 	for _, tc := range []struct{ answer, want string }{
 		{"9\n", "not one of the 3 actions"},
 		{"0\n", "not one of the 3 actions"},
-		{"read:nothing\n", "neither a number in the list nor an advertised action token"},
+		{"read:nothing\n", "neither a number in the list, a group letter, nor an advertised action token"},
 	} {
-		_, err := selectCatalogActions(catalog, tc.answer)
+		_, err := selectCatalogActions(catalog, nil, tc.answer)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("select(%q) = %v, want an error containing %q", tc.answer, err, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the structure a flat catalog loses
+// ---------------------------------------------------------------------------
+
+// An AND-alternative is shown AS a combination and selectable AS one. The flat
+// list alone lets a person take `read:profile`, believe the selection complete,
+// and mint a grant getProfile refuses.
+func TestAskForScopesShowsCombinationsAsCombinations(t *testing.T) {
+	var out bytes.Buffer
+	scope, err := askForScopes(bundleTarget(t), strings.NewReader("A\n"), &out)
+	if err != nil {
+		t.Fatalf("askForScopes: %v", err)
+	}
+	if scope != "read:profile read:email" {
+		t.Fatalf("a group letter must select the whole combination, got %q", scope)
+	}
+	menu := out.String()
+	for _, want := range []string{
+		"need a COMBINATION",
+		"read:profile AND read:email",
+		"getProfile",
+		"by group letter",
+	} {
+		if !strings.Contains(menu, want) {
+			t.Fatalf("menu must contain %q, got:\n%s", want, menu)
+		}
+	}
+}
+
+// Taking HALF a combination is allowed — the host decides what a grant covers,
+// never this client — but it is never silent.
+func TestAskForScopesWarnsOnAPartialCombination(t *testing.T) {
+	var out bytes.Buffer
+	scope, err := askForScopes(bundleTarget(t), strings.NewReader("read:profile\n"), &out)
+	if err != nil {
+		t.Fatalf("askForScopes: %v", err)
+	}
+	if scope != "read:profile" {
+		t.Fatalf("the selection must be honored as typed, got %q", scope)
+	}
+	for _, want := range []string{"Warning:", "getProfile", "read:profile AND read:email", "read:email"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("the partial selection must be named, want %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+// A complete selection — by letter, by both tokens, or by taking everything —
+// warns about nothing.
+func TestAskForScopesIsQuietWhenTheCombinationIsWhole(t *testing.T) {
+	for _, answer := range []string{"A\n", "read:profile,read:email\n", "\n"} {
+		var out bytes.Buffer
+		if _, err := askForScopes(bundleTarget(t), strings.NewReader(answer), &out); err != nil {
+			t.Fatalf("askForScopes(%q): %v", answer, err)
+		}
+		if strings.Contains(out.String(), "Warning:") {
+			t.Fatalf("answer %q warned about a complete selection:\n%s", answer, out.String())
+		}
+	}
+}
+
+// A document with no combination shows no group block and no group hint — the
+// structure section exists only when there is structure to show.
+func TestAskForScopesShowsNoGroupsWhenThereAreNone(t *testing.T) {
+	var out bytes.Buffer
+	if _, err := askForScopes(scopeTarget(t), strings.NewReader("1\n"), &out); err != nil {
+		t.Fatalf("askForScopes: %v", err)
+	}
+	if strings.Contains(out.String(), "COMBINATION") || strings.Contains(out.String(), "group letter") {
+		t.Fatalf("a document with no AND-alternative must show no group block:\n%s", out.String())
+	}
+}
+
+// The non-interactive refusal prints the same structure the menu would have.
+func TestNoScopeChosenErrorCarriesTheCombinations(t *testing.T) {
+	err := noScopeChosenError(bundleTarget(t))
+	for _, want := range []string{"read:profile AND read:email", "--all-scopes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal must carry %q:\n%v", want, err)
 		}
 	}
 }
@@ -273,8 +398,9 @@ func TestResolveLoginTargetDiscoversAndOffersToRegister(t *testing.T) {
 	}
 }
 
-// A document spanning two authorities is two grants. Picking one for the
-// operator would hand them a credential for a host they did not name.
+// A document read from a file spanning two authorities is two grants, and
+// nothing says which. Picking one for the operator would hand them a credential
+// for a host they did not name.
 func TestDocumentAuthorityRefusesMoreThanOne(t *testing.T) {
 	doc, err := apispec.Parse([]byte(`{
 	  "openapi": "3.1.1",
@@ -288,9 +414,37 @@ func TestDocumentAuthorityRefusesMoreThanOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	_, err = documentAuthority(doc, "", "spread")
+	var out bytes.Buffer
+	_, err = documentAuthority(doc, "", "spread", &out)
 	if err == nil || !strings.Contains(err.Error(), "one.example.test") || !strings.Contains(err.Error(), "two.example.test") {
 		t.Fatalf("want an error naming both authorities, got %v", err)
+	}
+}
+
+// The SAME document served over the network is not ambiguous at all: the fetch
+// origin decides, so the second authority is the document's word and nothing
+// more. A credential must be minted for the host `api call` will spend it
+// against, and that host is the one the document came from.
+func TestDocumentAuthorityMintsForTheFetchOrigin(t *testing.T) {
+	doc, err := apispec.Parse([]byte(`{
+	  "openapi": "3.1.1",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": "https://evil.example.test"}],
+	  "paths": {"/a": {"get": {"operationId": "getA"}}}
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var out bytes.Buffer
+	authority, err := documentAuthority(doc, "https://api.example.test", "served", &out)
+	if err != nil {
+		t.Fatalf("documentAuthority: %v", err)
+	}
+	if authority != "api.example.test" {
+		t.Fatalf("authority = %q — a document must not name the host its grant is for", authority)
+	}
+	if !strings.Contains(out.String(), "evil.example.test") {
+		t.Fatalf("the ignored entry must be disclosed:\n%s", out.String())
 	}
 }
 

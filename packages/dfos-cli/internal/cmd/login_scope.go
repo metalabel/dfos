@@ -51,6 +51,8 @@ type loginTarget struct {
 	// Document is where the document was read from, for the display line.
 	Document string
 	Catalog  []apispec.CatalogEntry
+	// Bundles are the AND-alternatives the catalog's flat list cannot express.
+	Bundles []apispec.ActionBundle
 }
 
 // Label names the target the way the operator asked for it.
@@ -85,23 +87,23 @@ func resolveLoginTarget(value string, in io.Reader, out io.Writer, interactive b
 
 	if apispec.ValidateName(value) == nil {
 		if registration, err := apiStore().Get(value); err == nil {
-			return targetFromRegistration(registration)
+			return targetFromRegistration(registration, out)
 		}
 	}
 	return discoverLoginTarget(value, in, out, interactive)
 }
 
 // targetFromRegistration builds the target from a cached document.
-func targetFromRegistration(registration apispec.Registration) (*loginTarget, error) {
+func targetFromRegistration(registration apispec.Registration, out io.Writer) (*loginTarget, error) {
 	_, doc, err := loadAPI(registration.Name)
 	if err != nil {
 		return nil, err
 	}
-	authority, err := documentAuthority(doc, registration.Origin, registration.Name)
+	authority, err := documentAuthority(doc, registration.Origin, registration.Name, out)
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := doc.ActionCatalog()
+	catalog, bundles, err := documentActions(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +112,23 @@ func targetFromRegistration(registration apispec.Registration) (*loginTarget, er
 		Authority: authority,
 		Document:  registration.Document,
 		Catalog:   catalog,
+		Bundles:   bundles,
 	}, nil
+}
+
+// documentActions reads both readings of a document's action vocabulary: the
+// flat catalog a person selects from, and the AND-alternatives that flat list
+// cannot express.
+func documentActions(doc *apispec.Doc) ([]apispec.CatalogEntry, []apispec.ActionBundle, error) {
+	catalog, err := doc.ActionCatalog()
+	if err != nil {
+		return nil, nil, err
+	}
+	bundles, err := doc.ActionBundles()
+	if err != nil {
+		return nil, nil, err
+	}
+	return catalog, bundles, nil
 }
 
 // discoverLoginTarget runs the SAME resolution `api add` runs — the well-known
@@ -121,23 +139,16 @@ func discoverLoginTarget(source string, in io.Reader, out io.Writer, interactive
 	if err != nil {
 		return nil, err
 	}
-	authority, err := documentAuthority(resolution.Doc, resolution.Origin, source)
+	authority, err := documentAuthority(resolution.Doc, resolution.Origin, source, out)
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := resolution.Doc.ActionCatalog()
+	catalog, bundles, err := documentActions(resolution.Doc)
 	if err != nil {
 		return nil, err
 	}
-	target := &loginTarget{Authority: authority, Document: resolution.Document, Catalog: catalog}
-
-	// The document's servers decide the resource, so a document that points
-	// somewhere other than the host that served it is SAID OUT LOUD rather than
-	// quietly followed: the operator asked about one host and is about to hold a
-	// grant naming another.
-	if typed := typedAuthority(source); typed != "" && typed != authority {
-		fmt.Fprintf(out, "Note: %s serves a document whose operations live at %s — the credential will name api:%s.\n",
-			typed, authority, authority)
+	target := &loginTarget{
+		Authority: authority, Document: resolution.Document, Catalog: catalog, Bundles: bundles,
 	}
 
 	fmt.Fprintf(out, "Found %s's OpenAPI document at %s (%s).\n", authority, resolution.Document, resolution.Kind)
@@ -211,14 +222,23 @@ func typedAuthority(source string) string {
 // documentAuthority folds a document's servers into the ONE authority a
 // credential for it names, or into the reason it names none.
 //
+// Resolution runs under the SAME fetch-origin doctrine `api call` sends under —
+// an off-origin `servers` entry names no authority here either — so the
+// `api:<host>` a credential is minted for is the host `api call` will look for
+// it under. Minting under the document's word and spending under the origin's
+// would be a grant that never matches anything.
+//
 // More than one is refused rather than picked. A grant is `api:<host>` for a
 // single host, so a document spanning two authorities is two grants, and
 // choosing one for the operator would hand them a credential for a host they
 // did not name.
-func documentAuthority(doc *apispec.Doc, fallbackOrigin, label string) (string, error) {
-	authorities, err := doc.Authorities(fallbackOrigin)
+func documentAuthority(doc *apispec.Doc, fallbackOrigin, label string, out io.Writer) (string, error) {
+	authorities, notes, err := doc.Authorities(apispec.ServerPolicy{FetchOrigin: fallbackOrigin})
 	if err != nil {
 		return "", err
+	}
+	for _, note := range notes {
+		fmt.Fprintln(out, note)
 	}
 	switch len(authorities) {
 	case 1:
@@ -267,6 +287,7 @@ func noScopeChosenError(target *loginTarget) error {
 	fmt.Fprintf(&b, "no scope chosen for %s and nothing is attached to ask on — %s advertises:\n",
 		target.Label(), target.Authority)
 	b.WriteString(renderCatalog(target.Catalog, false))
+	b.WriteString(renderBundles(target.Bundles, false))
 	fmt.Fprintf(&b, "Name what you want with --scope '<token> <token>', or take all of it with --all-scopes.")
 	return fmt.Errorf("%s", b.String())
 }
@@ -279,19 +300,94 @@ func noScopeChosenError(target *loginTarget) error {
 func askForScopes(target *loginTarget, in io.Reader, out io.Writer) (string, error) {
 	fmt.Fprintf(out, "\n%s advertises %d action(s):\n", target.Authority, len(target.Catalog))
 	fmt.Fprint(out, renderCatalog(target.Catalog, true))
-	fmt.Fprintf(out, "Select by number (e.g. 1,3) or by token, or press enter for all: ")
+	fmt.Fprint(out, renderBundles(target.Bundles, true))
+	fmt.Fprintf(out, "Select by number (e.g. 1,3)%s or by token, or press enter for all: ",
+		bundleHint(target.Bundles))
 
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && err != io.EOF {
 		return "", fmt.Errorf("read the selection: %w", err)
 	}
-	selected, err := selectCatalogActions(target.Catalog, line)
+	selected, err := selectCatalogActions(target.Catalog, target.Bundles, line)
 	if err != nil {
 		return "", err
 	}
+	warnPartialBundles(target.Bundles, selected, out)
 	scope := strings.Join(selected, " ")
 	fmt.Fprintf(out, "Asking for: %s\n\n", scope)
 	return scope, nil
+}
+
+// bundleLetters are the group labels. Letters rather than more numbers so a
+// group and a token can never be typed for one another.
+const bundleLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// renderBundles shows the structure the flat catalog flattened away.
+//
+// An alphabetized list of tokens is a lie by omission about an AND-alternative:
+// the tokens appear as independent choices, so a person can take one of a pair,
+// see nothing wrong, and mint a grant that no route it was meant for accepts.
+// The groups are printed as groups, and selectable as groups.
+func renderBundles(bundles []apispec.ActionBundle, numbered bool) string {
+	if len(bundles) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nSome routes need a COMBINATION — every token of the group, or the route refuses:\n")
+	for i, bundle := range bundles {
+		label := "  "
+		if numbered && i < len(bundleLetters) {
+			label = fmt.Sprintf("  %c  ", bundleLetters[i])
+		}
+		fmt.Fprintf(&b, "%s%s   (%s)\n", label, bundle.Label(), describeBundleOperations(bundle))
+	}
+	return b.String()
+}
+
+func bundleHint(bundles []apispec.ActionBundle) string {
+	if len(bundles) == 0 {
+		return ""
+	}
+	return ", by group letter (e.g. A),"
+}
+
+// describeBundleOperations names the routes a combination is for, capped: the
+// evidence is that routes need it, not an inventory of every one of them.
+func describeBundleOperations(bundle apispec.ActionBundle) string {
+	const shown = 3
+	if len(bundle.Operations) <= shown {
+		return strings.Join(bundle.Operations, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(bundle.Operations[:shown], ", "), len(bundle.Operations)-shown)
+}
+
+// warnPartialBundles says so when a selection took part of a combination.
+//
+// It is a WARNING and not a refusal: an operator may deliberately want a subset,
+// and the host — never this client — decides what a grant covers. But taking
+// half a pair by accident is invisible at the moment it matters and obvious three
+// commands later as a 403, which is the whole reason the line is here.
+func warnPartialBundles(bundles []apispec.ActionBundle, selected []string, out io.Writer) {
+	chosen := map[string]bool{}
+	for _, token := range selected {
+		chosen[token] = true
+	}
+	for _, bundle := range bundles {
+		var missing []string
+		covered := 0
+		for _, token := range bundle.Actions {
+			if chosen[token] {
+				covered++
+				continue
+			}
+			missing = append(missing, token)
+		}
+		if covered == 0 || len(missing) == 0 {
+			continue
+		}
+		fmt.Fprintf(out, "Warning: %s needs %s together; this selection leaves out %s, so the grant will not cover it.\n",
+			describeBundleOperations(bundle), bundle.Label(), strings.Join(missing, ", "))
+	}
 }
 
 // renderCatalog is the menu. Numbers only when there is something to select by
@@ -324,10 +420,12 @@ func renderCatalog(catalog []apispec.CatalogEntry, numbered bool) string {
 // keeping it in the document's order keeps two runs that chose the same actions
 // spelling them the same way.
 //
-// A field is an index or a token. Both are accepted because both are in front of
-// the operator: the numbers are what the menu offered, and the tokens are what
-// they will see again in the credential.
-func selectCatalogActions(catalog []apispec.CatalogEntry, answer string) ([]string, error) {
+// A field is an index, a GROUP LETTER, or a token. All three are accepted
+// because all three are in front of the operator: the numbers and letters are
+// what the menu offered, and the tokens are what they will see again in the
+// credential. A group letter selects every token of that combination at once,
+// which is the only spelling that cannot take half of one by accident.
+func selectCatalogActions(catalog []apispec.CatalogEntry, bundles []apispec.ActionBundle, answer string) ([]string, error) {
 	fields := strings.FieldsFunc(answer, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
 	})
@@ -347,6 +445,12 @@ func selectCatalogActions(catalog []apispec.CatalogEntry, answer string) ([]stri
 			chosen[catalog[index-1].Action] = true
 			continue
 		}
+		if bundle, ok := bundleForLetter(bundles, field); ok {
+			for _, token := range bundle.Actions {
+				chosen[token] = true
+			}
+			continue
+		}
 		found := false
 		for _, entry := range catalog {
 			if entry.Action == field {
@@ -356,7 +460,7 @@ func selectCatalogActions(catalog []apispec.CatalogEntry, answer string) ([]stri
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("%q is neither a number in the list nor an advertised action token", field)
+			return nil, fmt.Errorf("%q is neither a number in the list, a group letter, nor an advertised action token", field)
 		}
 	}
 
@@ -370,6 +474,18 @@ func selectCatalogActions(catalog []apispec.CatalogEntry, answer string) ([]stri
 		return nil, fmt.Errorf("nothing selected — name at least one action, or press enter for all")
 	}
 	return selected, nil
+}
+
+// bundleForLetter resolves a single-letter field to the group it labels.
+func bundleForLetter(bundles []apispec.ActionBundle, field string) (apispec.ActionBundle, bool) {
+	if len(field) != 1 {
+		return apispec.ActionBundle{}, false
+	}
+	index := strings.IndexByte(bundleLetters, strings.ToUpper(field)[0])
+	if index < 0 || index >= len(bundles) {
+		return apispec.ActionBundle{}, false
+	}
+	return bundles[index], true
 }
 
 // ---------------------------------------------------------------------------

@@ -256,8 +256,11 @@ func TestAPICallAnonymousNormalizesTheServerTrailingSlash(t *testing.T) {
 	if !strings.Contains(stdout, `"ok": true`) {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	if stderr != "" {
-		t.Fatalf("a fresh document must print nothing extra, got stderr %q", stderr)
+	// The profile that actually went out is echoed on SUCCESS — a failure
+	// already names it, so success was the one case where the claim a request
+	// carried was invisible.
+	if strings.TrimSpace(stderr) != "open → anonymous, as the document advertises" {
+		t.Fatalf("a fresh document must print the profile echo and nothing else, got stderr %q", stderr)
 	}
 
 	// The same route by METHOD + path template.
@@ -558,6 +561,291 @@ func TestAPICallRefusesToSignPlaintextToARealHost(t *testing.T) {
 	_, _, err := runCall(t, []string{"plain", "me"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "refusing to sign a http:// request") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// where the request actually goes
+// ---------------------------------------------------------------------------
+
+// hostileDoc is served by one host and NAMES another. Two live servers stand
+// behind this test — the one that served the document and the one it points at
+// — so "did the request go to the right host" is answered by which process
+// received it, not by a string comparison.
+const hostileDoc = `{
+  "openapi": "3.1.1",
+  "info": {"title": "Hostile API", "version": "1"},
+  "servers": [{"url": "%OTHER%/v1"}],
+  "security": [],
+  "paths": {"/open": {"get": {"operationId": "open"}}}
+}`
+
+// twoServers starts a document's origin and the host its servers entry names,
+// and registers the document under "test" as though it had been fetched from
+// the first.
+func twoServers(t *testing.T, store *apispec.Store) (origin, other *httptest.Server, seen map[string]*received) {
+	t.Helper()
+	seen = map[string]*received{"origin": {}, "other": {}}
+	mark := func(key string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*seen[key] = received{method: r.Method, target: r.URL.RequestURI()}
+			okJSON(w)
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	origin, other = mark("origin"), mark("other")
+	body := strings.ReplaceAll(hostileDoc, "%OTHER%", other.URL)
+	if _, err := apispec.Parse([]byte(body)); err != nil {
+		t.Fatalf("fixture does not parse: %v", err)
+	}
+	if err := store.Put(apispec.Registration{
+		Name: "test", Source: origin.URL, Document: origin.URL + "/openapi.json",
+		Kind: apispec.KindConventional, Origin: origin.URL, FetchedAt: time.Now(), Operations: 1,
+	}, []byte(body)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	return origin, other, seen
+}
+
+// THE DOCTRINE, on the wire. A document is discovery, never authority — so a
+// servers entry naming another host contributes its PATH and never its
+// AUTHORITY, and the request lands on the host that served the document.
+func TestAPICallSendsToTheFetchOriginNotTheDocumentsServers(t *testing.T) {
+	setupDevices(t)
+	store := setupAPIRegistry(t)
+	_, _, seen := twoServers(t, store)
+
+	_, stderr, err := runCall(t, []string{"test", "open"}, nil)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if seen["other"].method != "" {
+		t.Fatalf("the request reached the host the DOCUMENT named — a document must never redirect the wire")
+	}
+	if seen["origin"].target != "/v1/open" {
+		t.Fatalf("origin saw %q, want /v1/open (the servers path prefix is kept, its authority is not)", seen["origin"].target)
+	}
+	for _, want := range []string{"servers entry names", "--trust-servers", "--server"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("the disclosure must name %q, got stderr:\n%s", want, stderr)
+		}
+	}
+}
+
+// --trust-servers is the opt-in, and --server the override. Both are explicit,
+// and neither is the default.
+func TestAPICallServerOverrides(t *testing.T) {
+	setupDevices(t)
+	store := setupAPIRegistry(t)
+	_, other, seen := twoServers(t, store)
+
+	t.Run("--trust-servers sends it where the document says", func(t *testing.T) {
+		if _, stderr, err := runCall(t, []string{"test", "open"}, map[string]string{"trust-servers": "true"}); err != nil {
+			t.Fatalf("call: %v", err)
+		} else if !strings.Contains(stderr, "--trust-servers") {
+			t.Fatalf("stderr = %q", stderr)
+		}
+		if seen["other"].target != "/v1/open" {
+			t.Fatalf("--trust-servers must reach the named host, got %q", seen["other"].target)
+		}
+	})
+
+	t.Run("--server names a base outright", func(t *testing.T) {
+		*seen["other"] = received{}
+		if _, _, err := runCall(t, []string{"test", "open"}, map[string]string{"server": other.URL + "/v1"}); err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if seen["other"].target != "/v1/open" {
+			t.Fatalf("--server must be honored, got %q", seen["other"].target)
+		}
+	})
+}
+
+// A --file registration has no fetch origin, so its servers must agree. A
+// document spanning two origins is refused with both named, not resolved.
+func TestAPICallFromAFileRefusesAmbiguousServers(t *testing.T) {
+	setupDevices(t)
+	store := setupAPIRegistry(t)
+
+	const spread = `{
+	  "openapi": "3.1.1",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": "https://one.example.test"}],
+	  "security": [],
+	  "paths": {
+	    "/open": {"get": {"operationId": "open"}},
+	    "/other": {"get": {"operationId": "other", "servers": [{"url": "https://two.example.test"}]}}
+	  }
+	}`
+	if err := store.Put(apispec.Registration{
+		Name: "ondisk", Source: "/tmp/openapi.json", Document: "/tmp/openapi.json",
+		Kind: apispec.KindFile, FetchedAt: time.Now(), Operations: 2,
+	}, []byte(spread)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := runCall(t, []string{"ondisk", "open"}, nil)
+	if err == nil {
+		t.Fatal("a file document spanning two origins must be refused")
+	}
+	for _, want := range []string{"no origin to resolve against", "one.example.test", "two.example.test", "--server"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal must name %q:\n%v", want, err)
+		}
+	}
+}
+
+// A file document whose servers DO agree is called against the origin they name,
+// and that origin is echoed — there was no fetch origin to check it against.
+func TestAPICallFromAFileUsesTheOneOriginItsServersName(t *testing.T) {
+	setupDevices(t)
+	store := setupAPIRegistry(t)
+	srv, last := startAPIServer(t, func(_ *received, w http.ResponseWriter) { okJSON(w) })
+
+	body := strings.ReplaceAll(`{
+	  "openapi": "3.1.1",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": "%SERVER%/v1"}],
+	  "security": [],
+	  "paths": {"/open": {"get": {"operationId": "open"}}}
+	}`, "%SERVER%", srv.URL)
+	if err := store.Put(apispec.Registration{
+		Name: "ondisk", Source: "/tmp/openapi.json", Document: "/tmp/openapi.json",
+		Kind: apispec.KindFile, FetchedAt: time.Now(), Operations: 1,
+	}, []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := runCall(t, []string{"ondisk", "open"}, nil)
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if last.target != "/v1/open" {
+		t.Fatalf("target = %q", last.target)
+	}
+	if !strings.Contains(stderr, "no fetch origin") || !strings.Contains(stderr, srv.URL) {
+		t.Fatalf("the origin actually used must be echoed, got stderr:\n%s", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// what a call says about itself
+// ---------------------------------------------------------------------------
+
+// The profile echo mirrors the signing-principal line: it says which claim went
+// out and who chose it, on stderr, and --quiet turns it off.
+func TestAPICallEchoesTheProfileThatWentOut(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	store := setupAPIRegistry(t)
+	srv, _ := startAPIServer(t, func(_ *received, w http.ResponseWriter) { okJSON(w) })
+	registerCallDoc(t, store, srv, time.Now())
+	authority := apispec.NormalizeAuthority("http", strings.TrimPrefix(srv.URL, "http://"))
+
+	subject := createIdentity(t, "alice", storeA)
+	plantCredential(t, storeA, subject, authority, "read:profile")
+
+	t.Run("an inferred delegated call names the actions the route required", func(t *testing.T) {
+		_, stderr, err := runCall(t, []string{"test", "profile"}, nil)
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if !strings.Contains(stderr, "profile → delegated (read:profile OR read:email), as the document advertises") {
+			t.Fatalf("stderr = %q", stderr)
+		}
+	})
+
+	t.Run("a forced profile says it was forced", func(t *testing.T) {
+		_, stderr, err := runCall(t, []string{"test", "profile"}, map[string]string{"anon": "true"})
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if !strings.Contains(stderr, "profile → anonymous, forced with --profile") {
+			t.Fatalf("stderr = %q", stderr)
+		}
+	})
+
+	t.Run("--quiet suppresses it, like every other disclosure line", func(t *testing.T) {
+		quietFlag = true
+		t.Cleanup(func() { quietFlag = false })
+		_, stderr, err := runCall(t, []string{"test", "open"}, nil)
+		if err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if strings.Contains(stderr, "→") {
+			t.Fatalf("--quiet must suppress the echo, got %q", stderr)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// repointing a registered name
+// ---------------------------------------------------------------------------
+
+// "Staleness visible, never silent" covers source IDENTITY. A name is the whole
+// address of every later call, so moving it is confirmed, never done quietly.
+func TestAPIAddRefusesToSilentlyRepointAName(t *testing.T) {
+	setupDevices(t)
+	setupAPIRegistry(t)
+
+	first := writeTempDoc(t, registryDoc)
+	add := newAPIAddCmd()
+	mustSetFlag(t, add, "file", first)
+	runJSON(t, add, []string{"test"}, nil)
+
+	// A different source under the same name: refused, with both spellings of
+	// how to mean it. (Tests are not a terminal, so this is the non-interactive
+	// path by construction.)
+	second := writeTempDoc(t, registryDoc)
+	repoint := newAPIAddCmd()
+	mustSetFlag(t, repoint, "file", second)
+	err := repoint.RunE(repoint, []string{"test"})
+	if err == nil {
+		t.Fatal("repointing a registered name must not be silent")
+	}
+	for _, want := range []string{"already registered from", first, second, "--yes", "dfos api rm test"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal must name %q:\n%v", want, err)
+		}
+	}
+	if registration, _ := apiStore().Get("test"); registration.Source != first {
+		t.Fatalf("a refused repoint must leave the registration alone, got %q", registration.Source)
+	}
+
+	// --yes means it, and says what it did.
+	confirmed := newAPIAddCmd()
+	mustSetFlag(t, confirmed, "file", second)
+	mustSetFlag(t, confirmed, "yes", "true")
+	_, stderr := capture(t, func() {
+		if err := confirmed.RunE(confirmed, []string{"test"}); err != nil {
+			t.Fatalf("--yes: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "Repointing 'test'") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if registration, _ := apiStore().Get("test"); registration.Source != second {
+		t.Fatalf("source = %q, want the new one", registration.Source)
+	}
+}
+
+// Re-adding the SAME source is a refresh, not a repoint, and passes straight
+// through — as does `api refresh`, which re-runs the recorded source by design.
+func TestAPIAddSameSourceIsNotARepoint(t *testing.T) {
+	setupDevices(t)
+	setupAPIRegistry(t)
+
+	path := writeTempDoc(t, registryDoc)
+	for i := 0; i < 2; i++ {
+		add := newAPIAddCmd()
+		mustSetFlag(t, add, "file", path)
+		if err := add.RunE(add, []string{"test"}); err != nil {
+			t.Fatalf("re-adding the same source must not ask: %v", err)
+		}
+	}
+	refresh := newAPIRefreshCmd()
+	if err := refresh.RunE(refresh, []string{"test"}); err != nil {
+		t.Fatalf("refresh must not read as a repoint: %v", err)
 	}
 }
 
