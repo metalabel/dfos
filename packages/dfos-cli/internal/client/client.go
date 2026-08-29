@@ -67,6 +67,11 @@ func New(baseURL string) *Client {
 // that kept the explicit default port would therefore sign a host no normally
 // configured relay matches — a 401 the two stacks disagree about, from a URL
 // spelling the operator is entitled to use.
+//
+// TWIN: apispec.NormalizeAuthority is the same rule for the generic API client,
+// which reaches arbitrary `api:<host>` surfaces this relay client never touches.
+// They are separate because neither package imports the other, and both
+// implement one paragraph of API-AUTH.md — change them together.
 func normalizeAuthority(scheme, hostport string) string {
 	host := strings.ToLower(hostport)
 	switch strings.ToLower(scheme) {

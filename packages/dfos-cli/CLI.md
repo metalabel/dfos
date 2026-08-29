@@ -871,6 +871,83 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 
 ---
 
+## Calling an API
+
+`dfos api` is a generic client for any host that advertises the [API-AUTH OpenAPI convention](https://protocol.dfos.com/api-auth#advertising-in-openapi). Register the API under a local name, then call its operations by name; the document says which authentication artifact each route needs, and the CLI signs that one. Nothing here is specific to the canonical deployment — a fork or a self-hosted API registers and calls exactly the same way.
+
+```bash
+# register by host — the document is discovered
+dfos api add dfos api.dfos.com
+
+# or by document URL, or from disk
+dfos api add mine https://api.example.org/v3/openapi.json
+dfos api add local --file ./openapi.json
+
+# what is registered, and how old each cached document is
+dfos api list
+
+# call an operation by its operationId
+dfos api call dfos protocol.getProtocolInfo
+
+# or by method and path template, with parameters
+dfos api call dfos GET /spaces/{space} --param space=nce
+dfos api call dfos spaces.listSpaces --param limit=10
+
+# refetch a document; unregister an API
+dfos api refresh dfos
+dfos api rm mine
+```
+
+### Registration is discovery
+
+A bare host — or a scheme and host with no path — is discovered: the host's `/.well-known/dfos-relay` is read for an `openapi` member (absolute or root-relative, per [WEB-RELAY.md](https://protocol.dfos.com/web-relay)), and `/openapi.json` is assumed when it advertises none. A URL carrying a path names the document outright. `--file` reads one from disk and makes no request at all.
+
+The document is fetched, parsed, and validated at registration, so a source that is not an OpenAPI 3.x document fails there rather than on some later call. `api list` reports which of the three routes found it (`well-known`, `conventional`, `direct`, `file`).
+
+### A cached document goes stale visibly
+
+`api call` reads the cached document and does not refetch. Past 24 hours it says so on stderr — `spec for dfos is 3d old — 'dfos api refresh dfos'` — and proceeds: a stale document still describes the call, and the host's own verdict still decides it. `api refresh` re-runs resolution from the source the registration recorded, so a host that moves its document is followed.
+
+### The requirement combination names the artifact
+
+The security schemes an operation requires, ANDed within one requirement object, are what say which claim the route needs. Schemes are identified structurally — by `type`, `scheme`, header name, and the `x-dfos-typ` marker — never by component name, so a host is free to name its schemes anything.
+
+| The operation requires                      | The CLI sends                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| nothing, or `security: []`                  | no artifact                                                        |
+| the identity-proof scheme alone             | `Authorization: DFOS <identity proof>`                             |
+| identity-proof AND credential schemes       | an identity proof plus `X-Credential`                              |
+| request-proof AND credential schemes        | `Authorization: DFOS <request proof>` plus `X-Credential`          |
+| several requirement objects                 | the cheapest one it can satisfy; the anonymous alternative last    |
+| the request-proof scheme with no credential | nothing — no conforming client can call that route, and it says so |
+
+An operation's `x-dfos-actions` is an OR of alternatives, each a single action token or an array of tokens that must all be covered. Under the delegated combination its absence is the presentation-suffices class: a valid credential for the host and no particular token. Action tokens are the host's vocabulary — they are copied from document to request to error message verbatim, never enumerated or interpreted here.
+
+`--profile <anon|identity|delegated>` (and its shorthand `--anon`) forces a profile instead. The document ranks as a default, not a constraint.
+
+### Credentials, and what a refusal means
+
+The delegated profile presents a stored login credential and signs the request proof with the key that credential was issued to — this installation's login client key. The credential is selected by what it grants: some `att` entry naming `api:<host>` for the host being called. `--as` picks between several; without it, exactly one candidate is required, because guessing which grant to spend is the one thing a credential client must never do. `dfos login` obtains credentials, `dfos creds list` shows them.
+
+A non-2xx renders by tier, because the tiers mean different things:
+
+- **401** — the proof layer refused. The host's `WWW-Authenticate` challenge is printed with it. Nothing is retried under a stronger profile: a client that escalated on its own would sign a second time over the same coordinates.
+- **403** — the credential layer refused. The actions the operation requires and the actions the presented credential grants on `api:<host>` are both printed, verbatim.
+- **503** — the host could not complete the check. That is the host's condition, not a verdict on the request.
+
+Everything but the response document goes to stderr — the staleness line, the signer announcement, `-i` headers — so stdout carries one document.
+
+| Flag               | Meaning                                                        |
+| ------------------ | -------------------------------------------------------------- |
+| `--param name=val` | A path or query parameter, matched against the operation's own |
+| `--data`           | A request body, as a JSON string                               |
+| `--data-file`      | A request body from a file (`-` for stdin)                     |
+| `--profile`        | Force `anon`, `identity`, or `delegated`                       |
+| `--anon`           | Shorthand for `--profile anon`                                 |
+| `-i`, `--include`  | Print the response status and headers to stderr                |
+
+---
+
 ## Raw Relay Access
 
 `dfos relay call` is the escape hatch for agents and power users — raw HTTP to the peer, with `--auth` signing the request:
@@ -895,7 +972,7 @@ dfos relay call GET /proof/v1/identities/did:dfos:xxx -i
 
 The `--auth` flag resolves the active identity, loads the auth key from the keychain, and signs an identity proof bound to this exact request — its method, the peer's host, the path as sent, and the body bytes. The proof always carries a `jti`, which the write-shaped routes require and the read-shaped ones ignore, so one flag is correct on every route.
 
-`call` is a subcommand of the peer group, so `dfos peer call` is the same command under the group's own name. `dfos api <METHOD> <path>` is a deprecated alias of `dfos relay call <METHOD> <path>`: it takes the same arguments and flags and prints the same output, plus one deprecation line on stderr.
+`call` is a subcommand of the peer group, so `dfos peer call` is the same command under the group's own name. `dfos api <METHOD> <path>` — an uppercase method and a path as the two bare arguments — is a deprecated alias of `dfos relay call <METHOD> <path>`: it takes the same arguments and flags and prints the same output, plus one deprecation line on stderr. It sits beside the [API client](#calling-an-api) subcommands, which cobra dispatches first, so the two spellings never collide.
 
 ### Signing a proof by hand
 
@@ -971,6 +1048,11 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                      |
 | `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`) |
 | `GET`  | `auth status`                   | Show current auth state                                    |
+| `POST` | `api add <name> [source]`       | Register an API and cache its OpenAPI document (`--file`)  |
+| `GET`  | `api list`                      | List registered APIs and their documents' age              |
+| `POST` | `api refresh <name>`            | Refetch a registered API's document                        |
+| `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document             |
+| `*`    | `api call <name> <op>`          | Call one operation, signing what the document names        |
 | `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                   |
 | `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                           |
 | `GET`  | `peer list`                     | List configured relays (alias: `relay`)                    |
