@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -40,6 +41,7 @@ func newServeCmd() *cobra.Command {
 	var authority string
 	var ingestion string
 	var gossipProof bool
+	var noSync bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -53,8 +55,8 @@ host callers reach you at, or those routes answer 503: the binding is yours to
 declare and is never read off a request.
 
 All flags support environment variable fallbacks for container deployment:
-  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW,
-  INDEX, AUTHORITY, INGESTION, GOSSIP_PROOF`,
+  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, NO_SYNC, SYNC_INTERVAL,
+  CONTENT_FOLLOW, INDEX, AUTHORITY, INGESTION, GOSSIP_PROOF`,
 		// A long-lived daemon must not hold the process-wide state lock (it
 		// would block every other dfos invocation for its entire run).
 		Annotations: map[string]string{annNoStateLock: "true"},
@@ -115,6 +117,11 @@ All flags support environment variable fallbacks for container deployment:
 					gossipProof = true
 				}
 			}
+			if !cmd.Flags().Changed("no-sync") {
+				if os.Getenv("NO_SYNC") == "true" {
+					noSync = true
+				}
+			}
 
 			interval, err := time.ParseDuration(syncInterval)
 			if err != nil {
@@ -157,6 +164,12 @@ All flags support environment variable fallbacks for container deployment:
 				ContentFollow: contentFollow,
 				Authority:     authority,
 				Ingestion:     ingestion,
+				// The one command that gossips. `serve` is the mesh participant:
+				// relaying what it sequences is what makes it a node rather than a
+				// private store, so here each peer's own `gossip` switch decides.
+				// Every one-shot command opens the same relay with this false, and
+				// a local write stays local.
+				Gossip: true,
 			}
 			if gossipProof {
 				opts.GossipIdentityProof = &gossipProof
@@ -193,7 +206,11 @@ All flags support environment variable fallbacks for container deployment:
 			fmt.Printf("DFOS relay serving (%s)\n", relay.Version)
 			fmt.Printf("  DID:    %s\n", lr.Relay.DID())
 			fmt.Printf("  Port:   %s\n", port)
-			fmt.Printf("  Sync:   every %s\n", interval)
+			if noSync {
+				fmt.Printf("  Sync:   OFF (--no-sync) — this node pulls from no peer\n")
+			} else {
+				fmt.Printf("  Sync:   every %s\n", interval)
+			}
 			if authority != "" {
 				fmt.Printf("  Host:   %s\n", authority)
 			} else {
@@ -203,38 +220,70 @@ All flags support environment variable fallbacks for container deployment:
 				fmt.Printf("  Ingest: %s\n", ingestion)
 			}
 
+			// The peer banner. "Peers: N configured" alone said nothing about what
+			// this boot is about to DO with them, and the first thing it does is
+			// pull every one of their logs. What gets synced is named here, before
+			// the sync loop starts, because a boot that drags a peer's whole corpus
+			// onto the machine should have announced it was going to.
 			peerCount := len(cfg.Relays) + len(extraPeers)
 			if peerCount > 0 {
 				fmt.Printf("  Peers:  %d configured\n", peerCount)
-				for name, r := range cfg.Relays {
-					fmt.Printf("    - %s (%s)%s\n", name, r.URL, peerFlagSuffix(localrelay.PeerConfigFor(r)))
+				var willSync []string
+				names := make([]string, 0, len(cfg.Relays))
+				for name := range cfg.Relays {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					r := cfg.Relays[name]
+					pc := localrelay.PeerConfigFor(r)
+					fmt.Printf("    - %s (%s)%s\n", name, r.URL, peerFlagSuffix(pc))
+					if syncEnabled(pc) {
+						willSync = append(willSync, name)
+					}
 				}
 				for _, p := range extraPeers {
 					fmt.Printf("    - %s%s\n", p.URL, peerFlagSuffix(p))
+					if syncEnabled(p) {
+						willSync = append(willSync, p.URL)
+					}
+				}
+				switch {
+				case noSync:
+					fmt.Printf("  Pull:   none — --no-sync, so this node serves what it already holds\n")
+				case len(willSync) == 0:
+					fmt.Printf("  Pull:   none — every configured peer has sync turned off\n")
+				default:
+					fmt.Printf("  Pull:   will sync %d peer(s) now and every %s: %s\n",
+						len(willSync), interval, strings.Join(willSync, ", "))
 				}
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			// background sync loop
-			go func() {
-				if err := lr.Relay.SyncFromPeers(); err != nil {
-					fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
-				}
-				ticker := time.NewTicker(interval)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-						if err := lr.Relay.SyncFromPeers(); err != nil {
-							fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+			// background sync loop. --no-sync starts no loop at all: a node that
+			// pulls nothing still serves, still ingests submissions, and still
+			// gossips what it sequenced — it just does not reach for a peer's log.
+			if !noSync {
+				go func() {
+					if err := lr.Relay.SyncFromPeers(); err != nil {
+						fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+					}
+					ticker := time.NewTicker(interval)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							if err := lr.Relay.SyncFromPeers(); err != nil {
+								fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+							}
 						}
 					}
-				}
-			}()
+				}()
+			}
 
 			// background sequencer
 			go func() {
@@ -329,6 +378,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&relayName, "name", "DFOS Relay", "Relay profile name (env: RELAY_NAME)")
 	cmd.Flags().StringVar(&peers, "peers", "", "Peer URLs: comma-separated, a JSON array of URLs, or a JSON array of {url,gossip,readThrough,sync} objects (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
+	cmd.Flags().BoolVar(&noSync, "no-sync", false, "Do not pull any peer's log: serve and ingest, but boot local-only (env: NO_SYNC=true)")
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
 	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
 	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
@@ -443,6 +493,13 @@ func validatePeerURL(raw string) error {
 		return fmt.Errorf("invalid peer URL %q: want a base URL with no query or fragment", raw)
 	}
 	return nil
+}
+
+// syncEnabled reports whether this peer is one `serve` will pull a log from. A
+// nil switch means on, which is what a config entry written without the key and
+// a --peers URL with no object form both say.
+func syncEnabled(p relay.PeerConfig) bool {
+	return p.Sync == nil || *p.Sync
 }
 
 // peerFlagSuffix renders a peer's non-default switches for the boot banner, so

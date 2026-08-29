@@ -106,6 +106,11 @@ type recoveredKey struct {
 	// role. It is still real and still recovered: the index answers
 	// has-ever-declared precisely so a rotated-out key is findable.
 	Superseded bool `json:"superseded,omitempty"`
+	// BeyondScan marks a key the derivation scan never reached. The oracle was
+	// never asked about this index; a chain this run FETCHED named the public
+	// key, and deriving forward from the seed proved which index of this vault
+	// produced it. Its presence is proof --scan-depth was too small.
+	BeyondScan bool `json:"beyondScan,omitempty"`
 }
 
 // recoveredIdentity is one identity the scan found, and its end state locally.
@@ -142,7 +147,26 @@ type recoverResult struct {
 	// Scanned is false when the derivation scan did not run at all — the
 	// manifest-only degradation. Nothing in this document then says anything
 	// about indices this machine has no record of.
-	Scanned       bool                `json:"scanned"`
+	Scanned bool `json:"scanned"`
+	// BeyondScanIndices are the derivation indices a FETCHED CHAIN proved this
+	// vault declared, at or past the index the scan stopped on. Non-empty means
+	// the gap limit ended the walk short of what the seed actually minted: these
+	// keys were installed and the counter cleared them, and the same shortfall
+	// can hide an identity whose every key sits past the gap.
+	BeyondScanIndices []uint32 `json:"beyondScanIndices,omitempty"`
+	// ScanComplete is the machine form of that finding: true only when a scan ran,
+	// every identity it found was read, and nothing in those chains proved the
+	// walk stopped short. A caller deciding whether this vault is safe to mint
+	// from reads this field, not the prose.
+	//
+	// False with a non-empty BeyondScanIndices is the proven shortfall. False
+	// with an empty one is the unproven kind — a chain this run could not read,
+	// so what it declares was never checked against a derivation at all.
+	ScanComplete bool `json:"scanComplete"`
+	// RecommendedScanDepth is the --scan-depth that would have walked far enough
+	// to reach the highest beyond-scan index. Zero when the scan was complete.
+	RecommendedScanDepth int `json:"recommendedScanDepth,omitempty"`
+
 	ManifestOnly  bool                `json:"manifestOnly,omitempty"`
 	DryRun        bool                `json:"dryRun,omitempty"`
 	Keys          []recoveredKey      `json:"keys"`
@@ -219,6 +243,17 @@ func runRecover(opts recoverOptions) error {
 		return err
 	}
 
+	// The seed is read once and used by both walks: the oracle scan, and the
+	// local probe that explains chain keys the scan never reached.
+	mnemonic, err := getVaults().Mnemonic(name)
+	if err != nil {
+		return fmt.Errorf("read vault '%s': %w", name, err)
+	}
+	seed, err := vault.MnemonicSeed(mnemonic)
+	if err != nil {
+		return err
+	}
+
 	result := &recoverResult{
 		Vault:            name,
 		VaultSource:      source,
@@ -253,19 +288,20 @@ func runRecover(opts recoverOptions) error {
 
 	// Stage 1 + 2. Every hit carries the private key so the write phase can
 	// install it once the chain has named the account it belongs under.
-	hits, scanned, err := scanVault(name, meta, oracle, opts)
+	hits, scanned, err := scanVault(seed, meta, oracle, opts)
 	if err != nil {
 		return err
 	}
 	result.IndicesScanned = scanned
 	result.Scanned = !opts.manifestOnly
+	result.ScanComplete = result.Scanned
 	for _, h := range hits {
 		if int64(h.index) > result.HighestUsedIndex {
 			result.HighestUsedIndex = int64(h.index)
 		}
 	}
 
-	if err := restoreFromHits(result, hits, oracle, meta, name, opts); err != nil {
+	if err := restoreFromHits(result, hits, seed, oracle, meta, name, opts); err != nil {
 		return err
 	}
 
@@ -310,37 +346,60 @@ func errNoVaultToRecover() error {
 func proveOracle(c *client.Client, name, url string) error {
 	rows, err := c.IdentitiesByKey(indexKeyProbeMultibase(), 1)
 	if errors.Is(err, client.ErrIndexUnavailable) {
-		return oracleFailure(name, url,
+		return oracleFailure(oracleReasonNoIndex, name, url,
 			"it answered 501 Not Implemented — capabilities.index is off, or this relay predates the index family",
 			"GET /index/v0/identities?key=")
 	}
 	if err != nil {
-		return oracleFailure(name, url, err.Error(), "GET /index/v0/identities?key=")
+		return oracleFailure(oracleReasonUnreachable, name, url, err.Error(), "GET /index/v0/identities?key=")
 	}
 	if len(rows) > 0 {
-		return oracleFailure(name, url,
+		return oracleFailure(oracleReasonParamIgnored, name, url,
 			"it answered an UNFILTERED page to a key no chain can have declared, which means it ignored the 'key=' parameter entirely — this relay predates the key lookup (needs web-relay >= 0.39.0)",
 			"the 'key=' filter on GET /index/v0/identities")
 	}
 	return nil
 }
 
+// The three ways an oracle cannot answer, as codes a script can branch on. The
+// prose beside them says the same thing at length and is free to be reworded;
+// these are not. They are distinct because the operator's next move differs for
+// each: turn the index on, fix the network, or upgrade the relay.
+const (
+	// oracleReasonNoIndex: a clean 501. The relay serves no identity index.
+	oracleReasonNoIndex = "oracle-no-index"
+	// oracleReasonUnreachable: no readable answer at all — a partition, a
+	// timeout, a body that did not parse.
+	oracleReasonUnreachable = "oracle-unreachable"
+	// oracleReasonParamIgnored: 200 with an unfiltered page. The relay predates
+	// `key=` and answers as though the filter were not there — the failure with
+	// no status code, and the one that would otherwise make every index look used.
+	oracleReasonParamIgnored = "oracle-key-param-ignored"
+)
+
 // oracleFailure is the one shape every "the oracle cannot answer" error takes.
 // It names the relay, names the capability, and says out loud that the failure
 // is not an absence of keys — because the whole hazard of this command is a
 // silence being read as an answer.
-func oracleFailure(name, url, why, missing string) error {
+// The reason code rides along so --json distinguishes the three causes without
+// parsing the sentence: a caller that must tell "this relay has no index" from
+// "the network is down" cannot do it on free text.
+func oracleFailure(reason, name, url, why, missing string) error {
 	label := url
 	if name != "" {
 		label = fmt.Sprintf("%s (%s)", name, url)
 	}
-	return fmt.Errorf("the oracle cannot answer the used/unused question, so no scan was run.\n"+
-		"  Oracle:  %s\n"+
-		"  Needs:   %s\n"+
-		"  Got:     %s\n"+
-		"This is NOT 'no keys found'. Nothing here says anything about what this phrase controls.\n"+
-		"Point --peer at a relay that serves the identity index, or re-run with --manifest-only to\n"+
-		"recover only what this machine's own vault records already name.", label, missing, why)
+	return &CodedError{
+		Reason: reason,
+		Fields: map[string]string{"oracle": name, "oracleURL": url},
+		Err: fmt.Errorf("the oracle cannot answer the used/unused question, so no scan was run.\n"+
+			"  Oracle:  %s\n"+
+			"  Needs:   %s\n"+
+			"  Got:     %s\n"+
+			"This is NOT 'no keys found'. Nothing here says anything about what this phrase controls.\n"+
+			"Point --peer at a relay that serves the identity index, or re-run with --manifest-only to\n"+
+			"recover only what this machine's own vault records already name.", label, missing, why),
+	}
 }
 
 // --- the scan ---
@@ -356,21 +415,18 @@ type scanHit struct {
 	// minted are this vault's own records at this index — what the manifest
 	// already knew, which is primary and needs no oracle to be true.
 	minted []vault.MintedKey
+	// chainDIDs are the DIDs a FETCHED CHAIN declared this public key under, as
+	// opposed to the index rows above. Only the beyond-scan probe sets it: those
+	// hits exist because a chain named the key, never because the oracle did.
+	chainDIDs []string
+	// beyondScan marks a hit the derivation walk never reached.
+	beyondScan bool
 }
 
 // scanVault runs the walk and returns every used index. In manifest-only mode it
 // does not walk at all: it folds the vault's own records, which is a different
 // and much smaller claim, and the caller banners it as such.
-func scanVault(name string, meta *vault.Metadata, oracle *client.Client, opts recoverOptions) ([]scanHit, int, error) {
-	mnemonic, err := getVaults().Mnemonic(name)
-	if err != nil {
-		return nil, 0, fmt.Errorf("read vault '%s': %w", name, err)
-	}
-	seed, err := vault.MnemonicSeed(mnemonic)
-	if err != nil {
-		return nil, 0, err
-	}
-
+func scanVault(seed []byte, meta *vault.Metadata, oracle *client.Client, opts recoverOptions) ([]scanHit, int, error) {
 	// This machine's own record of what the seed minted, keyed by index. The
 	// manifest is the PRIMARY record: a key it names is used whatever any relay
 	// says, and a hole it fills does not end the scan.
@@ -437,7 +493,7 @@ func scanVault(name string, meta *vault.Metadata, oracle *client.Client, opts re
 // local relay, private keys in the keystore, provenance in the vault, names in
 // config. Under --dry-run it computes and reports the same thing and writes
 // none of it.
-func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Client, meta *vault.Metadata, vaultName string, opts recoverOptions) error {
+func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle *client.Client, meta *vault.Metadata, vaultName string, opts recoverOptions) error {
 	lr, err := getRelay()
 	if err != nil {
 		return err
@@ -498,6 +554,54 @@ func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Clien
 		result.Identities = append(result.Identities, entry)
 	}
 
+	// What the scan REACHED and what the chains PROVE are two different sets,
+	// and until this ran only the first fed the counter.
+	//
+	// A rotation moves an identity's current key to a fresh index. Enough
+	// rotations — or enough burned indices in between — and that index sits past
+	// where the gap limit stopped the walk. The oracle was never asked about it;
+	// the chain fetched a moment ago names the public key anyway, and the seed in
+	// hand derives it. Two things went wrong there: the key was left out of the
+	// keystore even though the chain proves the vault owns it, and, far worse,
+	// the counter converged past only the SCANNED indices while reporting that
+	// the next mint could not reuse a recovered one. It could — the next mint
+	// took an index a burn identity already spent, and two unrelated DIDs ended
+	// up signing with the same Ed25519 private key.
+	//
+	// Closing it needs no relay. The chains are already here, and matching their
+	// declared keys against forward derivations is local arithmetic.
+	if extra := probeBeyondScan(seed, chains, hits, uint32(result.IndicesScanned), opts); len(extra) > 0 {
+		hits = append(hits, extra...)
+		for _, h := range extra {
+			// Every probe hit is a spent index and feeds the counter, wherever it
+			// sits. Only the ones PAST the walk say the scan depth was wrong; an
+			// index the walk reached and the oracle stayed silent about is the
+			// oracle's shortfall, and a deeper scan would not have helped.
+			if int64(h.index) > result.HighestUsedIndex {
+				result.HighestUsedIndex = int64(h.index)
+			}
+			if h.beyondScan {
+				result.BeyondScanIndices = append(result.BeyondScanIndices, h.index)
+			}
+		}
+		if n := len(result.BeyondScanIndices); n > 0 {
+			result.ScanComplete = false
+			// The walk starts at 0 and a gap limit of D reaches index D-1 in the
+			// worst case, so D = highest + 1 is what would have got there.
+			result.RecommendedScanDepth = int(result.BeyondScanIndices[n-1]) + 1
+		}
+	}
+
+	// A chain that could not be READ is a chain whose keys were never matched
+	// against a derivation, so this run has no basis for saying the scan reached
+	// everything the vault spent. --dry-run pulls nothing at all, which is
+	// precisely the run an operator makes before deciding to trust the vault:
+	// answering it with a clean scan on the strength of having looked at nothing
+	// is the same silence-read-as-an-answer this command exists to refuse.
+	if len(chains) < len(order) {
+		result.ScanComplete = false
+	}
+
 	// Install the keys. A key's ACCOUNT is `<did>#<keyId>`, and the key id lives
 	// only in the chain — which is why the fetch has to come first, and why an
 	// identity that could not be fetched leaves its key uninstallable rather than
@@ -512,6 +616,11 @@ func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Clien
 		for _, m := range h.minted {
 			dids[m.DID] = true
 		}
+		// Beyond-scan hits are named by the chain that declared them, never by an
+		// index row — the oracle was never asked about these indices at all.
+		for _, did := range h.chainDIDs {
+			dids[did] = true
+		}
 		ordered := make([]string, 0, len(dids))
 		for did := range dids {
 			ordered = append(ordered, did)
@@ -523,10 +632,11 @@ func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Clien
 		}
 		for _, did := range ordered {
 			key := recoveredKey{
-				Index:     h.index,
-				Path:      vault.DerivationPath(h.index),
-				PublicKey: h.publicKey,
-				DID:       did,
+				Index:      h.index,
+				Path:       vault.DerivationPath(h.index),
+				PublicKey:  h.publicKey,
+				DID:        did,
+				BeyondScan: h.beyondScan,
 			}
 			facts, ok := chains[did]
 			if !ok {
@@ -628,6 +738,93 @@ func restoreFromHits(result *recoverResult, hits []scanHit, oracle *client.Clien
 	}
 	result.MintedAdded, result.CounterAfter = added, next
 	return nil
+}
+
+// beyondScanCeiling bounds the forward derivation walk that explains chain keys
+// the scan never reached. Nothing is asked of any relay here — it is pure local
+// arithmetic — so the bound exists to keep an unexplainable key (one minted
+// outside this vault, which is an ordinary thing for a multi-device identity to
+// hold) from turning into an unbounded loop, not to be polite to a peer.
+const beyondScanCeiling = maxScanIndices
+
+// probeBeyondScan derives forward from where the scan stopped and matches each
+// derived public key against the keys the FETCHED CHAINS declare.
+//
+// The scan's question is "has any identity declared this key", asked of a relay.
+// This walk asks the opposite and asks it locally: "which index of this vault
+// produced the key this chain already showed me". A hit is chain-proven — the
+// operation declaring it was accepted by the local relay — and seed-proven, so
+// the index is spent whatever the oracle's gap limit concluded.
+//
+// It walks from zero, not from where the scan stopped, because there are two
+// ways an index the chain proves goes unrecorded and both spend the index:
+//
+//	past scanStop — the walk never derived it. This is the scan-depth finding,
+//	  and the hit is flagged beyondScan so the report can say so.
+//	before scanStop — the walk derived it and the ORACLE returned no row for it,
+//	  so it counted as a gap. An index whose declaring operation was never
+//	  published, or a relay whose index lags its own proof plane, looks like this.
+//
+// It stops as soon as every unexplained key is accounted for. Keys that never
+// match are left alone: a key this seed cannot derive was minted somewhere else,
+// which is a fact about the identity and says nothing about this vault's counter.
+//
+// Manifest-only runs no scan, asks no relay, and already banners itself as
+// covering only what the vault's own records name; it is left out rather than
+// given a second, quieter kind of walk.
+func probeBeyondScan(seed []byte, chains map[string]*chainFacts, scanned []scanHit, scanStop uint32, opts recoverOptions) []scanHit {
+	if opts.manifestOnly || len(chains) == 0 {
+		return nil
+	}
+
+	// Every public key a fetched chain declared, minus the ones the scan already
+	// matched to an index. DIDs are sorted so a key two chains share produces one
+	// hit naming both, in the same order on every run.
+	explained := make(map[string]bool, len(scanned))
+	for _, h := range scanned {
+		explained[h.publicKey] = true
+	}
+	wanted := map[string][]string{}
+	dids := make([]string, 0, len(chains))
+	for did := range chains {
+		dids = append(dids, did)
+	}
+	sort.Strings(dids)
+	for _, did := range dids {
+		for pub := range chains[did].keyIDByPublic {
+			if explained[pub] {
+				continue
+			}
+			wanted[pub] = append(wanted[pub], did)
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	var found []scanHit
+	for i := uint32(0); i < beyondScanCeiling && len(wanted) > 0; i++ {
+		priv, pub, err := vault.DeriveKey(seed, i)
+		if err != nil {
+			// The hardened range ran out. Nothing past here is derivable, so the
+			// remaining keys are unexplainable rather than undiscovered.
+			break
+		}
+		mb := protocol.EncodeMultikey(pub)
+		owners, ok := wanted[mb]
+		if !ok {
+			continue
+		}
+		delete(wanted, mb)
+		found = append(found, scanHit{
+			index:      i,
+			publicKey:  mb,
+			private:    priv,
+			chainDIDs:  owners,
+			beyondScan: i >= scanStop,
+		})
+	}
+	return found
 }
 
 func maxU32(a, b uint32) uint32 {
@@ -847,6 +1044,7 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 		fmt.Printf("  It says NOTHING about keys this seed minted elsewhere. Re-run without\n")
 		fmt.Printf("  --manifest-only against a relay serving the identity index for the full scan.\n")
 	}
+	printScanShortfall(r)
 
 	if len(r.Keys) == 0 {
 		fmt.Printf("\nNo keys found.\n")
@@ -865,6 +1063,9 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 				pad(truncateMiddle(k.PublicKey, 18), 18),
 				pad(k.Outcome, 16),
 				label)
+			if k.BeyondScan {
+				fmt.Printf("%s past the scan — the chain declares this key, and the seed derives it here\n", pad("", 6))
+			}
 			if k.Reason != "" {
 				fmt.Printf("%s %s\n", pad("", 6), k.Reason)
 			}
@@ -894,13 +1095,21 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 		verb = "would be added"
 	}
 	fmt.Printf("\nVault records: %d %s\n", r.MintedAdded, verb)
+	// The claim the counter line makes is scoped to what this run LEARNED, which
+	// is the scan plus the chains it fetched. Saying "cannot reuse a recovered
+	// index" was true and useless; what an operator reads it as — cannot reuse
+	// an index this vault has spent — is only true when the scan was complete.
+	safety := "the next mint from this vault cannot reuse an index this run learned"
+	if !r.ScanComplete {
+		safety = "past every index this run learned — indices the scan never reached remain unknown"
+	}
 	switch {
 	case r.CounterAfter == r.CounterBefore:
 		fmt.Printf("Counter:       %d — unchanged\n", r.CounterBefore)
 	case r.DryRun:
-		fmt.Printf("Counter:       %d — would rise to %d so the next mint cannot reuse a recovered index\n", r.CounterBefore, r.CounterAfter)
+		fmt.Printf("Counter:       %d — would rise to %d: %s\n", r.CounterBefore, r.CounterAfter, safety)
 	default:
-		fmt.Printf("Counter:       %d → %d — the next mint from this vault cannot reuse a recovered index\n", r.CounterBefore, r.CounterAfter)
+		fmt.Printf("Counter:       %d → %d — %s\n", r.CounterBefore, r.CounterAfter, safety)
 	}
 
 	fmt.Printf("\nWhat this scan cannot see:\n")
@@ -908,6 +1117,11 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 		fmt.Printf("  - One relay answered. '%s' not knowing a key is that relay's answer, not the world's.\n", r.Oracle)
 		fmt.Printf("  - A derived key no identity operation ever declared is invisible to any index. It is\n")
 		fmt.Printf("    still derivable from the phrase; nothing can find it for you.\n")
+		// The gap limit is the only thing that ends the walk, so the lever that
+		// moves it belongs in the same breath as the limitation it causes.
+		fmt.Printf("  - The walk ended on the gap limit: %d consecutive unused indices (--scan-depth %d).\n", r.ScanDepth, r.ScanDepth)
+		fmt.Printf("    An identity whose every key sits past a longer run of unused indices is out of\n")
+		fmt.Printf("    reach of this run. '--scan-depth N' walks through a gap that wide.\n")
 	}
 	fmt.Printf("  - Keys minted OUTSIDE a vault are not derivable from any phrase. This command says\n")
 	fmt.Printf("    nothing about them — 'dfos keys list' shows what this machine holds.\n")
@@ -918,6 +1132,34 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 	if hasOutcome(r.Keys, "recovered") {
 		fmt.Fprintf(os.Stderr, "\nRecovered keys are in %s. Signing resolves the identity and uses the key this device holds, so 'dfos --as <name> …' works again.\n", keys.Backend())
 	}
+}
+
+// printScanShortfall is the loud half of the counter fix. A scan that stopped
+// short is not a detail of the walk: it is the one condition under which this
+// vault's counter can still be behind what the seed has spent, and an operator
+// reading "recovered" over a clean report would have no way to know.
+//
+// It fires on PROOF, never on suspicion — a chain this run fetched declared a
+// key, and deriving forward from the seed found the index that produced it, past
+// where the scan stopped. Keys a chain names that this seed cannot derive are
+// silent here: they were minted elsewhere and say nothing about this vault.
+func printScanShortfall(r *recoverResult) {
+	if len(r.BeyondScanIndices) == 0 {
+		return
+	}
+	indices := make([]string, 0, len(r.BeyondScanIndices))
+	for _, i := range r.BeyondScanIndices {
+		indices = append(indices, fmt.Sprintf("%d", i))
+	}
+	fmt.Printf("\n! SCAN DEPTH TOO SHALLOW — current key(s) beyond scan depth.\n")
+	fmt.Printf("  The scan walked %d indices and stopped after %d consecutive unused ones. A chain\n", r.IndicesScanned, r.ScanDepth)
+	fmt.Printf("  this run fetched declares key(s) this vault's seed derives at index %s,\n", strings.Join(indices, ", "))
+	fmt.Printf("  past that stop. They are recovered here and the counter clears them.\n")
+	fmt.Printf("  What the walk could NOT see is an identity whose every key sits past the same\n")
+	fmt.Printf("  gap — indices included. Until this vault is scanned that deep, minting from it\n")
+	fmt.Printf("  risks handing out an index another identity already spent.\n")
+	fmt.Printf("  Re-run with --scan-depth %d (or more): dfos recover --vault %s --scan-depth %d\n",
+		r.RecommendedScanDepth, r.Vault, r.RecommendedScanDepth)
 }
 
 func hasOutcome(all []recoveredKey, outcome string) bool {

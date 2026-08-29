@@ -24,7 +24,8 @@ type LocalRelay struct {
 }
 
 // Options configures the local relay. All fields are optional — sensible
-// defaults are used when omitted.
+// defaults are used when omitted. Gossip is the one field whose zero value is a
+// POSTURE rather than a convenience default; see its comment.
 type Options struct {
 	DBPath      string             // override database path (default: ~/.dfos/relay.db)
 	ProfileName string             // relay profile name (default: "DFOS CLI")
@@ -52,6 +53,24 @@ type Options struct {
 	// GossipIdentityProof: true = sign gossip-out pushes with this relay's own
 	// identity proof. nil/false = push anonymously.
 	GossipIdentityProof *bool
+	// Gossip decides whether this relay pushes newly sequenced operations to
+	// peers AT ALL. Its zero value — false — is the posture, not a default:
+	// every peer's gossip switch is forced off, whatever config.toml or
+	// ExtraPeers said.
+	//
+	// A one-shot `dfos` command opens this relay to write locally. Ingesting an
+	// operation runs the sequencer, and the sequencer gossips, so `identity
+	// create` with no --peer would push the new operation to every registered
+	// peer — nondeterministically, because the pushes are goroutines racing
+	// process exit, and invisibly, because the command reports publishedTo:null.
+	// Publishing is the explicit path (`content publish`, `--peer`) and nothing
+	// else. Leaving this field alone is therefore the correct thing for every
+	// command to do, and forgetting it cannot leak.
+	//
+	// `dfos serve` — the long-running mesh participant, whose whole job is to
+	// relay what it sequences — sets it true, and each peer's own gossip switch
+	// then decides.
+	Gossip bool
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -94,6 +113,9 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 
 	// build peer configs from config.toml relay entries + extra peers
 	peers := mergePeerConfigs(buildPeerConfigs(cfg, opts.OnlyPeers), opts.ExtraPeers, logger)
+	if !opts.Gossip {
+		peers = withGossipOff(peers)
+	}
 
 	// wire up peer client if peers exist
 	var peerClient relay.PeerClient
@@ -273,6 +295,22 @@ func buildPeerConfigs(cfg *config.Config, only []string) []relay.PeerConfig {
 			continue
 		}
 		peers = append(peers, PeerConfigFor(r))
+	}
+	return peers
+}
+
+// withGossipOff forces the gossip switch off on every peer, whatever the config
+// entry or the explicit --peers object said. It is what Options.Gossip == false
+// applies, and it is deliberately an OVERRIDE rather than a default: the leak it
+// closes survived a per-peer default because an absent `gossip` key means on,
+// so every peer registered without the key would still have been pushed to.
+//
+// Only gossip is touched. Read-through and bulk sync are pulls this machine
+// initiates; gossip is the one direction that puts local state on a peer.
+func withGossipOff(peers []relay.PeerConfig) []relay.PeerConfig {
+	for i := range peers {
+		off := false
+		peers[i].Gossip = &off
 	}
 	return peers
 }
