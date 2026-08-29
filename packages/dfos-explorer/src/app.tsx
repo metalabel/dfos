@@ -21,10 +21,10 @@ import { Glossary } from './views/glossary';
 import { Home } from './views/home';
 import { Identity } from './views/identity';
 import { Key } from './views/key';
-import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
 import { Relays } from './views/relays';
 import { Search } from './views/search';
+import { LocalSync } from './views/sync';
 
 const SyncTicker = () => {
   const sync = useSyncState();
@@ -35,7 +35,7 @@ const SyncTicker = () => {
   return (
     <a
       class="synctick"
-      href="#/"
+      href="#/sync"
       title={`${auto ? 'auto-' : ''}${resolving ? 'resolving projections' : 'syncing'} — ${sync.status}`}
     >
       <span class="spin">◍</span>
@@ -82,11 +82,7 @@ const ThemeToggle = () => {
   );
 };
 
-const Header = (props: {
-  onToggleIndex: () => void;
-  indexOpen: boolean;
-  showIndexToggle: boolean;
-}) => {
+const Header = () => {
   const [relays, setRelays] = useState(getRelays());
   const [status, setStatus] = useState<'probing' | 'up' | 'mixed' | 'down'>('probing');
 
@@ -129,6 +125,7 @@ const Header = (props: {
           <a href="#/documents">documents</a>
           <a href="#/artifacts">artifacts</a>
           <a href="#/relays">relays</a>
+          <a href="#/sync">sync</a>
           <a href="#/glossary">glossary</a>
         </div>
         <div class="hstatus">
@@ -138,11 +135,6 @@ const Header = (props: {
             {relays.length} relay{relays.length === 1 ? '' : 's'}
           </a>
           <ThemeToggle />
-          {props.showIndexToggle ? (
-            <a class="index-toggle" onClick={props.onToggleIndex}>
-              {props.indexOpen ? '✕ index' : '☰ index'}
-            </a>
-          ) : null}
         </div>
       </div>
     </header>
@@ -195,15 +187,9 @@ const Foot = () => (
 
 export const App = () => {
   const route = useRoute();
-  const [indexOpen, setIndexOpen] = useState(false);
 
   // the auto-sync heartbeat lives for the life of the app
   useEffect(() => startAutoSyncScheduler(), []);
-
-  // navigating (tapping an index row) closes the mobile drawer
-  useEffect(() => {
-    setIndexOpen(false);
-  }, [route]);
 
   const view = (() => {
     switch (route.view) {
@@ -211,6 +197,8 @@ export const App = () => {
         return <Glossary />;
       case 'relays':
         return <Relays />;
+      case 'sync':
+        return <LocalSync />;
       case 'search':
         return <Search />;
       case 'identities':
@@ -236,37 +224,15 @@ export const App = () => {
     }
   })();
 
-  // IA (D3): the local-index sidebar is a home/browse ACTIVITY panel. Detail
-  // pages (did/content/op/cred), the glossary, and the relay browser go full
-  // width and carry their own crosslink panels instead.
-  const showSidebar =
-    route.view === 'home' ||
-    route.view === 'identities' ||
-    route.view === 'documents' ||
-    route.view === 'artifacts';
-
+  // IA: the local-index sidebar used to ride along beside home and the browse
+  // pages, costing every view 340px to carry a control panel. It is a page now
+  // (#/sync), so EVERY route is full width and the mobile drawer is gone with it.
   return (
     <>
-      <Header
-        onToggleIndex={() => setIndexOpen((v) => !v)}
-        indexOpen={indexOpen}
-        showIndexToggle={showSidebar}
-      />
+      <Header />
       <div class="wrap">
         <SearchBar />
-        <div class={showSidebar ? 'cols' : 'cols solo'}>
-          <main>{view}</main>
-          {showSidebar ? (
-            <aside class={indexOpen ? 'open' : ''}>
-              {indexOpen ? (
-                <div class="drawer-close">
-                  <a onClick={() => setIndexOpen(false)}>✕ close</a>
-                </div>
-              ) : null}
-              <LocalIndex />
-            </aside>
-          ) : null}
-        </div>
+        <main>{view}</main>
         <Foot />
       </div>
       <TermModal />
