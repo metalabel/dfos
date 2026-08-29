@@ -222,7 +222,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
 **Keys** (`dfos keys …`) — `list` · `show` · `prune`
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
-**Sign-in** — `dfos login [name|did]` · cached records: `dfos creds list` · `show` · `rm`
+**Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`
 **Auth** (`dfos auth …`) — `proof` · `status`
 **API client** (`dfos api …`) — `add` · `list` · `refresh` · `rm` · `call`
@@ -373,8 +373,10 @@ are ANDed. `--profile <anon|identity|delegated>` forces one. A 401 prints the
 host's challenge and stops — nothing is retried under stronger auth. A 403 prints
 the actions the route requires next to the actions the credential grants.
 
-The delegated profile spends a credential obtained by `dfos login`; `dfos creds list`
-shows what is stored.
+The delegated profile spends a credential obtained by `dfos login --host <name-or-host>`,
+which lists the actions that host advertises and asks which of them to request. The
+credential is matched to the host by its `api:<host>` attenuation, not by its audience.
+`dfos creds list` shows what is stored.
 
 ### Raw relay access & identity proofs (escape hatch)
 

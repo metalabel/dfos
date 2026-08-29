@@ -19,7 +19,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -376,7 +375,7 @@ func wrapWords(mnemonic string, n int) []string {
 // line otherwise. It is never read from argv: an argument lands in shell history
 // and is visible to every process on the box while the command runs.
 func readMnemonic(in io.Reader) (string, error) {
-	if isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()) {
+	if stdinIsInteractive() {
 		fmt.Fprintf(os.Stderr, "Paste the recovery phrase (12–24 words), then press enter.\n")
 		fmt.Fprintf(os.Stderr, "It is echoed to this terminal — do this where nobody is reading over your shoulder.\n")
 		fmt.Fprintf(os.Stderr, "Phrase: ")

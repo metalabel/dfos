@@ -797,6 +797,13 @@ dfos login did:dfos:xxx
 # request a scope that returns a credential
 dfos login alice --scope read:profile
 
+# sign in FOR an API: its advertised actions are listed, and you pick
+dfos login alice --host dfos
+dfos login alice --host api.dfos.com
+
+# take the whole catalog without being asked
+dfos login alice --host dfos --all-scopes
+
 # no browser (containers, SSH): print the URL and wait
 dfos login --no-browser --timeout 10m
 
@@ -805,6 +812,12 @@ dfos login alice --authorize-url https://app.example.com
 ```
 
 **Where the authorize endpoint comes from.** The subject's identity chain is fetched from the configured peer as an operation log, re-verified locally, and read for a `DfosAuthorizationServer` service entry — `{id, type, endpoint}`, where `endpoint` is the canonical authorize _origin_. The `/authorize` surface is appended to it, so a base path is kept and extended (`https://x.example/base` → `https://x.example/base/authorize`). **One entry, or none:** zero entries, more than one, an endpoint that is empty or not an absolute `http(s)` URL, and an endpoint that is not a bare origin (it carries a query, a fragment, or userinfo) all name nothing, and the CLI falls back to `--authorize-url`; with no fallback it errors and names both the missing entry and the flag. Ambiguity degrades to the fallback, never to a choice.
+
+**Choosing what to ask for.** Without `--host`, the scope is whatever you typed — an opaque string handed to the authorize host verbatim. `--host` names the API the credential is for, by registered name or by host, and reads that API's OpenAPI document for the actions it advertises: the catalog on its request-proof scheme (action token → description, per [API-AUTH](https://protocol.dfos.com/api-auth)) unioned with every token an operation requires. A registered name resolves against the local registry and reads the cached document; a bare host runs the same discovery `api add` runs — the well-known probe, then `/openapi.json` — and offers to keep what it found under a local name.
+
+The listed actions are then yours to pick from, by number or by token, with enter taking all of them. Three rules bound that ask: an explicit `--scope` is an instruction and is used exactly as typed, `--all-scopes` takes the whole catalog without prompting, and a run with no terminal and no explicit scope **errors and prints the choices** rather than choosing for you — a scope picked on your behalf is a grant you never made. Tokens stay opaque throughout: they are copied from document to prompt to scope string to credential unchanged, and the descriptions are display text nothing decides from.
+
+**Which host a credential is for.** The host lives in the credential's attenuation, as the `api:<host>` resource — not in `aud`, which is this installation's login client DID, the party the grant was issued to. That is the resource `dfos api call` selects on, so a `--host` login says out loud when what came back does not name it.
 
 **How this machine asks.** A CLI holds no domain, so it asks under SIWD's **loopback credential tier**: a per-install client identity, minted on first login and recorded at `~/.dfos/login-client.json` with its key in the keystore. The request carries that identity's DID, an ask proof signed by its current authentication key, and its one-operation chain — which is what lets a credential-returning scope have something to be issued to. The DID is stable across logins, so the consent you give names the same party each time; if its key goes missing the command errors instead of minting a new DID behind your back (delete the file to start over, and expect to consent again). Key control is all this proves about the software: origin and authorship are unverifiable from the host's side, which is why a credential minted here carries a hard expiry ceiling.
 
@@ -830,14 +843,18 @@ dfos creds rm alice
 
 `creds list` prints `-` when an expiry claim is absent or cannot be decoded; an empty store prints a friendly message (`[]` with `--json`). `creds show` resolves configured identity names and also accepts a bare DID. Decoding here is intentionally unsafe inspection: signature verification happens when a credential is presented, not while listing the local cache.
 
-| Flag              | Default    | Meaning                                                                 |
-| ----------------- | ---------- | ----------------------------------------------------------------------- |
-| `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here. |
-| `--authorize-url` | —          | Authorize endpoint (or bare origin) to use when the chain names none.   |
-| `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.            |
-| `--timeout`       | `5m`       | How long to wait for the callback.                                      |
+| Flag              | Default    | Meaning                                                                                         |
+| ----------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here.                         |
+| `--host`          | —          | API the credential is for — a registered name or a host — whose advertised actions are offered. |
+| `--all-scopes`    | `false`    | With `--host`, ask for every advertised action without prompting.                               |
+| `--authorize-url` | —          | Authorize endpoint (or bare origin) to use when the chain names none.                           |
+| `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.                                    |
+| `--timeout`       | `5m`       | How long to wait for the callback.                                                              |
 
-The global `--as` and `--relay` flags select the subject and the peer to resolve chains through when no positional argument names the subject. With `--json` the command emits `{did, clientDid, credentialPath?, credential?}`.
+`--scope` and `--all-scopes` are mutually exclusive, and `--all-scopes` needs a `--host` to have a catalog to take.
+
+The global `--as` and `--relay` flags select the subject and the peer to resolve chains through when no positional argument names the subject. With `--json` the command emits `{did, clientDid, scope, host?, resource?, credentialPath?, credential?}`.
 
 ---
 
@@ -927,7 +944,7 @@ An operation's `x-dfos-actions` is an OR of alternatives, each a single action t
 
 ### Credentials, and what a refusal means
 
-The delegated profile presents a stored login credential and signs the request proof with the key that credential was issued to — this installation's login client key. The credential is selected by what it grants: some `att` entry naming `api:<host>` for the host being called. `--as` picks between several; without it, exactly one candidate is required, because guessing which grant to spend is the one thing a credential client must never do. `dfos login` obtains credentials, `dfos creds list` shows them.
+The delegated profile presents a stored login credential and signs the request proof with the key that credential was issued to — this installation's login client key. The credential is selected by what it grants: some `att` entry naming `api:<host>` for the host being called. It is the **attenuation** that is matched, never `aud` — the audience is this installation's client DID on every stored credential, so it says nothing about which host a grant is for. `--as` picks between several; without it, exactly one candidate is required, because guessing which grant to spend is the one thing a credential client must never do. `dfos login --host <name-or-host>` obtains a credential for a specific host and lists that host's advertised actions to choose from; `dfos creds list` shows what is stored. When nothing covers the host, or when the presented grant does not carry what a route requires, the error names that spelling.
 
 A non-2xx renders by tier, because the tiers mean different things:
 
@@ -1006,69 +1023,69 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 ## Commands
 
-| Method | Command                         | Description                                                |
-| ------ | ------------------------------- | ---------------------------------------------------------- |
-| `GET`  | `identity list`                 | List all known identities (owned + fetched)                |
-| `GET`  | `identity show [name\|did]`     | Show identity state                                        |
-| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                     |
-| `GET`  | `identity services [name\|did]` | Show resolved discovery services                           |
-| `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)               |
-| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                 |
-| `POST` | `identity update`               | Rotate keys / set services (`--service`)                   |
-| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                |
-| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                       |
-| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)         |
-| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)      |
-| `POST` | `identity delete`               | Delete identity (restorable)                               |
-| `POST` | `identity restore`              | Restore a deleted identity                                 |
-| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                           |
-| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                         |
-| `GET`  | `identity log <name\|did>`      | Show identity operation history                            |
-| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)    |
-| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential              |
-| `GET`  | `content show <id>`             | Show content chain state                                   |
-| `GET`  | `content log <id>`              | Show operation history                                     |
-| `GET`  | `content download <id>`         | Download blob (stdout or file)                             |
-| `POST` | `content create <file\|->`      | Create content chain                                       |
-| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)                 |
-| `POST` | `content delete <id>`           | Permanently delete content chain                           |
-| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested           |
-| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                     |
-| `GET`  | `content fetch <id>`            | Download content chain from relay                          |
-| `GET`  | `content list`                  | List locally stored content chains                         |
-| `POST` | `credential grant <id> <did>`   | Issue read/write credential                                |
-| `POST` | `credential revoke <cid>`       | Revoke a credential                                        |
-| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                          |
-| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                    |
-| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                    |
-| `GET`  | `operation show <cid>`          | Inspect a protocol operation                               |
-| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--scope`)         |
-| `GET`  | `creds list`                    | List cached SIWD login credentials                         |
-| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                      |
-| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                      |
-| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`) |
-| `GET`  | `auth status`                   | Show current auth state                                    |
-| `POST` | `api add <name> [source]`       | Register an API and cache its OpenAPI document (`--file`)  |
-| `GET`  | `api list`                      | List registered APIs and their documents' age              |
-| `POST` | `api refresh <name>`            | Refetch a registered API's document                        |
-| `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document             |
-| `*`    | `api call <name> <op>`          | Call one operation, signing what the document names        |
-| `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                   |
-| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                           |
-| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                    |
-| `GET`  | `peer info [name]`              | Show relay metadata                                        |
-| `POST` | `peer add <name> <url>`         | Register a named relay                                     |
-| `DEL`  | `peer remove <name>`            | Unregister a relay                                         |
-| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store         |
-| `GET`  | `config list`                   | Show full configuration                                    |
-| `GET`  | `config get <key>`              | Read a single config value                                 |
-| `SET`  | `config set <key> <value>`      | Write a config value                                       |
-| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats    |
-| `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer      |
-| `POST` | `sync`                          | Sync with all configured relays                            |
-| `*`    | `serve`                         | Run the local relay as an HTTP server                      |
-| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)   |
-| `GET`  | `version`                       | Show the installed CLI version                             |
+| Method | Command                         | Description                                                  |
+| ------ | ------------------------------- | ------------------------------------------------------------ |
+| `GET`  | `identity list`                 | List all known identities (owned + fetched)                  |
+| `GET`  | `identity show [name\|did]`     | Show identity state                                          |
+| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                       |
+| `GET`  | `identity services [name\|did]` | Show resolved discovery services                             |
+| `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                 |
+| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                   |
+| `POST` | `identity update`               | Rotate keys / set services (`--service`)                     |
+| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                  |
+| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                         |
+| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)           |
+| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)        |
+| `POST` | `identity delete`               | Delete identity (restorable)                                 |
+| `POST` | `identity restore`              | Restore a deleted identity                                   |
+| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                             |
+| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                           |
+| `GET`  | `identity log <name\|did>`      | Show identity operation history                              |
+| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)      |
+| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential                |
+| `GET`  | `content show <id>`             | Show content chain state                                     |
+| `GET`  | `content log <id>`              | Show operation history                                       |
+| `GET`  | `content download <id>`         | Download blob (stdout or file)                               |
+| `POST` | `content create <file\|->`      | Create content chain                                         |
+| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)                   |
+| `POST` | `content delete <id>`           | Permanently delete content chain                             |
+| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested             |
+| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                       |
+| `GET`  | `content fetch <id>`            | Download content chain from relay                            |
+| `GET`  | `content list`                  | List locally stored content chains                           |
+| `POST` | `credential grant <id> <did>`   | Issue read/write credential                                  |
+| `POST` | `credential revoke <cid>`       | Revoke a credential                                          |
+| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                            |
+| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                      |
+| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                      |
+| `GET`  | `operation show <cid>`          | Inspect a protocol operation                                 |
+| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--host`, `--scope`) |
+| `GET`  | `creds list`                    | List cached SIWD login credentials                           |
+| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                        |
+| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                        |
+| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`)   |
+| `GET`  | `auth status`                   | Show current auth state                                      |
+| `POST` | `api add <name> [source]`       | Register an API and cache its OpenAPI document (`--file`)    |
+| `GET`  | `api list`                      | List registered APIs and their documents' age                |
+| `POST` | `api refresh <name>`            | Refetch a registered API's document                          |
+| `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document               |
+| `*`    | `api call <name> <op>`          | Call one operation, signing what the document names          |
+| `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                     |
+| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                             |
+| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                      |
+| `GET`  | `peer info [name]`              | Show relay metadata                                          |
+| `POST` | `peer add <name> <url>`         | Register a named relay                                       |
+| `DEL`  | `peer remove <name>`            | Unregister a relay                                           |
+| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store           |
+| `GET`  | `config list`                   | Show full configuration                                      |
+| `GET`  | `config get <key>`              | Read a single config value                                   |
+| `SET`  | `config set <key> <value>`      | Write a config value                                         |
+| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats      |
+| `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer        |
+| `POST` | `sync`                          | Sync with all configured relays                              |
+| `*`    | `serve`                         | Run the local relay as an HTTP server                        |
+| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)     |
+| `GET`  | `version`                       | Show the installed CLI version                               |
 
 ---
 
