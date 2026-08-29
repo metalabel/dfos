@@ -99,17 +99,39 @@ func mib(n int) string {
 	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 }
 
-// tooLarge renders a relay's 413 as the SIZE refusal it is.
+// size renders a byte count for a human: MiB past a mebibyte, where the relay
+// caps are expressed, and bytes below it, where "0.0 MiB" would say nothing.
+func size(n int) string {
+	if n < 1<<20 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	return mib(n)
+}
+
+// tooLarge renders a relay's 413 as the SIZE refusal it is, CLAIMING ONLY WHAT
+// THIS CLIENT KNOWS.
 //
 // A 413 is the one relay refusal whose cause the client already holds: it has
-// the body it just sent. Passing the bare status through makes an operator go
-// read relay source to learn what "413" was about, so this names the size that
-// was refused next to the ceiling the reference relays enforce. sent is the
-// body this client actually put on the wire.
+// the body it just sent. What it does NOT hold is the cap that refused it — a
+// proxy in front of the relay, or a deployment configured lower, refuses at a
+// number nothing here can see. Reporting every 413 as proof the body beat the
+// reference 16 MiB ceiling produced sentences that contradicted themselves
+// ("2.0 MiB exceeds the relay's 16.0 MiB request-body limit"), which teaches an
+// operator to distrust the message rather than fix the cap.
+//
+// So the refusal is stated as a fact — this size was refused, with a 413 — and
+// the reference ceiling appears as the CONTEXT it is: the thing that was
+// exceeded when the body was over it, and a hint that something caps lower when
+// it was not. sent is the body this client actually put on the wire.
 func tooLarge(op string, sent int) error {
-	return fmt.Errorf("%s: %s exceeds the relay's %s request-body limit — "+
-		"the relay refused it (413) before reading the whole request",
-		op, mib(sent), mib(RelayMaxBodyBytes))
+	if sent > RelayMaxBodyBytes {
+		return fmt.Errorf("%s: the relay refused a %s request body as too large (413) — "+
+			"it exceeds the %s ceiling both reference relays enforce",
+			op, size(sent), mib(RelayMaxBodyBytes))
+	}
+	return fmt.Errorf("%s: the relay refused a %s request body as too large (413) — "+
+		"the reference relays cap at %s, so this deployment (or something in front of it) caps lower",
+		op, size(sent), mib(RelayMaxBodyBytes))
 }
 
 // label names the peer this client speaks to — by registered name when it has

@@ -104,6 +104,79 @@ func TestResolveServerAgainstTheFetchOrigin(t *testing.T) {
 		}
 	})
 
+	// A NETWORK-PATH REFERENCE IS AN AUTHORITY, not a path prefix. `//host/v1`
+	// carries no scheme, so it is not "absolute" by url.URL's reckoning, and
+	// resolving it against the origin still lands on the host it names. Treating
+	// that as relative sent an identity-signed request to whatever host a document
+	// wrote, with nothing said out loud — the one outcome this doctrine exists to
+	// prevent.
+	t.Run("a scheme-relative servers entry is an authority, not a path prefix", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			server     string
+			policy     ServerPolicy
+			wantBase   string
+			wantInNote []string
+		}{
+			{
+				name:       "off-origin keeps its path and loses its authority",
+				server:     `"//evil.example.test/v1"`,
+				policy:     ServerPolicy{FetchOrigin: origin},
+				wantBase:   "https://api.example.test/v1",
+				wantInNote: []string{"evil.example.test", "api.example.test", "--trust-servers", "--server"},
+			},
+			{
+				name:       "--trust-servers sends it to the named host, and says so",
+				server:     `"//evil.example.test/v1"`,
+				policy:     ServerPolicy{FetchOrigin: origin, TrustServers: true},
+				wantBase:   "https://evil.example.test/v1",
+				wantInNote: []string{"--trust-servers", "evil.example.test"},
+			},
+			{
+				// The origin supplies the scheme, exactly as a browser would, so
+				// naming the fetch origin without one is same-origin and silent.
+				name:     "same-origin is honored with nothing to disclose",
+				server:   `"//api.example.test/v1"`,
+				policy:   ServerPolicy{FetchOrigin: origin},
+				wantBase: "https://api.example.test/v1",
+			},
+			{
+				name:     "a bare authority with no path is the origin itself",
+				server:   `"//api.example.test"`,
+				policy:   ServerPolicy{FetchOrigin: origin},
+				wantBase: "https://api.example.test",
+			},
+			{
+				name:     "an authority-free reference is still just a path prefix",
+				server:   `"/v1"`,
+				policy:   ServerPolicy{FetchOrigin: origin},
+				wantBase: "https://api.example.test/v1",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				choice, err := serverDoc(t, tc.server).ResolveServer(tc.policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if choice.Base != tc.wantBase {
+					t.Fatalf("base = %q, want %q", choice.Base, tc.wantBase)
+				}
+				if len(tc.wantInNote) == 0 {
+					if choice.Note != "" {
+						t.Fatalf("nothing to disclose here, got %q", choice.Note)
+					}
+					return
+				}
+				for _, want := range tc.wantInNote {
+					if !strings.Contains(choice.Note, want) {
+						t.Fatalf("the disclosure must name %q:\n%s", want, choice.Note)
+					}
+				}
+			})
+		}
+	})
+
 	t.Run("a document declaring no server is the origin itself", func(t *testing.T) {
 		choice, err := serverDoc(t, "").ResolveServer(ServerPolicy{FetchOrigin: origin + "/"})
 		if err != nil {
@@ -201,6 +274,16 @@ paths:
 	t.Run("a relative server URL is refused, and named as its own case", func(t *testing.T) {
 		_, err := serverDoc(t, `"/v1"`).ResolveServer(ServerPolicy{})
 		if err == nil || !strings.Contains(err.Error(), "relative server URL") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	// A network-path reference names a host and no scheme, and a file-backed
+	// document has no origin to supply the missing half — so it is refused rather
+	// than resolved by picking a scheme for the caller.
+	t.Run("a scheme-relative server URL is refused too", func(t *testing.T) {
+		_, err := serverDoc(t, `"//api.example.test/v1"`).ResolveServer(ServerPolicy{})
+		if err == nil || !strings.Contains(err.Error(), "--server") {
 			t.Fatalf("err = %v", err)
 		}
 	})

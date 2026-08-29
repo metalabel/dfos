@@ -86,11 +86,24 @@ func (o *Operation) ResolveServer(p ServerPolicy) (ServerChoice, error) {
 	if err != nil {
 		return ServerChoice{}, fmt.Errorf("the document's server URL %q does not parse: %w", declared, err)
 	}
-	// A relative server URL names no authority, so there is nothing here to
-	// distrust: it is already a path prefix, and it already resolves against the
-	// origin the document came from.
-	if !parsed.IsAbs() {
+	// AUTHORITY-BEARING IS NOT THE SAME AS ABSOLUTE, and the gate below is the
+	// host, never the scheme. `//evil.example/v1` — a network-path reference — has
+	// no scheme, so url.URL.IsAbs reports false, and it NAMES A HOST anyway:
+	// resolved against an https origin it becomes https://evil.example/v1. Reading
+	// it as "relative, therefore a path prefix" would hand the document exactly
+	// the authority this doctrine withholds, and silently, since a path prefix has
+	// nothing to disclose.
+	//
+	// So a reference that carries a host gets its scheme filled in from the fetch
+	// origin — which is what a browser resolving it would do — and then goes
+	// through the same same-origin / path-prefix-only / --trust-servers ladder as
+	// any other authority. Only a genuinely authority-free reference (`/v1`) is
+	// already a path prefix and nothing more.
+	if !parsed.IsAbs() && parsed.Host == "" {
 		return ServerChoice{Base: strings.TrimRight(originURL.ResolveReference(parsed).String(), "/")}, nil
+	}
+	if parsed.Scheme == "" {
+		parsed.Scheme = originURL.Scheme
 	}
 	if sameOrigin(parsed, originURL) {
 		return ServerChoice{Base: strings.TrimRight(parsed.String(), "/")}, nil
@@ -155,6 +168,11 @@ func (o *Operation) declaredServer() string {
 // therefore names no origin at all.
 func (d *Doc) declaredOrigins() (origins []string, relative bool) {
 	seen := map[string]bool{}
+	// Both halves of the test matter, and a network-path reference
+	// (`//host/path`) fails the first: it names a host but no scheme, so it names
+	// no ORIGIN, and a document with no fetch origin has nothing to supply the
+	// missing half. It lands here as relative, which refuses — the safe answer,
+	// since the alternative is picking a scheme for the caller.
 	consider := func(raw string) {
 		parsed, err := url.Parse(strings.TrimSpace(raw))
 		if err != nil || !parsed.IsAbs() || parsed.Host == "" {

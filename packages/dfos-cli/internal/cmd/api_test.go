@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,9 +32,9 @@ func setupAPIRegistry(t *testing.T) *apispec.Store {
 	t.Helper()
 	prevStore, prevFetch := apiStoreForTests, apiFetcherForTests
 	apiStoreForTests = apispec.NewStoreIn(t.TempDir())
-	apiFetcherForTests = func(rawURL string) ([]byte, error) {
+	apiFetcherForTests = func(rawURL string) (apispec.Fetched, error) {
 		t.Errorf("unexpected network fetch of %s", rawURL)
-		return nil, fmt.Errorf("no network in tests")
+		return apispec.Fetched{}, fmt.Errorf("no network in tests")
 	}
 	t.Cleanup(func() { apiStoreForTests, apiFetcherForTests = prevStore, prevFetch })
 	return apiStoreForTests
@@ -41,11 +42,11 @@ func setupAPIRegistry(t *testing.T) *apispec.Store {
 
 func withFetcher(t *testing.T, responses map[string]string) {
 	t.Helper()
-	apiFetcherForTests = func(rawURL string) ([]byte, error) {
+	apiFetcherForTests = func(rawURL string) (apispec.Fetched, error) {
 		if body, ok := responses[rawURL]; ok {
-			return []byte(body), nil
+			return apispec.Fetched{Data: []byte(body)}, nil
 		}
-		return nil, fmt.Errorf("HTTP 404")
+		return apispec.Fetched{}, fmt.Errorf("HTTP 404")
 	}
 }
 
@@ -309,7 +310,7 @@ func plantCredential(t *testing.T, store *keystore.MemoryStore, subject, authori
 	if err != nil {
 		t.Fatalf("create credential: %v", err)
 	}
-	if _, err := storeLoginCredential(subject, client, credential); err != nil {
+	if _, err := storeLoginCredential(subject, client, credential, authority); err != nil {
 		t.Fatalf("store credential: %v", err)
 	}
 	return credential
@@ -461,6 +462,86 @@ func TestAPICallDelegatedRefusesWithoutACredential(t *testing.T) {
 	if !strings.Contains(err.Error(), "no stored credential covers api:") ||
 		!strings.Contains(err.Error(), "dfos login") {
 		t.Fatalf("err = %v — it must name the resource and how to obtain a grant", err)
+	}
+}
+
+// A SECOND HOST'S LOGIN MUST NOT DESTROY THE FIRST HOST'S CREDENTIAL.
+//
+// The spend side selects by the `api:<host>` attenuation and is fully
+// multi-credential aware; the store under it was keyed by subject alone, so
+// signing one identity in to a second host overwrote the first host's file and
+// calls to that host reported "no stored credential covers api:<first>" while
+// the user believed both logins stood.
+func TestStoredCredentialsAreKeyedByHostNotSubjectAlone(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	subject := createIdentity(t, "alice", storeA)
+
+	plantCredential(t, storeA, subject, "a.example.test", "read:a")
+	plantCredential(t, storeA, subject, "b.example.test", "read:b")
+
+	for host, action := range map[string]string{"a.example.test": "read:a", "b.example.test": "read:b"} {
+		chosen, err := selectCredentialForHost(host)
+		if err != nil {
+			t.Fatalf("after logging in to both hosts, %s has no credential: %v", host, err)
+		}
+		if !chosen.granted[action] {
+			t.Fatalf("the credential selected for %s grants %v, not %s", host, chosen.granted, action)
+		}
+		if chosen.resource != "api:"+host {
+			t.Fatalf("selected resource = %q for host %s", chosen.resource, host)
+		}
+	}
+}
+
+// A store written by an earlier version holds one file per subject, named
+// without a host. It stays readable — every reader matches the record's own
+// fields — and the next store for that subject moves it into its slot rather
+// than leaving two files that answer for the same host.
+func TestLegacyCredentialFileSurvivesASecondHostLogin(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	subject := createIdentity(t, "alice", storeA)
+	keys = storeA
+	client, clientPriv, err := ensureLoginClient()
+	if err != nil {
+		t.Fatalf("mint login client: %v", err)
+	}
+
+	legacyToken, err := protocol.CreateCredential(subject, client.DID, subject+"#key_issuer",
+		"api:a.example.test", "read:a", time.Hour, clientPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(credentialStoreDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := storedLoginCredential{
+		SubjectDID: subject, ClientDID: client.DID, ClientKeyID: client.KeyID,
+		Credential: legacyToken, ObtainedAt: time.Now().UTC().Format(loginTimestampLayout),
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(credentialStoreDir(), legacyCredentialFileName(subject))
+	if err := os.WriteFile(legacyPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A credential read from the legacy name is spendable before anything else
+	// happens — the file name was never what made it findable.
+	if _, err := selectCredentialForHost("a.example.test"); err != nil {
+		t.Fatalf("a legacy-named credential must still be spendable: %v", err)
+	}
+
+	plantCredential(t, storeA, subject, "b.example.test", "read:b")
+
+	for _, host := range []string{"a.example.test", "b.example.test"} {
+		if _, err := selectCredentialForHost(host); err != nil {
+			t.Fatalf("after the second login, %s has no credential: %v", host, err)
+		}
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("the legacy file was not moved into its slot: %v", err)
 	}
 }
 

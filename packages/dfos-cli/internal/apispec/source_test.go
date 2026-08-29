@@ -15,12 +15,12 @@ const minimalDoc = `{"openapi":"3.1.1","info":{"title":"t","version":"1"},"paths
 func stubFetcher(t *testing.T, responses map[string]string) (Fetcher, *[]string) {
 	t.Helper()
 	var asked []string
-	return func(rawURL string) ([]byte, error) {
+	return func(rawURL string) (Fetched, error) {
 		asked = append(asked, rawURL)
 		if body, ok := responses[rawURL]; ok {
-			return []byte(body), nil
+			return Fetched{Data: []byte(body)}, nil
 		}
-		return nil, fmt.Errorf("HTTP 404")
+		return Fetched{}, fmt.Errorf("HTTP 404")
 	}, &asked
 }
 
@@ -150,6 +150,89 @@ func TestResolveSourceForms(t *testing.T) {
 		fetch, _ := stubFetcher(t, nil)
 		if _, err := Resolve("ftp://api.example.test/o.json", "", fetch); err == nil {
 			t.Fatalf("a non-http source must be refused")
+		}
+	})
+}
+
+// redirectingFetcher answers each URL with a body and the URL it ended up at —
+// a 302 the http client already followed by the time the fetcher returns.
+func redirectingFetcher(responses map[string]redirected) Fetcher {
+	return func(rawURL string) (Fetched, error) {
+		answer, ok := responses[rawURL]
+		if !ok {
+			return Fetched{}, fmt.Errorf("HTTP 404")
+		}
+		return Fetched{Data: []byte(answer.body), FinalURL: answer.finalURL}, nil
+	}
+}
+
+type redirected struct {
+	body     string
+	finalURL string
+}
+
+// THE ORIGIN RECORDED IS THE ORIGIN THAT ANSWERED.
+//
+// Every `servers` entry in a document resolves against the origin the document
+// was fetched from, so a redirect that crosses origins would file host B's
+// document under host A's name and aim A-bound requests using B's paths. It is
+// refused rather than re-attributed; a same-origin redirect changes nothing that
+// the doctrine reads and is transparent.
+func TestResolveRefusesACrossOriginRedirect(t *testing.T) {
+	t.Run("the document fetch", func(t *testing.T) {
+		fetch := redirectingFetcher(map[string]redirected{
+			"https://a.example.test/openapi.json": {body: minimalDoc, finalURL: "https://b.example.test/openapi.json"},
+		})
+		_, err := Resolve("https://a.example.test/openapi.json", "", fetch)
+		if err == nil {
+			t.Fatal("a document served from another origin must not be recorded as this one's")
+		}
+		for _, want := range []string{"https://a.example.test", "https://b.example.test", "--file"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal must name %q:\n%v", want, err)
+			}
+		}
+	})
+
+	t.Run("the conventional discovery fetch", func(t *testing.T) {
+		fetch := redirectingFetcher(map[string]redirected{
+			"https://a.example.test/openapi.json": {body: minimalDoc, finalURL: "https://b.example.test/openapi.json"},
+		})
+		if _, err := Resolve("a.example.test", "", fetch); err == nil {
+			t.Fatal("discovery must refuse a document that crossed origins")
+		}
+	})
+
+	// A well-known that redirects off-origin is not this host's advertisement, so
+	// the probe fails and discovery falls through to the convention — the same
+	// path an absent well-known takes.
+	t.Run("a redirected well-known probe falls through to the convention", func(t *testing.T) {
+		fetch := redirectingFetcher(map[string]redirected{
+			"https://a.example.test/.well-known/dfos-relay": {
+				body:     `{"openapi":"https://b.example.test/o.json"}`,
+				finalURL: "https://b.example.test/.well-known/dfos-relay",
+			},
+			"https://a.example.test/openapi.json": {body: minimalDoc},
+		})
+		res, err := Resolve("a.example.test", "", fetch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Kind != KindConventional || res.Document != "https://a.example.test/openapi.json" {
+			t.Fatalf("resolution = %q at %q", res.Kind, res.Document)
+		}
+	})
+
+	t.Run("a same-origin redirect is transparent", func(t *testing.T) {
+		fetch := redirectingFetcher(map[string]redirected{
+			"https://a.example.test/openapi.json": {body: minimalDoc, finalURL: "https://a.example.test/spec/openapi.json"},
+		})
+		res, err := Resolve("https://a.example.test/openapi.json", "", fetch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Origin != "https://a.example.test" {
+			t.Fatalf("Origin = %q", res.Origin)
 		}
 	})
 }

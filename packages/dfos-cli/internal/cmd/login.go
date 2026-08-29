@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -289,7 +290,11 @@ func newLoginCmd() *cobra.Command {
 					return fmt.Errorf("signed in as %s — the sign-in itself verified — but refusing to store what came back: %w",
 						signerDID, err)
 				}
-				credentialPath, err = storeLoginCredential(subjectDID, lc, callback.Credential)
+				targetHost := ""
+				if target != nil {
+					targetHost = target.Authority
+				}
+				credentialPath, err = storeLoginCredential(subjectDID, lc, callback.Credential, targetHost)
 				if err != nil {
 					return err
 				}
@@ -1144,19 +1149,110 @@ func verifyLoginSignature(jws, keyID string, state protocol.IdentityState) error
 // storing and reading back the credential
 // ---------------------------------------------------------------------------
 
-// credentialFileName maps a DID to a filename the way the file keystore maps a
-// key account: ':' is legal in a POSIX path but not on Windows, so it is
+// ONE FILE PER (SUBJECT, HOST), NOT PER SUBJECT.
+//
+// A credential is spent by HOST: `api call` scans the store and selects on the
+// `api:<host>` attenuation, which is fully multi-credential aware. The store
+// underneath it was not — it was keyed by subject alone, so signing the same
+// identity in to a second host overwrote the first host's file, and the calls
+// that had worked a minute earlier reported "no stored credential covers
+// api:<first>" while the user believed both logins stood.
+//
+// So the host is part of the name. The filename is a SLOT and nothing reads it
+// back: every reader scans the directory and matches on the record's own fields,
+// which is what keeps a legacy single-file-per-subject store readable with no
+// migration step (it is rewritten into its slot the next time that subject
+// stores one — see migrateLegacyCredential).
+//
+// credentialFileName maps the pair to a filename the way the file keystore maps
+// a key account: ':' is legal in a POSIX path but not on Windows, so it is
 // replaced rather than relied on.
-func credentialFileName(did string) string {
-	return strings.ReplaceAll(did, ":", "_") + ".json"
+func credentialFileName(did, host string) string {
+	slot := strings.TrimSpace(host)
+	if slot == "" {
+		slot = noHostCredentialSlot
+	}
+	return pathSafeSegment(did) + "__" + pathSafeSegment(slot) + ".json"
 }
+
+// noHostCredentialSlot files a credential that names no `api:<host>` resource at
+// all. Such a credential is not selectable by `api call` under any host, so the
+// slot exists only so it cannot displace one that is.
+const noHostCredentialSlot = "no-host"
+
+func pathSafeSegment(s string) string { return strings.ReplaceAll(s, ":", "_") }
+
+// legacyCredentialFileName is the pre-host spelling — one file per subject. Read
+// forever, written never.
+func legacyCredentialFileName(did string) string { return pathSafeSegment(did) + ".json" }
 
 func credentialStoreDir() string {
 	return filepath.Join(config.ConfigDir(), "credentials")
 }
 
-func credentialPath(did string) string {
-	return filepath.Join(credentialStoreDir(), credentialFileName(did))
+func credentialPath(did, host string) string {
+	return filepath.Join(credentialStoreDir(), credentialFileName(did, host))
+}
+
+// credentialAPIHosts is every `api:<host>` a credential names, sorted and
+// deduplicated. It is the credential's own account of which hosts it can be
+// spent against, read the same way `api call` reads it.
+func credentialAPIHosts(token string) []string {
+	_, payload, err := protocol.DecodeJWSUnsafe(strings.TrimSpace(token))
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	for _, entry := range protocol.ParseAtt(payload) {
+		host, ok := strings.CutPrefix(entry.Resource, "api:")
+		if !ok || host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
+// credentialSlotHost picks the slot a credential is filed under: the first host
+// its own attenuation names, then the host the login was aimed at, then none.
+//
+// The credential's word comes first because that is what the spend side matches;
+// the login target is the fallback for an artifact whose attenuation says
+// nothing this client can read.
+func credentialSlotHost(token, target string) string {
+	if hosts := credentialAPIHosts(token); len(hosts) > 0 {
+		return hosts[0]
+	}
+	return strings.TrimSpace(target)
+}
+
+// credentialFilesForSubject is every stored record whose SubjectDID is this one,
+// in filename order. The RECORD decides, not the filename, so a legacy file and
+// a slotted one are found the same way.
+func credentialFilesForSubject(did string) (paths []string, records []storedLoginCredential, err error) {
+	entries, err := os.ReadDir(credentialStoreDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("read credential store: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(credentialStoreDir(), entry.Name())
+		record, err := readStoredCredential(path)
+		if err != nil || record.SubjectDID != did {
+			continue
+		}
+		paths = append(paths, path)
+		records = append(records, record)
+	}
+	return paths, records, nil
 }
 
 // credentialJWSTyp is the registered typ of a DFOS credential artifact.
@@ -1188,10 +1284,20 @@ func assertCredentialForClient(token, clientDID string) error {
 	return nil
 }
 
-func storeLoginCredential(subjectDID string, lc *loginClient, credential string) (string, error) {
+// storeLoginCredential writes one credential into its (subject, host) slot.
+// targetHost is the API this login was aimed at, used only when the credential's
+// own attenuation names no host.
+func storeLoginCredential(subjectDID string, lc *loginClient, credential, targetHost string) (string, error) {
 	dir := credentialStoreDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	// Before writing, move any pre-host file for this subject into its own slot.
+	// Skipping this would leave the old record and the new one both readable and
+	// both matching the same host — two candidates naming one subject, which
+	// `api call` reports as an ambiguity the user cannot act on.
+	if err := migrateLegacyCredential(subjectDID); err != nil {
+		return "", err
 	}
 	record := storedLoginCredential{
 		SubjectDID:  subjectDID,
@@ -1204,11 +1310,53 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential string)
 	if err != nil {
 		return "", err
 	}
-	path := credentialPath(subjectDID)
+	path := credentialPath(subjectDID, credentialSlotHost(credential, targetHost))
 	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// migrateLegacyCredential rewrites a pre-host `<did>.json` into its slot. Lazy
+// by design: a store nobody logs into again is still read correctly, since every
+// reader matches records rather than filenames, and the rewrite only has to
+// happen before a second file for the same subject could shadow it.
+//
+// A slot that is already taken is left alone, legacy file and all: the file
+// already there was written by this scheme and is the newer record, and
+// discarding either of two records the user has is not this function's call.
+func migrateLegacyCredential(subjectDID string) error {
+	legacy := filepath.Join(credentialStoreDir(), legacyCredentialFileName(subjectDID))
+	record, err := readStoredCredential(legacy)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		// Unreadable is not fatal: a login must not be blocked by a record it is
+		// about to make redundant.
+		return nil
+	}
+	if record.SubjectDID != subjectDID {
+		return nil
+	}
+	slot := credentialPath(subjectDID, credentialSlotHost(record.Credential, ""))
+	if slot == legacy {
+		return nil
+	}
+	if _, err := os.Stat(slot); err == nil {
+		return nil
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(slot, append(data, '\n')); err != nil {
+		return err
+	}
+	if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove the superseded credential file %s: %w", legacy, err)
+	}
+	return nil
 }
 
 // writeFileAtomic writes through a temp file in the same directory and renames

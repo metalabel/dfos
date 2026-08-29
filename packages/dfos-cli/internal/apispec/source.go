@@ -33,22 +33,44 @@ const (
 	conventionalPath = "/openapi.json"
 )
 
+// Fetched is one response as it ACTUALLY ARRIVED: the bytes, and the URL they
+// were finally served from.
+//
+// FinalURL exists because the fetch origin is the whole authority story
+// (server.go), and a redirect is how the URL that was asked for stops being the
+// URL that answered. A fetcher that reported bytes alone made the doctrine's
+// central claim — "this document came from here" — unverifiable at exactly the
+// moment it stops being true. An empty FinalURL means the response came from
+// the URL as asked; every fetcher that cannot redirect leaves it so.
+type Fetched struct {
+	Data     []byte
+	FinalURL string
+}
+
 // Fetcher retrieves a URL. It is an argument rather than a package-level client
 // so tests drive resolution against a loopback server without a global.
-type Fetcher func(rawURL string) ([]byte, error)
+type Fetcher func(rawURL string) (Fetched, error)
 
 // HTTPFetcher is the default Fetcher: a plain GET with a bounded timeout and a
-// bounded read.
+// bounded read. It follows redirects — Go's client does by default — and reports
+// where it ended up, which is what lets locate refuse a document that crossed
+// origins on the way.
 func HTTPFetcher() Fetcher {
 	client := &http.Client{Timeout: 30 * time.Second}
-	return func(rawURL string) ([]byte, error) {
+	return func(rawURL string) (Fetched, error) {
 		resp, err := client.Get(rawURL)
 		if err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", rawURL, err)
+			return Fetched{}, fmt.Errorf("fetch %s: %w", rawURL, err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("fetch %s: HTTP %d", rawURL, resp.StatusCode)
+			return Fetched{}, fmt.Errorf("fetch %s: HTTP %d", rawURL, resp.StatusCode)
+		}
+		// resp.Request is the LAST request the client made, so its URL is where
+		// the bytes below actually came from rather than where they were sought.
+		final := ""
+		if resp.Request != nil && resp.Request.URL != nil {
+			final = resp.Request.URL.String()
 		}
 		// One byte PAST the limit, so an over-size body is DETECTED rather than
 		// silently truncated to exactly the limit — a truncated document parses
@@ -56,10 +78,43 @@ func HTTPFetcher() Fetcher {
 		// there. Parse checks the length and says the honest thing.
 		data, err := io.ReadAll(io.LimitReader(resp.Body, MaxDocumentBytes+1))
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", rawURL, err)
+			return Fetched{}, fmt.Errorf("read %s: %w", rawURL, err)
 		}
-		return data, nil
+		return Fetched{Data: data, FinalURL: final}, nil
 	}
+}
+
+// fetchOnOrigin is every fetch this package makes, plus the one rule that makes
+// the recorded origin true: THE ANSWER MUST COME FROM THE HOST THAT WAS ASKED.
+//
+// A same-origin redirect is transparent — a path moved, the authority did not,
+// and the origin recorded is still the origin that served the bytes. A
+// cross-origin redirect is refused outright rather than followed into a quiet
+// re-attribution: the document that comes back is host B's, it would be recorded
+// as host A's, and every `servers` entry in it would then resolve against an
+// authority that never served it. A document that moved origins is precisely the
+// situation this doctrine distrusts, so the caller says which origin they meant.
+func fetchOnOrigin(rawURL string, fetch Fetcher) ([]byte, error) {
+	got, err := fetch(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(got.FinalURL) == "" {
+		return got.Data, nil
+	}
+	asked, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: that URL does not parse: %w", rawURL, err)
+	}
+	final, err := url.Parse(strings.TrimSpace(got.FinalURL))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: it answered from %q, which does not parse: %w", rawURL, got.FinalURL, err)
+	}
+	if sameOrigin(final, asked) {
+		return got.Data, nil
+	}
+	return nil, fmt.Errorf("%s redirected to %s: a document is attributed to the origin it was fetched from, and this one crossed origins — register %s directly if that host is what you mean, or read the document with --file <path>",
+		originOf(asked), originOf(final), got.FinalURL)
 }
 
 // Resolution is where a document came from and what it is.
@@ -113,7 +168,7 @@ func locate(source, file string, fetch Fetcher) (*Resolution, error) {
 		return nil, err
 	}
 	if documentURL != "" {
-		data, err := fetch(documentURL)
+		data, err := fetchOnOrigin(documentURL, fetch)
 		if err != nil {
 			return nil, err
 		}
@@ -124,14 +179,14 @@ func locate(source, file string, fetch Fetcher) (*Resolution, error) {
 	// that serves an API and no relay surface is the common case, not an error —
 	// so its failure falls through to the convention rather than aborting.
 	if advertised, ok := wellKnownOpenAPI(base, fetch); ok {
-		if data, err := fetch(advertised); err == nil {
+		if data, err := fetchOnOrigin(advertised, fetch); err == nil {
 			return &Resolution{Document: advertised, Kind: KindWellKnown, Origin: base, Data: data}, nil
 		} else {
 			return nil, fmt.Errorf("%s advertises its OpenAPI document at %s, which did not fetch: %w", base, advertised, err)
 		}
 	}
 	conventional := base + conventionalPath
-	data, err := fetch(conventional)
+	data, err := fetchOnOrigin(conventional, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("no OpenAPI document found for %s: nothing advertised at %s, and %s did not fetch: %w",
 			base, base+wellKnownPath, conventional, err)
@@ -175,8 +230,13 @@ func splitSource(source string) (base, documentURL string, err error) {
 
 // wellKnownOpenAPI reads the `openapi` member of a relay's well-known response.
 // The value is absolute, or root-relative against the relay's base URL.
+//
+// The probe goes through the same origin rule as the document fetch, and a
+// cross-origin redirect here simply makes the probe fail — which falls through
+// to the convention, exactly as an absent well-known does. A host's
+// advertisement is only a host's advertisement when the host answered it.
 func wellKnownOpenAPI(base string, fetch Fetcher) (string, bool) {
-	data, err := fetch(base + wellKnownPath)
+	data, err := fetchOnOrigin(base+wellKnownPath, fetch)
 	if err != nil {
 		return "", false
 	}

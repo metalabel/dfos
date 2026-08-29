@@ -120,7 +120,7 @@ func TestUploadBlobRendersSizeRefusalHonestly(t *testing.T) {
 	if err == nil {
 		t.Fatal("over-cap upload: want an error")
 	}
-	for _, want := range []string{"exceeds", "16.0 MiB", "413"} {
+	for _, want := range []string{"too large", "exceeds", "16.0 MiB", "413"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("over-cap upload error %q does not mention %q", err, want)
 		}
@@ -131,7 +131,13 @@ func TestUploadBlobRendersSizeRefusalHonestly(t *testing.T) {
 }
 
 // TestSubmitOperationsRendersSizeRefusalHonestly is the same contract on the
-// other body-carrying write surface.
+// other body-carrying write surface — and here the body is nowhere near the
+// reference cap, so the message must not claim it beat one.
+//
+// THE CLIENT DOES NOT KNOW THE CAP THAT REFUSED IT. A proxy or a
+// lower-configured deployment answers 413 at its own number, and a client that
+// renders every 413 as "N MiB exceeds the relay's 16.0 MiB limit" writes a
+// sentence that contradicts itself whenever N is smaller.
 func TestSubmitOperationsRendersSizeRefusalHonestly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
@@ -144,7 +150,12 @@ func TestSubmitOperationsRendersSizeRefusalHonestly(t *testing.T) {
 	if err == nil {
 		t.Fatal("over-cap batch: want an error")
 	}
-	if !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "16.0 MiB") {
-		t.Fatalf("over-cap batch error is not a size sentence: %v", err)
+	for _, want := range []string{"too large", "413", "caps lower"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("sub-cap refusal %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("a body under the reference cap must not be reported as exceeding it: %v", err)
 	}
 }
