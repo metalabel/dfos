@@ -313,8 +313,8 @@ func runRecover(opts recoverOptions) error {
 	return nil
 }
 
-// errNoVaultToRecover is the mint-side errNoVault, reworded for the one moment
-// an operator reaches this command: they hold a phrase and a bare machine.
+// errNoVaultToRecover is the no-vault refusal, worded for the one moment an
+// operator reaches this command: they hold a phrase and a bare machine.
 func errNoVaultToRecover() error {
 	return fmt.Errorf("no vault to recover from — name one:\n" +
 		"  --vault <name>                       for this invocation\n" +

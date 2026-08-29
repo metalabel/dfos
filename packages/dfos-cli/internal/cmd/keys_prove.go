@@ -431,9 +431,9 @@ type candidateKey struct {
 	VaultIndex uint32
 }
 
-// errCeremonyNoVault is errNoVault reworded for the machine this command is
-// most often run on: a fresh one, where a person has pasted a code before they
-// have ever created a seed.
+// errCeremonyNoVault is the no-vault refusal, worded for the machine this
+// command is most often run on: a fresh one, where a person has pasted a code
+// before they have ever created a seed.
 //
 // The reassurance is the load-bearing half. Everything else in this command
 // tells the operator a failure spent their ceremony, so a bare "no vault" here
