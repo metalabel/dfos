@@ -685,7 +685,12 @@ export const Identity = (props: { did: string }) => {
 
       <Panel
         title="operation history"
-        right={<span class="lbl">newest first · verified fold</span>}
+        right={
+          <span class="lbl">
+            newest first · <Term word="signer keys" def={GLOSSARY['keyIdentity'] ?? ''} /> ·
+            verified fold
+          </span>
+        }
       >
         {rows.length === 0 ? (
           <span class="muted">{error ? <span class="err">{error}</span> : 'loading log…'}</span>

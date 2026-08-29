@@ -202,6 +202,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'Your browser’s own copy of every operation it has synced from relay logs, stored in IndexedDB — chains fold offline from it, and it persists across visits.',
   },
   {
+    key: 'localDivergence',
+    term: 'divergence (local index vs relays)',
+    def: 'The local index never retracts an operation, so a relay that drops one — a corpus rebuild, a re-mint under new CIDs — leaves your tab holding history no relay carries any more, and figures counted locally stop describing the network. The local sync page spot-checks it: a spread of the operations you hold is fetched back from every relay you configured, and only an answered “not found” from all of them counts as gone — a timeout, a refusal, or an error is inconclusive, never clean. Clearing the local data and re-syncing is the fix. Distinct from an origin’s carried log diverging from the relays’ log, which is a signed contradiction between two servers rather than a stale cache in your tab.',
+  },
+  {
     key: 'publicProjection',
     term: 'public projection',
     def: 'A browse field (a content chain’s type, an identity’s name) materialized once at sync time by fetching the content-plane blob and re-hashing its bytes to the on-chain committed document CID — so browse is instant and offline, and only PUBLIC (anonymously served) documents ever appear.',

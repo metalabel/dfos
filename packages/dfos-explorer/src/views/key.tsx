@@ -143,11 +143,13 @@ export const Key = (props: { multibase: string }) => {
       right={<span class="lbl">multibase · Ed25519 Multikey</span>}
       orient={
         <>
-          A key, as the thing itself. An identity declares keys by{' '}
-          <Term word="role" def={GLOSSARY['keyRoles'] ?? ''} /> and rotates them over time, so the
-          same key can appear on more than one chain and can outlive its place on any of them. This
-          page asks the relay index which identities have ever declared it, and folds each of those
-          chains here to say where it stands now.
+          A key, as the thing itself: the{' '}
+          <Term word="public key, not a key id" def={GLOSSARY['keyIdentity'] ?? ''} /> — a{' '}
+          <code>key_1</code> names a slot on one identity document and travels nowhere. An identity
+          declares keys by <Term word="role" def={GLOSSARY['keyRoles'] ?? ''} /> and rotates them
+          over time, so the same key can appear on more than one chain and can outlive its place on
+          any of them. This page asks the relay index which identities have ever declared it, and
+          folds each of those chains here to say where it stands now.
         </>
       }
     >
