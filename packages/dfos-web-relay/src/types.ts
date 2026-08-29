@@ -113,12 +113,21 @@ export type AdmissionPolicy = (principal: string | null) => boolean | Promise<bo
  *   const relay = await createRelay({ store, openapi: { document } });
  *   ```
  *
+ *   A CONFIGURED `route` IS VALIDATED AT CONSTRUCTION. It must be a literal
+ *   absolute path that does not fall under a surface the relay itself serves —
+ *   the document route is registered before every plane, and Hono answers
+ *   first-match, so `route: '/proof/v1/log'` would serve the document where the
+ *   operation log belongs. `createRelay` throws and names the collision rather
+ *   than mounting a relay that 200s a conformance probe with a document.
+ *
  *   THE SERVED COPY DESCRIBES THIS RELAY. The canonical document names no
  *   `servers` — it describes the surface every relay serves, not the address of
  *   one — and the served copy's is written from `authority`, so a client reading
  *   it resolves operations against this deployment. With no `authority`
  *   configured the member stays absent, and OpenAPI resolves against the URL the
- *   document was fetched from, which is this relay either way. The caller's
+ *   document was fetched from, which is this relay either way. Under a custom
+ *   `route` the document's own path entry is relocated to that route as well, so
+ *   the served copy does not describe itself at a path that 404s. The caller's
  *   document object is never mutated. See `./openapi.ts`.
  *
  * The document is DISCOVERY, NEVER AUTHORITY — the routes, capability gates, and

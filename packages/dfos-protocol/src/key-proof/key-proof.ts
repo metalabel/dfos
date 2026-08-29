@@ -178,7 +178,19 @@ const validateKeyProofPayload = (value: unknown): KeyProofPayload => {
     throw invalid('schema', 'audience must be a lowercase authority, without a scheme or path');
   }
 
-  if (!WHOLE_SECOND_TIMESTAMP.test(timestamp) || !Number.isFinite(Date.parse(timestamp))) {
+  // THE ROUND-TRIP IS THE CALENDAR CHECK, and it is not optional. The regex fixes
+  // the SPELLING and says nothing about whether the date EXISTS:
+  // `Date.parse('2026-02-30T00:00:00.000Z')` NORMALIZES to March 2 and returns a
+  // finite number, so a finiteness test alone VERIFIES a correctly-signed proof
+  // that the Go byte-twin's `time.Parse` refuses outright. Two byte-twins that
+  // disagree about whether a proof verifies is the one thing the twin contract
+  // forbids, so the parsed instant is re-emitted and byte-compared: `toISOString`
+  // always spells a whole-second UTC instant `.000Z`, which makes this both the
+  // calendar check (an impossible date round-trips to a DIFFERENT day) and a
+  // re-pin of the canonical spelling, with Go-equivalent semantics. The regex
+  // stays the cheap first gate — a miss short-circuits to NaN before any Date.
+  const parsedMs = WHOLE_SECOND_TIMESTAMP.test(timestamp) ? Date.parse(timestamp) : Number.NaN;
+  if (!Number.isFinite(parsedMs) || new Date(parsedMs).toISOString() !== timestamp) {
     throw invalid('schema', 'timestamp must be ISO-8601 UTC whole-second .000Z');
   }
 
@@ -356,6 +368,20 @@ export interface VerifiedKeyProof {
  * — is the ceremony operator's.
  */
 export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): VerifiedKeyProof => {
+  // THE TYP GATE IS ONLY A GATE WHEN THE EXPECTATION NAMES A PURPOSE. An empty
+  // `expectedTyp` byte-equals an artifact carrying `"typ":""`, so a verifier
+  // configured with one admits an envelope scoped to no ceremony at all — the
+  // gate reads as satisfied while gating nothing. That is a MISCONFIGURATION, not
+  // a verdict about a proof: it throws a plain Error like the skew guard below
+  // and never a `KeyProofVerifyError`, so a caller branching on `reason` cannot
+  // mistake a broken deployment for a bad envelope. Non-empty is the whole rule —
+  // the purpose registry is KEY-PROOF.md's, and hardcoding its rows here would
+  // make registering a new purpose a library release. `signKeyProof` refuses an
+  // empty `typ` on the producer side for the same reason.
+  if (options.expectedTyp === '') {
+    throw new Error('invalid key proof verifier: expectedTyp must be a registered purpose value');
+  }
+
   const maxSkew = options.maxSkewSeconds ?? DEFAULT_KEY_PROOF_SKEW_SECONDS;
   if (!Number.isSafeInteger(maxSkew) || maxSkew < 0) {
     throw new Error('invalid key proof verifier: maxSkewSeconds must be a non-negative integer');

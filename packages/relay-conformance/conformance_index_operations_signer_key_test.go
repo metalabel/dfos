@@ -293,7 +293,17 @@ func TestIndexOperationsSignerKeyIsOpaque(t *testing.T) {
 		}
 	}
 
-	// The row shape is unchanged: signerKey is a FILTER, never a field.
+	// THE ROW SHAPE, AS THE SPEC FIXES IT AND NO TIGHTER. WEB-RELAY.md prohibits
+	// exactly four row contents — "they contain no JWS, payload, title, or name" —
+	// and that is what a third-party relay is gated on here. This suite tests
+	// MUSTs, not the reference twins' habits: the same section describes the
+	// resolved signer key as "stored metadata" the row RETAINS, so a relay that
+	// surfaces it is conformant, and an assertion that signerKey is "never a
+	// field" would have failed it for a shape the spec permits. The reference
+	// relays pin their own leaner row shape in their own suites
+	// (dfos-web-relay/tests, dfos-web-relay-go), which is where a house
+	// convention belongs — not in the bar third parties are measured against.
+	prohibited := []string{"jws", "jwsToken", "payload", "title", "name"}
 	var rows struct {
 		Operations []map[string]any `json:"operations"`
 	}
@@ -303,8 +313,11 @@ func TestIndexOperationsSignerKeyIsOpaque(t *testing.T) {
 		t.Fatalf("GET %s: status %d, %d rows", route, resp.StatusCode, len(rows.Operations))
 	}
 	for _, row := range rows.Operations {
-		if _, present := row["signerKey"]; present {
-			t.Fatalf("operations row leaked a signerKey field: %+v", row)
+		for _, member := range prohibited {
+			if _, present := row[member]; present {
+				t.Fatalf("operations row carries prohibited content %q — rows are browsing "+
+					"metadata, never proof: %+v", member, row)
+			}
 		}
 	}
 }

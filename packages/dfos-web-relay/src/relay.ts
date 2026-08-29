@@ -48,7 +48,7 @@ import {
   redactNonPublicIdentityRow,
 } from './index-routes';
 import { ingestOperations, type AdmissionMode } from './ingest';
-import { selfDescribingDocument } from './openapi';
+import { DEFAULT_OPENAPI_ROUTE, selfDescribingDocument } from './openapi';
 import {
   credentialRevocationStatus,
   issuerRevocationList,
@@ -215,6 +215,77 @@ export const parseLimit = (
 };
 
 // -----------------------------------------------------------------------------
+// openapi route admission
+// -----------------------------------------------------------------------------
+
+/**
+ * THE SURFACES THIS FACTORY OWNS. Every route prefix `createRelay` registers,
+ * as base paths — the reserved set an operator-configured OpenAPI route may not
+ * fall under.
+ *
+ * Kept as a list of the CONSTANTS the routes are built from rather than a
+ * hand-copied set of strings, so moving a plane's base path moves this too.
+ * `/content` and `/1.0/identifiers` have no constant to borrow; they are the
+ * blob plane and the DID resolution route, written out here because they are
+ * still surfaces this factory mounts.
+ */
+const RESERVED_ROUTE_PREFIXES: readonly string[] = [
+  '/.well-known',
+  PROOF_BASE_PATH,
+  INDEX_BASE_PATH,
+  REVOCATIONS_BASE_PATH,
+  SIGNING_BASE_PATH,
+  '/content',
+  '/1.0/identifiers',
+];
+
+/**
+ * A configured OpenAPI route, refused at CONSTRUCTION if it would shadow a route
+ * this relay serves.
+ *
+ * WHY THIS IS A THROW AND NOT A DOC NOTE. Hono answers with the FIRST handler
+ * that matches, and the document route is registered before the proof, index,
+ * revocation, content, and signing planes — so `route: '/proof/v1/log'` serves
+ * the OpenAPI document where the operation log belongs, and `route: '/*'` serves
+ * it in place of every GET on the relay. Both produce a relay that answers 200
+ * to a conformance probe with a document instead of data: a silent, total
+ * capability outage that no runtime check downstream can attribute. A typo in a
+ * deployment config should fail the deployment, not the protocol.
+ *
+ * The rule is narrow on purpose. A route is admissible when it is a literal
+ * absolute path — no Hono pattern syntax, no query or fragment, no whitespace —
+ * that does not fall under a reserved surface. `/schema.json`, `/docs/openapi`,
+ * and `/` are all fine; nothing this factory mounts is.
+ */
+const validateOpenApiRoute = (route: string): string => {
+  if (!route.startsWith('/')) {
+    throw new Error(
+      `invalid openapi route ${JSON.stringify(route)}: must be an absolute path beginning with "/"`,
+    );
+  }
+  // Pattern syntax is refused rather than interpreted: `/*` and `/:anything` are
+  // route MATCHERS, and a matcher registered ahead of every plane below is the
+  // shadowing bug in its most total form.
+  const illegal = /[\s:*?#{}]/.exec(route);
+  if (illegal !== null) {
+    throw new Error(
+      `invalid openapi route ${JSON.stringify(route)}: must be a literal path — ` +
+        `${JSON.stringify(illegal[0])} is route-pattern or URL syntax, not a path segment`,
+    );
+  }
+  for (const reserved of RESERVED_ROUTE_PREFIXES) {
+    if (route === reserved || route.startsWith(`${reserved}/`)) {
+      throw new Error(
+        `invalid openapi route ${JSON.stringify(route)}: it falls under ${JSON.stringify(reserved)}, ` +
+          `a surface this relay serves — the document route is registered first, so it would ` +
+          `shadow those routes`,
+      );
+    }
+  }
+  return route;
+};
+
+// -----------------------------------------------------------------------------
 // factory
 // -----------------------------------------------------------------------------
 
@@ -285,8 +356,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // DISCOVERY, NEVER AUTHORITY — nothing below reads it to decide a request.
   const openapiOption = options.openapi;
   const openapiDocument = openapiOption?.document;
+  // A CONFIGURED ROUTE IS VALIDATED HERE, BEFORE ANY ROUTE IS MOUNTED — an
+  // operator route that falls under a surface this relay serves would shadow it
+  // (Hono answers first-match, and the document route is registered first). See
+  // validateOpenApiRoute.
   const openapiRoute =
-    openapiDocument !== undefined ? (openapiOption?.route ?? '/openapi.json') : undefined;
+    openapiDocument !== undefined
+      ? validateOpenApiRoute(openapiOption?.route ?? DEFAULT_OPENAPI_ROUTE)
+      : undefined;
   const openapiUrl = openapiOption?.url ?? openapiRoute;
 
   // peer configuration
@@ -503,8 +580,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // whatever host the document was authored against. Built once here, not per
   // request — the authority is construction-time configuration. See
   // ./openapi.ts for why the canonical document names no host at all.
+  // SELF-PATH: the document's own path entry is relocated to `openapiRoute` too,
+  // so a relay serving at a custom route does not hand out a document claiming
+  // the document lives somewhere that 404s.
   if (openapiDocument !== undefined && openapiRoute !== undefined) {
-    const servedDocument = selfDescribingDocument(openapiDocument, authority);
+    const servedDocument = selfDescribingDocument(openapiDocument, authority, openapiRoute);
     app.get(openapiRoute, (c) => c.json(servedDocument));
   }
 

@@ -321,6 +321,21 @@ type VerifiedKeyProof struct {
 // Everything after — appending the key to a chain, custody policy, notification —
 // is the ceremony operator's.
 func VerifyKeyProof(proof string, expect KeyProofExpectations, now time.Time) (*VerifiedKeyProof, error) {
+	// THE TYP GATE IS ONLY A GATE WHEN THE EXPECTATION NAMES A PURPOSE. An empty
+	// expect.Typ byte-equals an artifact carrying "typ":"", so a verifier
+	// configured with one admits an envelope scoped to no ceremony at all — the
+	// gate reads as satisfied while gating nothing. That is a MISCONFIGURATION,
+	// not a verdict about a proof: it returns a plain error like the skew guard
+	// below and never wraps ErrKeyProofInvalid, so a caller branching on Reason
+	// cannot mistake a broken deployment for a bad envelope. Non-empty is the
+	// whole rule — the purpose registry is KEY-PROOF.md's, and hardcoding its rows
+	// here would make registering a new purpose a library release. SignKeyProof
+	// refuses an empty typ on the producer side for the same reason, and the TS
+	// twin's verifyKeyProof carries this guard byte-for-byte.
+	if expect.Typ == "" {
+		return nil, fmt.Errorf("invalid key proof verifier: Typ must be a registered purpose value")
+	}
+
 	maxSkew := int64(DefaultKeyProofSkewSeconds)
 	if expect.MaxSkewSeconds != nil {
 		maxSkew = *expect.MaxSkewSeconds
