@@ -100,7 +100,7 @@ func newWhoamiCmd() *cobra.Command {
 					id.Deleted = chain.State.IsDeleted
 					result.SigningKey.PublishedAll = len(chain.State.AuthKeys)
 					for _, k := range chain.State.AuthKeys {
-						if keys.HasKey(chain.DID + "#" + k.ID) {
+						if holdsDeclaredKey(chain.DID, k) {
 							result.SigningKey.Held++
 							if result.SigningKey.KID == "" {
 								result.SigningKey.KID = chain.DID + "#" + k.ID

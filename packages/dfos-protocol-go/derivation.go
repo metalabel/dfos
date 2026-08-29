@@ -58,3 +58,21 @@ func GenerateKeyID() string {
 	_, _ = rand.Read(b)
 	return "key_" + DeriveID(b)
 }
+
+// DeriveKeyID derives a key_xxxx identifier from the key itself: DeriveID over
+// the multibase public key, which is the same sha256 + alphabet encoding every
+// other identifier in this protocol uses. The result is indistinguishable in
+// shape from a generated one — key ids are opaque strings to the chain grammar,
+// and this changes only who computes them and from what.
+//
+// Deriving rather than generating buys one property, and it matters exactly
+// once: two machines holding the same key compute the same handle with no shared
+// secret and no coordination. A recovery that rederives a key from a phrase can
+// name it the way the machine that minted it did, and "what this chain declares"
+// and "what this device holds" compare by equality instead of by lookup.
+//
+// The input is the multibase STRING, not the raw key bytes, so the vector is
+// pinned to the encoding a chain actually carries.
+func DeriveKeyID(publicKeyMultibase string) string {
+	return "key_" + DeriveID([]byte(publicKeyMultibase))
+}

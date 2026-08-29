@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
 )
 
@@ -299,10 +300,13 @@ func TestIdentityCreateMintsFromTheDefaultVault(t *testing.T) {
 	cmd := newIdentityCreateCmd()
 	mustSetFlag(t, cmd, "name", "alice")
 	var res struct {
-		DID   string `json:"did"`
+		DID   string   `json:"did"`
+		Key   string   `json:"key"`
+		Roles []string `json:"roles"`
 		Vault struct {
 			Name            string `json:"name"`
 			Fingerprint     string `json:"fingerprint"`
+			Index           uint32 `json:"index"`
 			ControllerIndex uint32 `json:"controllerIndex"`
 			AuthIndex       uint32 `json:"authIndex"`
 		} `json:"vault"`
@@ -312,34 +316,87 @@ func TestIdentityCreateMintsFromTheDefaultVault(t *testing.T) {
 	if res.Vault.Name != "personal" {
 		t.Fatalf("minted from vault %q, want the config default", res.Vault.Name)
 	}
-	if res.Vault.ControllerIndex != 0 || res.Vault.AuthIndex != 1 {
-		t.Fatalf("indices = %d and %d, want 0 and 1", res.Vault.ControllerIndex, res.Vault.AuthIndex)
+	// ONE index. The controller and auth fields report the same one, because
+	// there is one key and it is both.
+	if res.Vault.Index != 0 || res.Vault.ControllerIndex != 0 || res.Vault.AuthIndex != 0 {
+		t.Fatalf("indices = %d/%d/%d, want 0 everywhere",
+			res.Vault.Index, res.Vault.ControllerIndex, res.Vault.AuthIndex)
 	}
 
-	// The counter advanced by exactly two, and the provenance trail records both
-	// keys against the DID that now publishes them.
+	// The counter advanced by exactly one, and the provenance trail records the
+	// one key, in all three roles, against the DID that now publishes it.
 	meta, err := getVaults().Load("personal")
 	if err != nil {
 		t.Fatalf("load vault: %v", err)
 	}
-	if meta.NextIndex != 2 {
-		t.Errorf("NextIndex = %d, want 2", meta.NextIndex)
+	if meta.NextIndex != 1 {
+		t.Errorf("NextIndex = %d, want 1", meta.NextIndex)
 	}
-	if len(meta.Minted) != 2 {
-		t.Fatalf("minted records = %d, want 2", len(meta.Minted))
+	if len(meta.Minted) != 1 {
+		t.Fatalf("minted records = %d, want 1", len(meta.Minted))
 	}
-	roles := map[string]bool{}
-	for _, m := range meta.Minted {
-		roles[m.Role] = true
-		if m.DID != res.DID {
-			t.Errorf("minted record points at %s, want %s", m.DID, res.DID)
+	m := meta.Minted[0]
+	if m.DID != res.DID {
+		t.Errorf("minted record points at %s, want %s", m.DID, res.DID)
+	}
+	if m.PublicKey == "" || m.KeyID == "" {
+		t.Errorf("minted record is missing key material identifiers: %+v", m)
+	}
+	if got := strings.Join(m.RoleList(), ","); got != "controller,auth,assert" {
+		t.Errorf("minted roles = %q, want controller,auth,assert", got)
+	}
+	if m.KeyID != protocol.DeriveKeyID(m.PublicKey) {
+		t.Errorf("key id %q is not derived from the public key", m.KeyID)
+	}
+	if res.Key != m.KeyID {
+		t.Errorf("reported key %q != recorded key id %q", res.Key, m.KeyID)
+	}
+	if strings.Join(res.Roles, ",") != "controller,auth,assert" {
+		t.Errorf("reported roles = %v", res.Roles)
+	}
+}
+
+// TestIdentityCreateDeclaresOneKeyInAllThreeRoles reads the genesis the chain
+// actually holds: one entry per role array, and the SAME entry in each — same
+// id, same publicKeyMultibase.
+func TestIdentityCreateDeclaresOneKeyInAllThreeRoles(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	keys = storeA
+
+	did := createIdentity(t, "alice", storeA)
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil || chain == nil {
+		t.Fatalf("get identity: %v", err)
+	}
+	sets := map[string][]protocol.MultikeyPublicKey{
+		"controller": chain.State.ControllerKeys,
+		"auth":       chain.State.AuthKeys,
+		"assert":     chain.State.AssertKeys,
+	}
+	for role, set := range sets {
+		if len(set) != 1 {
+			t.Fatalf("%s keys = %d, want exactly 1", role, len(set))
 		}
-		if m.PublicKey == "" || m.KeyID == "" {
-			t.Errorf("minted record is missing key material identifiers: %+v", m)
-		}
 	}
-	if !roles["controller"] || !roles["auth"] {
-		t.Errorf("minted roles = %v, want both controller and auth", roles)
+	c, a, s := chain.State.ControllerKeys[0], chain.State.AuthKeys[0], chain.State.AssertKeys[0]
+	if c.ID != a.ID || c.ID != s.ID {
+		t.Fatalf("key ids differ across roles: %s / %s / %s", c.ID, a.ID, s.ID)
+	}
+	if c.PublicKeyMultibase != a.PublicKeyMultibase || c.PublicKeyMultibase != s.PublicKeyMultibase {
+		t.Fatal("public keys differ across roles")
+	}
+	if c.ID != protocol.DeriveKeyID(c.PublicKeyMultibase) {
+		t.Fatalf("key id %q is not the id its public key derives", c.ID)
+	}
+	// One key, held under its content address and nothing else.
+	if !storeA.HasKey(keyAccount(c.PublicKeyMultibase)) {
+		t.Fatal("the genesis key is not filed under its content address")
+	}
+	if storeA.HasKey(did + "#" + c.ID) {
+		t.Fatal("the genesis key was also written under the legacy DID-scoped account")
+	}
+	if n := countKeysInChain(chain); n != 1 {
+		t.Fatalf("countKeysInChain = %d, want 1", n)
 	}
 }
 
@@ -379,8 +436,8 @@ func TestIdentityCreateHonorsVaultOverrideAndNoVault(t *testing.T) {
 		t.Fatalf("--no-vault reported a vault: %v", plain)
 	}
 	burner, _ := getVaults().Load("burner")
-	if burner.NextIndex != 2 {
-		t.Errorf("--no-vault consumed indices: burner NextIndex = %d, want 2", burner.NextIndex)
+	if burner.NextIndex != 1 {
+		t.Errorf("--no-vault consumed indices: burner NextIndex = %d, want 1", burner.NextIndex)
 	}
 
 	// An unknown vault is refused rather than silently falling back.
@@ -422,8 +479,8 @@ func TestRotationStaysOnTheVaultThatMintedTheCurrentKeys(t *testing.T) {
 	if rotated.Vault.Name != "burner" {
 		t.Fatalf("rotation drew from %q, want the minting vault burner", rotated.Vault.Name)
 	}
-	if len(rotated.Vault.Indices) != 1 || rotated.Vault.Indices[0] != 2 {
-		t.Fatalf("rotation indices = %v, want [2]", rotated.Vault.Indices)
+	if len(rotated.Vault.Indices) != 1 || rotated.Vault.Indices[0] != 1 {
+		t.Fatalf("rotation indices = %v, want [1]", rotated.Vault.Indices)
 	}
 	if personal, _ := getVaults().Load("personal"); personal.NextIndex != 0 {
 		t.Errorf("the default vault was drawn from: NextIndex = %d", personal.NextIndex)
@@ -490,10 +547,11 @@ func TestWhoamiReportsVaultProvenance(t *testing.T) {
 	if result.SigningKey.Vault.Name != "personal" {
 		t.Errorf("whoami vault = %q, want personal", result.SigningKey.Vault.Name)
 	}
-	if result.SigningKey.Vault.Index != 1 {
-		t.Errorf("whoami vault index = %d, want the auth key's index 1", result.SigningKey.Vault.Index)
+	// One key, one index: the auth key IS the controller key, at index 0.
+	if result.SigningKey.Vault.Index != 0 {
+		t.Errorf("whoami vault index = %d, want the one key's index 0", result.SigningKey.Vault.Index)
 	}
-	if result.SigningKey.Vault.Path != "m/1684434803'/1'" {
+	if result.SigningKey.Vault.Path != "m/1684434803'/0'" {
 		t.Errorf("whoami derivation path = %q", result.SigningKey.Vault.Path)
 	}
 

@@ -734,15 +734,17 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	//    other account is filed there because something else named it, and
 	//    moving it on an operator's say-so would take that key away from whatever
 	//    was using it.
-	if account, ok := adoptedAccount(answer); ok && strings.HasPrefix(cand.Account, candidateAccountPrefix) &&
-		!keys.HasKey(account) {
-		if err := keys.RenameKey(cand.Account, account); err == nil {
-			result.Account = account
-			if cand.Minted && cand.Vault != "" {
-				_ = getVaults().Record(cand.Vault, vault.MintedKey{
-					Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
-					Role: "auth", PublicKey: cand.PublicKey,
-				})
+	if ok := adoptionNamesAnIdentity(answer); ok && strings.HasPrefix(cand.Account, candidateAccountPrefix) {
+		account := keyAccount(cand.PublicKey)
+		if !keys.HasKey(account) {
+			if err := keys.RenameKey(cand.Account, account); err == nil {
+				result.Account = account
+				if cand.Minted && cand.Vault != "" {
+					_ = getVaults().Record(cand.Vault, vault.MintedKey{
+						Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
+						Roles: []string{"auth"}, PublicKey: cand.PublicKey,
+					})
+				}
 			}
 		}
 	}
@@ -755,15 +757,16 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	return nil
 }
 
-// adoptedAccount is the keystore account for a completion that named its
-// identity. Both members are validated before they name anything local: an
-// account is `<did>#<keyId>`, and a key id carrying '#' would file a key under a
-// name that means a different key.
-func adoptedAccount(answer *completionAnswer) (string, bool) {
-	if !strings.HasPrefix(answer.DID, "did:dfos:") || !keyIDShape.MatchString(answer.KeyID) {
-		return "", false
-	}
-	return answer.DID + "#" + answer.KeyID, true
+// adoptionNamesAnIdentity reports whether a completion actually said which
+// identity adopted the key, in a shape this CLI will act on.
+//
+// The account the key moves to is its own content address and needs neither
+// member — but the vault provenance record does, and a completion that names
+// nothing readable is a completion this machine does not file anything against.
+// The key id is shape-checked because a '#' in it would make the provenance
+// record read as a different key.
+func adoptionNamesAnIdentity(answer *completionAnswer) bool {
+	return strings.HasPrefix(answer.DID, "did:dfos:") && keyIDShape.MatchString(answer.KeyID)
 }
 
 // printCeremonyDisclosure is KEY-PROOF.md's Holder Obligation made visible: the

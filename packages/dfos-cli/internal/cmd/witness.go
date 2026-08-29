@@ -29,16 +29,16 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {
 				return err
 			}
-			privKey, err := keys.GetPrivateKey(kid)
+			privKey, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return err
 			}
 
-			csToken, _, err := protocol.SignCountersignWithRelation(chain.DID, operationCID, relation, kid, privKey)
+			csToken, _, err := protocol.SignCountersignWithRelation(chain.DID, operationCID, relation, signer.KID, privKey)
 			if err != nil {
 				return err
 			}

@@ -67,12 +67,31 @@ type Metadata struct {
 // this identity signs with", which is what `whoami` reports and what rotation
 // reads to stay on the seed that minted the current keys.
 type MintedKey struct {
-	Index     uint32 `toml:"index" json:"index"`
-	DID       string `toml:"did" json:"did"`
-	KeyID     string `toml:"key_id" json:"keyId"`
-	Role      string `toml:"role" json:"role"`
+	Index uint32 `toml:"index" json:"index"`
+	DID   string `toml:"did" json:"did"`
+	KeyID string `toml:"key_id" json:"keyId"`
+	// Roles is every role the operation that published this key declared it in.
+	// One key in several roles is the ordinary shape — `identity create` mints one
+	// key and declares it controller, auth, and assert — so a single-role field
+	// could only record it by picking one and dropping the rest.
+	Roles []string `toml:"roles,omitempty" json:"roles,omitempty"`
+	// Role is the single-role field this record carried before a key could be
+	// several things at once. It is READ so an existing vault's provenance still
+	// says what it said, and never written. Use RoleList.
+	Role      string `toml:"role,omitempty" json:"role,omitempty"`
 	PublicKey string `toml:"public_key" json:"publicKey"`
 	MintedAt  string `toml:"minted_at" json:"mintedAt"`
+}
+
+// RoleList is the roles this record names, under either shape.
+func (m MintedKey) RoleList() []string {
+	if len(m.Roles) > 0 {
+		return m.Roles
+	}
+	if m.Role != "" {
+		return []string{m.Role}
+	}
+	return nil
 }
 
 // Derived is one freshly derived keypair together with the index it came from.

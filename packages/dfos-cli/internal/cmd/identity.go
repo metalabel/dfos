@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,12 +58,15 @@ func newIdentityCreateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new identity (mint keys + sign genesis)",
-		Long: "Mint a controller key and an auth key and sign a genesis operation with them. The keys are " +
-			"derived from a vault — --vault, else default-vault — so the vault's recovery phrase covers " +
-			"them. With no vault selected, or with --no-vault, the keys are generated standalone and exist " +
-			"only in the keystore. Nothing about the vault is published: the genesis carries public keys " +
-			"and nothing else.",
+		Short: "Create a new identity (mint one key + sign genesis)",
+		Long: "Mint ONE key and sign a genesis operation that declares it in all three roles — controller, " +
+			"auth, and assert. The key is derived from a vault — --vault, else default-vault — so the " +
+			"vault's recovery phrase covers it. With no vault selected, or with --no-vault, the key is " +
+			"generated standalone and exists only in the keystore. Nothing about the vault is published: " +
+			"the genesis carries a public key and nothing else.\n\n" +
+			"Custody splits at the first key-add, not at genesis. Two keys off one seed in one keychain " +
+			"share every fate that matters; 'dfos identity add-key' and 'dfos keys prove' are where a " +
+			"second custodian actually appears.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -88,49 +92,54 @@ func newIdentityCreateCmd() *cobra.Command {
 				return err
 			}
 
-			// Mint both keys from the vault in one reservation, so an identity's
-			// controller and auth keys land on consecutive indices and a scan that
-			// finds one finds the other.
-			minter, err := newKeyMinter(vaultName, 2)
+			// ONE key, ONE derivation index, all three roles.
+			//
+			// The split this genesis does not make is the point. Two keys minted
+			// from one seed, into one keychain, on one machine, are one custody
+			// arrangement wearing two names: every event that takes one takes the
+			// other. A role separation only becomes real when a second custodian
+			// holds a key the first cannot reach, and that happens at a key-add
+			// ceremony ('dfos identity add-key', 'dfos keys prove') — the first
+			// key-add IS the split. Until then, declaring one key three times says
+			// exactly what is true.
+			//
+			// The chain grammar is untouched: PROTOCOL.md requires at least one
+			// controller key and says nothing about separation or cross-array
+			// uniqueness, and a key id is an opaque string. The same entry — same
+			// id, same publicKeyMultibase — appears in each array.
+			minter, err := newKeyMinter(vaultName, 1)
 			if err != nil {
 				return err
 			}
 
-			// controller key
-			controllerKeyID := protocol.GenerateKeyID()
-			controllerPriv, controllerPub, controllerIndex, err := minter.next("pending:" + controllerKeyID)
+			minted, err := minter.next()
 			if err != nil {
-				return fmt.Errorf("mint controller key: %w", err)
+				return fmt.Errorf("mint identity key: %w", err)
 			}
-			controllerMK := protocol.NewMultikeyPublicKey(controllerKeyID, controllerPub)
+			keyID := protocol.DeriveKeyID(minted.PublicMultibase)
+			mk := protocol.NewMultikeyPublicKey(keyID, minted.Public)
 
-			// auth key
-			authKeyID := protocol.GenerateKeyID()
-			_, authPub, authIndex, err := minter.next("pending:" + authKeyID)
-			if err != nil {
-				return fmt.Errorf("mint auth key: %w", err)
+			// The key is stored before the genesis is signed, so a create that dies
+			// mid-flight leaves material an operator still holds rather than a
+			// spent derivation index and nothing to show for it. Its account is the
+			// key's own content address, which needs no DID and so needs no rename
+			// once one exists.
+			account := keyAccount(minted.PublicMultibase)
+			if _, err := keys.PutKey(account, minted.Private); err != nil {
+				return fmt.Errorf("store the identity key in %s: %w", keys.Backend(), err)
 			}
-			authMK := protocol.NewMultikeyPublicKey(authKeyID, authPub)
 
 			// sign genesis (services omitted entirely when none given — CID-neutral)
 			jwsToken, did, opCID, err := protocol.SignIdentityCreateWithServices(
-				[]protocol.MultikeyPublicKey{controllerMK},
-				[]protocol.MultikeyPublicKey{authMK},
-				nil,
+				[]protocol.MultikeyPublicKey{mk},
+				[]protocol.MultikeyPublicKey{mk},
+				[]protocol.MultikeyPublicKey{mk},
 				services,
-				controllerKeyID,
-				controllerPriv,
+				keyID,
+				minted.Private,
 			)
 			if err != nil {
 				return fmt.Errorf("sign genesis: %w", err)
-			}
-
-			// rename keys from pending to final
-			if err := keys.RenameKey("pending:"+controllerKeyID, did+"#"+controllerKeyID); err != nil {
-				return fmt.Errorf("rename controller key: %w", err)
-			}
-			if err := keys.RenameKey("pending:"+authKeyID, did+"#"+authKeyID); err != nil {
-				return fmt.Errorf("rename auth key: %w", err)
 			}
 
 			// ingest into local relay
@@ -168,8 +177,10 @@ func newIdentityCreateCmd() *cobra.Command {
 			// that actually exist in a chain.
 			if vaultName != "" {
 				if err := getVaults().Record(vaultName,
-					vault.MintedKey{Index: controllerIndex, DID: did, KeyID: controllerKeyID, Role: "controller", PublicKey: controllerMK.PublicKeyMultibase},
-					vault.MintedKey{Index: authIndex, DID: did, KeyID: authKeyID, Role: "auth", PublicKey: authMK.PublicKeyMultibase},
+					vault.MintedKey{
+						Index: minted.Index, DID: did, KeyID: keyID,
+						Roles: genesisRoles, PublicKey: mk.PublicKeyMultibase,
+					},
 				); err != nil {
 					return fmt.Errorf("record vault provenance: %w", err)
 				}
@@ -187,20 +198,30 @@ func newIdentityCreateCmd() *cobra.Command {
 
 			if jsonFlag {
 				out := map[string]any{
-					"did":           did,
-					"name":          name,
-					"operationCID":  opCID,
-					"controllerKey": controllerKeyID,
-					"authKey":       authKeyID,
+					"did":          did,
+					"name":         name,
+					"operationCID": opCID,
+					"key":          keyID,
+					"publicKey":    mk.PublicKeyMultibase,
+					"roles":        genesisRoles,
+					// controllerKey and authKey name the SAME key now. They are kept
+					// because a script reading either field is asking "which key
+					// controls this identity", and the answer has not stopped
+					// existing — it has stopped being two answers.
+					"controllerKey": keyID,
+					"authKey":       keyID,
 					"services":      len(services),
 					"publishedTo":   publishedTo,
 				}
 				if vaultName != "" {
 					out["vault"] = map[string]any{
-						"name":            vaultName,
-						"fingerprint":     minter.fingerprint,
-						"controllerIndex": controllerIndex,
-						"authIndex":       authIndex,
+						"name":        vaultName,
+						"fingerprint": minter.fingerprint,
+						"index":       minted.Index,
+						// Both role indices are the one index, for the same reason
+						// the two key fields are the one key.
+						"controllerIndex": minted.Index,
+						"authIndex":       minted.Index,
 					}
 				}
 				outputJSON(out)
@@ -208,12 +229,11 @@ func newIdentityCreateCmd() *cobra.Command {
 				fmt.Printf("Identity created:\n")
 				fmt.Printf("  Name:           %s\n", name)
 				fmt.Printf("  DID:            %s\n", did)
-				fmt.Printf("  Controller key: %s  (%s)\n", controllerKeyID, keys.Backend())
-				fmt.Printf("  Auth key:       %s  (%s)\n", authKeyID, keys.Backend())
+				fmt.Printf("  Key:            %s  (%s)\n", keyID, keys.Backend())
+				fmt.Printf("  Roles:          %s — one key, declared in all three\n", joinComma(genesisRoles))
 				if vaultName != "" {
-					fmt.Printf("  Vault:          %s [%s] at %s and %s — via %s\n",
-						vaultName, minter.fingerprint,
-						vault.DerivationPath(controllerIndex), vault.DerivationPath(authIndex), vaultSource)
+					fmt.Printf("  Vault:          %s [%s] at %s — via %s\n",
+						vaultName, minter.fingerprint, vault.DerivationPath(minted.Index), vaultSource)
 				}
 				if len(services) > 0 {
 					fmt.Printf("  Services:       %d\n", len(services))
@@ -225,12 +245,12 @@ func newIdentityCreateCmd() *cobra.Command {
 				}
 				fmt.Printf("  Sign as it:     --as %s, DFOS_AS=%s, or 'dfos config set default-identity %s'\n", name, name, name)
 				if vaultName == "" {
-					fmt.Fprintf(os.Stderr, "\nWarning: these keys are standalone. They exist in %s and nowhere else.\n", keys.Backend())
-					fmt.Fprintf(os.Stderr, "         Lose them and control of this identity is gone for good.\n")
-					fmt.Fprintf(os.Stderr, "         Mint from a vault ('dfos vault create <name>') so a written-down phrase covers the keys, and register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key, so no single key loss is fatal.\n")
+					fmt.Fprintf(os.Stderr, "\nWarning: this key is standalone. It exists in %s and nowhere else.\n", keys.Backend())
+					fmt.Fprintf(os.Stderr, "         Lose it and control of this identity is gone for good.\n")
+					fmt.Fprintf(os.Stderr, "         Mint from a vault ('dfos vault create <name>') so a written-down phrase covers the key, and register a second key (e.g. on another device) with 'dfos identity add-key' while you still hold this one, so no single key loss is fatal.\n")
 				} else {
-					fmt.Fprintf(os.Stderr, "\nThese keys derive from vault '%s'. Its recovery phrase is the only copy: if it is not written down, write it down now with 'dfos vault show %s --reveal-mnemonic'.\n", vaultName, vaultName)
-					fmt.Fprintf(os.Stderr, "Availability is still a multi-key story: register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key.\n")
+					fmt.Fprintf(os.Stderr, "\nThis key derives from vault '%s'. Its recovery phrase is the only copy: if it is not written down, write it down now with 'dfos vault show %s --reveal-mnemonic'.\n", vaultName, vaultName)
+					fmt.Fprintf(os.Stderr, "Availability is a multi-key story and this identity has one key: register a second (e.g. on another device) with 'dfos identity add-key' while you still hold this one. That add is also where controller and auth stop being the same custody.\n")
 				}
 			}
 			return nil
@@ -244,10 +264,15 @@ func newIdentityCreateCmd() *cobra.Command {
 	return cmd
 }
 
+// genesisRoles is what `identity create` declares its one key in. The order is
+// the protocol's own controller→auth→assert order, so every surface that prints
+// a key's roles prints them the same way.
+var genesisRoles = []string{"controller", "auth", "assert"}
+
 // keyMinter is the one place a private key comes into existence. It hands out
-// keys either from a vault's reserved indices or from the keystore's own
-// generator, and either way the key lands in the keystore under the account the
-// caller names — so nothing downstream has to know or care where it came from.
+// key MATERIAL — from a vault's reserved indices or from fresh entropy — and the
+// caller stores it, because a key's account is its own public key and that is
+// not known until the key exists.
 //
 // Reserving all of an operation's indices up front means a vault's counter moves
 // exactly once per command, and the indices an operation consumes are contiguous.
@@ -256,6 +281,16 @@ type keyMinter struct {
 	fingerprint string
 	derived     []vault.Derived
 	used        int
+}
+
+// mintedKey is one key the minter produced, with the index it came from. The
+// index is meaningful only for a vault-backed minter; a standalone key has no
+// index and reports 0, which callers gate on vaultName rather than on the number.
+type mintedKey struct {
+	Index           uint32
+	Private         ed25519.PrivateKey
+	Public          ed25519.PublicKey
+	PublicMultibase string
 }
 
 func newKeyMinter(vaultName string, count int) (*keyMinter, error) {
@@ -276,24 +311,35 @@ func newKeyMinter(vaultName string, count int) (*keyMinter, error) {
 	return m, nil
 }
 
-// next produces the next key and stores it under account. The index it returns
-// is meaningful only for a vault-backed minter; a standalone key has no index
-// and reports 0, which callers gate on vaultName rather than on the number.
-func (m *keyMinter) next(account string) (ed25519.PrivateKey, ed25519.PublicKey, uint32, error) {
+// next produces the next key. It does NOT store it: the account a key is filed
+// under is derived from the key's own public half (see keyaccount.go), so there
+// is no name to write it under until it exists. The caller stores it, which is
+// also where the caller decides whether a half-finished operation should leave
+// the material behind.
+func (m *keyMinter) next() (mintedKey, error) {
 	if m.vaultName == "" {
-		priv, pub, err := keys.GenerateKey(account)
-		return priv, pub, 0, err
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return mintedKey{}, fmt.Errorf("generate a key: %w", err)
+		}
+		return newMintedKey(0, priv), nil
 	}
 	if m.used >= len(m.derived) {
-		return nil, nil, 0, fmt.Errorf("vault '%s' reserved %d key(s) and a %d%s was asked for", m.vaultName, len(m.derived), m.used+1, ordinalSuffix(m.used+1))
+		return mintedKey{}, fmt.Errorf("vault '%s' reserved %d key(s) and a %d%s was asked for", m.vaultName, len(m.derived), m.used+1, ordinalSuffix(m.used+1))
 	}
 	d := m.derived[m.used]
 	m.used++
-	pub, err := keys.PutKey(account, d.Private)
-	if err != nil {
-		return nil, nil, 0, err
+	return newMintedKey(d.Index, d.Private), nil
+}
+
+func newMintedKey(index uint32, priv ed25519.PrivateKey) mintedKey {
+	pub := priv.Public().(ed25519.PublicKey)
+	return mintedKey{
+		Index:           index,
+		Private:         priv,
+		Public:          pub,
+		PublicMultibase: protocol.EncodeMultikey(pub),
 	}
-	return d.Private, pub, d.Index, nil
 }
 
 func ordinalSuffix(n int) string {
@@ -315,6 +361,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 	var peerName string
 	var rotateAuth bool
 	var rotateController bool
+	var rotateAssert bool
 	var serviceSpecs []string
 	var clearServices bool
 	var vaultFlag string
@@ -326,17 +373,21 @@ func newIdentityUpdateCmd() *cobra.Command {
 		Long: "Sign an identity update operation for the named identity, or — with no name — for the one the " +
 			"resolution stack resolves. A typed name or DID is the subject: it outranks --as, DFOS_AS, and " +
 			"default-identity, and the announce line says it came from the command line. " +
-			"Use --rotate-auth or --rotate-controller to mint new keys " +
-			"and rotate out the old ones. Rotation is sticky: replacements are drawn from the vault that " +
+			"Use --rotate-auth, --rotate-controller, and/or --rotate-assert to mint a replacement key " +
+			"and rotate out the old ones. The named roles are replaced by ONE freshly minted key — one " +
+			"custody, one key, the same rule 'identity create' follows — and a role no flag names carries " +
+			"its keys forward unchanged, which means the retired key stays declared in it. " +
+			"Rotation is sticky: the replacement is drawn from the vault that " +
 			"minted this identity's CURRENT keys, so an identity stays on one seed unless --vault says " +
-			"otherwise. An identity whose keys came from no vault rotates into standalone keys. " +
+			"otherwise. An identity whose keys came from no vault rotates into a standalone key. " +
 			"Use --service (repeatable) to REPLACE the discovery services set, or " +
 			"--clear-services to empty it. Services left unspecified are carried forward unchanged.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			settingServices := len(serviceSpecs) > 0 || clearServices
-			if !rotateAuth && !rotateController && !settingServices {
-				return fmt.Errorf("specify --rotate-auth, --rotate-controller, --service, and/or --clear-services")
+			rotating := rotateController || rotateAuth || rotateAssert
+			if !rotating && !settingServices {
+				return fmt.Errorf("specify --rotate-controller, --rotate-auth, --rotate-assert, --service, and/or --clear-services")
 			}
 			if len(serviceSpecs) > 0 && clearServices {
 				return fmt.Errorf("--service and --clear-services are mutually exclusive")
@@ -361,11 +412,11 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			signer, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
 			if err != nil {
 				return err
 			}
-			controllerPriv, err := keys.GetPrivateKey(kid)
+			controllerPriv, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -382,6 +433,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 			newControllerKeys := chain.State.ControllerKeys
 			newAssertKeys := chain.State.AssertKeys
 			var rotatedKeys []string
+			var retainedRoles []retainedKeyRole
 
 			// An update REPLACES the full services state. Carry the current set
 			// forward unless --service replaces it or --clear-services empties it.
@@ -414,8 +466,12 @@ func newIdentityUpdateCmd() *cobra.Command {
 			// vault-derived identity into an error about mint counts.
 			var minter *keyMinter
 			var vaultFingerprint string
-			if rotateAuth || rotateController {
-				minter, err = newKeyMinter(rotationVault, boolCount(rotateAuth, rotateController))
+			if rotating {
+				// ONE reservation, one index, one key — however many roles are being
+				// rotated. Minting a key per role would put two fresh keys in one
+				// keychain under one seed and call that a separation, which is the
+				// arrangement `identity create` stopped making.
+				minter, err = newKeyMinter(rotationVault, 1)
 				if err != nil {
 					return err
 				}
@@ -423,39 +479,51 @@ func newIdentityUpdateCmd() *cobra.Command {
 			}
 			var mintedRecords []vault.MintedKey
 
-			if rotateAuth {
-				newAuthKeyID := protocol.GenerateKeyID()
-				_, newAuthPub, index, err := minter.next(chain.DID + "#" + newAuthKeyID)
+			if rotating {
+				minted, err := minter.next()
 				if err != nil {
-					return fmt.Errorf("mint new auth key: %w", err)
+					return fmt.Errorf("mint the replacement key: %w", err)
 				}
-				newAuthMK := protocol.NewMultikeyPublicKey(newAuthKeyID, newAuthPub)
-				newAuthKeys = []protocol.MultikeyPublicKey{newAuthMK}
-				rotatedKeys = append(rotatedKeys, "auth:"+newAuthKeyID)
-				mintedRecords = append(mintedRecords, vault.MintedKey{
-					Index: index, DID: chain.DID, KeyID: newAuthKeyID, Role: "auth", PublicKey: newAuthMK.PublicKeyMultibase,
-				})
-			}
+				newKeyID := protocol.DeriveKeyID(minted.PublicMultibase)
+				newMK := protocol.NewMultikeyPublicKey(newKeyID, minted.Public)
+				if _, err := keys.PutKey(keyAccount(minted.PublicMultibase), minted.Private); err != nil {
+					return fmt.Errorf("store the replacement key in %s: %w", keys.Backend(), err)
+				}
 
-			if rotateController {
-				newControllerKeyID := protocol.GenerateKeyID()
-				_, newControllerPub, index, err := minter.next(chain.DID + "#" + newControllerKeyID)
-				if err != nil {
-					return fmt.Errorf("mint new controller key: %w", err)
+				var newRoles []string
+				if rotateController {
+					newControllerKeys = []protocol.MultikeyPublicKey{newMK}
+					newRoles = append(newRoles, "controller")
 				}
-				newControllerMK := protocol.NewMultikeyPublicKey(newControllerKeyID, newControllerPub)
-				newControllerKeys = []protocol.MultikeyPublicKey{newControllerMK}
-				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
+				if rotateAuth {
+					newAuthKeys = []protocol.MultikeyPublicKey{newMK}
+					newRoles = append(newRoles, "auth")
+				}
+				if rotateAssert {
+					newAssertKeys = []protocol.MultikeyPublicKey{newMK}
+					newRoles = append(newRoles, "assert")
+				}
+				for _, role := range newRoles {
+					rotatedKeys = append(rotatedKeys, role+":"+newKeyID)
+				}
 				mintedRecords = append(mintedRecords, vault.MintedKey{
-					Index: index, DID: chain.DID, KeyID: newControllerKeyID, Role: "controller", PublicKey: newControllerMK.PublicKeyMultibase,
+					Index: minted.Index, DID: chain.DID, KeyID: newKeyID,
+					Roles: newRoles, PublicKey: newMK.PublicKeyMultibase,
 				})
+
+				// What the retired keys STILL are. A role no flag named carried its
+				// keys forward, so a key rotated out of auth can remain the
+				// identity's controller — which is exactly the shape a single-key
+				// identity is in after --rotate-auth alone. Saying "rotated out"
+				// and stopping there would be a sentence with its subject removed.
+				retainedRoles = retainedRolesAfterRotation(chain, newControllerKeys, newAuthKeys, newAssertKeys)
 			}
 
 			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
 				previousCID,
 				newControllerKeys, newAuthKeys, newAssertKeys,
 				services,
-				kid, controllerPriv,
+				signer.KID, controllerPriv,
 			)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
@@ -498,6 +566,9 @@ func newIdentityUpdateCmd() *cobra.Command {
 					"operationCID": opCID,
 					"rotatedKeys":  rotatedKeys,
 				}
+				if rotating {
+					out["retiredKeys"] = retainedRoles
+				}
 				if servicesChanged {
 					out["services"] = len(services)
 				}
@@ -524,27 +595,88 @@ func newIdentityUpdateCmd() *cobra.Command {
 				if rotationVault != "" && len(mintedRecords) > 0 {
 					for _, r := range mintedRecords {
 						fmt.Printf("  Vault:          %s [%s] at %s (%s) — via %s\n",
-							rotationVault, vaultFingerprint, vault.DerivationPath(r.Index), r.Role, rotationSource)
+							rotationVault, vaultFingerprint, vault.DerivationPath(r.Index),
+							joinComma(r.RoleList()), rotationSource)
 					}
 				}
 				if servicesChanged {
 					fmt.Printf("  Services:       %d (replaced)\n", len(services))
 				}
-				if len(rotatedKeys) > 0 {
-					fmt.Printf("  Old keys remain in keychain for chain re-verification.\n")
+				for _, r := range retainedRoles {
+					if len(r.Roles) > 0 {
+						fmt.Printf("  Still declared: %s — %s (a role no flag named carries its keys forward)\n",
+							r.KeyID, joinComma(r.Roles))
+					} else {
+						fmt.Printf("  Retired:        %s — declared in no role now; the seed stays in the keystore so the chain still re-verifies\n", r.KeyID)
+					}
 				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
-	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Mint a new auth key and rotate out old one(s)")
-	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Mint a new controller key and rotate out old one(s)")
+	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Replace the auth key set with a freshly minted key")
+	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Replace the controller key set with a freshly minted key")
+	cmd.Flags().BoolVar(&rotateAssert, "rotate-assert", false, "Replace the assert key set with a freshly minted key")
 	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable); REPLACES the entire services set")
 	cmd.Flags().BoolVar(&clearServices, "clear-services", false, "Empty the discovery services set")
 	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the replacements from this vault for THIS rotation only; a later bare rotate returns to the vault behind the identity's current controller key")
 	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Rotate into standalone keys, from no vault")
 	return cmd
+}
+
+// retainedKeyRole is one key a rotation displaced from at least one role, and
+// the roles it is STILL declared in afterwards.
+//
+// It exists because a role-scoped rotation on a single-key identity has a result
+// that "rotated out" does not describe: --rotate-auth mints a new auth key, and
+// the key it displaced is still the identity's controller and assert key,
+// because no flag named those roles and a full-state replacement carries an
+// unnamed role forward untouched. An operator told only that the old key was
+// rotated out would believe a key is retired that still controls the identity.
+type retainedKeyRole struct {
+	KeyID string   `json:"keyId"`
+	Roles []string `json:"stillDeclaredIn"`
+}
+
+// retainedRolesAfterRotation compares the chain's key sets before and after, and
+// reports every key that lost a role, with whatever roles it kept. Order is the
+// chain's own controller→auth→assert order, so two runs print the same lines.
+func retainedRolesAfterRotation(chain *relay.StoredIdentityChain, newController, newAuth, newAssert []protocol.MultikeyPublicKey) []retainedKeyRole {
+	before := map[string][]string{}
+	var order []string
+	seen := map[string]bool{}
+	note := func(set []protocol.MultikeyPublicKey, role string) {
+		for _, k := range set {
+			if !seen[k.ID] {
+				seen[k.ID] = true
+				order = append(order, k.ID)
+			}
+			before[k.ID] = append(before[k.ID], role)
+		}
+	}
+	note(chain.State.ControllerKeys, "controller")
+	note(chain.State.AuthKeys, "auth")
+	note(chain.State.AssertKeys, "assert")
+
+	after := map[string][]string{}
+	keep := func(set []protocol.MultikeyPublicKey, role string) {
+		for _, k := range set {
+			after[k.ID] = append(after[k.ID], role)
+		}
+	}
+	keep(newController, "controller")
+	keep(newAuth, "auth")
+	keep(newAssert, "assert")
+
+	var out []retainedKeyRole
+	for _, id := range order {
+		if len(after[id]) == len(before[id]) {
+			continue
+		}
+		out = append(out, retainedKeyRole{KeyID: id, Roles: after[id]})
+	}
+	return out
 }
 
 // resolveRotationVault answers which seed a rotation's replacement keys come
@@ -628,14 +760,20 @@ func newIdentityDevicePubkeyCmd() *cobra.Command {
 				return err
 			}
 
-			// The DID already exists locally (this device fetched the chain),
-			// so store directly under did#keyID — no pending-then-rename dance.
-			keyID := protocol.GenerateKeyID()
-			_, pub, err := keys.GenerateKey(chain.DID + "#" + keyID)
+			// The account is the key's own content address, so it is knowable
+			// before any chain names the key — and the key id the other device
+			// will publish is derived from the same public key, so both machines
+			// compute the same handle without exchanging anything but the key.
+			_, priv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				return fmt.Errorf("generate device key: %w", err)
 			}
-			mk := protocol.NewMultikeyPublicKey(keyID, pub)
+			pub := priv.Public().(ed25519.PublicKey)
+			publicMultibase := protocol.EncodeMultikey(pub)
+			if _, err := keys.PutKey(keyAccount(publicMultibase), priv); err != nil {
+				return fmt.Errorf("store device key in %s: %w", keys.Backend(), err)
+			}
+			mk := protocol.NewMultikeyPublicKey(protocol.DeriveKeyID(publicMultibase), pub)
 
 			role := "auth"
 			if controller {
@@ -728,11 +866,11 @@ func newIdentityBindDomainCmd() *cobra.Command {
 				return err
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			signer, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
 			if err != nil {
 				return err
 			}
-			controllerPriv, err := keys.GetPrivateKey(kid)
+			controllerPriv, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -749,7 +887,7 @@ func newIdentityBindDomainCmd() *cobra.Command {
 				h.CID,
 				chain.State.ControllerKeys, chain.State.AuthKeys, chain.State.AssertKeys,
 				plan.Services,
-				kid, controllerPriv,
+				signer.KID, controllerPriv,
 			)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
@@ -991,9 +1129,6 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			if !authKey && !controllerKey {
 				return fmt.Errorf("specify --auth-key and/or --controller-key")
 			}
-			if idFlag == "" {
-				return fmt.Errorf("--id is required (the key id printed by 'dfos identity device-pubkey')")
-			}
 			if pubkeyFlag == "" {
 				return fmt.Errorf("--pubkey is required (the public Multikey printed by 'dfos identity device-pubkey')")
 			}
@@ -1009,11 +1144,11 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			}
 
 			// sign with whatever controller key this device actually holds
-			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			signer, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
 			if err != nil {
 				return err
 			}
-			controllerPriv, err := keys.GetPrivateKey(kid)
+			controllerPriv, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -1030,7 +1165,16 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			if len(rawPub) != ed25519.PublicKeySize {
 				return fmt.Errorf("invalid --pubkey: expected a %d-byte ed25519 key, got %d bytes", ed25519.PublicKeySize, len(rawPub))
 			}
-			newKey := protocol.NewMultikeyPublicKey(idFlag, ed25519.PublicKey(rawPub))
+			// The id defaults to the one the key derives for itself, so the device
+			// that generated the key and the device that publishes it name it the
+			// same way without passing an id between them. An explicit --id still
+			// wins: a key id is an opaque string, and a ceremony run elsewhere may
+			// have already told the world what this key is called.
+			keyID := idFlag
+			if keyID == "" {
+				keyID = protocol.DeriveKeyID(protocol.EncodeMultikey(ed25519.PublicKey(rawPub)))
+			}
+			newKey := protocol.NewMultikeyPublicKey(keyID, ed25519.PublicKey(rawPub))
 
 			// determine head CID
 			lastToken := chain.Log[len(chain.Log)-1]
@@ -1064,7 +1208,7 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			jwsToken, opCID, err := protocol.SignIdentityUpdate(
 				previousCID,
 				newControllerKeys, newAuthKeys, newAssertKeys,
-				kid, controllerPriv,
+				signer.KID, controllerPriv,
 			)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
@@ -1117,7 +1261,7 @@ func newIdentityAddKeyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().BoolVar(&authKey, "auth-key", false, "Add the key to the auth set (content/credential publishing)")
 	cmd.Flags().BoolVar(&controllerKey, "controller-key", false, "Add the key to the controller set (higher trust: rotate/delete/add)")
-	cmd.Flags().StringVar(&idFlag, "id", "", "Key id from 'dfos identity device-pubkey' (required)")
+	cmd.Flags().StringVar(&idFlag, "id", "", "Key id to publish this key under (default: derived from --pubkey, which is what 'dfos identity device-pubkey' prints)")
 	cmd.Flags().StringVar(&pubkeyFlag, "pubkey", "", "Public Multikey from 'dfos identity device-pubkey' (required)")
 	return cmd
 }
@@ -1153,11 +1297,11 @@ func newIdentityDeleteCmd() *cobra.Command {
 				chain = chain2
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			signer, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
 			if err != nil {
 				return err
 			}
-			controllerPriv, err := keys.GetPrivateKey(kid)
+			controllerPriv, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -1168,7 +1312,7 @@ func newIdentityDeleteCmd() *cobra.Command {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 
-			jwsToken, opCID, err := protocol.SignIdentityDelete(h.CID, kid, controllerPriv)
+			jwsToken, opCID, err := protocol.SignIdentityDelete(h.CID, signer.KID, controllerPriv)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
 			}
@@ -1266,11 +1410,11 @@ func newIdentityRestoreCmd() *cobra.Command {
 				return fmt.Errorf("identity '%s' is not deleted", identityArg)
 			}
 
-			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			signer, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
 			if err != nil {
 				return err
 			}
-			controllerPriv, err := keys.GetPrivateKey(kid)
+			controllerPriv, err := keys.GetPrivateKey(signer.Account)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -1281,7 +1425,7 @@ func newIdentityRestoreCmd() *cobra.Command {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 
-			jwsToken, opCID, err := protocol.SignIdentityRestore(h.CID, kid, controllerPriv)
+			jwsToken, opCID, err := protocol.SignIdentityRestore(h.CID, signer.KID, controllerPriv)
 			if err != nil {
 				return fmt.Errorf("sign restore: %w", err)
 			}
@@ -1593,21 +1737,22 @@ func newIdentityKeysCmd() *cobra.Command {
 				return fmt.Errorf("identity not found")
 			}
 
+			// One row per KEY, not per role membership. A key declared in three
+			// roles is one key; three rows carrying the same id and the same
+			// held-flag read as three keys, and after `identity create` that is
+			// the ordinary case rather than an edge one.
+			rows := chainKeyRoles(chain)
+
 			if jsonFlag {
 				type keyInfo struct {
-					ID       string `json:"id"`
-					Role     string `json:"role"`
-					Keychain bool   `json:"keychain"`
+					ID        string   `json:"id"`
+					Roles     []string `json:"roles"`
+					PublicKey string   `json:"publicKey"`
+					Keychain  bool     `json:"keychain"`
 				}
-				var items []keyInfo
-				for _, k := range chain.State.ControllerKeys {
-					items = append(items, keyInfo{k.ID, "controller", keys.HasKey(chain.DID + "#" + k.ID)})
-				}
-				for _, k := range chain.State.AuthKeys {
-					items = append(items, keyInfo{k.ID, "auth", keys.HasKey(chain.DID + "#" + k.ID)})
-				}
-				for _, k := range chain.State.AssertKeys {
-					items = append(items, keyInfo{k.ID, "assert", keys.HasKey(chain.DID + "#" + k.ID)})
+				items := make([]keyInfo, 0, len(rows))
+				for _, r := range rows {
+					items = append(items, keyInfo{r.Key.ID, r.Roles, r.Key.PublicKeyMultibase, r.Held})
 				}
 				outputJSON(items)
 				return nil
@@ -1619,19 +1764,14 @@ func newIdentityKeysCmd() *cobra.Command {
 				label = chain.DID + " (" + name + ")"
 			}
 			fmt.Printf("Identity: %s\n\n", label)
-			fmt.Printf("%-30s %-12s %s\n", "KEY ID", "ROLE", "HELD")
-			printKeys := func(mkKeys []protocol.MultikeyPublicKey, role string) {
-				for _, k := range mkKeys {
-					has := "-"
-					if keys.HasKey(chain.DID + "#" + k.ID) {
-						has = "present"
-					}
-					fmt.Printf("%-30s %-12s %s\n", k.ID, role, has)
+			fmt.Printf("%-36s %-26s %s\n", "KEY ID", "ROLES", "HELD")
+			for _, r := range rows {
+				has := "-"
+				if r.Held {
+					has = "present"
 				}
+				fmt.Printf("%-36s %-26s %s\n", r.Key.ID, joinComma(r.Roles), has)
 			}
-			printKeys(chain.State.ControllerKeys, "controller")
-			printKeys(chain.State.AuthKeys, "auth")
-			printKeys(chain.State.AssertKeys, "assert")
 			return nil
 		},
 	}

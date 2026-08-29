@@ -119,7 +119,7 @@ dfos skill install --global      # write ~/.claude/skills/dfos/SKILL.md
 
 ```bash
 dfos vault create personal                 # seed the keys come from; prints the phrase once
-dfos identity create --name alice          # mint keys from the vault + sign genesis (no relay needed)
+dfos identity create --name alice          # mint ONE key from the vault + sign genesis (no relay needed)
 dfos config set default-identity alice     # standing default (or pass --as alice per command)
 
 dfos content create - <<'EOF'
@@ -278,7 +278,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   too — so a forgotten identity's keys still read as declared. `dfos keys list`
   shows what this machine holds and what claims it; `dfos keys prune` (a dry run
   until `--yes`) removes only keys **no** local chain declares, which in practice
-  is `pending:` leftovers from an interrupted `identity create`. A deleted
+  is the leftovers of an interrupted `identity create`. A deleted
   identity's keys are never orphans — deletion is not revocation, and `restore`
   is real — and neither the local relay's own key nor a vault mnemonic is
   reachable from `prune` at all.
@@ -425,6 +425,24 @@ never leaves it), then from a device holding a controller key run
 `dfos identity add-key` with the printed public key. Now losing one device is not
 losing the identity. This must be done _before_ a loss, while you still hold a
 controller key.
+
+**`identity create` mints ONE key and declares it controller, auth, and assert.**
+Two keys off one seed in one keychain on one machine are one custody arrangement
+under two names — every event that reaches one reaches the other — so the genesis
+declares one key three times, which is what is actually true. Custody splits at
+the first key-add: `identity add-key` (a key generated on another device) or
+`keys prove` (a key presented to a ceremony someone else custodies the chain for).
+Rotation is scoped to the roles its flags name — `--rotate-auth` alone leaves the
+displaced key still controller and assert, and the report says so — while
+`--rotate-controller --rotate-auth --rotate-assert` retires it outright and mints
+ONE replacement for all three.
+
+**Key ids and keystore accounts are content-addressed.** A `key_id` is
+`key_` + the protocol's 31-character ID encoding of `SHA-256(publicKeyMultibase)`,
+so every machine holding a key computes the same handle for it with nothing
+exchanged (`identity add-key --id` is optional and defaults to it). The keystore
+stores each seed under `key:<publicKeyMultibase>`; accounts an earlier version
+wrote as `<did>#<key_id>` are still read and are never rewritten.
 
 _Restoring the backup_ is `dfos recover`. After a machine is lost, the whole path
 is two commands: `dfos vault import restored` to adopt the phrase, then

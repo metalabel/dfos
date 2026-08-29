@@ -51,8 +51,8 @@ func keyAtIndex(t *testing.T, r recoverResult, index uint32) recoveredKey {
 }
 
 // rotatedPastTheScan builds the repro: an identity whose current auth key sits
-// at index 5 after four rotations, against an oracle whose INDEX knows only the
-// genesis pair while its proof plane serves the whole chain. It returns the
+// at index 5 after five rotations, against an oracle whose INDEX knows only the
+// first two indices while its proof plane serves the whole chain. It returns the
 // mnemonic and the DID, with device B active and the vault imported as
 // "restored" — the fresh machine holding nothing but the phrase.
 func rotatedPastTheScan(t *testing.T) (mnemonic, did string, oracle *fakeOracle, storeB *keystore.MemoryStore) {
@@ -63,9 +63,9 @@ func rotatedPastTheScan(t *testing.T) (mnemonic, did string, oracle *fakeOracle,
 	oracle.registerAsPeer(t, "oracle")
 
 	mnemonic = createVault(t, "personal")
-	did = createIdentity(t, "alice", storeA) // controller at 0, auth at 1
-	for i := 0; i < 4; i++ {
-		rotateAuth(t) // 2, 3, 4, then 5 — the current auth key
+	did = createIdentity(t, "alice", storeA) // one key, all three roles, at index 0
+	for i := 0; i < 5; i++ {
+		rotateAuth(t) // 1, 2, 3, 4, then 5 — the current auth key
 	}
 
 	chain, err := lr.Relay.GetIdentity(did)
@@ -74,9 +74,9 @@ func rotatedPastTheScan(t *testing.T) (mnemonic, did string, oracle *fakeOracle,
 	}
 	oracle.logsByDID[did] = chain.Log
 
-	// The index answers for the genesis pair and nothing the rotations declared.
-	// A relay whose index lags its own proof plane looks like this, and so does a
-	// corpus whose rotation operations were never published.
+	// The index answers for the first two indices and nothing the later rotations
+	// declared. A relay whose index lags its own proof plane looks like this, and
+	// so does a corpus whose rotation operations were never published.
 	oracle.declare(derivedPublicKey(t, mnemonic, 0), did, false, "")
 	oracle.declare(derivedPublicKey(t, mnemonic, 1), did, false, "")
 

@@ -46,7 +46,7 @@ cd packages/dfos-cli && make build
 # create the seed your keys derive from, and write the phrase down
 dfos vault create personal
 
-# create your identity — its keys are minted from that vault
+# create your identity — one key, minted from that vault
 dfos identity create --name myname
 
 # publish your first post — every signing command names the identity it acts as
@@ -104,7 +104,7 @@ The CLI embeds a full relay locally — the same SQLite-backed relay that runs a
 
 The CLI has four layers of state:
 
-- **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<name>`, holding its mnemonic. Never written to disk.
+- **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `key:<publicKeyMultibase>` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<name>`, holding its mnemonic. Never written to disk.
 - **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
 - **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain.
 - **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
@@ -252,14 +252,14 @@ New key material comes from `--vault <name>`, and otherwise from `default-vault`
 ```bash
 dfos identity create --name alice                  # mints from default-vault
 dfos identity create --name alias --vault burner   # mints from a named vault
-dfos identity create --name detached --no-vault    # standalone keys, from no seed
+dfos identity create --name detached --no-vault    # a standalone key, from no seed
 ```
 
-With no vault selected — none exists, no default is set, or `--no-vault` is passed — keys are generated straight into the keystore and exist only there. Those keys are legal and complete; what they lack is a phrase that covers them.
+With no vault selected — none exists, no default is set, or `--no-vault` is passed — the key is generated straight into the keystore and exists only there. That key is legal and complete; what it lacks is a phrase that covers it.
 
 `dfos config set default-vault <name>` writes the default, and it is the only thing that writes it, with one exception: creating the **first** vault on a machine that has none sets it, because there is nothing there to displace.
 
-Rotation is sticky. `identity update --rotate-auth` and `--rotate-controller` draw their replacements from the vault that minted the identity's **current** keys, so an identity stays on one seed and its phrase does not silently stop covering it. `default-vault` is not consulted — that would move an identity onto a different seed the moment someone changed a default. `--vault` overrides the stickiness for **that invocation only** — it moves no pointer, so a later bare rotate resolves the seed afresh from whichever vault minted the identity's controller key at that moment. An identity whose keys came from no vault rotates into standalone keys.
+Rotation is sticky. `identity update --rotate-controller`, `--rotate-auth`, and `--rotate-assert` draw their replacement from the vault that minted the identity's **current** keys, so an identity stays on one seed and its phrase does not silently stop covering it. `default-vault` is not consulted — that would move an identity onto a different seed the moment someone changed a default. `--vault` overrides the stickiness for **that invocation only** — it moves no pointer, so a later bare rotate resolves the seed afresh from whichever vault minted the identity's controller key at that moment. An identity whose keys came from no vault rotates into a standalone key.
 
 ### Derivation
 
@@ -269,7 +269,7 @@ Keys derive by SLIP-0010 for ed25519, hardened at every level, from the BIP-39 s
 m / 1684434803' / <index>'
 ```
 
-`1684434803` is `0x64666f73` — the four ASCII bytes of `dfos`. The index is a single flat counter per vault, dense and ascending from 0, incremented once per key regardless of role: an `identity create` consumes two consecutive indices (controller, then auth) and a rotation consumes one per rotated key. An index consumed by an operation that then failed is burned rather than reused, because a gap costs nothing and handing one index to two identities costs everything.
+`1684434803` is `0x64666f73` — the four ASCII bytes of `dfos`. The index is a single flat counter per vault, dense and ascending from 0, incremented once per **key** and never per role: an `identity create` consumes one index, and a rotation consumes one however many roles it names. An index consumed by an operation that then failed is burned rather than reused, because a gap costs nothing and handing one index to two identities costs everything.
 
 This path is fixed. A vault's mnemonic and this path are together the full description of every key the vault minted, so any SLIP-0010 ed25519 implementation derives the same keys from the same words.
 
@@ -296,7 +296,7 @@ a second vault over the same phrase would mint identical keys from its own count
 
 The refusal is by fingerprint, so a re-cased or re-spaced form of the phrase does not slip past it. `vault create` runs the same check on the seed it generates.
 
-The rule is a custody rule, not a bookkeeping one. The derivation counter belongs to the vault, so two vaults over one phrase each hand out indices from their own counter starting at 0 — mint an identity from each and the two identities hold **byte-identical** controller and auth private keys, with nothing on screen to say so. There is no `--force`: several accounts branching under one mnemonic is a shape that is refused by design, because a phrase whose holder cannot tell which identity it controls has stopped being a backup. A second identity gets a second phrase.
+The rule is a custody rule, not a bookkeeping one. The derivation counter belongs to the vault, so two vaults over one phrase each hand out indices from their own counter starting at 0 — mint an identity from each and the two identities hold the **byte-identical** private key, with nothing on the chain to say so. There is no `--force`: several accounts branching under one mnemonic is a shape that is refused by design, because a phrase whose holder cannot tell which identity it controls has stopped being a backup. A second identity gets a second phrase.
 
 ### Seeing the phrase
 
@@ -305,6 +305,8 @@ The mnemonic goes to **stderr**, always, from every command that prints it: `vau
 `vault create` prints it once, fenced and numbered. `vault show` does not print it at all unless asked: `vault show <name> --reveal-mnemonic` does, behind a typed confirmation — the vault's own name, not a `y` — because the phrase then lives in that terminal's scrollback and in anything recording the session. The confirmation is read from stdin, so a non-interactive invocation fails closed rather than revealing anything. No flag puts a `mnemonic` field in a `--json` document; a script that needs the phrase captures stderr.
 
 `vault import` reads the phrase from stdin — a prompt at a terminal, a piped line otherwise. It is never an argument: argv lands in shell history and is readable in the process list. The words are checked against the BIP-39 English wordlist and their checksum, and the seed against every vault this machine already holds, before anything is stored.
+
+At a terminal the prompt reads the phrase with **echo off**: nothing appears as it is typed, and nothing of it stays in the scrollback, in a multiplexer's history, or in whatever is recording the session. A terminal that refuses to surrender its echo bit gets a hard failure naming the piped form, not a quiet fall-through to typing a seed in clear text. Piping is how the import is scripted — `printf '%s' "$PHRASE" | dfos vault import restored` — and a piped stdin has no echo to worry about either way.
 
 A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel. What that phrase gets you back is [Recovery](#recovery).
 
@@ -350,7 +352,7 @@ The last one has no status code to catch it by: `key=` is an opaque string match
 
 ### What comes back
 
-For each identity the scan finds, `recover` pulls the chain from the oracle into the local relay, reads the key id the chain declares each recovered public key under, and writes the private key into the keystore under `<did>#<keyId>`. Then it rebuilds the vault's minted-key records and registers the identity in config — using the relay's projected profile name where there is one, and a DID-derived label otherwise, with a numeric suffix on a collision. A name already in config is kept; recovery adds and never renames.
+For each identity the scan finds, `recover` pulls the chain from the oracle into the local relay, reads the key id the chain declares each recovered public key under, and writes the private key into the keystore under its content address, `key:<publicKeyMultibase>`. The chain still gates the write — a public key no accepted operation declares is a key `recover` reports rather than installs — and a key this machine already holds under either addressing is reported `already-present` rather than written a second time. Then it rebuilds the vault's minted-key records and registers the identity in config — using the relay's projected profile name where there is one, and a DID-derived label otherwise, with a numeric suffix on a collision. A name already in config is kept; recovery adds and never renames.
 
 Signing afterwards needs nothing further: it resolves the identity, intersects its published auth keys with the keys this device holds, and signs.
 
@@ -407,6 +409,50 @@ An oracle failure under `--json` carries a `reason` code beside its prose — `o
 
 > The task-oriented view of key custody — what is and isn't backed up, what key loss costs, and the deploy-time provisioning recipe — lives at [docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody](https://docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody). The full app-integration walkthrough is at [docs.dfos.com/docs/developers/sign-in-with-dfos/setup](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup).
 
+### One key at genesis
+
+`dfos identity create` mints **one** key, from one derivation index, and declares it in all three role arrays — `controllerKeys`, `authKeys`, `assertKeys`. The same entry appears in each: same id, same `publicKeyMultibase`.
+
+That is a statement about custody rather than about roles. Two keys minted from one seed, written into one keychain, on one machine, are one custody arrangement wearing two names — every event that reaches one reaches the other, so a controller/auth separation drawn there separates nothing. A role split becomes real when a second custodian holds a key the first cannot reach, and the CLI has exactly two moments where that happens: [`identity add-key`](#multi-device-identities-1-of-n), which publishes a key generated on another device, and [`keys prove`](#proving-a-key-to-a-ceremony), which presents a key to a ceremony someone else custodies the chain for. **The first key-add is the split.**
+
+Nothing in the chain grammar changes. PROTOCOL.md requires at least one controller key and states no separation rule and no cross-array uniqueness rule; a key id is an opaque string. One key in three arrays is what the format already allows.
+
+`identity keys` reports one row per key with the roles beside it, because a key is a thing and its roles are an attribute of it:
+
+```
+KEY ID                               ROLES                      HELD
+key_k7h2an38v2drtec7648vnvfdd4rdr44  controller, auth, assert   present
+```
+
+Rotation is scoped to the roles its flags name. `--rotate-auth` on a single-key identity replaces `authKeys` with a freshly minted key and carries `controllerKeys` and `assertKeys` forward untouched — so the displaced key is still the identity's controller and assert key, and the report says so rather than calling it retired:
+
+```
+  New key:        auth:key_3kfv7dc73nat93f9rkednzf389288n8
+  Still declared: key_k7h2an38v2drtec7648vnvfdd4rdr44 — controller, assert
+```
+
+Naming every role (`--rotate-controller --rotate-auth --rotate-assert`) is what fully retires a key; the report then says `Retired:` and names no roles. Several flags in one invocation mint **one** replacement key and put it in each named role — one custody, one key, the rule genesis follows.
+
+### Key ids are derived from the key
+
+A key's `key_id` is computed from its public key, not drawn from randomness:
+
+```
+key_id = "key_" + DeriveID(publicKeyMultibase)
+```
+
+`DeriveID` is the protocol's own identifier encoding, the one behind every `did:dfos:` and every content id: SHA-256 over the input, then one character per digest byte from the 19-symbol alphabet `2346789acdefhknrtvz` by `byte % 19`, for 31 characters. The input is the multibase **string** a chain carries, not the raw key bytes. Nothing about the shape changes — the result is a `key_` identifier of the same 31 characters as before, and the chain grammar cannot tell the difference.
+
+What it buys is one property, and it matters exactly once: every machine that holds a key computes the same handle for it, with no shared secret and nothing exchanged. A recovery that rederives a key from a phrase names it the way the machine that minted it did, `identity device-pubkey` and `identity add-key` agree on an id without passing one between them (`--id` is optional, and defaults to the derived one), and "what this chain declares" compares to "what this device holds" by equality.
+
+Pinned vector, for anyone implementing the same derivation:
+
+| Input `publicKeyMultibase`                         | `key_id`                              |
+| -------------------------------------------------- | ------------------------------------- |
+| `z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp` | `key_v8ctratnzd9dfz4azdr2acdvh633f74` |
+
+An `--id` given explicitly still wins wherever the CLI accepts one: a key id is an opaque string, and a ceremony run elsewhere may already have told the world what a key is called.
+
 ### The key ledger
 
 `dfos keys` reports every key this machine holds:
@@ -427,7 +473,7 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | -------------- | ------------------------------------------------------------------------------------------------- |
 | `vault`        | a vault's minted-key record names it, with the derivation index that produced it                  |
 | `standalone`   | generated straight into the keystore; no vault record names it, so this keystore is its only copy |
-| `pending`      | held under a `pending:` account — an `identity create` interrupted before its DID existed         |
+| `pending`      | held under a `pending:` account — an `identity create` an earlier version interrupted             |
 | `candidate`    | held under a `candidate:` account — a key [`keys prove`](#proving-a-key-to-a-ceremony) presented  |
 | `login-client` | this installation's Sign In With DFOS client key                                                  |
 
@@ -479,11 +525,19 @@ A completion is posted once and is **never retried**. A verifier consumes the ce
 
 What goes on the wire is the JWS and the ceremony identifier. The envelope's four members are the nonce, the audience, the candidate's **public** key, and a timestamp; the private key stays in the keystore, and the payload has no member for content, intent, or authority to ride in.
 
-On completion the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes. An operator that names the identity its ceremony added the key to gets the key filed under `<did>#<keyId>` instead, with the vault provenance recorded — and from then on signing resolves that identity and uses the key this device holds.
+On completion the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes. A completion that names the identity its ceremony added the key to moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible — and from then on signing resolves that identity and uses the key this device holds.
 
 ### Backends
 
-The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. This is true whether the key was derived from a vault or generated standalone: the keystore is the one place private key material lives, so every signing path is identical regardless of where the key came from. There are two storage backends:
+The CLI stores each Ed25519 seed under an account key of the form `key:<publicKeyMultibase>` — a key is addressed by its **content**, and by nothing else. This is true whether the key was derived from a vault or generated standalone: the keystore is the one place private key material lives, so every signing path is identical regardless of where the key came from.
+
+Addressing by the public key is what makes a keystore entry a fact about a key rather than a fact about a relationship. The scheme it replaces named a key `<did>#<key_id>`, after the identity that declared it: a name that did not exist until a chain did, that changed when a key was adopted by a second identity, and under which one seed written twice was two entries with nothing to say they were the same bytes. A content address cannot be two addresses for one key, so the same seed arriving twice — a re-import, a recovery, a second identity that turns out to declare the same key — lands where it already is, and the duplicate is visible by construction instead of discoverable by audit.
+
+`<did>#<key_id>` accounts written by earlier versions are still **read**, everywhere a key is looked up, and are never rewritten. Nothing migrates them: a key that works is left where it works, and the next key an operation mints goes to the content address. Three account namespaces are deliberately unchanged — `candidate:<publicKeyMultibase>` (already content-addressed), `pending:<key_id>` (a transient genesis account, see below), and `login-client__<key_id>` (this installation's SIWD client key, whose handle is recorded in `login-client.json`).
+
+Nothing on the wire is affected. A `key_id` remains a local and chain-level handle; the identifier a signature and a role array carry is the `publicKeyMultibase`.
+
+There are two storage backends:
 
 | Backend     | Location                | When used                                          |
 | ----------- | ----------------------- | -------------------------------------------------- |
@@ -503,14 +557,14 @@ One keychain entry per key:
 | Field   | Value                            |
 | ------- | -------------------------------- |
 | Service | `dfos`                           |
-| Account | `did:dfos:xxx#key_yyy`           |
+| Account | `key:<publicKeyMultibase>`       |
 | Secret  | hex-encoded 32-byte Ed25519 seed |
 
 Protection is whatever the host keychain provides (e.g. macOS Keychain, libsecret/gnome-keyring).
 
 #### File store backend (`~/.dfos/keys/`)
 
-When the keychain is unavailable, each key is written to its own file under `~/.dfos/keys/`, named by percent-encoding its account: every byte outside `[A-Za-z0-9.-]` becomes `%XX`, so `did:dfos:xxx#key_yyy` is filed as `did%3Adfos%3Axxx%23key%5Fyyy`. The encoding is reversible, which is what lets the store enumerate itself for `dfos keys list`. Files written under the earlier scheme (`#`→`__`, `:`→`_`) are still read, and are rewritten under the current name the next time that account is written; one whose account that scheme made ambiguous is listed as an unnamed entry rather than guessed at. **The file contains the hex-encoded 32-byte Ed25519 seed in plaintext — it is not encrypted.** The directory is created `0700` and each key file `0600` (owner read/write only), so the protection is filesystem permissions and nothing more.
+When the keychain is unavailable, each key is written to its own file under `~/.dfos/keys/`, named by percent-encoding its account: every byte outside `[A-Za-z0-9.-]` becomes `%XX`, so `key:z6Mk…` is filed as `key%3Az6Mk…` and a legacy `did:dfos:xxx#key_yyy` account as `did%3Adfos%3Axxx%23key%5Fyyy`. The encoding is reversible, which is what lets the store enumerate itself for `dfos keys list`. Files written under the earlier scheme (`#`→`__`, `:`→`_`) are still read, and are rewritten under the current name the next time that account is written; one whose account that scheme made ambiguous is listed as an unnamed entry rather than guessed at. **The file contains the hex-encoded 32-byte Ed25519 seed in plaintext — it is not encrypted.** The directory is created `0700` and each key file `0600` (owner read/write only), so the protection is filesystem permissions and nothing more.
 
 Threat model for the file store:
 
@@ -518,9 +572,9 @@ Threat model for the file store:
 - There is no passphrase, no encryption at rest, and no hardware backing. Disk theft, a permissive backup, a synced home directory, or root on the box all expose the seeds.
 - If you need encryption at rest, run on a host with a working OS keychain (the default path) or place `~/.dfos/keys/` on an encrypted volume.
 
-During identity genesis (before the DID is known), keys are stored under a temporary account (`pending:<keyId>`) and renamed after the DID is derived from the genesis CID — this happens in whichever backend is active. A genesis interrupted between the mint and the rename leaves the `pending:` account behind; no chain can ever name it, so `dfos keys list` reports it as an orphan and `dfos keys prune` removes it.
+Identity genesis needs no temporary account: the key's address is its own public key, which exists before the DID does, so the key is written once and never renamed. A genesis that dies between the mint and the signed operation leaves a key nothing declares — `dfos keys list` reports it as an orphan and `dfos keys prune` removes it, the same answer the old `pending:<key_id>` account gave. Any `pending:` account an earlier version left behind is still read and still classified exactly as before.
 
-The CLI discovers which keys belong to which identity by querying the identity's chain state (from local store or relay) and checking which keys have private material in the active backend.
+The CLI discovers which keys belong to which identity by querying the identity's chain state (from local store or relay) and checking which keys have private material in the active backend. Because a content address names a key and not a relationship, that lookup runs the other way for the ledger: the DID a held key belongs to comes from a vault's minted-key record or from the identity roster in config, and only a key neither can place sends `dfos keys list` to read every chain in the local relay — which it announces on stderr before it does.
 
 ### Security Properties
 
@@ -576,7 +630,8 @@ The handoff never moves a private key. A new device generates its own keypair lo
 End-to-end, adding device **B** to an identity already controlled by device **A**:
 
 ```bash
-# 1. On A: create the identity (already has controller + auth keys).
+# 1. On A: create the identity. One key, in all three roles — this step is
+#    where A's custody begins and, until step 5, is the whole of it.
 dfos identity create --name alice --peer prod
 
 # 2. On B: get the chain locally.
@@ -590,8 +645,11 @@ dfos identity device-pubkey
 
 # 4. Hand the id + public key to A (copy/paste, QR, air-gap — public only).
 
-# 5. On A: add B's public key, signed with A's held controller key.
-dfos identity add-key --auth-key --id key_... --pubkey z6Mk... --peer prod
+# 5. On A: add B's public key, signed with A's held controller key. This is
+#    the moment custody actually splits: B holds a key A cannot reach.
+#    --id is optional — the id derives from the key, so A and B agree on it
+#    without passing one across.
+dfos identity add-key --auth-key --pubkey z6Mk... --peer prod
 
 # 6. On B: re-fetch so B sees its now-in-chain key.
 dfos identity fetch alice --peer prod
@@ -603,6 +661,7 @@ dfos content create post.json --peer prod
 
 Notes:
 
+- **This is the split `identity create` does not make.** A genesis key is one key in three roles because two keys off one seed in one keychain are one custody; here a key really is somewhere the first one is not, and the role separation means something for the first time.
 - **`device-pubkey` defaults to the auth role**, which is sufficient for publishing content and credentials. Pass `--controller` only to print a controller-role hint; granting a controller key is a higher-trust act (a controller can rotate, delete, and add further keys), and the role is ultimately decided by A's `add-key` flags (`--auth-key` vs `--controller-key`), not by B.
 - **B must re-fetch after A's `add-key` propagates.** Between `device-pubkey` and that re-fetch, B holds a private key that is not yet in the published set, so a publish attempt will report "no held auth key" until B syncs.
 - This is set up _in advance_. There is no way to add a key after every device key is lost — `add-key` itself must be signed by a held controller key.

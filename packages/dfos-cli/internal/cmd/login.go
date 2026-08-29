@@ -586,10 +586,17 @@ func loadLoginClient() (*loginClient, ed25519.PrivateKey, error) {
 // up a loopback client identity: a DID it can prove control of, and a
 // one-operation chain small enough to carry on the request itself.
 func mintLoginClient() (*loginClient, ed25519.PrivateKey, error) {
-	keyID := protocol.GenerateKeyID()
-	priv, pub, err := keys.GenerateKey(loginClientAccount(keyID))
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate login client key: %w", err)
+	}
+	// Derived from the key, like every other key id this CLI publishes. The
+	// account keeps the login-client prefix: this key is infrastructure named by
+	// login-client.json, a file this CLI owns, so its address is already
+	// reconstructible without a chain to read it out of.
+	keyID := protocol.DeriveKeyID(protocol.EncodeMultikey(pub))
+	if _, err := keys.PutKey(loginClientAccount(keyID), priv); err != nil {
+		return nil, nil, fmt.Errorf("store login client key: %w", err)
 	}
 	key := protocol.NewMultikeyPublicKey(keyID, pub)
 

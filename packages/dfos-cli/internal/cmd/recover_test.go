@@ -246,8 +246,8 @@ func TestRecoverCountsAManifestRecordAsUsedWithoutTheOracle(t *testing.T) {
 	did := createIdentity(t, "alice", storeA)
 
 	// The oracle knows NOTHING — no rows for any key. The manifest is the primary
-	// record, so the two indices this machine minted are still used, and the hole
-	// they would otherwise open does not shorten the scan.
+	// record, so the index this machine minted is still used, and the hole it
+	// would otherwise open does not shorten the scan.
 	chain, err := lr.Relay.GetIdentity(did)
 	if err != nil || chain == nil {
 		t.Fatalf("chain for %s: %v", did, err)
@@ -257,8 +257,8 @@ func TestRecoverCountsAManifestRecordAsUsedWithoutTheOracle(t *testing.T) {
 	var res recoverResult
 	runJSON(t, newRecover(t, map[string]string{"vault": "personal", "peer": "oracle", "scan-depth": "3"}), nil, &res)
 
-	if got := usedIndices(res); !equalIndices(got, []uint32{0, 1}) {
-		t.Fatalf("used indices = %v, want [0 1] from the vault's own records", got)
+	if got := usedIndices(res); !equalIndices(got, []uint32{0}) {
+		t.Fatalf("used indices = %v, want [0] from the vault's own record", got)
 	}
 	for _, k := range res.Keys {
 		if k.Outcome != "already-present" {
@@ -445,8 +445,8 @@ func TestRecoverManifestOnlyRunsNoScanAndSaysSo(t *testing.T) {
 	if !res.ManifestOnly {
 		t.Error("a manifest-only run does not record itself as one")
 	}
-	if got := usedIndices(res); !equalIndices(got, []uint32{0, 1}) {
-		t.Errorf("manifest-only found %v, want the vault's own two records", got)
+	if got := usedIndices(res); !equalIndices(got, []uint32{0}) {
+		t.Errorf("manifest-only found %v, want the vault's own record", got)
 	}
 }
 
@@ -483,8 +483,9 @@ func TestRecoverInstallsKeysReconcilesTheVaultAndRaisesTheCounter(t *testing.T) 
 	var res recoverResult
 	runJSON(t, newRecover(t, map[string]string{"vault": "restored", "peer": "oracle"}), nil, &res)
 
-	if len(res.Keys) != 2 {
-		t.Fatalf("recovered %d keys, want 2 (controller and auth): %+v", len(res.Keys), res.Keys)
+	// ONE key, in all three roles, at one index.
+	if len(res.Keys) != 1 {
+		t.Fatalf("recovered %d keys, want 1 (the genesis key, in all three roles): %+v", len(res.Keys), res.Keys)
 	}
 	for _, k := range res.Keys {
 		if k.Outcome != "recovered" {
@@ -493,8 +494,11 @@ func TestRecoverInstallsKeysReconcilesTheVaultAndRaisesTheCounter(t *testing.T) 
 		if !keys.HasKey(k.Account) {
 			t.Errorf("key %s is not in the keystore after recovery", k.Account)
 		}
-		if len(k.Roles) == 0 {
-			t.Errorf("index %d reports no role: %+v", k.Index, k)
+		if k.Account != keyAccount(k.PublicKey) {
+			t.Errorf("a recovered key was filed under %q, want its content address", k.Account)
+		}
+		if strings.Join(k.Roles, ",") != "controller,auth,assert" {
+			t.Errorf("index %d roles = %v, want all three", k.Index, k.Roles)
 		}
 	}
 
@@ -517,14 +521,14 @@ func TestRecoverInstallsKeysReconcilesTheVaultAndRaisesTheCounter(t *testing.T) 
 	// The counter is the correctness half: an imported vault that stayed at 0
 	// would hand index 0 to a second identity on the next mint.
 	meta, _ := getVaults().Load("restored")
-	if meta.NextIndex != 2 {
-		t.Errorf("counter = %d after recovering indices 0 and 1, want 2", meta.NextIndex)
+	if meta.NextIndex != 1 {
+		t.Errorf("counter = %d after recovering index 0, want 1", meta.NextIndex)
 	}
-	if len(meta.Minted) != 2 {
-		t.Errorf("minted records = %d, want 2 rebuilt", len(meta.Minted))
+	if len(meta.Minted) != 1 {
+		t.Errorf("minted records = %d, want 1 rebuilt", len(meta.Minted))
 	}
-	if res.MintedAdded != 2 {
-		t.Errorf("report claims %d records added, want 2", res.MintedAdded)
+	if res.MintedAdded != 1 {
+		t.Errorf("report claims %d records added, want 1", res.MintedAdded)
 	}
 
 	// Idempotent: running it again converges rather than duplicating.
@@ -538,7 +542,7 @@ func TestRecoverInstallsKeysReconcilesTheVaultAndRaisesTheCounter(t *testing.T) 
 			t.Errorf("a second run reports index %d as %q, want already-present", k.Index, k.Outcome)
 		}
 	}
-	if meta2, _ := getVaults().Load("restored"); len(meta2.Minted) != 2 || meta2.NextIndex != 2 {
+	if meta2, _ := getVaults().Load("restored"); len(meta2.Minted) != 1 || meta2.NextIndex != 1 {
 		t.Errorf("a second run moved the vault: %d records, counter %d", len(meta2.Minted), meta2.NextIndex)
 	}
 }
@@ -560,9 +564,8 @@ func TestRecoverFindsADeletedIdentityAndSaysItIsDeleted(t *testing.T) {
 		t.Fatal("the identity was not deleted")
 	}
 	oracle.logsByDID[did] = chain.Log
-	// Both minted keys, found through has-ever-declared.
+	// The one minted key, found through has-ever-declared.
 	oracle.declare(derivedPublicKey(t, mnemonic, 0), did, true, "")
-	oracle.declare(derivedPublicKey(t, mnemonic, 1), did, true, "")
 
 	storeB, _, _ := setupDevices(t)
 	keys = storeB
@@ -583,8 +586,8 @@ func TestRecoverFindsADeletedIdentityAndSaysItIsDeleted(t *testing.T) {
 	if res.Identities[0].Status != "recovered" {
 		t.Errorf("a deleted identity's status = %q, want recovered", res.Identities[0].Status)
 	}
-	if len(res.Keys) != 2 {
-		t.Fatalf("recovered %d keys for a deleted identity, want 2", len(res.Keys))
+	if len(res.Keys) != 1 {
+		t.Fatalf("recovered %d keys for a deleted identity, want 1", len(res.Keys))
 	}
 	for _, k := range res.Keys {
 		if k.Outcome != "recovered" || !keys.HasKey(k.Account) {
@@ -602,15 +605,19 @@ func TestRecoverFindsAKeyARotationLeftBehind(t *testing.T) {
 	mnemonic := createVault(t, "personal")
 	did := createIdentity(t, "alice", storeA)
 
+	// Every role, so the genesis key is left declared in nothing — the only way a
+	// single-key identity produces a fully rotated-out key.
 	rotate := newIdentityUpdateCmd()
+	mustSetFlag(t, rotate, "rotate-controller", "true")
 	mustSetFlag(t, rotate, "rotate-auth", "true")
+	mustSetFlag(t, rotate, "rotate-assert", "true")
 	runJSON(t, rotate, nil, &struct{}{})
 
 	chain, _ := lr.Relay.GetIdentity(did)
 	oracle.logsByDID[did] = chain.Log
-	// 0 controller, 1 the rotated-OUT auth key, 2 the current auth key. The index
-	// answers has-ever-declared precisely so index 1 is findable.
-	for _, i := range []uint32{0, 1, 2} {
+	// 0 the rotated-OUT genesis key, 1 the current one. The index answers
+	// has-ever-declared precisely so index 0 is findable.
+	for _, i := range []uint32{0, 1} {
 		oracle.declare(derivedPublicKey(t, mnemonic, i), did, false, "")
 	}
 
@@ -626,23 +633,23 @@ func TestRecoverFindsAKeyARotationLeftBehind(t *testing.T) {
 	for _, k := range res.Keys {
 		byIndex[k.Index] = k
 	}
-	if len(byIndex) != 3 {
-		t.Fatalf("recovered %d indices, want 0, 1 and 2: %+v", len(byIndex), res.Keys)
+	if len(byIndex) != 2 {
+		t.Fatalf("recovered %d indices, want 0 and 1: %+v", len(byIndex), res.Keys)
 	}
-	old := byIndex[1]
+	old := byIndex[0]
 	if old.Outcome != "recovered" || !old.Superseded || len(old.Roles) != 0 {
-		t.Errorf("the rotated-out key at index 1 = %+v, want recovered and superseded with no current role", old)
+		t.Errorf("the rotated-out key at index 0 = %+v, want recovered and superseded with no current role", old)
 	}
 	if !keys.HasKey(old.Account) {
 		t.Errorf("the rotated-out key was not written to the keystore under %s", old.Account)
 	}
-	current := byIndex[2]
-	if len(current.Roles) != 1 || current.Roles[0] != "auth" || current.Superseded {
-		t.Errorf("the current auth key at index 2 = %+v, want role auth and not superseded", current)
+	current := byIndex[1]
+	if strings.Join(current.Roles, ",") != "controller,auth,assert" || current.Superseded {
+		t.Errorf("the current key at index 1 = %+v, want all three roles and not superseded", current)
 	}
-	// The counter must clear the rotation too, not just the genesis pair.
-	if meta, _ := getVaults().Load("restored"); meta.NextIndex != 3 {
-		t.Errorf("counter = %d, want 3", meta.NextIndex)
+	// The counter must clear the rotation too, not just the genesis index.
+	if meta, _ := getVaults().Load("restored"); meta.NextIndex != 2 {
+		t.Errorf("counter = %d, want 2", meta.NextIndex)
 	}
 }
 

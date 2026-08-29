@@ -337,15 +337,15 @@ func gatherProfile(profile apispec.Profile, withCredential bool, authority strin
 		if err != nil {
 			return nil, err
 		}
-		kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+		signer, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 		if err != nil {
 			return nil, err
 		}
-		priv, err := keys.GetPrivateKey(kid)
+		priv, err := keys.GetPrivateKey(signer.Account)
 		if err != nil {
 			return nil, err
 		}
-		chosen.kid, chosen.priv = kid, priv
+		chosen.kid, chosen.priv = signer.KID, priv
 		if withCredential {
 			credential, err := selectCredentialForHost(authority)
 			if err != nil {
