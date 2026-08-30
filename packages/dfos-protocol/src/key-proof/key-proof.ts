@@ -222,6 +222,14 @@ const keyProofPayloadObject = (payload: KeyProofPayload): Record<string, string>
   timestamp: payload.timestamp,
 });
 
+/**
+ * Plain byte equality. Not constant-time on purpose: both operands are public —
+ * one is the payload the presenter handed over, the other is that same payload
+ * re-serialized — so there is no secret for a timing channel to leak.
+ */
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
+  a.length === b.length && a.every((byte, index) => byte === b[index]);
+
 /** Floor a wall-clock instant to the canonical whole-second `.000Z` spelling. */
 const normalizeTimestamp = (ms: number): string =>
   new Date(Math.floor(ms / 1000) * 1000).toISOString();
@@ -352,8 +360,9 @@ export interface VerifiedKeyProof {
 
 /**
  * Verify a key proof — KEY-PROOF.md's verification algorithm steps 1–5 and 7:
- * size cap, header gates, closed payload schema, audience byte-equality,
- * freshness, and the signature against the payload's OWN `publicKeyMultibase`.
+ * size cap, header gates, the closed payload schema over CANONICAL bytes,
+ * audience byte-equality, freshness, and the signature against the payload's OWN
+ * `publicKeyMultibase`.
  *
  * STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
  * nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
@@ -439,13 +448,27 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
     throw invalid('header', `invalid typ: expected ${options.expectedTyp}, got ${String(typ)}`);
   }
 
-  // 3. Payload schema — closed, exactly four string members. Parsed from the
-  // ORIGINAL payload octets (the signature covers those bytes), not
-  // re-canonicalized: the canonical rule binds PRODUCERS.
+  // 3. Payload schema — closed, exactly four string members — AND the canonical
+  // bytes. The parse runs against the ORIGINAL payload octets, because those are
+  // the bytes the signature covers; the canonical serialization is then
+  // RECOMPUTED from the parsed members and byte-compared against them.
+  //
+  // THE CANONICAL RULE BINDS THE VERIFIER, NOT ONLY THE PRODUCER. A signature
+  // covers whatever octets arrived, so without this comparison a payload whose
+  // four members are REORDERED — or re-spelled with insignificant whitespace —
+  // and signed over that serialization verifies exactly like the canonical one.
+  // The envelope's bytes would stop being a function of its members, and one
+  // proof would have many spellings for a caller to key, log, or cache against.
+  // Conformant producers already emit these bytes, so nothing that could be
+  // signed correctly is refused here.
   let payload: KeyProofPayload;
   try {
-    const source = new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(payloadB64));
+    const payloadBytes = base64urlDecode(payloadB64);
+    const source = new TextDecoder('utf-8', { fatal: true }).decode(payloadBytes);
     payload = validateKeyProofPayload(JSON.parse(source) as unknown);
+    if (!bytesEqual(keyProofSigningInput(payload), payloadBytes)) {
+      throw invalid('schema', 'payload is not the canonical signing input for its members');
+    }
   } catch (err) {
     if (err instanceof KeyProofVerifyError) throw err;
     throw invalid('schema', err instanceof Error ? err.message : 'payload is not valid UTF-8 JSON');

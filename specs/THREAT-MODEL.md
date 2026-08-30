@@ -204,6 +204,13 @@ surface is built around:
 - **The payload is closed, so a key proof cannot be socially engineered into
   "signing something".** There is no member in which to smuggle a transaction or an
   instruction; a proof proves a key and conveys no intent (KEY-PROOF.md pin 1).
+- **An envelope's bytes are a function of its members.** A signature covers whatever
+  octets arrived, not member semantics, so the verifier recomputes the canonical signing
+  input from the parsed payload and byte-compares it against what it was handed — a
+  reordered or re-spaced payload signed over its own serialization rejects.
+  Canonicalization binds the verifier as it binds the signer; without that, one proof
+  would exist under many byte strings, each with its own hash, for a consumer to key,
+  log, cache, or deduplicate against (KEY-PROOF.md "Verification" step 3).
 - **Nothing persists to hijack.** Ceremonies are single-shot: no session, pairing, or
   channel outlives completion, and the nonce is consumed atomically (KEY-PROOF.md
   pin 2, "Verification").

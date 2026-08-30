@@ -1,9 +1,11 @@
 package dfos
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,17 @@ const keyProofVectorJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQif
 // The SAME fixture under a second purpose — the proof that typ is a parameter.
 const keyProofVectorOtherTyp = "did:dfos:key-proof-vector-other"
 const keyProofVectorOtherTypJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1wcm9vZi12ZWN0b3Itb3RoZXIifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.NMNjktabEWgXRhP28Jh2hLl7s6ATWD4liXvS_nw85HwvnLu14HEl6NINtuTSO2O2dBW7tPOcnJrvFSrnrzPRDA"
+
+// THE MALLEABILITY NEGATIVES. Both carry the vector's exact four members, both
+// are REALLY signed by the vector key over the octets they present, and both are
+// refused: the first serializes the members in reverse order, the second inserts
+// insignificant whitespace. A signature covers whatever octets arrived, so the
+// only thing that makes one proof one string is the verifier recomputing the
+// canonical signing input and byte-comparing. Pinned in
+// dfos-protocol/tests/key-proof.spec.ts too — a twin that accepted either would
+// be accepting bytes production refuses.
+const keyProofVectorReorderedJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSJ9.Xnigl9DVx4IMKoFypxcfJqZig9M7KSQUrfk-7Is46ZEOF4jML0tf_hePFrv596FPWmFn02q7hMhSQhtxpdDpCA"
+const keyProofVectorSpacedJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ICJub25jZS1rZXktcHJvb2YtdmVjdG9yLTAwMDEiLCAiYXVkaWVuY2UiOiAia2V5cy5kZm9zLmNvbSIsICJwdWJsaWNLZXlNdWx0aWJhc2UiOiAiejZNa2hGd1hORldvc0xldWd2U2Y0d2NMOXQzdXVSWHVlR1NGVFJnU3ZIaFdqNUcyIiwgInRpbWVzdGFtcCI6ICIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.PwFg4KJcHQ6dsj0zEeeuHJTn-KKSfZXXciCI8PGE8OL9DZHMCROWaYB0pBhHMyUuQsvh3iUM3U9_JvrmpzzBDg"
 
 // The same members signed by the OTHER key, naming the OTHER key.
 const keyProofVectorOtherKeyJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtneGoyUjNITHRRUnBQbnZmdnB1S0VjZVNxZjN0WkhCamRtWjNmRnozSkhHRyIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.p1pM7ycrLvynxbrHSCAJZiWIw5RufHWnnQa-ewpj8SbOI55o01IfV2-SO4rs28SqTa40WeLQovyE4TqI1_PQDQ"
@@ -82,12 +95,60 @@ func forgeKeyProof(t *testing.T, header map[string]any, payload any, key ed25519
 	if err != nil {
 		t.Fatalf("marshal header: %v", err)
 	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
-	signingInput := Base64urlEncode(headerJSON) + "." + Base64urlEncode(payloadJSON)
+	signingInput := Base64urlEncode(headerJSON) + "." + Base64urlEncode(forgeKeyProofPayload(t, payload))
 	return signingInput + "." + Base64urlEncode(ed25519.Sign(key, []byte(signingInput)))
+}
+
+// forgeKeyProofPayload serializes a forged payload map in the CANONICAL member
+// order, appending any unknown member after the four. json.Marshal would emit map
+// keys ALPHABETICALLY — audience, nonce, publicKeyMultibase, timestamp — which is
+// a non-canonical payload, and the verifier now byte-compares against the
+// canonical bytes. Every forged negative would otherwise reject at the
+// canonical-bytes gate instead of the gate it is written to exercise. The
+// malleability cases are deliberately pinned envelopes, not forgeries, precisely
+// so no helper's serialization choices are load-bearing for them.
+func forgeKeyProofPayload(t *testing.T, payload any) []byte {
+	t.Helper()
+	members, ok := payload.(map[string]any)
+	if !ok {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		return encoded
+	}
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	write := func(name string) {
+		value, err := json.Marshal(members[name])
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		if buf.Len() > 1 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(jsonStringifyString(name))
+		buf.WriteByte(':')
+		buf.Write(value)
+	}
+	for _, name := range keyProofMembers {
+		if _, present := members[name]; present {
+			write(name)
+		}
+	}
+	var extra []string
+	for name := range members {
+		if !slices.Contains(keyProofMembers, name) {
+			extra = append(extra, name)
+		}
+	}
+	slices.Sort(extra)
+	for _, name := range extra {
+		write(name)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
 }
 
 func keyProofHeader() map[string]any {
@@ -352,6 +413,61 @@ func TestVerifyKeyProofPayloadIsClosed(t *testing.T) {
 	}
 }
 
+// TestVerifyKeyProofRejectsANonCanonicalPayload pins the malleability gate. Every
+// other check passes on both fixtures — real signature by the named key, right
+// typ, right audience, fresh timestamp, exactly the four members — and what fails
+// is that the presented octets are not the canonical serialization of those
+// members. Left unchecked, one proof would have unboundedly many spellings, and
+// this package would verify envelopes production's verifier already refuses.
+func TestVerifyKeyProofRejectsANonCanonicalPayload(t *testing.T) {
+	for _, malleable := range []string{keyProofVectorReorderedJWS, keyProofVectorSpacedJWS} {
+		err := mustFailKeyProof(t, malleable)
+		if reason := keyProofReason(t, err); reason != KeyProofFailureSchema {
+			t.Fatalf("reason: %s", reason)
+		}
+		if !strings.Contains(err.Error(), "canonical signing input") {
+			t.Fatalf("message: %v", err)
+		}
+
+		// The members really are the vector's, and the signature really covers the
+		// bytes presented — so the refusal is the canonical-bytes gate and nothing else.
+		parts := strings.Split(malleable, ".")
+		presented, err := Base64urlDecode(parts[1])
+		if err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		var members map[string]string
+		if err := json.Unmarshal(presented, &members); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		canonical, err := KeyProofSigningInput(KeyProofPayload{
+			Nonce:              members["nonce"],
+			Audience:           members["audience"],
+			PublicKeyMultibase: members["publicKeyMultibase"],
+			Timestamp:          members["timestamp"],
+		})
+		if err != nil {
+			t.Fatalf("KeyProofSigningInput: %v", err)
+		}
+		if string(canonical) != keyProofVectorCanonical {
+			t.Fatalf("the fixture does not carry the vector's members: %s", canonical)
+		}
+		if bytes.Equal(presented, canonical) {
+			t.Fatalf("the fixture is canonical after all: %s", presented)
+		}
+		if !ed25519.Verify(keyProofVectorKey().Public().(ed25519.PublicKey),
+			[]byte(parts[0]+"."+parts[1]), mustDecodeKeyProofSignature(t, parts[2])) {
+			t.Fatalf("the fixture is not signed over the bytes it presents")
+		}
+	}
+
+	// ...and the canonical spelling of the same members verifies, so the gate is a
+	// byte comparison and not a blanket refusal.
+	if _, err := VerifyKeyProof(keyProofVectorJWS, keyProofVectorExpect(), keyProofVectorNow()); err != nil {
+		t.Fatalf("canonical vector: %v", err)
+	}
+}
+
 func TestVerifyKeyProofRejectsMissingAndNonStringMembers(t *testing.T) {
 	for _, member := range keyProofMembers {
 		partial := keyProofVectorPayload2()
@@ -561,6 +677,15 @@ func keyProofVectorPayload2() map[string]any {
 		"publicKeyMultibase": keyProofVectorMultibase,
 		"timestamp":          keyProofVectorTimestamp,
 	}
+}
+
+func mustDecodeKeyProofSignature(t *testing.T, segment string) []byte {
+	t.Helper()
+	signature, err := Base64urlDecode(segment)
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	return signature
 }
 
 func mustFailKeyProof(t *testing.T, proof string) error {

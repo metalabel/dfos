@@ -22,6 +22,7 @@ import {
   base64urlDecode,
   base64urlEncode,
   importEd25519Keypair,
+  isValidEd25519Signature,
   signPayloadEd25519,
 } from '../src/crypto';
 import {
@@ -64,6 +65,20 @@ const VECTOR_JWS =
 const VECTOR_OTHER_TYP = 'did:dfos:key-proof-vector-other';
 const VECTOR_OTHER_TYP_JWS =
   'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1wcm9vZi12ZWN0b3Itb3RoZXIifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.NMNjktabEWgXRhP28Jh2hLl7s6ATWD4liXvS_nw85HwvnLu14HEl6NINtuTSO2O2dBW7tPOcnJrvFSrnrzPRDA';
+
+/**
+ * THE MALLEABILITY NEGATIVES. Both carry the vector's exact four members, both
+ * are REALLY signed by the vector key over the octets they present, and both are
+ * refused: the first serializes the members in reverse order, the second inserts
+ * insignificant whitespace. A signature covers whatever octets arrived, so the
+ * only thing that makes one proof one string is the verifier recomputing the
+ * canonical signing input and byte-comparing. Pinned in key_proof_test.go too —
+ * a twin that accepted either would be accepting bytes production refuses.
+ */
+const VECTOR_REORDERED_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSJ9.Xnigl9DVx4IMKoFypxcfJqZig9M7KSQUrfk-7Is46ZEOF4jML0tf_hePFrv596FPWmFn02q7hMhSQhtxpdDpCA';
+const VECTOR_SPACED_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ICJub25jZS1rZXktcHJvb2YtdmVjdG9yLTAwMDEiLCAiYXVkaWVuY2UiOiAia2V5cy5kZm9zLmNvbSIsICJwdWJsaWNLZXlNdWx0aWJhc2UiOiAiejZNa2hGd1hORldvc0xldWd2U2Y0d2NMOXQzdXVSWHVlR1NGVFJnU3ZIaFdqNUcyIiwgInRpbWVzdGFtcCI6ICIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.PwFg4KJcHQ6dsj0zEeeuHJTn-KKSfZXXciCI8PGE8OL9DZHMCROWaYB0pBhHMyUuQsvh3iUM3U9_JvrmpzzBDg';
 
 /** The same members signed by the OTHER key, naming the OTHER key. */
 const VECTOR_OTHER_KEY_JWS =
@@ -332,6 +347,33 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     );
     expect(reasonOf(() => verifyKeyProof(extra, expectAt()))).toBe('schema');
     expect(() => verifyKeyProof(extra, expectAt())).toThrow(/the payload is closed/);
+  });
+
+  it('rejects a REORDERED or RE-SPACED payload — the canonical bytes bind the verifier', () => {
+    // Every other gate passes: real signature by the named key, right typ, right
+    // audience, fresh timestamp, exactly the four members. What fails is that the
+    // presented octets are not the canonical serialization of those members. Left
+    // unchecked, one proof would have unboundedly many spellings — and this
+    // package would verify envelopes the platform's verifier already refuses.
+    for (const malleable of [VECTOR_REORDERED_JWS, VECTOR_SPACED_JWS]) {
+      expect(reasonOf(() => verifyKeyProof(malleable, expectAt()))).toBe('schema');
+      expect(() => verifyKeyProof(malleable, expectAt())).toThrow(/canonical signing input/);
+      // The members really are the vector's, and the signature really covers the
+      // bytes presented — so the refusal is the canonical-bytes gate and nothing else.
+      const [header, segment, signature] = malleable.split('.') as [string, string, string];
+      expect(JSON.parse(decoder.decode(base64urlDecode(segment)))).toEqual(vectorPayload());
+      expect(segment).not.toBe(base64urlEncode(keyProofSigningInput(vectorPayload())));
+      expect(
+        isValidEd25519Signature(
+          encoder.encode(`${header}.${segment}`),
+          base64urlDecode(signature),
+          importEd25519Keypair(VECTOR_SEED).publicKey,
+        ),
+      ).toBe(true);
+    }
+    // ...and the canonical spelling of the same members verifies, so the gate is a
+    // byte comparison and not a blanket refusal.
+    expect(() => verifyKeyProof(VECTOR_JWS, expectAt())).not.toThrow();
   });
 
   it('rejects a MISSING member', () => {
