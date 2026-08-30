@@ -57,7 +57,7 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/typescript7/bin/tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "pnpm build"
   },
@@ -70,6 +70,7 @@
     "@metalabel/dfos-web-relay": "workspace:*",
     "@types/node": "^24.10.4",
     "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   }
 }
