@@ -186,21 +186,43 @@ the surface is built around:
 
 ### Key proofs — possession is the whole claim
 
-A key proof (KEY-PROOF.md, an optional `0.x` capability) is a single-shot,
-challenge-bound JWS in which a candidate key signs `{nonce, audience, its own public
-key, timestamp}` to demonstrate possession and consent to one named ceremony
-(KEY-PROOF.md "The Envelope", `specs/KEY-PROOF.md`). The threat consequences the
-surface is built around:
+A key proof is a challenge-bound JWS in which a candidate key signs `{nonce,
+audience, chain DID, role set, chain position, its own public key, timestamp}` to
+demonstrate possession and consent to one named introduction (KEY-PROOF.md "The
+Envelope", `specs/KEY-PROOF.md`) — presented once during a ceremony, then carried
+forever by the chain operation that adopted it (PROTOCOL.md "Key Possession").
+The threat consequences the surface is built around:
 
+- **A chain cannot hold a key its holder never gave it.** Every non-genesis
+  key-role membership is backed by the key's own embedded signature over
+  `{chain, roles, position}`; genesis proves its single key by signing itself.
+  A membership without that backing is **void** — never effective, never
+  resolved, never indexed, never a burn against the true holder — so the
+  preemptive-claim and hostile-listing class (declare a victim's key to pollute
+  recovery, forge association, or spend its one-key-one-DID slot) produces
+  nothing but a loudly-surfaced dead claim (PROTOCOL.md "Key Possession",
+  WEB-RELAY.md's has-ever-proved `key=` index).
+- **Consent is spent at the position it names.** The envelope binds the chain
+  head the introduction builds on, so no stored proof re-adds a removed key at a
+  later head — the chain's own controller included. There is no standing consent
+  and nothing to revoke: each introduction costs a fresh signature from the key
+  itself (KEY-PROOF.md "Position binding").
 - **Challenge relay is defeated by audience binding, not carriage secrecy.** The
-  signer names the completion authority its human confirmed inside the signed bytes,
+  signer names the completing authority its human confirmed inside the signed bytes,
   and the verifier compares against its own configured authority — so a phished or
   re-displayed challenge yields a proof that is dead bytes everywhere but the host
-  the victim actually initiated (KEY-PROOF.md "Audience Binding").
-- **The carriage names no identity.** A shoulder-surfed code or intercepted QR learns
-  where a ceremony completes, never whom it is for; completing still requires the
-  candidate key's signature plus the operator's own ceremony authorization
-  (KEY-PROOF.md "Carriage").
+  the victim actually initiated (KEY-PROOF.md "Audience Binding"). The
+  controller-verified leg has no host, and its audience is the chain's own DID —
+  the two value domains never overlap, so neither leg's envelope verifies in the
+  other (KEY-PROOF.md "The Two Legs").
+- **The code is the capability, and resolving it names the identity — deliberately.**
+  A shoulder-surfed code or intercepted QR yields the ability to resolve one
+  short-lived ceremony's context — including which public identity it adopts into —
+  and to attempt one presentation, which still requires the candidate key's
+  signature plus the operator's own ceremony authorization. The disclosure is the
+  price of consent: a holder who cannot see whom they are joining cannot refuse it,
+  and the named facts are public identity facts (KEY-PROOF.md "Carriage",
+  "Security Considerations").
 - **The payload is closed, so a key proof cannot be socially engineered into
   "signing something".** There is no member in which to smuggle a transaction or an
   instruction; a proof proves a key and conveys no intent (KEY-PROOF.md pin 1).
@@ -211,21 +233,25 @@ surface is built around:
   Canonicalization binds the verifier as it binds the signer. What it binds is the
   payload, not the envelope: padding-tolerant base64url decoding and an unpinned header
   serialization leave one proof more than one envelope spelling, and nothing rests on
-  envelope uniqueness — the nonce is what a completion spends, atomically and once
-  (KEY-PROOF.md "Verification" steps 3 and 6).
+  envelope uniqueness — at presentation the nonce is what is spent, atomically and
+  once, and on the chain the carrying operation's CID pins one spelling of the whole
+  operation (KEY-PROOF.md "Presentation Verification" steps 3 and 7,
+  "Chain-Walk Verification").
 - **Nothing persists to hijack.** Ceremonies are single-shot: no session, pairing, or
-  channel outlives completion, and the nonce is consumed atomically (KEY-PROOF.md
-  pin 2, "Verification").
-- **Cross-DID key reuse is a permanent public link.** The has-ever-declared `key=`
-  index survives rotation and deletion, so declaring one key in two chains publishes
+  channel outlives adoption, and the nonce is consumed atomically. The envelope's
+  afterlife on the chain is a fact about one introduction, inert at every other
+  position (KEY-PROOF.md pin 2).
+- **Cross-DID key reuse is a permanent public link.** The has-ever-proved `key=`
+  index survives rotation and deletion, so proving one key into two chains publishes
   their association irreversibly — which is why holder tooling refuses by default
-  before any signature exists (KEY-PROOF.md "Holder Obligations").
+  before any signature exists (KEY-PROOF.md "Holder Obligations"). An unproved
+  declaration creates no link: void memberships never index.
 - **The operator may name the pre-flight's oracle, and that adds no trust the ceremony
   does not already extend.** The short-code resolution's optional `relay` member reaches
   only a holder with no configured relay of its own — a holder's own oracle always takes
   precedence, the member is ceremony-scoped, and adopting it as a standing peer is
   refused by rule. The party it defers to is the one that already decides what the
-  completion effects (KEY-PROOF.md "Carriage", "Security Considerations").
+  adoption effects (KEY-PROOF.md "Carriage", "Security Considerations").
 
 ### Countersignatures live on the public proof plane
 

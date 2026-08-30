@@ -417,7 +417,7 @@ An oracle failure under `--json` carries a `reason` code beside its prose — `o
 
 That is a statement about custody rather than about roles. Two keys minted from one seed, written into one keychain, on one machine, are one custody arrangement wearing two names — every event that reaches one reaches the other, so a controller/auth separation drawn there separates nothing. A role split becomes real when a second custodian holds a key the first cannot reach, and the CLI has exactly two moments where that happens: [`identity add-key`](#multi-device-identities-1-of-n), which publishes a key generated on another device, and [`keys prove`](#proving-a-key-to-a-ceremony), which presents a key to a ceremony someone else custodies the chain for. **The first key-add is the split.**
 
-Nothing in the chain grammar changes. PROTOCOL.md requires at least one controller key and states no separation rule and no cross-array uniqueness rule; a key id is an opaque string. One key in three arrays is what the format already allows.
+The chain grammar requires exactly this shape at genesis. PROTOCOL.md's single-key rule declares one key as the sole entry of all three role arrays, self-signed — the signature is the key's own possession proof — and states no separation rule past it; a key id is an opaque string. One key in three arrays is what genesis is.
 
 `identity keys` reports one row per key with the roles beside it, because a key is a thing and its roles are an attribute of it:
 

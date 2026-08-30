@@ -35,10 +35,17 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   no header-key-trust (`jwk`/`x5c` rejected), canonical scalar `S < L`, 64-byte length
   (PROTOCOL.md "Signature Verification Profile" §1–§4, `specs/PROTOCOL.md`). Applies
   to **every** verification path.
-- **Identity chain verification** — genesis bootstrap, signer-validity against prior
-  controller state, `previousOperationCID` linkage, `createdAt` ordering, `header.cid`
-  consistency, terminal-state enforcement (PROTOCOL.md "Verification → Identity Chain",
-  `specs/PROTOCOL.md`; "Identity Chain Signer Validity", `specs/PROTOCOL.md`;
+- **Identity chain verification** — single-key self-signed genesis (reject a genesis
+  declaring more than one distinct key, or carrying `keyProofs`), signer-validity
+  against prior **declared** controller state, `previousOperationCID` linkage,
+  `createdAt` ordering, `header.cid` consistency, terminal-state enforcement, and the
+  **possession fold**: for each key-role membership an `update` introduces, chain-walk
+  verification of its embedded key-proof envelope (key, chain DID, position, role
+  coverage, canonical bytes, signature), with uncovered introductions computed as
+  **void** — excluded from effective state, surfaced, never a rejection — and both the
+  declared and effective readings exposed (PROTOCOL.md "Verification → Identity Chain",
+  `specs/PROTOCOL.md`; "Identity Chain Signer Validity" / "Key Possession",
+  `specs/PROTOCOL.md`; KEY-PROOF.md "Chain-Walk Verification", `specs/KEY-PROOF.md`;
   DID-METHOD.md §5.2.1, `specs/DID-METHOD.md`).
 - **Content chain verification** — valid EdDSA signature, `kid`-DID matches payload `did`,
   CID integrity, chain linkage, terminal state, and creator-sovereignty authorization when
@@ -76,16 +83,21 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   resolution (the live-authentication rule, not the credential rule — deliberate), signature, CID
   integrity, the ≤ 7-day temporal window, and the same structural `invalid` vs
   `unverifiable` verdict split (SIGNING.md "Verification Algorithm", `specs/SIGNING.md`).
-- **Key-proof verification** (if it completes key-proof ceremonies; KEY-PROOF `0.x`) —
+- **Key-proof presentation verification** (if it operates key-proof ceremonies) —
   the 4 KiB cap before any decode, the profile header gates with a registered purpose
-  `typ` and **no `kid`**, the closed four-member payload schema **over canonical bytes**
+  `typ` and **no `kid`**, the closed seven-member payload schema **over canonical bytes**
   (the verifier MUST recompute the canonical signing input from the parsed members and
   byte-compare it against the presented payload octets, so a reordered or re-spaced
   payload signed over its own serialization rejects; the comparison binds those octets
-  and nothing past them), audience byte-equality
-  against the verifier's own configured authority (never request-derived), the freshness
-  window, **atomic** nonce consumption, and signature verification against the payload's
-  own `publicKeyMultibase` (KEY-PROOF.md "Verification", `specs/KEY-PROOF.md`).
+  and nothing past them), the canonical `roleSet` grammar, audience byte-equality
+  against the verifier's own configured authority (never request-derived; on the
+  controller-verified leg, against the payload's own `did`), the three positional arms
+  (`did`, `roleSet`, `prevCID` against the ceremony's chain, role set, and current
+  head), the freshness window, **atomic** nonce consumption, and signature verification
+  against the payload's own `publicKeyMultibase` (KEY-PROOF.md "Presentation
+  Verification" / "The Two Legs", `specs/KEY-PROOF.md`). The chain-walk half of
+  key-proof verification is not conditional — it is part of identity chain
+  verification, above.
 
 ### Tier 2 — Signer
 
@@ -96,6 +108,12 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
   `specs/PROTOCOL.md`, `specs/PROTOCOL.md`).
 - **`kid` rules** — bare key ID for identity genesis, DID URL otherwise; content ops always
   DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md`).
+- **Possession authoring (door one)** — emit genesis as one self-signing key across all
+  three role arrays; refuse to author an identity operation that introduces a key to a
+  role without embedding that key's valid covering envelope in `keyProofs`; never carry
+  `keyProofs` on a non-introducing operation. The void path exists for reading hostile
+  chains, not for conformant signers to emit (PROTOCOL.md "Key Possession",
+  `specs/PROTOCOL.md`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
   credentials, revocations, credit claims, and sign-request envelopes; absent on
   API-AUTH's request and identity proofs (PROTOCOL.md "`cid` Header",
@@ -128,7 +146,11 @@ A relay ingests, sequences, and serves. It implements:
 - **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
   selection, identity-chain linearity and order authority (permanent refusal of
   conflicting extensions — normative in PROTOCOL.md "Chain Validity",
-  `specs/PROTOCOL.md`), ingestion statuses (RELAY-CONTRACT.md "Submission",
+  `specs/PROTOCOL.md`), possession-blind admission (door two: an identity operation's
+  key-proof status never gates log membership; void memberships are excluded from every
+  served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
+  WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`),
+  ingestion statuses (RELAY-CONTRACT.md "Submission",
   `specs/RELAY-CONTRACT.md`), deletion + restore semantics (WEB-RELAY.md
   "Fork Acceptance" / "Deletion Semantics", `specs/WEB-RELAY.md`).
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
