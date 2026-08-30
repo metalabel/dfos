@@ -942,6 +942,51 @@ bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
 
 **Derived DID: `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`**
 
+### Reference Key Proof (Key 2's Introduction)
+
+The rotation below introduces key 2 to all three roles, so it carries key 2's [key-proof envelope](https://protocol.dfos.com/key-proof) in `keyProofs` ([Key Possession](#key-possession)). The envelope is signed by **key 2** — the key being introduced — while the operation carrying it is signed by **key 1**. Its deterministic inputs: `nonce` is the literal `dfos-protocol-reference-nonce-1`, `audience` is `keys.dfos.com`, `timestamp` is `2026-03-07T00:00:30.000Z`; the rest is derived — `did` is the reference DID, `roleSet` is `auth,assert,controller`, `prevCID` is the genesis CID, `publicKeyMultibase` is key 2's multikey.
+
+Decoded payload:
+
+```json
+{
+  "nonce": "dfos-protocol-reference-nonce-1",
+  "audience": "keys.dfos.com",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "roleSet": "auth,assert,controller",
+  "prevCID": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne",
+  "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
+  "timestamp": "2026-03-07T00:00:30.000Z"
+}
+```
+
+Canonical signing input (the exact payload octets):
+
+```
+{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}
+```
+
+JWS protected header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:key-add"
+}
+```
+
+JWS Signature (hex):
+
+```
+f27835d076dbb360450ac6284983474b54f4d36d3e1d79b8683d7442b1e5a72b0ed6caa6cb553f763f72133d0225230260dc214d931b4e26a7849f021f52ed03
+```
+
+Compact JWS token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ImRmb3MtcHJvdG9jb2wtcmVmZXJlbmNlLW5vbmNlLTEiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJkaWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwicm9sZVNldCI6ImF1dGgsYXNzZXJ0LGNvbnRyb2xsZXIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZlVkNjVKckFoZmRnRnVNQ2NjVTlUaFF2akIyZkpBTVVIa3V1YWpGOTkyZ0siLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjMwLjAwMFoifQ.8ng10Hbbs2BFCsYoSYNHS1T0020-HXm4aD10QrHlpysO1sqmy1U_dj9yEz0CJSMCYNwhTZMbTianhJ8CH1LtAw
+```
+
 ### Identity Chain: Update (Key Rotation)
 
 JWS Header:
@@ -951,7 +996,7 @@ JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
-  "cid": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei"
+  "cid": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy"
 }
 ```
 
@@ -983,29 +1028,32 @@ Operation:
       "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
     }
   ],
-  "createdAt": "2026-03-07T00:01:00.000Z"
+  "createdAt": "2026-03-07T00:01:00.000Z",
+  "keyProofs": [
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ImRmb3MtcHJvdG9jb2wtcmVmZXJlbmNlLW5vbmNlLTEiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJkaWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwicm9sZVNldCI6ImF1dGgsYXNzZXJ0LGNvbnRyb2xsZXIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZlVkNjVKckFoZmRnRnVNQ2NjVTlUaFF2akIyZkpBTVVIa3V1YWpGOTkyZ0siLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjMwLjAwMFoifQ.8ng10Hbbs2BFCsYoSYNHS1T0020-HXm4aD10QrHlpysO1sqmy1U_dj9yEz0CJSMCYNwhTZMbTianhJ8CH1LtAw"
+  ]
 }
 ```
 
 JWS Signature (hex):
 
 ```
-edfaaf586115616f5ab40d6eaa9a7b94850e5a9e1d0132e92e33a6156cc937ef204cbf909d70c27b219c06ee405e11f33b9d9f6aec146af8752ab07ac0162e0b
+d77a2bfd7ef30ce7b391214775604bc0f70dc88686dd794701bf661e9806f3354395dcf4c063f45fc5a25481cf2d0fb6d19b023afb21f18e816e0c5d6c8bcc04
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWliZnVoNjN1djMzaTJpNWVvb2UzYm9pdDJydXlqZWh1YnNyeWVtdXV6Nm1ydGxlajI2cmVpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.7fqvWGEVYW9atA1uqpp7lIUOWp4dATLpLjOmFWzJN-8gTL-QnXDCeyGcBu5AXhHzO52fauwUavh1KrB6wBYuCw
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA
 ```
 
 Operation CID:
 
 ```
-bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei
+bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy
 ```
 
-Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`.
+Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`, key 2 proved for all three roles by the embedded envelope.
 
 ### Identity Chain: Delete + Restore
 
@@ -1015,7 +1063,7 @@ Delete Operation:
 {
   "version": 1,
   "type": "delete",
-  "previousOperationCID": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei",
+  "previousOperationCID": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy",
   "createdAt": "2026-03-07T00:02:00.000Z"
 }
 ```
@@ -1027,26 +1075,26 @@ Delete JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi"
+  "cid": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm"
 }
 ```
 
 Delete JWS Signature (hex):
 
 ```
-d340f2eea78aec8d210b73f5caf1112c920d04b362115f4b846f015dd50c20618b4ecc6e31cba19f762abaaf7a4906bc9b397e073b730f92ccc41a21619c5002
+40887e1d10fe60457ce328355f72f0cfeb5724418f08baee4ecb160ba2206f98ff406d1a18f8c9eac02a144d5533c29445896616468b818655e8edbcdf560108
 ```
 
 Delete JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA
 ```
 
 Delete Operation CID:
 
 ```
-bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi
+bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm
 ```
 
 Restore Operation:
@@ -1055,7 +1103,7 @@ Restore Operation:
 {
   "version": 1,
   "type": "restore",
-  "previousOperationCID": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi",
+  "previousOperationCID": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm",
   "createdAt": "2026-03-07T00:03:00.000Z"
 }
 ```
@@ -1067,26 +1115,26 @@ Restore JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba"
+  "cid": "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq"
 }
 ```
 
 Restore JWS Signature (hex):
 
 ```
-9552998f7e081a6c9ffb4527ed310b48f3f78b9ee058c7bc8f9778774ea016787caf88697f9ff5547314af0c24b7b0859d671de148b809d7973ca4bc8e921e02
+2622005ca66a2199c3a5952b6dde12ec5eed1280448c478829c1a0dd645e6170052628bdeb4c2964b15fcab737c8028e36c330f614f9685462be8b3892d86e04
 ```
 
 Restore JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA
 ```
 
 Restore Operation CID:
 
 ```
-bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba
+bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq
 ```
 
 ### Content Chain: Document + Create
@@ -1235,6 +1283,8 @@ Given the artifacts above, verify:
 4. **CID header**: Verify each operation JWS header contains `cid` matching the derived operation CID
 
 5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 31 bytes → `byte % 19` → alphabet lookup → should be `cnnnft9f8a2rn938d6nkz38r847v2kr` → DID = `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`
+
+5b. **Rotation key proof**: base64url-decode the single entry of the rotation operation's `keyProofs`; its payload octets MUST byte-equal the canonical signing input shown in [Reference Key Proof](#reference-key-proof-key-2s-introduction); verify its EdDSA signature with **key 2's** public key (the payload's own `publicKeyMultibase`); check `did` equals the derived DID, `prevCID` equals the genesis CID (the rotation's `previousOperationCID`), and `roleSet` is `auth,assert,controller` — covering all three roles the rotation introduces key 2 to.
 
 6. **Rotation JWS**: signed by OLD controller key (key 1). Verify with key 1's public key. kid:
 

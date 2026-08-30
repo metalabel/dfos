@@ -41,6 +41,22 @@ import {
   signPayloadEd25519,
   verifyJwt,
 } from '../src/crypto';
+import {
+  KEY_ADD_JWS_TYP,
+  keyProofSigningInput,
+  serializeRoleSet,
+  signKeyProof,
+  type KeyProofPayload,
+} from '../src/key-proof';
+
+/**
+ * The reference key-proof envelope's fixed inputs. Kept byte-identical with
+ * scripts/generate-examples.ts, so the rotation fixture in examples/ and the
+ * spec's deterministic artifacts are the same operation.
+ */
+const REFERENCE_KEY_PROOF_NONCE = 'dfos-protocol-reference-nonce-1';
+const REFERENCE_KEY_PROOF_AUDIENCE = 'keys.dfos.com';
+const REFERENCE_KEY_PROOF_TIMESTAMP = '2026-03-07T00:00:30.000Z';
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
 const DIV = (t: string) => console.log(`\n${'='.repeat(80)}\n${t}\n${'='.repeat(80)}\n`);
@@ -82,6 +98,12 @@ interface ReferenceArtifacts {
   updateCID: string;
   updateSignatureHex: string;
   updateHeader: Record<string, unknown>;
+  // the possession proof the rotation carries
+  keyProof: string;
+  keyProofPayload: KeyProofPayload;
+  keyProofCanonical: string;
+  keyProofHeader: Record<string, unknown>;
+  keyProofSignatureHex: string;
   deleteOp: IdentityOperation;
   deleteJws: string;
   deleteCID: string;
@@ -165,6 +187,25 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
   // Identity chain: update (key rotation)
   // ----------------------------------------------------------------
   const key2: MultikeyPublicKey = { id: keyId2, type: 'Multikey', publicKeyMultibase: multikey2 };
+
+  // The rotation INTRODUCES key 2 to all three roles, so it carries key 2's own
+  // possession proof, headed at the genesis CID. Signed by key 2 — the key being
+  // introduced — while the OPERATION is signed by key 1. Two different keys sign
+  // two different things, and that is the whole rotation ceremony in miniature:
+  // the outgoing controller authorizes the change, the incoming key consents to
+  // the position.
+  const { proof: keyProof, payload: keyProofPayload } = await signKeyProof({
+    typ: KEY_ADD_JWS_TYP,
+    nonce: REFERENCE_KEY_PROOF_NONCE,
+    audience: REFERENCE_KEY_PROOF_AUDIENCE,
+    did,
+    roleSet: serializeRoleSet(['auth', 'assert', 'controller']),
+    prevCID: genesisCID,
+    privateKey: keypair2.privateKey,
+    timestamp: REFERENCE_KEY_PROOF_TIMESTAMP,
+  });
+  const keyProofParts = decodeParts(keyProof);
+
   const updateOp: IdentityOperation = {
     version: 1,
     type: 'update',
@@ -173,6 +214,7 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     assertKeys: [key2],
     controllerKeys: [key2],
     createdAt: '2026-03-07T00:01:00.000Z',
+    keyProofs: [keyProof],
   };
   const { jwsToken: updateJws, operationCID: updateCID } = await signIdentityOperation({
     operation: updateOp,
@@ -186,6 +228,11 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     didPrefix: 'did:dfos',
     log: [genesisJws, updateJws],
   });
+  // The proof is what puts key 2 into EFFECTIVE state. A reference chain whose
+  // rotation went void would be a reference chain nobody could sign with.
+  if (identity2.controllerKeys[0]?.id !== keyId2 || (identity2.voidKeys ?? []).length > 0) {
+    throw new Error('reference rotation did not put key 2 into effective state');
+  }
 
   // ----------------------------------------------------------------
   // Identity chain: delete + restore
@@ -339,6 +386,11 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     updateCID,
     updateSignatureHex: updParts.signatureHex,
     updateHeader: updParts.header,
+    keyProof,
+    keyProofPayload,
+    keyProofCanonical: new TextDecoder().decode(keyProofSigningInput(keyProofPayload)),
+    keyProofHeader: keyProofParts.header,
+    keyProofSignatureHex: keyProofParts.signatureHex,
     deleteOp,
     deleteJws,
     deleteCID,
@@ -425,13 +477,27 @@ describe('protocol reference artifacts', () => {
     console.log('Derived DID:  ', a.did);
 
     DIV('STEP 4: Identity Chain — Update (Key Rotation)');
-    console.log('--- JWS Header ---');
+    console.log('--- Operation (unsigned) ---');
+    console.log(JSON.stringify(a.updateOp, null, 2));
+    console.log('\n--- JWS Header ---');
     console.log(JSON.stringify(a.updateHeader, null, 2));
     console.log('\n--- JWS Signature (hex) ---');
     console.log(a.updateSignatureHex);
     console.log('\n--- JWS Compact Token ---');
     console.log(a.updateJws);
     console.log('\nOperation CID:', a.updateCID);
+
+    DIV('STEP 4A: The Key Proof the Rotation Carries');
+    console.log('--- Payload (decoded) ---');
+    console.log(JSON.stringify(a.keyProofPayload, null, 2));
+    console.log('\n--- Canonical signing input (the exact payload octets) ---');
+    console.log(a.keyProofCanonical);
+    console.log('\n--- JWS Header ---');
+    console.log(JSON.stringify(a.keyProofHeader, null, 2));
+    console.log('\n--- JWS Signature (hex) ---');
+    console.log(a.keyProofSignatureHex);
+    console.log('\n--- JWS Compact Token ---');
+    console.log(a.keyProof);
 
     DIV('STEP 4B: Identity Chain — Delete + Restore');
     console.log('--- Delete Operation ---');
@@ -552,6 +618,10 @@ describe('protocol reference artifacts', () => {
     expectInSpec('rotation JWS', a.updateJws);
     expectInSpec('rotation CID', a.updateCID);
     expectInSpec('rotation signature (hex)', a.updateSignatureHex);
+    // The possession proof the rotation carries, and its canonical payload bytes.
+    expectInSpec('rotation key proof', a.keyProof);
+    expectInSpec('rotation key proof canonical payload', a.keyProofCanonical);
+    expectInSpec('rotation key proof signature (hex)', a.keyProofSignatureHex);
     expectInSpec('delete JWS', a.deleteJws);
     expectInSpec('delete CID', a.deleteCID);
     expectInSpec('delete signature (hex)', a.deleteSignatureHex);
@@ -560,7 +630,7 @@ describe('protocol reference artifacts', () => {
     expectInSpec('restore signature (hex)', a.restoreSignatureHex);
 
     expect(a.genesisCID).toBe('bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne');
-    expect(a.updateCID).toBe('bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei');
+    expect(a.updateCID).toBe('bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy');
     // The 468-byte CBOR blob is line-wrapped in PROTOCOL.md (so not substring-
     // checkable as one contiguous string); pin it as a literal instead so a
     // generator-side change to canonical encoding still trips the guard.
