@@ -464,6 +464,8 @@ dfos keys list                 # the whole manifest
 dfos keys show <key-id>        # one key: also accepts its public key or its full account
 dfos keys prune                # what removing the orphans would cost — removes nothing
 dfos keys prune --yes          # remove them
+dfos keys remove <key-id>      # what removing ONE named key would cost — removes nothing
+dfos keys remove <key-id> --yes  # remove it
 dfos keys prove <code-or-uri>  # prove a key to a key-add ceremony
 ```
 
@@ -499,6 +501,15 @@ A key with origin `vault` is derivable again from that vault's phrase, which is 
 - **Uncertainty is not an orphan.** A key whose status cannot be established is listed as skipped, with the reason, and left alone.
 - **The local relay's own key is out of reach by construction.** It lives in `relay.db`'s `relay_meta` table, not in the keystore, so a fold over the keystore cannot see it, list it, or delete it.
 - **Vault mnemonics are out of reach too.** They share the OS keychain service with key seeds, so the keystore drops them inside the enumerator that produces the list, and `prune` re-checks before every delete.
+
+`remove` takes **one** key, named by its key id, its public key, or the account it is stored under. It is a dry run until `--yes`, it prints the same recovery cost per key, and it acts on two statuses: `orphan`, and `candidate` — the one status `prune` is built never to reach. A key proven to a ceremony that was abandoned, or replaced by a second ceremony, is claimed by a chain this machine cannot see and is retained by the rule above for as long as the keystore holds it; `remove` is the by-name path to it. That is the whole difference between the two commands: `prune` sweeps a class, `remove` executes a decision about one key.
+
+Every other status is refused, and the refusal says why:
+
+- **`declared`** is chain business. A declared key is rotated out of the chain that names it — `dfos identity update --rotate-controller | --rotate-auth | --rotate-assert` — not deleted out from under it.
+- **`superseded`** is kept for the reason `prune` keeps it: this machine's view of a chain can be behind the network's, so "no longer current here" is a statement about this relay and not about the world.
+- **`login-client`** is infrastructure. Deleting the seed under the file that names it leaves `dfos login` holding a client identity it cannot prove; deleting `login-client.json` is what mints a new one, and the authorize host asks for consent again.
+- **`unreadable` / `unnamed` / `unrecognized`**: uncertainty is neither a candidate nor an orphan, and a status that cannot be established cannot be judged.
 
 `identity forget` removes a local name and touches no key material, and it leaves the chain in the local relay — so a forgotten identity's keys still read as `declared`, and `prune` leaves them alone.
 
@@ -538,7 +549,7 @@ What goes on the wire is the JWS, the ceremony identifier, and the label. The en
 
 On completion the receipt names the key in full, repeats it shortened beside the operator's key id — which is the form a person compares against the other screen — and gives its public address, `https://explore.dfos.com/#/key/<publicKeyMultibase>`, with the whole key in the URL. When the operator named the identity that adopted the key, the receipt also says the label can be changed later in that operator's own Settings → Signing keys.
 
-The key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes. A completion that names the identity its ceremony added the key to moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible — and from then on signing resolves that identity and uses the key this device holds.
+The key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes; `dfos keys remove <public-key>` is how a candidate from a ceremony that went nowhere leaves the keystore. A completion that names the identity its ceremony added the key to moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible — and from then on signing resolves that identity and uses the key this device holds.
 
 ### Backends
 

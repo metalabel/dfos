@@ -220,7 +220,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 `publish` · `fetch` · `verify` · `remove`
 
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
-**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `prove <code-or-uri>` (complete a key-add ceremony: mints or names a key, shows the audience, refuses a key any identity has ever declared, posts one KEY-PROOF envelope and never retries)
+**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (complete a key-add ceremony: mints or names a key, shows the audience, refuses a key any identity has ever declared, posts one KEY-PROOF envelope and never retries)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `repin` · `remove` · `list` · `info` · `gc`
@@ -273,6 +273,8 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   data stays in the relay); `content remove` is just a no-op that points you at
   `content delete` — local content can't be selectively un-ingested. Neither signs
   a protocol delete; `delete` is the irreversible protocol operation (see below).
+  `keys remove` is the one `remove` that really removes something: it deletes a
+  named key's seed from the keystore (see below).
 - **No identity command removes key material.** `remove`, `forget`, and `delete`
   all leave the keys in the keystore, and `forget` leaves the chain in the relay
   too — so a forgotten identity's keys still read as declared. `dfos keys list`
@@ -281,7 +283,11 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   is the leftovers of an interrupted `identity create`. A deleted
   identity's keys are never orphans — deletion is not revocation, and `restore`
   is real — and neither the local relay's own key nor a vault mnemonic is
-  reachable from `prune` at all.
+  reachable from `prune` at all. `dfos keys remove <key-id|public-key|account>`
+  (also a dry run until `--yes`) is the by-name path for one key, and it acts on
+  two statuses: `orphan`, and `candidate` — the key a `keys prove` ceremony left
+  behind, which `prune` is built never to reach because the chain that claims it
+  is not this machine's. It refuses everything else and says why.
 
 ## Common workflows
 
