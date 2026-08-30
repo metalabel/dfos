@@ -356,7 +356,10 @@ describe('client cold fold — asOfUnix forwarding', () => {
     const credentialCID = credCid(credential);
 
     // the delegated op is dated 4 minutes ago, so a revocation stamped NOW lands
-    // strictly AFTER it
+    // strictly AFTER it. Sampled once: a second ts(-4) reads the clock again,
+    // and a floor-boundary crossing between the two makes opCreatedAtUnix
+    // disagree with the op by a second.
+    const opCreatedAt = ts(-4);
     const update = {
       version: 1 as const,
       type: 'update' as const,
@@ -364,7 +367,7 @@ describe('client cold fold — asOfUnix forwarding', () => {
       previousOperationCID: g.operationCID,
       documentCID: 'bafkreiupdatedocument000000000000000000000000000000000000000',
       baseDocumentCID: null,
-      createdAt: ts(-4),
+      createdAt: opCreatedAt,
       authorization: credential,
     };
     const u = await signContentOperation({
