@@ -76,6 +76,51 @@ jobs:
         working-directory: packages/dfos-cli
         run: go test ./...
 
+  go-hygiene:
+    # gofmt + full `go vet` across every Go module. The test jobs above cover
+    # neither: `go test` runs only vet's high-confidence subset, and nothing
+    # anywhere looked at formatting — so both drifted silently. One job over
+    # all five modules keeps the gate in a single place instead of bolting two
+    # more steps onto each test job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: |
+            packages/dfos-cli/go.sum
+            packages/dfos-protocol-go/go.sum
+            packages/dfos-web-relay-go/go.sum
+            packages/relay-conformance/go.sum
+            packages/protocol-verify/go/go.sum
+
+      - name: gofmt and go vet every Go module
+        run: |
+          set -euo pipefail
+          modules=(
+            packages/dfos-cli
+            packages/dfos-protocol-go
+            packages/dfos-web-relay-go
+            packages/relay-conformance
+            packages/protocol-verify/go
+          )
+          for module in "${modules[@]}"; do
+            echo "--- $module"
+            unformatted=$(gofmt -l "$module")
+            if [ -n "$unformatted" ]; then
+              echo "gofmt -w needed on:"
+              echo "$unformatted"
+              exit 1
+            fi
+            go -C "$module" vet ./...
+          done
+
   dfos-web-relay-go:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -255,6 +300,9 @@ jobs:
         run: ./scripts/run-signing.sh
 
   verify-ts:
+    # `tsx` strips types without checking them, so this reference verifier —
+    # the one third parties read to reimplement the protocol — could drift into
+    # type nonsense and still pass. The typecheck step runs tsc over it first.
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -270,6 +318,10 @@ jobs:
       - name: Install dependencies
         working-directory: packages/protocol-verify/ts
         run: npm install
+
+      - name: Typecheck
+        working-directory: packages/protocol-verify/ts
+        run: npm run typecheck
 
       - name: Run TypeScript verification
         working-directory: packages/protocol-verify/ts
