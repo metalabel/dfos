@@ -32,7 +32,7 @@ func TestClassifyAnchor(t *testing.T) {
 		"":              AnchorInvalid,
 		// a non-dag-cbor CID (raw 0x55 → bafkrei, dag-pb → bafybei) is NOT a valid
 		// artifact anchor under the tightened grammar — artifacts are always dag-cbor.
-		"bafkreieabcdefghijklmnoprstuvwxyz234567":                    AnchorInvalid,
+		"bafkreieabcdefghijklmnoprstuvwxyz234567":                     AnchorInvalid,
 		"bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi": AnchorInvalid,
 	}
 	for anchor, want := range cases {
