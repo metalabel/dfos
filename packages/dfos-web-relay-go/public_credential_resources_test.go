@@ -3,6 +3,7 @@ package relay
 import (
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -106,6 +107,95 @@ func TestPublicCredentialRemoveClearsResources(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Fatalf("removed credential left %d resource rows", orphans)
+	}
+}
+
+// TestPublicCredentialResourcesWriteAllOrNothing pins what makes the boot
+// repair's cid-granular NOT EXISTS sound: one credential's resources land in a
+// single statement, so a credential is projected completely or not at all.
+// A per-resource write loop autocommits outside a batch, and a credential left
+// holding SOME rows reads as already-projected forever — its missing grants
+// silently stop being returned. The proxy for "one statement" this can check
+// cheaply is that a many-resource att is fully present and that the row count
+// is exactly the non-empty resource count, with no host-parameter ceiling in
+// the way.
+func TestPublicCredentialResourcesWriteAllOrNothing(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "atomic.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer store.Close()
+
+	// Comfortably past SQLite's host-parameter ceiling had this bound one
+	// parameter per resource.
+	const wide = 20000
+	resources := make([]string, 0, wide)
+	for i := 0; i < wide; i++ {
+		resources = append(resources, "chain:content-"+strconv.Itoa(i))
+	}
+	addCred(t, store, "cid-wide", resources...)
+
+	var rows int
+	if err := store.readerDB().QueryRow(
+		"SELECT COUNT(*) FROM public_credential_resources WHERE cid = ?", "cid-wide",
+	).Scan(&rows); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != wide {
+		t.Fatalf("projected %d of %d resources", rows, wide)
+	}
+	assertTokens(t, "first resource", credsFor(t, store, resources[0]), []string{"token-cid-wide"})
+	assertTokens(t, "last resource", credsFor(t, store, resources[wide-1]), []string{"token-cid-wide"})
+}
+
+// TestPublicCredentialEmptyResourceSkippedByBothPaths pins that the live write
+// and the boot repair admit the same rows. An empty resource names nothing, so
+// neither may store it — and in particular the repair must not resurrect a row
+// the writer deliberately declined, which would leave the two paths disagreeing
+// about the same att.
+func TestPublicCredentialEmptyResourceSkippedByBothPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	addCred(t, store, "cid-mixed", "chain:content-a", "", "chain:content-b")
+
+	countRows := func(t *testing.T, s *SQLiteStore, label string) int {
+		t.Helper()
+		var n int
+		if err := s.readerDB().QueryRow(
+			"SELECT COUNT(*) FROM public_credential_resources WHERE cid = ?", "cid-mixed",
+		).Scan(&n); err != nil {
+			t.Fatalf("%s: count: %v", label, err)
+		}
+		return n
+	}
+	if got := countRows(t, store, "live"); got != 2 {
+		t.Fatalf("live path projected %d rows, want 2 (empty resource skipped)", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Clear the projection and let the boot repair rebuild it from att alone.
+	reopened, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err := reopened.writerDB().Exec("DELETE FROM public_credential_resources"); err != nil {
+		t.Fatalf("clear projection: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	repaired, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("reopen for repair: %v", err)
+	}
+	defer repaired.Close()
+	if got := countRows(t, repaired, "backfill"); got != 2 {
+		t.Fatalf("backfill projected %d rows, want 2 (must match the live path)", got)
 	}
 }
 

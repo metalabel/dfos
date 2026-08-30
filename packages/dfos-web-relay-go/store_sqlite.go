@@ -523,12 +523,17 @@ func upgradeOperationLogCIDIndex(db *sql.DB) error {
 //
 // The insert is scoped by `NOT EXISTS` rather than `INSERT OR IGNORE` over
 // everything so the common warm case does not re-parse every att on every boot.
+// That scope is cid-granular, which is only safe because the live path writes a
+// credential's rows in ONE statement (see AddPublicCredential): a credential can
+// hold all of its rows or none, never some, so "has any row" is a sound proxy
+// for "is projected". The empty-resource predicate below is the same one that
+// statement uses, so the live path and this repair admit identical rows.
 func backfillPublicCredentialResources(db *sql.DB) error {
 	_, err := db.Exec(`
 		INSERT OR IGNORE INTO public_credential_resources (cid, resource)
 		SELECT pc.cid, json_extract(je.value, '$.resource')
 		FROM public_credentials pc, json_each(pc.att) je
-		WHERE json_extract(je.value, '$.resource') IS NOT NULL
+		WHERE json_extract(je.value, '$.resource') <> ''
 		  AND NOT EXISTS (
 			SELECT 1 FROM public_credential_resources r WHERE r.cid = pc.cid
 		  )`)
@@ -2472,20 +2477,32 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	); err != nil {
 		return err
 	}
-	// Same statement, same transaction: the resource projection is only usable
-	// as a lookup path if it is never behind the att it derives from. An empty
-	// or resource-less att writes nothing, which is the correct projection of a
-	// credential that names no resource.
-	for _, entry := range credential.Att {
-		if entry.Resource == "" {
-			continue
-		}
-		if _, err := s.writerDB().Exec(
-			"INSERT OR IGNORE INTO public_credential_resources (cid, resource) VALUES (?, ?)",
-			credential.CID, entry.Resource,
-		); err != nil {
-			return err
-		}
+	// ONE statement, from the SAME bytes stored above.
+	//
+	// Two properties are load-bearing and a per-resource Exec loop has neither.
+	// A single statement is atomic even when this store is not inside a write
+	// batch — writerDB() is the bare connection when s.tx is nil, so a loop
+	// autocommits per resource and a crash mid-loop leaves a credential holding
+	// SOME of its rows. The boot repair cannot see that: its NOT EXISTS is
+	// cid-granular, so a partially-projected credential looks done forever and
+	// the missing grants simply stop being returned. The loop also took one host
+	// parameter per resource, which an att large enough would push past SQLite's
+	// variable ceiling; this form takes two regardless of att length.
+	//
+	// Deriving from attJSON rather than the Go slice is the point: the column and
+	// its projection cannot disagree when one is computed from the other, and the
+	// predicate here is character-for-character the one
+	// backfillPublicCredentialResources uses, so the live path and the repair
+	// path admit exactly the same rows. A resource-less att writes nothing, which
+	// is the correct projection of a credential that names no resource.
+	if _, err := s.writerDB().Exec(
+		`INSERT OR IGNORE INTO public_credential_resources (cid, resource)
+		 SELECT ?, json_extract(je.value, '$.resource')
+		 FROM json_each(?) je
+		 WHERE json_extract(je.value, '$.resource') <> ''`,
+		credential.CID, string(attJSON),
+	); err != nil {
+		return err
 	}
 	return nil
 }
