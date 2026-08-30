@@ -78,7 +78,11 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   `unverifiable` verdict split (SIGNING.md "Verification Algorithm", `specs/SIGNING.md`).
 - **Key-proof verification** (if it completes key-proof ceremonies; KEY-PROOF `0.x`) —
   the 4 KiB cap before any decode, the profile header gates with a registered purpose
-  `typ` and **no `kid`**, the closed four-member payload schema, audience byte-equality
+  `typ` and **no `kid`**, the closed four-member payload schema **over canonical bytes**
+  (the verifier MUST recompute the canonical signing input from the parsed members and
+  byte-compare it against the presented payload octets, so a reordered or re-spaced
+  payload signed over its own serialization rejects; the comparison binds those octets
+  and nothing past them), audience byte-equality
   against the verifier's own configured authority (never request-derived), the freshness
   window, **atomic** nonce consumption, and signature verification against the payload's
   own `publicKeyMultibase` (KEY-PROOF.md "Verification", `specs/KEY-PROOF.md`).

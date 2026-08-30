@@ -1,6 +1,7 @@
 package dfos
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -305,9 +306,9 @@ type VerifiedKeyProof struct {
 }
 
 // VerifyKeyProof verifies a key proof — KEY-PROOF.md's verification algorithm
-// steps 1–5 and 7: size cap, header gates, closed payload schema, audience
-// byte-equality, freshness, and the signature against the payload's OWN
-// publicKeyMultibase.
+// steps 1–5 and 7: size cap, header gates, the closed payload schema over
+// CANONICAL bytes, audience byte-equality, freshness, and the signature against
+// the payload's OWN publicKeyMultibase.
 //
 // STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
 // nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
@@ -398,9 +399,25 @@ func VerifyKeyProof(proof string, expect KeyProofExpectations, now time.Time) (*
 			expect.Typ, string(header["typ"]))
 	}
 
-	// 3. Payload schema — CLOSED, exactly four string members. Parsed from the
-	// ORIGINAL payload octets (the signature covers those bytes), not
-	// re-canonicalized: the canonical rule binds PRODUCERS.
+	// 3. Payload schema — CLOSED, exactly four string members — AND the canonical
+	// bytes. The parse runs against the ORIGINAL payload octets, because those are
+	// the bytes the signature covers; the canonical serialization is then
+	// RECOMPUTED from the parsed members and byte-compared against them.
+	//
+	// THE CANONICAL RULE BINDS THE VERIFIER, NOT ONLY THE PRODUCER. A signature
+	// covers whatever octets arrived, so without that comparison a payload whose
+	// four members are REORDERED — or re-spelled with insignificant whitespace —
+	// and signed over that serialization verifies exactly like the canonical one,
+	// and the payload stops being a function of its members.
+	//
+	// WHAT THIS PINS IS THE PAYLOAD'S OCTETS, AND NOTHING PAST THEM. The compact
+	// envelope around them is not canonicalized: Base64urlDecode is
+	// padding-tolerant (a family-wide choice), and no rule pins the protected
+	// header's serialization — so one proof still has more than one envelope
+	// spelling, and a caller must not treat the envelope string as an identity.
+	// Nothing here needs it to be: what a completion spends is the NONCE, consumed
+	// atomically and once by the caller's step 6. Conformant producers already emit
+	// these bytes, so nothing that could be signed correctly is refused here.
 	payloadBytes, err := Base64urlDecode(parts[1])
 	if err != nil {
 		return nil, keyProofInvalid(KeyProofFailureSchema, "failed to decode payload")
@@ -449,6 +466,14 @@ func VerifyKeyProof(proof string, expect KeyProofExpectations, now time.Time) (*
 	}
 	if err := validateKeyProofPayload(payload); err != nil {
 		return nil, err
+	}
+	canonical, err := KeyProofSigningInput(payload)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(canonical, payloadBytes) {
+		return nil, keyProofInvalid(KeyProofFailureSchema,
+			"payload is not the canonical signing input for its members")
 	}
 
 	// 4. Audience — BYTE EQUALITY against the verifier's own configured authority.
