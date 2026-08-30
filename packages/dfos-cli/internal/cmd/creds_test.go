@@ -72,7 +72,7 @@ func TestCredsCommands(t *testing.T) {
 				if got["removed"] != testLoginSubject {
 					t.Fatalf("rm output = %#v", got)
 				}
-				if _, err := os.Stat(credentialPath(testLoginSubject, "")); !os.IsNotExist(err) {
+				if _, err := os.Stat(slotPath(t, testLoginSubject, "")); !os.IsNotExist(err) {
 					t.Fatalf("credential still exists: %v", err)
 				}
 				cmd := newCredsRemoveCmd()
@@ -120,10 +120,10 @@ func TestCredsCommands(t *testing.T) {
 					t.Fatal(err)
 				}
 				runJSON(t, removeOne, []string{testLoginSubject}, &removed)
-				if _, err := os.Stat(credentialPath(testLoginSubject, "a.example.test")); !os.IsNotExist(err) {
+				if _, err := os.Stat(slotPath(t, testLoginSubject, "a.example.test")); !os.IsNotExist(err) {
 					t.Fatalf("the named credential still exists: %v", err)
 				}
-				if _, err := os.Stat(credentialPath(testLoginSubject, "b.example.test")); err != nil {
+				if _, err := os.Stat(slotPath(t, testLoginSubject, "b.example.test")); err != nil {
 					t.Fatalf("removing one host's credential took the other: %v", err)
 				}
 			},
@@ -163,6 +163,17 @@ func setupCredsTest(t *testing.T) {
 	t.Cleanup(func() { cfg = previousCfg })
 }
 
+// slotPath is credentialPath for a test that has already decided the slot is a
+// legitimate one.
+func slotPath(t *testing.T, subjectDID, host string) string {
+	t.Helper()
+	path, err := credentialPath(subjectDID, host)
+	if err != nil {
+		t.Fatalf("credentialPath(%s, %s): %v", subjectDID, host, err)
+	}
+	return path
+}
+
 // writeCredentialRecord plants one record in the (subject, host) slot the store
 // keys by. host names the slot; what the token itself grants is its own claim.
 func writeCredentialRecord(t *testing.T, subjectDID, host, token string) {
@@ -181,7 +192,7 @@ func writeCredentialRecord(t *testing.T, subjectDID, host, token string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(credentialPath(subjectDID, host), data, 0o600); err != nil {
+	if err := os.WriteFile(slotPath(t, subjectDID, host), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

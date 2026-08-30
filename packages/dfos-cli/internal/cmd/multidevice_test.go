@@ -113,6 +113,21 @@ func runJSON(t *testing.T, cmd *cobra.Command, args []string, out any) {
 	}
 }
 
+// captureStdout runs fn with stdout redirected and returns what it wrote. The
+// human half of a command is prose on stdout, so this is where an assertion
+// about what an operator is TOLD has to look.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
 // createIdentity runs `dfos identity create` with the given keystore active and
 // returns the DID. It registers the identity name and points identityFlag at it.
 func createIdentity(t *testing.T, name string, store *keystore.MemoryStore) string {

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -99,5 +101,61 @@ func TestForgetIdentityConfig(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A credential file that will not parse might be a grant for the identity being
+// forgotten, and nothing here can tell whether it is. So forget removes what it
+// could read, leaves what it could not, and says which — rather than reporting a
+// whole forget on a partial view of the store.
+func TestForgetNamesTheCredentialFilesItCouldNotRead(t *testing.T) {
+	setupCredsTest(t)
+	cfg.Identities["alice"] = config.IdentityConfig{DID: testLoginSubject}
+	writeCredentialRecord(t, testLoginSubject, "a.example.test", testCredentialForHost(t, "a.example.test"))
+
+	corrupt := slotPath(t, testLoginSubject, "b.example.test")
+	if err := os.WriteFile(corrupt, []byte("{ this is not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var result identityForgetResult
+	runJSON(t, newIdentityForgetCmd(), []string{"alice"}, &result)
+
+	if !result.CredentialRemoved {
+		t.Fatalf("the readable credential was not removed: %+v", result)
+	}
+	if _, err := os.Stat(slotPath(t, testLoginSubject, "a.example.test")); !os.IsNotExist(err) {
+		t.Fatalf("the readable credential survived: %v", err)
+	}
+	want := []string{"did_dfos_nzkf838efr424433rn2rzkdv8h7t9ae__b.example.test.json"}
+	if !reflect.DeepEqual(result.UnreadableCredentialFiles, want) {
+		t.Fatalf("unreadable files = %v, want %v", result.UnreadableCredentialFiles, want)
+	}
+	// Left in place, not quietly deleted: this command cannot read it, so it is
+	// not this command's to remove.
+	if _, err := os.Stat(corrupt); err != nil {
+		t.Fatalf("the unreadable file was removed anyway: %v", err)
+	}
+
+	// And the human is told, in the same words the ledger uses for a view it
+	// cannot complete.
+	setupCredsTest(t)
+	cfg.Identities["alice"] = config.IdentityConfig{DID: testLoginSubject}
+	if err := os.MkdirAll(credentialStoreDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(slotPath(t, testLoginSubject, "b.example.test"), []byte("{ this is not a record"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		forget := newIdentityForgetCmd()
+		if err := forget.RunE(forget, []string{"alice"}); err != nil {
+			t.Fatalf("identity forget: %v", err)
+		}
+	})
+	for _, want := range []string{"partial", "b.example.test.json", "may still hold a grant"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the forget did not disclose the partial view (%q missing):\n%s", want, out)
+		}
 	}
 }

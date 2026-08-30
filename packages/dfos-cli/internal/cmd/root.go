@@ -299,13 +299,26 @@ func errNoIdentity() error {
 		"  dfos config set default-identity <name|did> as the standing default")
 }
 
+// errNoPeerConfigured is the sentinel under errNoPeer(): THIS MACHINE NAMES NO
+// RELAY AT ALL. It exists because that is a different fact from every other way
+// requirePeer fails — an unknown relay name, or a peer whose DID pin has moved —
+// and one caller is entitled to act on the difference.
+//
+// `keys prove` may fall back to the oracle a ceremony's own resolution named,
+// but only for a holder that brought none of its own (KEY-PROOF.md). An operator
+// who typed --relay named a relay; a pin mismatch is a compromise signal about
+// the relay they named. Reaching past either for someone else's relay would
+// answer a question that was asked of a specific one, so the fallback tests for
+// this sentinel and nothing else.
+var errNoPeerConfigured = errors.New("no peer to talk to")
+
 // errNoPeer is the peer-side twin of errNoIdentity, same three-mechanism shape.
 func errNoPeer() error {
-	return fmt.Errorf("no peer to talk to — name one:\n" +
-		"  --relay <name>                          for this invocation\n" +
-		"  DFOS_RELAY=<name>                       for this environment\n" +
-		"  dfos config set default-peer <name>     as the standing default\n" +
-		"Register a peer first with 'dfos peer add <name> <url>'.")
+	return fmt.Errorf("%w — name one:\n"+
+		"  --relay <name>                          for this invocation\n"+
+		"  DFOS_RELAY=<name>                       for this environment\n"+
+		"  dfos config set default-peer <name>     as the standing default\n"+
+		"Register a peer first with 'dfos peer add <name> <url>'.", errNoPeerConfigured)
 }
 
 // announceSigner echoes the resolved principal, and the mechanism it resolved
