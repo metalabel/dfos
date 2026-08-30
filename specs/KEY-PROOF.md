@@ -96,17 +96,18 @@ Each ceremony purpose is one registered `typ`. The envelope grammar and the veri
 
 ## Carriage
 
-The carriage conveys exactly three values — **presentation endpoint, ceremony identifier, nonce**. The code itself names no identity; the *resolution* of a live code names everything the holder's human must see before signing — this is deliberate, and its trust posture is examined under [Security Considerations](#security-considerations).
+The carriage conveys exactly two values — **an authority and a code** — and the code is the ceremony's identifier: it selects the ceremony at resolution and travels beside the envelope at presentation. What the carriage does not carry is the signing context: everything the payload binds and everything the holder's human must see lives in the *resolution* of a live code, so every carriage form funnels through one resolution step, and a tool MUST resolve before signing — there is no self-contained carriage that skips it. The code itself names no identity; resolving it names everything — this is deliberate, and its trust posture is examined under [Security Considerations](#security-considerations).
 
-**URI carriage.** One HTTPS URL carrying the triple: the presentation endpoint with `ceremony` and `nonce` query members; the presentation endpoint is the URL with those two members removed. A QR code and a deep link are this URI verbatim — a phone arrives later as a carriage of the same flow, never as a second flow.
+**Short code.** The human-typeable display form, `<authority>/<code>`, where `<code>` is an operator-chosen compact token.
 
-**Short code.** A human-typeable display form, `<authority>/<code>`, where `<code>` is an operator-chosen compact token. A tool resolves it with `GET https://<authority>/.well-known/dfos-key-proof?code=<code>`, and the resolved URI's authority MUST byte-equal the resolving authority, so a code's resolution can never redirect a ceremony off the host the human typed.
+**URI carriage.** One HTTPS URL naming the same resolution — the [resolution endpoint](#carriage) with its `code` member. A QR code and a deep link are this URI verbatim: a phone arrives later as a carriage of the same flow, never as a second flow, and lands at the same mandatory resolution as a typed code.
 
-**Resolution.** A live code resolves to the full signing context — everything the payload binds and everything [render-before-sign](#holder-obligations) displays:
+**Resolution.** A tool resolves with `GET https://<authority>/.well-known/dfos-key-proof?code=<code>`. A live code answers the full signing context:
 
 ```jsonc
 {
-  "uri": "…",              // the carriage URI (presentation endpoint + ceremony + nonce)
+  "present": "…",          // absolute URL of the presentation endpoint
+  "nonce": "…",            // the verifier-minted challenge the payload carries
   "audience": "…",         // the authority the envelope names — byte-equal to the resolving authority
   "purpose": "did:dfos:key-add",
   "adopts": { "did": "…", "handle": "…", "displayName": "…" },
@@ -117,11 +118,13 @@ The carriage conveys exactly three values — **presentation endpoint, ceremony 
 }
 ```
 
+The resolved `audience` MUST byte-equal the resolving authority, and the `present` URL's authority MUST byte-equal it too — a code's resolution can never redirect a ceremony off the host the human typed.
+
 `adopts` names the identity the introduction targets: its DID, and the operator's public handle and display name for it. The holder's tool renders these to its human verbatim; a tool MUST NOT sign on a resolution that omits them. `prevCID` is the head the envelope binds — a holder that signs a stale head produces an envelope the operator refuses at adoption, and re-resolves for the current head to re-sign; re-resolution of a live ceremony is how the holder recovers, never a second ceremony.
 
 The `relay` member, when present, is an absolute `https` URL of a relay serving the [`key=` reverse index](https://protocol.dfos.com/web-relay#identities-get-indexv0identitiesdidkeyhaspublicprofilenamecontainsorderafterdidlimitn). It is the operator naming an oracle for the [one-key-one-DID pre-flight](#holder-obligations): a holder with no oracle of its own SHOULD check against it, **for that ceremony only**, and MUST NOT adopt it as a standing peer — the member configures nothing beyond the single pre-flight it names, and a holder's own configured relay always takes precedence. A tool ignores resolution members it does not recognize.
 
-Single-shot applies to the carriage too: a carriage token is consumed with its ceremony, and no member of the triple is a session, a pairing, or a credential.
+Single-shot applies to the carriage too: a code is consumed with its ceremony, and neither the code, the nonce, nor any resolution member is a session, a pairing, or a credential.
 
 ---
 
