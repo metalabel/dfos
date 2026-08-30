@@ -122,6 +122,31 @@ CREATE TABLE IF NOT EXISTS public_credentials (
 
 CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
 
+-- The searchable projection of public_credentials.att: one row per
+-- (credential, resource) named by that credential's attenuations.
+--
+-- GetPublicCredentials asks one question — "which standing grants name THIS
+-- chain?" — and the only way to ask it of a JSON array is json_each over every
+-- credential row, i.e. a full table scan that re-parses every att on every
+-- call. That call is not rare: it sits inside the index projection's per-content
+-- recompute, so its cost is multiplied by the corpus. Measured against the
+-- public relay's corpus (9.4k standing credentials, 9.4k public-read chains) it
+-- ran 17ms per call, which made one recomputeContentRow 77ms and turned the
+-- public-read sweep a single identity delete triggers into a TWELVE-MINUTE
+-- stall — the sequencer pinned at 100% CPU with the ingest mutex held and no
+-- op landing. One indexed row per resource turns that scan into a probe.
+--
+-- Derived, never authoritative: att is still the truth, these rows are written
+-- alongside it in the same transaction and rebuilt from it at open.
+CREATE TABLE IF NOT EXISTS public_credential_resources (
+	cid TEXT NOT NULL,
+	resource TEXT NOT NULL,
+	PRIMARY KEY (cid, resource)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_public_credential_resources_resource
+	ON public_credential_resources(resource, cid);
+
 CREATE TABLE IF NOT EXISTS signing_requests (
 	cid TEXT PRIMARY KEY,
 	request_token TEXT NOT NULL,
@@ -406,6 +431,11 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		readDB.Close()
 		return nil, err
 	}
+	if err := backfillPublicCredentialResources(writeDB); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
+	}
 	for _, statement := range []string{
 		"CREATE INDEX IF NOT EXISTS idx_operation_log_created ON operation_log(created_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_operation_log_ingested ON operation_log(ingested_at, cid)",
@@ -477,6 +507,38 @@ func upgradeOperationLogCIDIndex(db *sql.DB) error {
 		"CREATE UNIQUE INDEX idx_operation_log_cid ON operation_log(cid)",
 	); err != nil {
 		return fmt.Errorf("create unique idx_operation_log_cid: %w", err)
+	}
+	return nil
+}
+
+// backfillPublicCredentialResources derives public_credential_resources from
+// the att column for every credential that has no rows yet.
+//
+// Self-healing rather than versioned: the rows are a pure function of att, so
+// "which credentials are missing from the projection" is a question the two
+// tables can answer between themselves, and asking it every open also repairs a
+// database written by a build that did not maintain the projection. A relay
+// upgrading in place does the whole corpus once; a warm one matches nothing and
+// the pass is a single indexed anti-join.
+//
+// The insert is scoped by `NOT EXISTS` rather than `INSERT OR IGNORE` over
+// everything so the common warm case does not re-parse every att on every boot.
+// That scope is cid-granular, which is only safe because the live path writes a
+// credential's rows in ONE statement (see AddPublicCredential): a credential can
+// hold all of its rows or none, never some, so "has any row" is a sound proxy
+// for "is projected". The empty-resource predicate below is the same one that
+// statement uses, so the live path and this repair admit identical rows.
+func backfillPublicCredentialResources(db *sql.DB) error {
+	_, err := db.Exec(`
+		INSERT OR IGNORE INTO public_credential_resources (cid, resource)
+		SELECT pc.cid, json_extract(je.value, '$.resource')
+		FROM public_credentials pc, json_each(pc.att) je
+		WHERE json_extract(je.value, '$.resource') <> ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM public_credential_resources r WHERE r.cid = pc.cid
+		  )`)
+	if err != nil {
+		return fmt.Errorf("backfill public_credential_resources: %w", err)
 	}
 	return nil
 }
@@ -2347,21 +2409,25 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetPublicCredentials(resource string) ([]string, error) {
-	// Build a query that unnests the att JSON array and matches on resource.
-	// We handle two cases:
+	// Matches the same two cases the att JSON always did:
 	//   1. Exact match on resource
 	//   2. chain:* matches any chain: resource
+	// but through the indexed resource projection rather than json_each over
+	// every credential row — this is the call the index projection makes once
+	// per recomputed content and identity row, so an unindexed scan here is
+	// paid per row of the corpus (see public_credential_resources).
 	var query string
 	var args []any
 
 	if strings.HasPrefix(resource, "chain:") {
-		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je
-			WHERE json_extract(je.value, '$.resource') = ?
-			   OR json_extract(je.value, '$.resource') = 'chain:*'`
+		query = `SELECT DISTINCT pc.jws_token FROM public_credential_resources r
+			JOIN public_credentials pc ON pc.cid = r.cid
+			WHERE r.resource = ? OR r.resource = 'chain:*'`
 		args = []any{resource}
 	} else {
-		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je
-			WHERE json_extract(je.value, '$.resource') = ?`
+		query = `SELECT DISTINCT pc.jws_token FROM public_credential_resources r
+			JOIN public_credentials pc ON pc.cid = r.cid
+			WHERE r.resource = ?`
 		args = []any{resource}
 	}
 
@@ -2405,14 +2471,48 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	if err != nil {
 		return err
 	}
-	_, err = s.writerDB().Exec(
+	if _, err = s.writerDB().Exec(
 		"INSERT OR IGNORE INTO public_credentials (cid, issuer_did, att, exp, jws_token) VALUES (?, ?, ?, ?, ?)",
 		credential.CID, credential.IssuerDID, attJSON, credential.Exp, credential.JWSToken,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	// ONE statement, from the SAME bytes stored above.
+	//
+	// Two properties are load-bearing and a per-resource Exec loop has neither.
+	// A single statement is atomic even when this store is not inside a write
+	// batch — writerDB() is the bare connection when s.tx is nil, so a loop
+	// autocommits per resource and a crash mid-loop leaves a credential holding
+	// SOME of its rows. The boot repair cannot see that: its NOT EXISTS is
+	// cid-granular, so a partially-projected credential looks done forever and
+	// the missing grants simply stop being returned. The loop also took one host
+	// parameter per resource, which an att large enough would push past SQLite's
+	// variable ceiling; this form takes two regardless of att length.
+	//
+	// Deriving from attJSON rather than the Go slice is the point: the column and
+	// its projection cannot disagree when one is computed from the other, and the
+	// predicate here is character-for-character the one
+	// backfillPublicCredentialResources uses, so the live path and the repair
+	// path admit exactly the same rows. A resource-less att writes nothing, which
+	// is the correct projection of a credential that names no resource.
+	if _, err := s.writerDB().Exec(
+		`INSERT OR IGNORE INTO public_credential_resources (cid, resource)
+		 SELECT ?, json_extract(je.value, '$.resource')
+		 FROM json_each(?) je
+		 WHERE json_extract(je.value, '$.resource') <> ''`,
+		credential.CID, string(attJSON),
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RemovePublicCredential(credentialCID string) error {
+	if _, err := s.writerDB().Exec(
+		"DELETE FROM public_credential_resources WHERE cid = ?", credentialCID,
+	); err != nil {
+		return err
+	}
 	_, err := s.writerDB().Exec("DELETE FROM public_credentials WHERE cid = ?", credentialCID)
 	return err
 }
