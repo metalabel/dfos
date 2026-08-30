@@ -1269,12 +1269,24 @@ func TestStoreLoginCredentialKeepsAHostTheOverwriteWouldOrphan(t *testing.T) {
 	}
 
 	// And the readers find it by what it says, from wherever it now sits.
-	_, records, unreadable, err := credentialFilesForSubject(testLoginSubject)
+	paths, records, unreadable, err := credentialFilesForSubject(testLoginSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(records) != 2 || len(unreadable) != 0 {
 		t.Fatalf("the store holds %d readable and %d unreadable records, want 2 and 0", len(records), len(unreadable))
+	}
+	// The incumbent MOVED — it is in exactly one slot. A copy would leave the
+	// same record in two, and every reader scanning the store would then report
+	// two files naming one host.
+	slots := map[string][]string{}
+	for i, record := range records {
+		slots[record.Credential] = append(slots[record.Credential], filepath.Base(paths[i]))
+	}
+	for token, held := range slots {
+		if len(held) != 1 {
+			t.Fatalf("one credential (%s…) occupies %v — a record is in more than one slot", token[:16], held)
+		}
 	}
 	covers := func(token, host string) bool {
 		for _, named := range credentialAPIHosts(token) {
@@ -1292,6 +1304,39 @@ func TestStoreLoginCredentialKeepsAHostTheOverwriteWouldOrphan(t *testing.T) {
 		if !found {
 			t.Fatalf("no stored record covers %s after the overwrite", host)
 		}
+	}
+}
+
+// The move is a RENAME, not a copy: the incumbent leaves its old slot in the
+// same instant it arrives in the new one, so it is in exactly one slot at every
+// point in between. A copy would hold the same record in two slots for as long
+// as the write that follows takes — and leave it in both for good if that write
+// never lands — which every store scan reads as two files naming one host, from
+// a login that did not even succeed.
+func TestRehomeDisplacedCredentialEmptiesTheSlotItLeaves(t *testing.T) {
+	setupLoginClientEnv(t)
+	lc, _ := newTestLoginClient(t)
+
+	both := testCredentialForHosts(t, "a.example.test", "b.example.test")
+	occupied, err := storeLoginCredential(testLoginSubject, lc, both, "")
+	if err != nil {
+		t.Fatalf("store the two-host credential: %v", err)
+	}
+
+	// Exactly what a store of an `a`-only credential does first, and nothing
+	// after it: the slot must already be free when this returns.
+	if err := rehomeDisplacedCredential(occupied, []string{"a.example.test"}); err != nil {
+		t.Fatalf("rehome: %v", err)
+	}
+	if _, err := os.Stat(occupied); !os.IsNotExist(err) {
+		t.Fatalf("the incumbent is still in the slot it was moved out of (%v) — the record is in two places", err)
+	}
+	moved, err := readStoredCredential(slotPath(t, testLoginSubject, "b.example.test"))
+	if err != nil {
+		t.Fatalf("the incumbent did not arrive in b's slot: %v", err)
+	}
+	if moved.Credential != both {
+		t.Fatalf("the moved record holds %q, want the two-host credential", moved.Credential)
 	}
 }
 

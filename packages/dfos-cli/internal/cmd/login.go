@@ -1423,11 +1423,18 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential, target
 // held for `b` has just been deleted, and `api call --host b` starts answering
 // "no stored credential covers api:b" for a grant they never gave up.
 //
-// So the incumbent is MOVED rather than overwritten: it is rewritten into a slot
+// So the incumbent is MOVED rather than overwritten: it is renamed into a slot
 // named by one of its own hosts that the incoming credential does not cover.
 // Nothing reads a filename back, so the move costs the record nothing — every
 // reader still finds it by the hosts it names, all of them, from wherever it
 // sits.
+//
+// A RENAME, NOT A COPY. Same-directory rename is atomic, so the incumbent is in
+// exactly one slot at every instant — including the instant after the write that
+// follows this one fails, or the process dies between them. Copying first would
+// leave the same record in two slots on that path, and every reader that scans
+// the store would then report two files naming one host: an ambiguity the user
+// cannot act on, produced by a login that did not even succeed.
 //
 // A host whose slot is already occupied needs no rescue: a file lands in slot X
 // because X is one of the hosts ITS record names, so that host still has a
@@ -1459,11 +1466,10 @@ func rehomeDisplacedCredential(path string, incoming []string) error {
 		if _, err := os.Stat(refuge); err == nil {
 			continue
 		}
-		data, err := json.MarshalIndent(incumbent, "", "  ")
-		if err != nil {
-			return err
+		if err := os.Rename(path, refuge); err != nil {
+			return fmt.Errorf("move the credential covering %s to %s: %w", host, filepath.Base(refuge), err)
 		}
-		return writeFileAtomic(refuge, append(data, '\n'))
+		return nil
 	}
 	return nil
 }
