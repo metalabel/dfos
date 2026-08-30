@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/apispec"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
@@ -778,6 +779,72 @@ func TestKeysProve_AConfiguredPeerOutranksTheResolutionsRelay(t *testing.T) {
 	}
 	if strings.Contains(stderr, "named by the ceremony resolution") {
 		t.Fatalf("a configured peer was reported as the ceremony's:\n%s", stderr)
+	}
+}
+
+// The fallback is for a holder that brought NO oracle — not for one whose
+// oracle this machine found something wrong with.
+//
+// An unknown --relay is a relay the operator named and this machine cannot
+// resolve. A moved DID pin is worse: the relay at that URL is not the one the
+// config pinned, which is either a re-key or a different relay answering, and
+// the CLI cannot tell those apart. Reaching past either for the relay the
+// CEREMONY named would hand the oracle question to the party running the
+// ceremony at exactly the moment this machine had reason to distrust the one it
+// was told to use.
+func TestKeysProve_ANamedOracleThatFailsIsNotReplacedByTheCeremonys(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(*testing.T)
+		want    string
+	}{
+		{
+			name: "the pin has moved",
+			arrange: func(t *testing.T) {
+				peer := newFakePeer(t) // serves pinnedDID
+				cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: otherDID}
+				relayFlag = "prod"
+			},
+			// The alarm keeps its own words: both DIDs and the one command that
+			// resolves it.
+			want: "peer repin prod",
+		},
+		{
+			name: "the relay is not one this machine knows",
+			arrange: func(t *testing.T) {
+				relayFlag = "not-registered"
+			},
+			want: "not-registered",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storeA, _, _ := setupDevices(t)
+			keys = storeA
+			createVault(t, "personal")
+			theirs := newFakeOracle(t)
+			stub := newStubCeremony(t)
+			stub.resolveRelay = theirs.server.URL
+			tc.arrange(t)
+
+			_, _, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, nil)
+			if err == nil || !strings.Contains(err.Error(), "could not run") {
+				t.Fatalf("want an unanswerable-check refusal, got %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the refusal must carry %q:\n%v", tc.want, err)
+			}
+			if theirs.indexQueries != 0 {
+				t.Fatalf("the ceremony's relay answered %d times for a machine that named its own", theirs.indexQueries)
+			}
+			if stub.completeHits != 0 {
+				t.Fatal("signed anyway")
+			}
+			// A relay WAS offered by the ceremony, so the refusal must not claim
+			// there was nothing to fall back to.
+			if strings.Contains(err.Error(), "Nor did this ceremony name one") {
+				t.Fatalf("the refusal reported no ceremony relay when one was offered: %v", err)
+			}
+		})
 	}
 }
 

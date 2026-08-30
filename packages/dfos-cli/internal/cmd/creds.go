@@ -181,11 +181,19 @@ func newCredsRemoveCmd() *cobra.Command {
 // on the credential's own `api:<host>` attenuation — the same string `api call`
 // selects on — so what the user types here is what they would type there.
 func selectStoredCredential(did, host string) (string, storedLoginCredential, error) {
-	paths, records, err := credentialFilesForSubject(did)
+	paths, records, unreadable, err := credentialFilesForSubject(did)
 	if err != nil {
 		return "", storedLoginCredential{}, err
 	}
 	if len(records) == 0 {
+		// "None" is a claim about the whole store, so it is only made about a
+		// store that was wholly read. A file that would not parse might be the
+		// one being asked for, and saying nothing is stored would be answering
+		// with a gap.
+		if len(unreadable) > 0 {
+			return "", storedLoginCredential{}, fmt.Errorf("no stored login credential for %s among the files that could be read — %s did not parse, so this answer is partial",
+				did, credentialFileList(unreadable))
+		}
 		return "", storedLoginCredential{}, fmt.Errorf("no stored login credential for %s", did)
 	}
 
@@ -220,6 +228,18 @@ func selectStoredCredential(did, host string) (string, storedLoginCredential, er
 			len(matches), did, wanted, credentialStoreDir())
 	}
 	return paths[matches[0]], records[matches[0]], nil
+}
+
+// credentialFileList names files by their basename: the directory is already
+// said elsewhere in every message that uses this, and the operator's next move
+// is to open one of them.
+func credentialFileList(paths []string) string {
+	names := make([]string, len(paths))
+	for i, path := range paths {
+		names[i] = filepath.Base(path)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // credentialHostsLabel renders what one stored credential is spendable against.

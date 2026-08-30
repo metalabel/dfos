@@ -562,6 +562,11 @@ type linkageReport struct {
 	Limit string `json:"limit,omitempty"`
 	// Declaring names the identities that have EVER declared this key.
 	Declaring []string `json:"declaringIdentities,omitempty"`
+	// noOracleAnywhere records the one shape of unanswerability where NEITHER
+	// side offered an oracle: this machine named no relay and the resolution
+	// carried none. It shapes the refusal's wording and is nobody's business
+	// downstream, so it is not part of the receipt.
+	noOracleAnywhere bool
 }
 
 // oracleProvenance annotates an oracle that came from the ceremony rather than
@@ -586,7 +591,7 @@ func oracleProvenance(r linkageReport) string {
 // thing the human can fix from here.
 func errLinkageUncheckable(report linkageReport) error {
 	nothingToFallBackTo := ""
-	if report.OracleVia == "" {
+	if report.noOracleAnywhere {
 		nothingToFallBackTo = "Nor did this ceremony name one: a short code's resolution may offer a relay for exactly this\n" +
 			"check, and this ceremony offered none.\n"
 	}
@@ -632,17 +637,26 @@ const (
 // never asked for (KEY-PROOF.md "Security Considerations"). The fallback's
 // discipline is identical, so an operator-named relay that cannot answer the
 // question is as loud a failure as a configured one.
+//
+// "NONE" MEANS NONE — errNoPeerConfigured and nothing else. A --relay this
+// machine cannot resolve and a peer whose DID pin has moved are both statements
+// about a relay the operator DID name, the second of them a compromise signal,
+// and each was a hard refusal before there was any fallback to reach for.
+// Treating every requirePeer failure as "no oracle here" would let the operator
+// who supplies the ceremony also supply the oracle that vets it, exactly when
+// this machine had just found something wrong with the one it was told to use.
 func checkKeyLinkage(publicKey string, car *carriage) linkageReport {
 	report := linkageReport{}
 	ctx, c, err := requirePeer("")
 	switch {
 	case err == nil:
 		report.Oracle, report.OracleURL, report.OracleVia = ctx.RelayName, ctx.RelayURL, oracleViaPeer
-	case car.Relay != "":
+	case errors.Is(err, errNoPeerConfigured) && car.Relay != "":
 		c = client.New(car.Relay)
 		report.Oracle, report.OracleURL, report.OracleVia = ceremonyRelayLabel(car.Relay), car.Relay, oracleViaResolution
 	default:
 		report.Limit = err.Error()
+		report.noOracleAnywhere = errors.Is(err, errNoPeerConfigured) && car.Relay == ""
 		return report
 	}
 	if err := proveOracle(c, report.Oracle, report.OracleURL); err != nil {

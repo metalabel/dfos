@@ -296,7 +296,7 @@ func newLoginCmd() *cobra.Command {
 				}
 				credentialPath, err = storeLoginCredential(subjectDID, lc, callback.Credential, targetHost)
 				if err != nil {
-					return err
+					return fmt.Errorf("signed in as %s — the sign-in itself verified — but %w", signerDID, err)
 				}
 			}
 
@@ -1175,11 +1175,16 @@ func verifyLoginSignature(jws, keyID string, state protocol.IdentityState) error
 // a key account: ':' is legal in a POSIX path but not on Windows, so it is
 // replaced rather than relied on.
 func credentialFileName(did, host string) string {
-	slot := strings.TrimSpace(host)
-	if slot == "" {
-		slot = noHostCredentialSlot
+	return pathSafeSegment(did) + "__" + pathSafeSegment(credentialSlot(host)) + ".json"
+}
+
+// credentialSlot is the slot name for a host: the host itself, or the no-host
+// slot when there is none.
+func credentialSlot(host string) string {
+	if slot := strings.TrimSpace(host); slot != "" {
+		return slot
 	}
-	return pathSafeSegment(did) + "__" + pathSafeSegment(slot) + ".json"
+	return noHostCredentialSlot
 }
 
 // noHostCredentialSlot files a credential that names no `api:<host>` resource at
@@ -1189,6 +1194,49 @@ const noHostCredentialSlot = "no-host"
 
 func pathSafeSegment(s string) string { return strings.ReplaceAll(s, ":", "_") }
 
+// assertFilableHost refuses a host that could not honestly be a filename.
+//
+// THE HOSTS COME FROM THE ISSUER, NOT FROM HERE. A credential's `api:<host>`
+// attenuations are written by whoever minted it, and this store turns them into
+// path components — so an issuer that returned `api:../../../.ssh/authorized`
+// would have named the file this client writes, and `filepath.Join` would have
+// carried it out of the credentials directory without complaint. What the
+// server says is data; it never gets to be a path.
+//
+// The rule is the smallest one that says what a slot IS: a bare authority, a
+// host with an optional port and nothing else. Anything a path could read as a
+// step — a separator, a traversal, whitespace, a userinfo prefix — is not a
+// host, and a credential naming one is refused rather than filed somewhere
+// unexpected.
+func assertFilableHost(host string) error {
+	refuse := fmt.Errorf("the credential names the resource %q, whose host is not a bare host[:port] — "+
+		"a credential store slot is a filename, and this one is not one", "api:"+host)
+	// Nothing but dots is a path step ("." and ".."), never a host, and it is the
+	// one authority `url.Parse` hands back unchanged.
+	if host == "" || strings.Trim(host, ".") == "" {
+		return refuse
+	}
+	parsed, err := url.Parse("//" + host)
+	if err != nil || parsed.Host != host || parsed.User != nil {
+		return refuse
+	}
+	return nil
+}
+
+// assertFilableHosts vets every host a credential names, because every one of
+// them is a slot this store may file it under. One malformed resource refuses
+// the whole credential: a credential that names a path is not one this client
+// can account for, and storing the readable half of it would be a partial
+// record reported as a whole one.
+func assertFilableHosts(hosts []string) error {
+	for _, host := range hosts {
+		if err := assertFilableHost(host); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // legacyCredentialFileName is the pre-host spelling — one file per subject. Read
 // forever, written never.
 func legacyCredentialFileName(did string) string { return pathSafeSegment(did) + ".json" }
@@ -1197,8 +1245,24 @@ func credentialStoreDir() string {
 	return filepath.Join(config.ConfigDir(), "credentials")
 }
 
-func credentialPath(did, host string) string {
-	return filepath.Join(credentialStoreDir(), credentialFileName(did, host))
+// credentialPath is the one place a (subject, host) pair becomes a path, and it
+// is where the pair is proven to be one. The host is vetted as an authority, and
+// then the assembled filename is required to be a single local component — a
+// second, independent check that catches whatever the first did not, including
+// anything a malformed subject DID could contribute. A path that leaves the
+// credentials directory is never returned, so nothing downstream has to notice
+// that it left.
+func credentialPath(did, host string) (string, error) {
+	slot := credentialSlot(host)
+	if err := assertFilableHost(slot); err != nil {
+		return "", err
+	}
+	name := credentialFileName(did, slot)
+	if !filepath.IsLocal(name) {
+		return "", fmt.Errorf("the credential store slot for (%s, %s) is not a name inside %s — refusing to write it",
+			did, slot, credentialStoreDir())
+	}
+	return filepath.Join(credentialStoreDir(), name), nil
 }
 
 // credentialAPIHosts is every `api:<host>` a credential names, sorted and
@@ -1225,12 +1289,14 @@ func credentialAPIHosts(token string) []string {
 
 // credentialSlotHost picks the slot a credential is filed under: the first host
 // its own attenuation names, then the host the login was aimed at, then none.
+// hosts is what credentialAPIHosts read from the credential, already vetted as
+// filable by the caller.
 //
 // The credential's word comes first because that is what the spend side matches;
 // the login target is the fallback for an artifact whose attenuation says
 // nothing this client can read.
-func credentialSlotHost(token, target string) string {
-	if hosts := credentialAPIHosts(token); len(hosts) > 0 {
+func credentialSlotHost(hosts []string, target string) string {
+	if len(hosts) > 0 {
 		return hosts[0]
 	}
 	return strings.TrimSpace(target)
@@ -1239,13 +1305,19 @@ func credentialSlotHost(token, target string) string {
 // credentialFilesForSubject is every stored record whose SubjectDID is this one,
 // in filename order. The RECORD decides, not the filename, so a legacy file and
 // a slotted one are found the same way.
-func credentialFilesForSubject(did string) (paths []string, records []storedLoginCredential, err error) {
+//
+// unreadable is every .json the scan could not open or parse. It is RETURNED
+// rather than skipped: a file that will not parse may hold a grant for this
+// subject, and nothing here can tell whether it does. A caller that acted on
+// records alone would be acting on a partial view of the store, so the partial
+// half travels with it and the caller says so.
+func credentialFilesForSubject(did string) (paths []string, records []storedLoginCredential, unreadable []string, err error) {
 	entries, err := os.ReadDir(credentialStoreDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, fmt.Errorf("read credential store: %w", err)
+		return nil, nil, nil, fmt.Errorf("read credential store: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
@@ -1253,13 +1325,17 @@ func credentialFilesForSubject(did string) (paths []string, records []storedLogi
 		}
 		path := filepath.Join(credentialStoreDir(), entry.Name())
 		record, err := readStoredCredential(path)
-		if err != nil || record.SubjectDID != did {
+		if err != nil {
+			unreadable = append(unreadable, path)
+			continue
+		}
+		if record.SubjectDID != did {
 			continue
 		}
 		paths = append(paths, path)
 		records = append(records, record)
 	}
-	return paths, records, nil
+	return paths, records, unreadable, nil
 }
 
 // credentialJWSTyp is the registered typ of a DFOS credential artifact.
@@ -1294,7 +1370,18 @@ func assertCredentialForClient(token, clientDID string) error {
 // storeLoginCredential writes one credential into its (subject, host) slot.
 // targetHost is the API this login was aimed at, used only when the credential's
 // own attenuation names no host.
+//
+// The hosts are vetted BEFORE anything is written, and the whole credential is
+// refused if any of them is not a filable authority — see assertFilableHosts.
 func storeLoginCredential(subjectDID string, lc *loginClient, credential, targetHost string) (string, error) {
+	hosts := credentialAPIHosts(credential)
+	if err := assertFilableHosts(hosts); err != nil {
+		return "", fmt.Errorf("refusing to store the credential: %w", err)
+	}
+	path, err := credentialPath(subjectDID, credentialSlotHost(hosts, targetHost))
+	if err != nil {
+		return "", fmt.Errorf("refusing to store the credential: %w", err)
+	}
 	dir := credentialStoreDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
@@ -1304,6 +1391,9 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential, target
 	// both matching the same host — two candidates naming one subject, which
 	// `api call` reports as an ambiguity the user cannot act on.
 	if err := migrateLegacyCredential(subjectDID); err != nil {
+		return "", err
+	}
+	if err := rehomeDisplacedCredential(path, hosts); err != nil {
 		return "", err
 	}
 	record := storedLoginCredential{
@@ -1317,11 +1407,65 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential, target
 	if err != nil {
 		return "", err
 	}
-	path := credentialPath(subjectDID, credentialSlotHost(credential, targetHost))
 	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// rehomeDisplacedCredential keeps the record already in this slot from taking a
+// host down with it.
+//
+// A slot holds ONE record, and the credential about to take it is filed under
+// the FIRST host it names — so an `api:a`+`api:b` credential sits in slot `a`,
+// and the next login that returns an `a`-only credential lands on top of it.
+// The user is told the login succeeded while the only credential this machine
+// held for `b` has just been deleted, and `api call --host b` starts answering
+// "no stored credential covers api:b" for a grant they never gave up.
+//
+// So the incumbent is MOVED rather than overwritten: it is rewritten into a slot
+// named by one of its own hosts that the incoming credential does not cover.
+// Nothing reads a filename back, so the move costs the record nothing — every
+// reader still finds it by the hosts it names, all of them, from wherever it
+// sits.
+//
+// A host whose slot is already occupied needs no rescue: a file lands in slot X
+// because X is one of the hosts ITS record names, so that host still has a
+// credential once this write completes. And when every host the incumbent names
+// is either covered by the incoming credential or already held elsewhere, there
+// is nothing to preserve and the write replaces it.
+func rehomeDisplacedCredential(path string, incoming []string) error {
+	incumbent, err := readStoredCredential(path)
+	if err != nil {
+		// An empty slot displaces nothing, and a record that will not parse names
+		// no hosts this could preserve.
+		return nil
+	}
+	covered := make(map[string]bool, len(incoming))
+	for _, host := range incoming {
+		covered[host] = true
+	}
+	for _, host := range credentialAPIHosts(incumbent.Credential) {
+		if covered[host] {
+			continue
+		}
+		// The incumbent's own subject, not the incoming one: they are the same by
+		// construction, and a hand-edited store that disagrees is re-filed under
+		// the DID its record claims rather than one this call assumed.
+		refuge, err := credentialPath(incumbent.SubjectDID, host)
+		if err != nil || refuge == path {
+			continue
+		}
+		if _, err := os.Stat(refuge); err == nil {
+			continue
+		}
+		data, err := json.MarshalIndent(incumbent, "", "  ")
+		if err != nil {
+			return err
+		}
+		return writeFileAtomic(refuge, append(data, '\n'))
+	}
+	return nil
 }
 
 // migrateLegacyCredential rewrites a pre-host `<did>.json` into its slot. Lazy
@@ -1346,7 +1490,13 @@ func migrateLegacyCredential(subjectDID string) error {
 	if record.SubjectDID != subjectDID {
 		return nil
 	}
-	slot := credentialPath(subjectDID, credentialSlotHost(record.Credential, ""))
+	slot, err := credentialPath(subjectDID, credentialSlotHost(credentialAPIHosts(record.Credential), ""))
+	if err != nil {
+		// A legacy record naming a host that is not filable is left exactly where
+		// it is: it is already inside the store under a name this scheme wrote,
+		// and a migration is not the place to act on what its issuer said.
+		return nil
+	}
 	if slot == legacy {
 		return nil
 	}

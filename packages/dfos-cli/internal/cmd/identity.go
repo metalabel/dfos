@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -2275,6 +2276,12 @@ type identityForgetResult struct {
 	ActiveContextCleared   bool     `json:"activeContextCleared"`
 	DefaultIdentityCleared bool     `json:"defaultIdentityCleared"`
 	CredentialRemoved      bool     `json:"credentialRemoved"`
+	// UnreadableCredentialFiles names the files in the credential store this
+	// forget could not open or parse. A file that will not parse may be a grant
+	// for this identity, so a forget that stepped over one removed what it could
+	// read and no more — and says which files it could not, rather than
+	// reporting a whole job on a partial view.
+	UnreadableCredentialFiles []string `json:"unreadableCredentialFiles,omitempty"`
 }
 
 func newIdentityForgetCmd() *cobra.Command {
@@ -2290,8 +2297,10 @@ func newIdentityForgetCmd() *cobra.Command {
 			// EVERY stored credential for this subject, not one: the store holds a
 			// file per (subject, host), and forgetting an identity while leaving
 			// some of its grants on disk would be a partial forget reported as a
-			// whole one.
-			paths, _, err := credentialFilesForSubject(result.DID)
+			// whole one. A file that will not parse is the one thing this cannot
+			// remove and cannot vouch for, so it is carried out of the scan and
+			// named below rather than stepped over.
+			paths, _, unreadable, err := credentialFilesForSubject(result.DID)
 			if err != nil {
 				return err
 			}
@@ -2301,6 +2310,10 @@ func newIdentityForgetCmd() *cobra.Command {
 				}
 				result.CredentialRemoved = true
 			}
+			for _, path := range unreadable {
+				result.UnreadableCredentialFiles = append(result.UnreadableCredentialFiles, filepath.Base(path))
+			}
+			sort.Strings(result.UnreadableCredentialFiles)
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
@@ -2322,6 +2335,17 @@ func newIdentityForgetCmd() *cobra.Command {
 			}
 			if result.CredentialRemoved {
 				fmt.Println("  Stored login credential removed.")
+			}
+			// The partial view, said as a partial view. Removing what parsed and
+			// stopping there is the right thing to do — a file this command cannot
+			// read is a file it cannot claim is not a grant — but reporting it as a
+			// whole forget would leave the operator believing a credential is gone
+			// that may still be on disk.
+			if len(result.UnreadableCredentialFiles) > 0 {
+				fmt.Printf("  Credentials: partial — %d file(s) in %s did not parse and were left in place: %s\n",
+					len(result.UnreadableCredentialFiles), credentialStoreDir(),
+					strings.Join(result.UnreadableCredentialFiles, ", "))
+				fmt.Println("  Read or delete those files yourself; one of them may still hold a grant for this identity.")
 			}
 			// Forget removes a NAME, and deliberately nothing else: no key is
 			// touched and no chain is dropped. Saying which is which matters,

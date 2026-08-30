@@ -12,6 +12,7 @@ package cmd
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1149,6 +1150,148 @@ func TestStoreLoginCredentialReplacesRatherThanFollows(t *testing.T) {
 	}
 	if record.Credential != "second.header.sig" {
 		t.Fatalf("credential = %q, want the newer one", record.Credential)
+	}
+}
+
+// testCredentialForHosts is a credential whose attenuation names one `api:`
+// resource per string given — which is what the store reads to decide the slots
+// it is filed under. The resources are written VERBATIM, so a test can hand it
+// something no honest issuer would send.
+func testCredentialForHosts(t *testing.T, hosts ...string) string {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	att := make([]map[string]string, 0, len(hosts))
+	for _, host := range hosts {
+		att = append(att, map[string]string{"resource": "api:" + host, "action": "read"})
+	}
+	token, err := protocol.CreateJWS(protocol.JWSHeader{
+		Alg: "EdDSA",
+		Typ: credentialJWSTyp,
+		Kid: testLoginSubject + "#key_test",
+	}, map[string]any{
+		"iss": testLoginSubject, "aud": testLoginOther, "att": att,
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// The `api:<host>` resources are the ISSUER's text, and the store turns them
+// into filenames. A resource that spells a path is refused outright: nothing is
+// written, inside the credential store or anywhere else.
+func TestStoreLoginCredentialRefusesAResourceThatNamesAPath(t *testing.T) {
+	setupLoginClientEnv(t)
+	lc, _ := newTestLoginClient(t)
+
+	outside := filepath.Join(config.ConfigDir(), "credentials", "..", "..", "escaped.json")
+	for _, resource := range []string{
+		"../../../escaped",
+		"api.example.test/../../escaped",
+		`api.example.test\escaped`,
+		"..",
+		"api.example.test escaped",
+	} {
+		credential := testCredentialForHosts(t, resource)
+		path, err := storeLoginCredential(testLoginSubject, lc, credential, "")
+		if err == nil {
+			t.Fatalf("resource %q was filed at %s", resource, path)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("%q", "api:"+resource)) {
+			t.Fatalf("the refusal must name the resource it read:\n%v", err)
+		}
+		if path != "" {
+			t.Fatalf("a refused store returned the path %q", path)
+		}
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("a file was written outside the credential store: %v", err)
+	}
+
+	// The store itself holds nothing — not even the directory's worth of a
+	// half-written attempt.
+	entries, err := os.ReadDir(credentialStoreDir())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the credential store holds %d file(s) after refusals", len(entries))
+	}
+
+	// One bad resource condemns the whole credential: a credential naming a path
+	// is not one this client can account for, even where it also names a host.
+	both := testCredentialForHosts(t, "api.example.test", "../escaped")
+	if _, err := storeLoginCredential(testLoginSubject, lc, both, ""); err == nil {
+		t.Fatal("a credential naming one good host and one path was stored")
+	}
+}
+
+// A credential covering two hosts sits in ONE slot, so the next login for the
+// first of them lands on top of it. The host the incumbent alone covered must
+// still have a credential afterwards — the user gave up no grant by signing in
+// again.
+func TestStoreLoginCredentialKeepsAHostTheOverwriteWouldOrphan(t *testing.T) {
+	setupLoginClientEnv(t)
+	lc, _ := newTestLoginClient(t)
+
+	both := testCredentialForHosts(t, "a.example.test", "b.example.test")
+	first, err := storeLoginCredential(testLoginSubject, lc, both, "")
+	if err != nil {
+		t.Fatalf("store the two-host credential: %v", err)
+	}
+	if want := slotPath(t, testLoginSubject, "a.example.test"); first != want {
+		t.Fatalf("the two-host credential is filed at %s, want the first host's slot %s", first, want)
+	}
+
+	onlyA := testCredentialForHosts(t, "a.example.test")
+	second, err := storeLoginCredential(testLoginSubject, lc, onlyA, "")
+	if err != nil {
+		t.Fatalf("store the one-host credential: %v", err)
+	}
+	if second != first {
+		t.Fatalf("the second login took slot %s, not %s", second, first)
+	}
+	if record, err := readStoredCredential(second); err != nil || record.Credential != onlyA {
+		t.Fatalf("slot a holds %+v (%v), want the newer credential", record, err)
+	}
+
+	// b's coverage survived, in a slot of its own.
+	moved, err := readStoredCredential(slotPath(t, testLoginSubject, "b.example.test"))
+	if err != nil {
+		t.Fatalf("the overwrite orphaned b.example.test: %v", err)
+	}
+	if moved.Credential != both {
+		t.Fatalf("the rehomed record holds %q, want the two-host credential", moved.Credential)
+	}
+
+	// And the readers find it by what it says, from wherever it now sits.
+	_, records, unreadable, err := credentialFilesForSubject(testLoginSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || len(unreadable) != 0 {
+		t.Fatalf("the store holds %d readable and %d unreadable records, want 2 and 0", len(records), len(unreadable))
+	}
+	covers := func(token, host string) bool {
+		for _, named := range credentialAPIHosts(token) {
+			if named == host {
+				return true
+			}
+		}
+		return false
+	}
+	for _, host := range []string{"a.example.test", "b.example.test"} {
+		found := false
+		for _, record := range records {
+			found = found || covers(record.Credential, host)
+		}
+		if !found {
+			t.Fatalf("no stored record covers %s after the overwrite", host)
+		}
 	}
 }
 
