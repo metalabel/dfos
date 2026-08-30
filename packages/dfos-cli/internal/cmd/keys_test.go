@@ -731,6 +731,190 @@ func TestKeysListReportsWhatARotationRetired(t *testing.T) {
 	}
 }
 
+// runRemove drives `keys remove <selector>` and returns its report. It is the
+// happy path only — a refusal is an error, and removeRefusal is how those are
+// asserted on.
+func runRemove(t *testing.T, selector string, armed bool) keyRemoval {
+	t.Helper()
+	cmd := newKeysRemoveCmd()
+	if armed {
+		mustSetFlag(t, cmd, "yes", "true")
+	}
+	var res keyRemoval
+	runJSON(t, cmd, []string{selector}, &res)
+	return res
+}
+
+// removeRefusal asserts that `keys remove --yes <selector>` refuses, and hands
+// back the refusal. Armed on purpose: a key this command will not touch is one
+// it will not touch with --yes either.
+func removeRefusal(t *testing.T, selector string) error {
+	t.Helper()
+	cmd := newKeysRemoveCmd()
+	mustSetFlag(t, cmd, "yes", "true")
+	_, _, err := runCapturing(t, cmd, []string{selector})
+	if err == nil {
+		t.Fatalf("'keys remove --yes %s' was allowed", selector)
+	}
+	return err
+}
+
+// A candidate is the key prune can never reach — nothing here declares it, and
+// that is its normal state rather than orphanhood. `remove` is the by-name path
+// that reaches it, and it is a dry run until armed.
+func TestKeysRemoveTakesACandidatePruneNeverReaches(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createStandaloneIdentity(t, "alice", storeA)
+	candidate := candidateAccountPrefix + "z6MkAbandonedCeremonyKey"
+	publicKey := plantKey(t, storeA, candidate)
+	keys = storeA
+
+	// The premise: an armed prune leaves the candidate exactly where it is.
+	if res := runPrune(t, true); res.Removed != 0 {
+		t.Fatalf("prune removed %d key(s); a candidate is never pruned", res.Removed)
+	}
+	if !storeA.HasKey(candidate) {
+		t.Fatal("prune deleted a candidate")
+	}
+
+	dry := runRemove(t, publicKey, false)
+	if dry.Armed || dry.Removed {
+		t.Fatalf("a dry run reported armed=%v removed=%v", dry.Armed, dry.Removed)
+	}
+	if dry.Key.Account != candidate || dry.Key.Status != statusCandidate {
+		t.Fatalf("remove resolved the public key to %+v", dry.Key)
+	}
+	if dry.Because == "" {
+		t.Fatal("a removal with no stated reason is not deliberate")
+	}
+	if dry.Recoverable {
+		t.Fatal("a planted key no vault minted is not derivable from any phrase")
+	}
+	if !storeA.HasKey(candidate) {
+		t.Fatal("a dry run deleted the candidate")
+	}
+
+	armed := runRemove(t, candidate, true)
+	if !armed.Armed || !armed.Removed {
+		t.Fatalf("'remove --yes' reported armed=%v removed=%v", armed.Armed, armed.Removed)
+	}
+	if storeA.HasKey(candidate) {
+		t.Fatal("'remove --yes' left the candidate in the keystore")
+	}
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger: %v", err)
+	}
+	for _, e := range ledger.Entries {
+		if e.Account == candidate {
+			t.Fatalf("the removed candidate is still in the ledger: %+v", e)
+		}
+	}
+}
+
+// An orphan is removable too — one at a time, named, which is the difference
+// between this and prune's sweep.
+func TestKeysRemoveTakesOneOrphanAndLeavesTheOthers(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	plantKey(t, storeA, "pending:key_interrupted")
+	plantKey(t, storeA, "did:dfos:notinthisrelay#key_gone")
+	keys = storeA
+
+	// Named by its key id, which is what an operator reads off `keys list`.
+	res := runRemove(t, "key_interrupted", true)
+	if !res.Removed || res.Key.Status != statusOrphan {
+		t.Fatalf("removing an orphan reported %+v", res)
+	}
+	if storeA.HasKey("pending:key_interrupted") {
+		t.Fatal("'remove --yes' left the named orphan behind")
+	}
+	if !storeA.HasKey("did:dfos:notinthisrelay#key_gone") {
+		t.Fatal("remove took an orphan it was not named")
+	}
+	chain, _ := localRelayInstance.Relay.GetIdentity(did)
+	if !storeA.HasKey(keyAccount(chain.State.AuthKeys[0].PublicKeyMultibase)) {
+		t.Fatal("remove took a declared key")
+	}
+}
+
+// Everything else is refused, out loud, with the reason — and refused with
+// --yes, because a key this command will not touch is not one an arming flag
+// unlocks.
+func TestKeysRemoveRefusesEveryStatusThatIsNotItsToJudge(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+
+	before, _ := localRelayInstance.Relay.GetIdentity(did)
+	genesis := keyAccount(before.State.AuthKeys[0].PublicKeyMultibase)
+
+	// Declared: chain business, and the refusal names the operation that is not
+	// this one.
+	if err := removeRefusal(t, genesis); !strings.Contains(err.Error(), "rotate") {
+		t.Fatalf("the declared-key refusal does not point at rotation: %v", err)
+	}
+	if !storeA.HasKey(genesis) {
+		t.Fatal("a refusal deleted a declared key")
+	}
+
+	// Rotate every role, and the same key becomes superseded — still refused,
+	// for the reason prune retains it: this relay's view can trail the network.
+	identityFlag = "alice"
+	update := newIdentityUpdateCmd()
+	mustSetFlag(t, update, "rotate-auth", "true")
+	mustSetFlag(t, update, "rotate-controller", "true")
+	mustSetFlag(t, update, "rotate-assert", "true")
+	if err := update.RunE(update, nil); err != nil {
+		t.Fatalf("identity update --rotate-*: %v", err)
+	}
+	if err := removeRefusal(t, genesis); !strings.Contains(err.Error(), statusSuperseded) {
+		t.Fatalf("the superseded refusal does not name the status: %v", err)
+	}
+	if !storeA.HasKey(genesis) {
+		t.Fatal("a refusal deleted a superseded key")
+	}
+
+	// The sign-in client key: infrastructure, and the refusal names the file
+	// that is the real handle on it.
+	writeLoginClientFile(t, "did:dfos:loginclient", "key_login")
+	login := loginClientAccount("key_login")
+	plantKey(t, storeA, login)
+	if err := removeRefusal(t, login); !strings.Contains(err.Error(), loginClientFileName) {
+		t.Fatalf("the login-client refusal does not name %s: %v", loginClientFileName, err)
+	}
+	if !storeA.HasKey(login) {
+		t.Fatal("a refusal deleted the sign-in client key")
+	}
+
+	// Uncertain is neither a candidate nor an orphan.
+	plantKey(t, storeA, "something-nobody-here-writes")
+	if err := removeRefusal(t, "something-nobody-here-writes"); !strings.Contains(err.Error(), statusUnrecognized) {
+		t.Fatalf("the uncertain refusal does not name the status: %v", err)
+	}
+	if !storeA.HasKey("something-nobody-here-writes") {
+		t.Fatal("a refusal deleted a key it could not classify")
+	}
+}
+
+func TestKeysRemoveOnAnUnknownSelectorRemovesNothing(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+
+	err := removeRefusal(t, "key_nothingherematchesthis")
+	if !strings.Contains(err.Error(), "no key matching") {
+		t.Fatalf("an unknown selector reported %v", err)
+	}
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger: %v", err)
+	}
+	if len(ledger.Entries) == 0 {
+		t.Fatal("a failed selector emptied the keystore")
+	}
+}
+
 func writeLoginClientFile(t *testing.T, did, keyID string) {
 	t.Helper()
 	body, err := json.Marshal(loginClient{DID: did, KeyID: keyID, Chain: []string{}})

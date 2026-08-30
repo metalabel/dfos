@@ -132,17 +132,18 @@ type keyLedger struct {
 func newKeysCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "keys",
-		Short:   "List, inspect, and prune the private keys this machine holds",
+		Short:   "List, inspect, prune, and remove the private keys this machine holds",
 		GroupID: "identity",
 		Long: "Report every key in this machine's keystore: where its seed came from, which backend holds " +
 			"it, and which identity's chain declares it. The report is derived from the keystore, the vaults' " +
 			"minted-key records, and the identity chains in the local relay — there is no separate manifest " +
-			"file to drift out of step. `prune` removes keys nothing declares. Private key material is never " +
-			"printed.",
+			"file to drift out of step. `prune` sweeps the keys nothing declares; `remove` takes one key by " +
+			"name. Private key material is never printed.",
 	}
 	cmd.AddCommand(newKeysListCmd())
 	cmd.AddCommand(newKeysShowCmd())
 	cmd.AddCommand(newKeysPruneCmd())
+	cmd.AddCommand(newKeysRemoveCmd())
 	cmd.AddCommand(newKeysProveCmd())
 	return cmd
 }
@@ -937,6 +938,24 @@ func findKeyEntry(l *keyLedger, selector string) (*keyLedgerEntry, error) {
 }
 
 func printKeyEntry(e keyLedgerEntry) {
+	printKeyFacts(e)
+	switch {
+	case e.Prunable:
+		fmt.Printf("  Prune:     'dfos keys prune' would remove this key\n")
+	case keyRemovalRefusal(e) == nil:
+		// Removable, and prune will never be the thing that removes it. Saying
+		// only "never" here is how an operator ends up at the OS keychain.
+		fmt.Printf("  Prune:     never — 'dfos keys prune' removes only keys with status %s; "+
+			"'dfos keys remove %s' removes this one by name\n", statusOrphan, keyLabel(e))
+	default:
+		fmt.Printf("  Prune:     never — 'dfos keys prune' removes only keys with status %s\n", statusOrphan)
+	}
+}
+
+// printKeyFacts is everything `keys show` reports about one key EXCEPT what to
+// do about it. `keys remove` prints the facts and then says what it is doing,
+// which is not the same as pointing at itself.
+func printKeyFacts(e keyLedgerEntry) {
 	fmt.Printf("Key:         %s\n", orDash(e.KeyID))
 	fmt.Printf("  Public:    %s\n", orDash(e.PublicKey))
 	if e.Account != "" {
@@ -974,11 +993,6 @@ func printKeyEntry(e keyLedgerEntry) {
 	}
 	if e.Reason != "" {
 		fmt.Printf("  Why:       %s\n", e.Reason)
-	}
-	if e.Prunable {
-		fmt.Printf("  Prune:     'dfos keys prune' would remove this key\n")
-	} else {
-		fmt.Printf("  Prune:     never — 'dfos keys prune' removes only keys with status %s\n", statusOrphan)
 	}
 }
 
@@ -1166,6 +1180,192 @@ func printPruneResult(r pruneResult, l *keyLedger) {
 			}
 		}
 	}
+}
+
+// --- remove ---
+
+// `keys remove` is the BY-NAME counterpart to prune's by-status sweep, and it
+// exists for the one class of key that sweep can never reach.
+//
+// A candidate is a key `keys prove` presented to a ceremony someone else
+// custodies the chain for. Nothing here declares it, and that is its normal
+// state rather than orphanhood, so prune retains it forever — correctly, and
+// unchanged by this command. But an abandoned ceremony, or a second ceremony
+// that supersedes the first, leaves a candidate whose only removal path was the
+// OS keychain itself. That is the gap: not a missing sweep, a missing name.
+//
+// So this takes exactly one key, named, and only the two statuses where the
+// keystore is the whole story — candidate and orphan. Everything else is
+// refused out loud with the reason, because a key a chain declares is that
+// chain's business, and a key whose status cannot be established is nobody's to
+// judge.
+func newKeysRemoveCmd() *cobra.Command {
+	var armed bool
+	cmd := &cobra.Command{
+		Use:   "remove <key-id|public-key|account>",
+		Short: "Remove one named key this machine holds (dry run by default)",
+		Long: "Remove ONE key, named by its key id, its public key, or the account it is stored under. It " +
+			"prints the key, why it is removable, and what removing it costs, and removes nothing until " +
+			"--yes.\n\n" +
+			"Only two statuses are removable: `candidate`, a key presented to a key-add ceremony that no " +
+			"chain here declares by design, and `orphan`, a key nothing declares at all. A `declared` key is " +
+			"rotated out of the chain that names it, not deleted out from under it. A `superseded` key is " +
+			"kept because this machine's view of a chain can be behind the network's — the same reason " +
+			"'keys prune' retains it. The sign-in client key is infrastructure. A key whose status cannot be " +
+			"established cannot be judged, and is left alone. Each refusal names its reason.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ledger, err := buildKeyLedger()
+			if err != nil {
+				return err
+			}
+			entry, err := findKeyEntry(ledger, args[0])
+			if err != nil {
+				return err
+			}
+			return runKeysRemove(*entry, armed)
+		},
+	}
+	cmd.Flags().BoolVar(&armed, "yes", false, "Actually remove the key (without it, nothing is deleted)")
+	return cmd
+}
+
+// keyRemoval is one removal, decided and — when armed — done.
+type keyRemoval struct {
+	Armed   bool           `json:"armed"`
+	Removed bool           `json:"removed"`
+	Key     keyLedgerEntry `json:"key"`
+	// Because is why this status is one remove acts on. The entry's own Reason
+	// says what the key IS; this says why that makes it removable.
+	Because     string `json:"because"`
+	Recoverable bool   `json:"recoverableFromVault"`
+	Vault       string `json:"vault,omitempty"`
+}
+
+// keyRemovalRefusal reports why `keys remove` will not touch a key, or nil when
+// it will. It is the single place the removable set is decided, so the help
+// text, the `keys show` hint, and the command itself cannot drift apart.
+func keyRemovalRefusal(e keyLedgerEntry) error {
+	switch e.Status {
+	case statusCandidate, statusOrphan:
+		return nil
+
+	case statusDeclared:
+		roles := ""
+		if len(e.Roles) > 0 {
+			roles = " in " + strings.Join(e.Roles, ", ")
+		}
+		return fmt.Errorf("%s is declared by %s%s — that is chain business, not keystore business.\n"+
+			"A declared key is rotated out of the chain that names it, not deleted out from under it: "+
+			"'dfos identity update --rotate-controller|--rotate-auth|--rotate-assert' is the operation that "+
+			"retires a key, and it publishes the fact rather than leaving the chain naming a key this machine "+
+			"no longer holds.", keyLabel(e), identityLabel(e), roles)
+
+	case statusSuperseded:
+		return fmt.Errorf("%s is superseded: the chain for %s is in this local relay and no longer names it.\n"+
+			"That is a statement about this relay, not about the world — this machine's view of a chain can be "+
+			"behind the network's, and a rotation seen here may not be the last word. It is the same reason "+
+			"'dfos keys prune' retains a superseded key.", keyLabel(e), identityLabel(e))
+
+	case statusLoginClient:
+		return fmt.Errorf("%s is this installation's sign-in client key: infrastructure, named by %s, and "+
+			"declared by no identity of yours.\n"+
+			"Deleting the seed under the file that names it leaves 'dfos login' holding a client identity it "+
+			"cannot prove. Delete %s to mint a new login client identity instead — the authorize host asks for "+
+			"consent again.", keyLabel(e), loginClientFileName, loginClientFileName)
+
+	default:
+		// Every uncertain status, and any status a later version adds without
+		// deciding this question: not removable until something decides it is.
+		return fmt.Errorf("%s has status %s, so what it is cannot be established from what this machine can "+
+			"see: %s\n"+
+			"Uncertainty is not a candidate and not an orphan. 'dfos keys remove' acts on status %s and %s "+
+			"only, the same rule that makes 'dfos keys prune' skip this key rather than judge it.",
+			keyLabel(e), e.Status, e.Reason, statusCandidate, statusOrphan)
+	}
+}
+
+// removableBecause says why the status this key carries is one remove acts on.
+func removableBecause(status string) string {
+	if status == statusCandidate {
+		return "a candidate is claimed by a chain this machine does not custody, so nothing here ever declares " +
+			"it and 'dfos keys prune' never reaches it — removal is by name and deliberate"
+	}
+	return "nothing in the local relay declares it and nothing else claims it — 'dfos keys prune' sweeps the " +
+		"whole class; this removes just this one"
+}
+
+func runKeysRemove(e keyLedgerEntry, armed bool) error {
+	if err := keyRemovalRefusal(e); err != nil {
+		return err
+	}
+
+	removal := keyRemoval{
+		Armed:       armed,
+		Key:         e,
+		Because:     removableBecause(e.Status),
+		Recoverable: e.Recoverable,
+	}
+	if e.Vault != nil {
+		removal.Vault = e.Vault.Name
+	}
+
+	if armed {
+		// The same three questions prune asks at the last possible moment: is
+		// this a key at all, is it still there, and is it still the account we
+		// judged. The ledger is a snapshot; the delete is the act.
+		switch {
+		case keystore.IsReservedAccount(e.Account):
+			return fmt.Errorf("refusing to delete %s: reserved account — not a key seed", e.Account)
+		case e.Account == "":
+			return fmt.Errorf("no account to delete: %s holds this key under a reference it cannot name (%s)",
+				e.Backend, e.Ref)
+		case !keys.HasKey(e.Account):
+			return fmt.Errorf("%s is no longer in the keystore — something removed it since this ledger was "+
+				"built", e.Account)
+		}
+		if err := keys.DeleteKey(e.Account); err != nil {
+			return fmt.Errorf("delete %s from %s: %w", e.Account, e.Backend, err)
+		}
+		removal.Removed = true
+	}
+
+	if jsonFlag {
+		outputJSON(removal)
+		return nil
+	}
+	printKeyRemoval(removal)
+	return nil
+}
+
+func printKeyRemoval(r keyRemoval) {
+	printKeyFacts(r.Key)
+	fmt.Println()
+	if r.Removed {
+		fmt.Printf("Removed:   this key's seed is gone from the keystore\n")
+	} else {
+		fmt.Printf("Remove:    would delete this key's seed from the keystore\n")
+	}
+	fmt.Printf("Because:   %s\n", r.Because)
+	fmt.Printf("Recovery:  %s\n", keyRemovalRecovery(r))
+	if !r.Removed {
+		fmt.Printf("\nNothing was removed. Re-run with --yes to remove it.\n")
+	}
+}
+
+// keyRemovalRecovery is the cost line: what a person still has after the delete.
+func keyRemovalRecovery(r keyRemoval) string {
+	if r.Recoverable {
+		path := ""
+		if r.Key.Vault != nil {
+			path = " at " + r.Key.Vault.Path
+		}
+		return fmt.Sprintf("derivable again from vault '%s' phrase%s", r.Vault, path)
+	}
+	if r.Removed {
+		return "no vault record named this key — this keystore was its only copy, and the seed is gone for good"
+	}
+	return "no vault record names this key — this keystore is its only copy, and once removed the seed is gone for good"
 }
 
 // --- small helpers ---
