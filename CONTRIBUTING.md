@@ -10,7 +10,9 @@ breaks become a new major.
 ## Build & verify
 
 - `pnpm build` — tsup bundles each subpath entrypoint (ESM + declarations)
-- `pnpm typecheck` / `pnpm test` — strict tsc; protocol + relay vitest suites
+- `pnpm typecheck` / `pnpm test` — strict tsc on the TypeScript 7 native compiler
+  (`typescript7`, invoked by path so it never shadows the `typescript` that tsup emits
+  with); protocol + relay vitest suites
 - `pnpm lint && pnpm lint:specs` — prettier + spec lint
 - `pnpm lint:anchors` — every `protocol.dfos.com` link resolves to a page and, when
   it carries a fragment, to a heading that page actually renders

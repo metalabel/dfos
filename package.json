@@ -25,6 +25,7 @@
     "marked": "^15.0.0",
     "prettier": "^3.8.3",
     "turbo": "^2.9.16",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript7": "npm:typescript@7.0.2"
   }
 }

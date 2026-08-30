@@ -58,7 +58,7 @@
     "gen:openapi": "node scripts/generate-openapi-json.mjs",
     "build": "pnpm gen:openapi && tsup",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/typescript7/bin/tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "pnpm build"
   },
@@ -75,6 +75,7 @@
     "hono": "^4.12.23",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.8",
     "yaml": "^2.8.2"
   }

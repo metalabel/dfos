@@ -70,7 +70,7 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/typescript7/bin/tsc --noEmit",
     "test": "vitest run",
     "generate-examples": "tsx scripts/generate-examples.ts",
     "prepublishOnly": "pnpm build"
@@ -90,6 +90,7 @@
     "ajv-formats": "^3.0.1",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.8",
     "zod": "^4.4.3"
   }
