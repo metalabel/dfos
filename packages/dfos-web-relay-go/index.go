@@ -618,8 +618,8 @@ func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
 	}
 }
 
-func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
-	doc, docSchema, publicRead := contentProjectionSources(chain, store)
+func contentIndexRow(chain StoredContentChain, src contentProjection) indexContentRow {
+	doc, docSchema, publicRead := src.doc, src.docSchema, src.publicRead
 	// Confidentiality is enforced at the application layer by whoever serves: a
 	// non-public document MUST NOT project its extracted display-name field onto
 	// the anonymous index surface. Compute publicRead first and gate title on it.
@@ -646,8 +646,8 @@ func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
 }
 
 // creditIndexRows builds one content chain's complete public-head credit set.
-func creditIndexRows(chain StoredContentChain, store Store) []indexCreditRow {
-	doc, docSchema, publicRead := contentProjectionSources(chain, store)
+func creditIndexRows(chain StoredContentChain, src contentProjection) []indexCreditRow {
+	doc, docSchema, publicRead := src.doc, src.docSchema, src.publicRead
 	if chain.State.IsDeleted || !publicRead || docSchema == nil || *docSchema != postSchema || doc == nil {
 		return []indexCreditRow{}
 	}
@@ -808,9 +808,29 @@ func headDocumentProjection(chain StoredContentChain, store Store) (map[string]a
 	return doc, &schemaValue
 }
 
-func contentProjectionSources(chain StoredContentChain, store Store) (map[string]any, *string, bool) {
+// contentProjection is what both of a content chain's projection rows read: the
+// head document, its schema, and whether a standing public grant covers the
+// head.
+//
+// It is a value the caller computes once and hands to both row builders because
+// producing it is the expensive half of a recompute — a blob read plus a
+// standing-grant check that reloads the chain and verifies every credential
+// naming it. Each builder used to derive it independently, so every recomputed
+// content row paid for it twice, including inside the fan-out sweeps that walk
+// the whole public-read corpus.
+type contentProjection struct {
+	doc        map[string]any
+	docSchema  *string
+	publicRead bool
+}
+
+func contentProjectionSources(chain StoredContentChain, store Store) contentProjection {
 	doc, docSchema := headDocumentProjection(chain, store)
-	return doc, docSchema, hasPublicStandingAuth(chain.ContentID, "read", store)
+	return contentProjection{
+		doc:        doc,
+		docSchema:  docSchema,
+		publicRead: hasPublicStandingAuth(chain.ContentID, "read", store),
+	}
 }
 
 func parseBooleanQuery(query map[string][]string, key string) (*bool, bool) {
