@@ -407,11 +407,17 @@ func VerifyKeyProof(proof string, expect KeyProofExpectations, now time.Time) (*
 	// THE CANONICAL RULE BINDS THE VERIFIER, NOT ONLY THE PRODUCER. A signature
 	// covers whatever octets arrived, so without that comparison a payload whose
 	// four members are REORDERED — or re-spelled with insignificant whitespace —
-	// and signed over that serialization verifies exactly like the canonical one.
-	// The envelope's bytes would stop being a function of its members, and one
-	// proof would have many spellings for a caller to key, log, or cache against.
-	// Conformant producers already emit these bytes, so nothing that could be
-	// signed correctly is refused here.
+	// and signed over that serialization verifies exactly like the canonical one,
+	// and the payload stops being a function of its members.
+	//
+	// WHAT THIS PINS IS THE PAYLOAD'S OCTETS, AND NOTHING PAST THEM. The compact
+	// envelope around them is not canonicalized: Base64urlDecode is
+	// padding-tolerant (a family-wide choice), and no rule pins the protected
+	// header's serialization — so one proof still has more than one envelope
+	// spelling, and a caller must not treat the envelope string as an identity.
+	// Nothing here needs it to be: what a completion spends is the NONCE, consumed
+	// atomically and once by the caller's step 6. Conformant producers already emit
+	// these bytes, so nothing that could be signed correctly is refused here.
 	payloadBytes, err := Base64urlDecode(parts[1])
 	if err != nil {
 		return nil, keyProofInvalid(KeyProofFailureSchema, "failed to decode payload")

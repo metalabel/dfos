@@ -41,8 +41,8 @@ const keyProofVectorOtherTypJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtle
 // are REALLY signed by the vector key over the octets they present, and both are
 // refused: the first serializes the members in reverse order, the second inserts
 // insignificant whitespace. A signature covers whatever octets arrived, so the
-// only thing that makes one proof one string is the verifier recomputing the
-// canonical signing input and byte-comparing. Pinned in
+// only thing that makes one set of members one payload string is the verifier
+// recomputing the canonical signing input and byte-comparing. Pinned in
 // dfos-protocol/tests/key-proof.spec.ts too — a twin that accepted either would
 // be accepting bytes production refuses.
 const keyProofVectorReorderedJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSJ9.Xnigl9DVx4IMKoFypxcfJqZig9M7KSQUrfk-7Is46ZEOF4jML0tf_hePFrv596FPWmFn02q7hMhSQhtxpdDpCA"
@@ -417,8 +417,8 @@ func TestVerifyKeyProofPayloadIsClosed(t *testing.T) {
 // other check passes on both fixtures — real signature by the named key, right
 // typ, right audience, fresh timestamp, exactly the four members — and what fails
 // is that the presented octets are not the canonical serialization of those
-// members. Left unchecked, one proof would have unboundedly many spellings, and
-// this package would verify envelopes production's verifier already refuses.
+// members. Left unchecked, one set of members would have unboundedly many payload
+// spellings, and this package would verify payloads production's verifier refuses.
 func TestVerifyKeyProofRejectsANonCanonicalPayload(t *testing.T) {
 	for _, malleable := range []string{keyProofVectorReorderedJWS, keyProofVectorSpacedJWS} {
 		err := mustFailKeyProof(t, malleable)

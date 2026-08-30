@@ -71,8 +71,9 @@ const VECTOR_OTHER_TYP_JWS =
  * are REALLY signed by the vector key over the octets they present, and both are
  * refused: the first serializes the members in reverse order, the second inserts
  * insignificant whitespace. A signature covers whatever octets arrived, so the
- * only thing that makes one proof one string is the verifier recomputing the
- * canonical signing input and byte-comparing. Pinned in key_proof_test.go too —
+ * only thing that makes one set of members one payload string is the verifier
+ * recomputing the canonical signing input and byte-comparing. Pinned in
+ * key_proof_test.go too —
  * a twin that accepted either would be accepting bytes production refuses.
  */
 const VECTOR_REORDERED_JWS =
@@ -353,8 +354,8 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     // Every other gate passes: real signature by the named key, right typ, right
     // audience, fresh timestamp, exactly the four members. What fails is that the
     // presented octets are not the canonical serialization of those members. Left
-    // unchecked, one proof would have unboundedly many spellings — and this
-    // package would verify envelopes the platform's verifier already refuses.
+    // unchecked, one set of members would have unboundedly many payload spellings
+    // — and this package would verify payloads the platform's verifier refuses.
     for (const malleable of [VECTOR_REORDERED_JWS, VECTOR_SPACED_JWS]) {
       expect(reasonOf(() => verifyKeyProof(malleable, expectAt()))).toBe('schema');
       expect(() => verifyKeyProof(malleable, expectAt())).toThrow(/canonical signing input/);
