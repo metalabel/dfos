@@ -233,11 +233,18 @@ type declaredIdentityKey struct {
 }
 
 // identityKeysDeclaredBy reads every key one identity operation DECLARES, across
-// all three key classes. Deliberately payload-shaped rather than state-shaped:
-// an identity `update` REPLACES the key arrays, so "has ever declared" only
-// exists in the operations themselves — diffing head state loses every rotated-out
-// key, which is exactly the population `key=` serves (audit, key-loss recovery).
-// A delete/restore op carries no key arrays and yields nothing.
+// all three key classes. A delete/restore op carries no key arrays and yields
+// nothing.
+//
+// ONE CALLER, AND IT IS THE ONE POSITION WHERE DECLARED AND PROVED COINCIDE: an
+// identity GENESIS, whose kid is a bare key ID because the DID does not exist
+// until the operation that declares it, so there is no chain to resolve against.
+// Genesis declares exactly one key in all three roles and its own signature IS
+// that key's possession proof — declared and proved are the same single key, so
+// reading the payload here claims nothing the chain walk would not.
+//
+// Nothing else reads declarations. Both reverse indexes are has-ever-PROVED and
+// take dfos.IdentityState.ProvedKeys; see putIndexIdentityProvedKeys.
 //
 // There is no key-class column: which array carried the key is the chain's
 // answer, not the index's, so all three fold into one flat list.
@@ -264,15 +271,33 @@ func identityKeysDeclaredBy(payload map[string]any) []declaredIdentityKey {
 	return declared
 }
 
-// putIndexIdentityKeysFromOp records every key one accepted identity operation
-// declared into the has-ever-declared reverse index.
-func putIndexIdentityKeysFromOp(did string, jwsToken string, store Store) {
-	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
-	if err != nil || payload == nil {
+// putIndexIdentityProvedKeys records every key an identity chain has EVER PROVED
+// into the `key=` reverse index, as of the operation just accepted.
+//
+// HAS-EVER-PROVED, NOT HAS-EVER-DECLARED (KEY-PROOF.md, Holder Obligations).
+// This index is the one-key-one-DID oracle a holder consults before signing a key
+// proof, and it REFUSES on a hit. Indexing declarations would hand a stranger a
+// burn: anyone can write anyone's public key into their own chain, so a chain
+// that merely LISTS a key it does not hold would make every future ceremony for
+// the true holder refuse. A declaration publishes no cross-DID link — only a
+// proof does — so only a proof belongs in the oracle.
+//
+// MONOTONIC, WHICH IS WHY WRITING THE WHOLE UNION PER OPERATION IS RIGHT. The
+// index is append-only and ProvedKeys never shrinks, so the union after
+// operation N is a superset of the union after N-1. Re-writing all of it on each
+// accepted op is therefore idempotent, converges on the chain's final union, and
+// — unlike the per-op declaration read this replaces — can never enter a key
+// before the operation that proved it. Reading head state per op rather than
+// recomputing at flush still matters for the opposite reason it used to: an
+// update REPLACES the key arrays, and only ProvedKeys carries the rotated-out
+// keys forward.
+func putIndexIdentityProvedKeys(did string, store Store) {
+	chain, err := store.GetIdentityChain(did)
+	if err != nil || chain == nil {
 		return
 	}
-	for _, key := range identityKeysDeclaredBy(payload) {
-		_ = store.PutIndexIdentityKey(did, key.KeyID, key.PublicKey)
+	for _, key := range keysInKeyState(provedKeyState(chain.State)) {
+		_ = store.PutIndexIdentityKey(did, key.ID, key.PublicKeyMultibase)
 	}
 }
 
@@ -295,10 +320,19 @@ func putIndexIdentityKeysFromOp(did string, jwsToken string, store Store) {
 // coincide — but the declared string is the alphabet /index/v0/identities?key=
 // matches, so a key found there can be pasted into signerKey= here and hit.
 //
-// Mirrors CreateKeyResolver's search order (current state, then the historical
-// declarations in the chain log) rather than reusing it, because the resolver
-// returns decoded bytes and the multibase rendering is what the index stores. A
-// rotated-out key still resolves: the row is a fact about the past.
+// HAS-EVER-PROVED, the same rule as `key=`, so the two columns agree on which
+// keys exist. Mirrors CreateKeyResolver's lookup rather than reusing it, because
+// the resolver returns decoded bytes and the multibase rendering is what the
+// index stores. A rotated-out key still resolves: the row is a fact about the
+// past, and possession does not become untrue.
+//
+// ONE ROW KIND CAN LEGITIMATELY RESOLVE TO NOTHING under this rule: an identity
+// operation signed by a controller key the chain declared but no proof ever
+// admitted. Signer validity is declared-state-based on purpose, so that
+// operation is valid and sequenced — but its signing key was never proved, so it
+// is not in the has-ever-proved population and the column stays NULL. The
+// filter's honest answer for a key no chain proved is "no rows", not a row
+// keyed by evidence that never existed.
 func signerKeyForOperation(jwsToken string, store Store) string {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
@@ -332,28 +366,10 @@ func signerKeyForOperation(jwsToken string, store Store) string {
 		return ""
 	}
 
-	// fast path: the key is still in head state
-	for _, class := range [][]dfos.MultikeyPublicKey{
-		identity.State.ControllerKeys, identity.State.AuthKeys, identity.State.AssertKeys,
-	} {
-		for _, k := range class {
-			if k.ID == keyID {
-				return k.PublicKeyMultibase
-			}
-		}
-	}
-
-	// slow path: a rotated-out key, recoverable only from the declarations
-	for _, token := range identity.Log {
-		_, payload, err := dfos.DecodeJWSUnsafe(token)
-		if err != nil || payload == nil {
-			continue
-		}
-		for _, declared := range identityKeysDeclaredBy(payload) {
-			if declared.KeyID == keyID {
-				return declared.PublicKey
-			}
-		}
+	// Has-ever-proved is a superset of head state, so one search covers both a
+	// current key and a rotated-out one.
+	if k, ok := findKeyInKeyState(provedKeyState(identity.State), keyID); ok {
+		return k.PublicKeyMultibase
 	}
 	return ""
 }
@@ -401,10 +417,10 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	case "identity-op":
 		if result.ChainID != "" {
 			dirty.identityDIDs[result.ChainID] = struct{}{}
-			// Has-ever-declared keys are captured HERE, per op, not recomputed at
-			// flush from head state — the row set is append-only history, and an
-			// update's replacement of the key arrays would otherwise erase it.
-			putIndexIdentityKeysFromOp(result.ChainID, jwsToken, store)
+			// Has-ever-proved keys are captured HERE, per op, against the state the
+			// op just produced — the row set is append-only history, and an update's
+			// replacement of the key arrays would otherwise erase it.
+			putIndexIdentityProvedKeys(result.ChainID, store)
 			_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 			if err == nil && payload != nil {
 				if payload["type"] == "delete" {
@@ -617,18 +633,13 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 		if err := store.PutIndexIdentityRow(identityIndexRow(chain, store)); err != nil {
 			return err
 		}
-		// Walk the whole op log, not the head state: the reverse index is
-		// has-ever-declared, so a key some later update rotated out has to come back
-		// from the operation that declared it.
-		for _, token := range chain.Log {
-			_, payload, err := dfos.DecodeJWSUnsafe(token)
-			if err != nil || payload == nil {
-				continue
-			}
-			for _, key := range identityKeysDeclaredBy(payload) {
-				if err := store.PutIndexIdentityKey(chain.DID, key.KeyID, key.PublicKey); err != nil {
-					return err
-				}
+		// The reverse index is has-ever-PROVED, and the chain walk already folded
+		// that union onto head state — so the backfill reads ProvedKeys instead of
+		// replaying the op log under a possession rule restated here. A key some
+		// later update rotated out still comes back: ProvedKeys is monotonic.
+		for _, key := range keysInKeyState(provedKeyState(chain.State)) {
+			if err := store.PutIndexIdentityKey(chain.DID, key.ID, key.PublicKeyMultibase); err != nil {
+				return err
 			}
 		}
 		if (i+1)%rebuildProgressEvery == 0 {

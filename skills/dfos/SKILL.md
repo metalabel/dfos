@@ -220,7 +220,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 `publish` · `fetch` · `verify` · `remove`
 
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
-**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (complete a key-add ceremony: mints or names a key, shows the audience, refuses a key any identity has ever declared, posts one KEY-PROOF envelope and never retries)
+**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (present a key to a key-add ceremony: a carriage is an authority and a code, and the identity, roles, chain head and nonce all come from resolving it; mints or names a key, shows the identity and the roles being consented to, refuses a key any identity has ever proved, posts one seven-member KEY-PROOF envelope and never retries. Presenting is not adoption — the key stays a local candidate until a chain declares it)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `repin` · `remove` · `list` · `info` · `gc`
@@ -454,8 +454,9 @@ _Restoring the backup_ is `dfos recover`. After a machine is lost, the whole pat
 is two commands: `dfos vault import restored` to adopt the phrase, then
 `dfos recover --vault restored --peer <relay>`. It rederives keys at
 `m/1684434803'/<index>'`, asks the relay's identity index which of them any
-identity has ever declared (`GET /index/v0/identities?key=`, has-ever-declared, so
-keys a rotation left behind are found too), pulls those chains into the local
+identity has ever proved (`GET /index/v0/identities?key=`, has-ever-proved, so
+keys a rotation left behind are found too, while a membership no proof admitted
+never enters the index), pulls those chains into the local
 relay, writes the private keys back into the keystore, rebuilds the vault's
 minted-key records, and raises the vault's derivation counter past every index it
 found in use — without which the next mint would hand a recovered index to a

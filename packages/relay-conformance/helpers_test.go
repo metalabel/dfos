@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -146,6 +147,16 @@ func newKeypair() keypair {
 }
 
 // identity holds a created identity with its signing keys.
+//
+// controller and auth NAME THE ROLE a call site is exercising, not two distinct
+// keys. A genesis declares exactly ONE key, in all three of authKeys, assertKeys
+// and controllerKeys, and the genesis signature is that key's own possession
+// proof — one signature demonstrates possession of exactly one key, and nothing
+// precedes genesis to carry an envelope for a second. The two field names survive
+// because `id.auth` at a content-signing call site reads better than `id.key`.
+//
+// A SECOND KEY JOINS THE ORDINARY WAY: an update that introduces it, carrying a
+// possession envelope for the roles it gains. See introduceKey.
 type identity struct {
 	did        string
 	genCID     string
@@ -157,15 +168,14 @@ type identity struct {
 // createIdentity creates a fresh identity on the relay.
 func createIdentity(t *testing.T, base string) identity {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 
 	token, did, opCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("SignIdentityCreate: %v", err)
@@ -182,9 +192,162 @@ func createIdentity(t *testing.T, base string) identity {
 		did:        did,
 		genCID:     opCID,
 		headCID:    opCID,
-		controller: ctrl,
-		auth:       auth,
+		controller: key,
+		auth:       key,
 	}
+}
+
+// ---------------------------------------------------------------------------
+// possession proofs
+// ---------------------------------------------------------------------------
+
+// keyProofAudience is any lowercase authority. The CHAIN WALK deliberately does
+// not check audience — it is presentation-time transport, byte-fixed under the
+// signature and inert once the envelope is on the chain — so a conformance
+// fixture only has to satisfy the payload grammar, never a live ceremony's host.
+const keyProofAudience = "conformance.test"
+
+// keyProof mints one possession envelope: the candidate key's own signature over
+// {did, roleSet, prevCID, …}, which is what makes an introduction of that key at
+// that position effective rather than void. With no roles named it consents to
+// all three, which is the ordinary whole-rotation shape.
+func keyProof(t *testing.T, priv ed25519.PrivateKey, did, prevCID string, roles ...dfos.KeyRole) string {
+	t.Helper()
+	if len(roles) == 0 {
+		roles = dfos.KeyRoles
+	}
+	roleSet, err := dfos.SerializeRoleSet(roles)
+	if err != nil {
+		t.Fatalf("SerializeRoleSet: %v", err)
+	}
+	proof, _, err := dfos.SignKeyProof(dfos.SignKeyProofInput{
+		Typ:        dfos.KeyAddJWSTyp,
+		Nonce:      "conformance-nonce-" + prevCID,
+		Audience:   keyProofAudience,
+		DID:        did,
+		RoleSet:    roleSet,
+		PrevCID:    prevCID,
+		PrivateKey: priv,
+	})
+	if err != nil {
+		t.Fatalf("SignKeyProof: %v", err)
+	}
+	return proof
+}
+
+// signIdentityUpdateWithProofs signs an identity update carrying possession
+// envelopes.
+//
+// Hand-rolled because the protocol library exposes no producer for this shape:
+// keyProofs is a payload MEMBER on the operation, not an argument to a signer, so
+// the payload is assembled here from the same exported primitives the verifier
+// reads it back with. An empty proof list omits the member entirely, which is
+// byte-for-byte what SignIdentityUpdate emits.
+func signIdentityUpdateWithProofs(
+	t *testing.T,
+	previousCID string,
+	controllerKeys, authKeys, assertKeys []dfos.MultikeyPublicKey,
+	keyProofs []string,
+	kid string,
+	privateKey ed25519.PrivateKey,
+) (jwsToken string, operationCID string) {
+	t.Helper()
+	if authKeys == nil {
+		authKeys = []dfos.MultikeyPublicKey{}
+	}
+	if assertKeys == nil {
+		assertKeys = []dfos.MultikeyPublicKey{}
+	}
+	if controllerKeys == nil {
+		controllerKeys = []dfos.MultikeyPublicKey{}
+	}
+	// The createdAt is BORROWED from the library's own clock — mint a throwaway
+	// update through the exported signer and read its timestamp back — rather than
+	// stamped from time.Now(). The library's source is a process-wide monotonic
+	// counter that runs ahead of the wall clock whenever operations are minted in a
+	// burst, so a wall-clock stamp can land behind an operation signed microseconds
+	// earlier and be refused as non-monotonic.
+	// The throwaway's prior state mirrors its own arrays so the writer door sees
+	// no introduction — the call exists to read a timestamp back, and the
+	// operation is discarded.
+	throwaway, _, err := dfos.SignIdentityUpdate(dfos.IdentityState{
+		ControllerKeys: controllerKeys,
+		AuthKeys:       authKeys,
+		AssertKeys:     assertKeys,
+	}, previousCID, controllerKeys, authKeys, assertKeys, nil, kid, privateKey)
+	if err != nil {
+		t.Fatalf("SignIdentityUpdate (clock): %v", err)
+	}
+	_, throwawayPayload, err := dfos.DecodeJWSUnsafe(throwaway)
+	if err != nil {
+		t.Fatalf("DecodeJWSUnsafe (clock): %v", err)
+	}
+	createdAt, _ := throwawayPayload["createdAt"].(string)
+	if createdAt == "" {
+		t.Fatal("could not borrow a protocol timestamp")
+	}
+
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "update",
+		"previousOperationCID": previousCID,
+		"authKeys":             authKeys,
+		"assertKeys":           assertKeys,
+		"controllerKeys":       controllerKeys,
+		"createdAt":            createdAt,
+	}
+	if len(keyProofs) > 0 {
+		payload["keyProofs"] = keyProofs
+	}
+	_, _, cid, errCID := dfos.DagCborCID(payload)
+	if errCID != nil {
+		t.Fatalf("DagCborCID: %v", errCID)
+	}
+	token, errJWS := dfos.CreateJWS(dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: kid,
+		CID: cid,
+	}, payload, privateKey)
+	if errJWS != nil {
+		t.Fatalf("CreateJWS: %v", errJWS)
+	}
+	return token, cid
+}
+
+// introduceKey ingests an update that adds `added` to the identity alongside its
+// existing key, PROVED for the named roles (all three when none are named), and
+// returns the operation's CID. It advances id.headCID.
+//
+// This is the two-operation shape a genesis with distinct keys per role used to
+// fake in one: single-key genesis, then a proved introduction.
+func introduceKey(t *testing.T, base string, id *identity, added keypair, roles ...dfos.KeyRole) string {
+	t.Helper()
+	if len(roles) == 0 {
+		roles = dfos.KeyRoles
+	}
+	has := func(role dfos.KeyRole) bool {
+		for _, r := range roles {
+			if r == role {
+				return true
+			}
+		}
+		return false
+	}
+	keysFor := func(role dfos.KeyRole) []dfos.MultikeyPublicKey {
+		if has(role) {
+			return []dfos.MultikeyPublicKey{id.controller.mk, added.mk}
+		}
+		return []dfos.MultikeyPublicKey{id.controller.mk}
+	}
+	time.Sleep(2 * time.Millisecond)
+	token, opCID := signIdentityUpdateWithProofs(t, id.headCID,
+		keysFor("controller"), keysFor("auth"), keysFor("assert"),
+		[]string{keyProof(t, added.priv, id.did, id.headCID, roles...)},
+		id.did+"#"+id.controller.keyID, id.controller.priv)
+	postOperationsAccepted(t, base, []string{token})
+	id.headCID = opCID
+	return opCID
 }
 
 // contentChain holds a created content chain.

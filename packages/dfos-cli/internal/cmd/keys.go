@@ -109,7 +109,19 @@ type keyLedgerEntry struct {
 	// its CURRENT roles; on a superseded one they are the roles it held before
 	// the rotation that retired it, read back out of the log. The status field
 	// is what distinguishes the two, and it is always set.
-	Roles       []string            `json:"roles,omitempty"`
+	//
+	// A role the chain declares but no possession proof admitted is marked
+	// `<role> (void)`. It is listed rather than dropped, because the chain really
+	// does name the key there — and marked rather than merged, because a void
+	// membership confers nothing: it is not in effective state, it never
+	// resolves, and it never indexes.
+	Roles []string `json:"roles,omitempty"`
+	// Void is true when EVERY role this chain names the key in is void. Such a
+	// key is claimed by a chain and effective in none of it — neither a working
+	// key nor an orphan — and the two readers that care (this ledger's reason
+	// line, and the one-key-one-DID pre-flight in `keys prove`) both have to tell
+	// it apart from a key that works.
+	Void        bool                `json:"void,omitempty"`
 	Deleted     bool                `json:"identityDeleted,omitempty"`
 	Vault       *keyVaultProvenance `json:"vault,omitempty"`
 	Recoverable bool                `json:"recoverableFromVault"`
@@ -300,6 +312,7 @@ func buildKeyLedger() (*keyLedger, error) {
 	// machine already holds. Only a held key NEITHER can place sends this to the
 	// whole corpus, and it says so before it goes.
 	declaredRoles := map[string][]string{}
+	voidRoles := map[string][]string{}
 	declaredPublic := map[string]string{}
 	accountDID := map[string]string{}
 	accountKeyID := map[string]string{}
@@ -312,19 +325,41 @@ func buildKeyLedger() (*keyLedger, error) {
 		knownDID[chain.DID] = true
 		deletedDID[chain.DID] = chain.State.IsDeleted
 		chainByDID[chain.DID] = chain
+		place := func(account string, k protocol.MultikeyPublicKey) {
+			declaredPublic[account] = k.PublicKeyMultibase
+			accountDID[account] = chain.DID
+			accountKeyID[account] = k.ID
+		}
 		declare := func(set []protocol.MultikeyPublicKey, role string) {
 			for _, k := range set {
 				for _, account := range keyAccountsFor(chain.DID, k.ID, k.PublicKeyMultibase) {
 					declaredRoles[account] = append(declaredRoles[account], role)
-					declaredPublic[account] = k.PublicKeyMultibase
-					accountDID[account] = chain.DID
-					accountKeyID[account] = k.ID
+					place(account, k)
 				}
 			}
 		}
+		// Effective state first — the memberships a possession proof admitted.
 		declare(chain.State.ControllerKeys, "controller")
 		declare(chain.State.AuthKeys, "auth")
 		declare(chain.State.AssertKeys, "assert")
+		// Then the VOID ones: memberships the chain declares and no proof ever
+		// admitted. They are placed exactly like effective ones — same account,
+		// same DID, same key id — because the fact they establish is the same one
+		// the placement is for: this chain names this key. What differs is that
+		// naming it did not make it work, and that difference is carried in the
+		// role marker rather than by leaving the key unplaced.
+		//
+		// Leaving them out is what this fold used to do by accident, and it was
+		// the worst of the three options: a held key under a void declaration fell
+		// through every placement branch and came out an ORPHAN, with the reason
+		// "no identity in the local relay declares this key" — which is precisely
+		// backwards. A chain declares it. The declaration is just empty.
+		for _, void := range chain.State.VoidKeys {
+			for _, account := range keyAccountsFor(chain.DID, void.Key.ID, void.Key.PublicKeyMultibase) {
+				voidRoles[account] = append(voidRoles[account], string(void.Role)+" (void)")
+				place(account, void.Key)
+			}
+		}
 	}
 	lookupDID := func(did string) error {
 		if did == "" || resolved[did] {
@@ -380,7 +415,8 @@ func buildKeyLedger() (*keyLedger, error) {
 		if h.account == "" || !strings.HasPrefix(h.account, keyAccountPrefix) {
 			continue
 		}
-		if _, ok := declaredRoles[h.account]; !ok {
+		_, placed := declaredRoles[h.account]
+		if _, void := voidRoles[h.account]; !placed && !void {
 			unplaced++
 		}
 	}
@@ -421,6 +457,12 @@ func buildKeyLedger() (*keyLedger, error) {
 		if _, declared := declaredRoles[h.account]; declared {
 			continue
 		}
+		// A void membership places the key too. Its roles are not what a rotation
+		// retired, so reading the log for them would answer a question nobody
+		// asked and overwrite a placement that is already correct.
+		if _, void := voidRoles[h.account]; void {
+			continue
+		}
 		want[h.account] = true
 	}
 	if len(want) > 0 {
@@ -454,6 +496,7 @@ func buildKeyLedger() (*keyLedger, error) {
 	for _, h := range order {
 		ledger.Entries = append(ledger.Entries, classifyKey(h.account, h.ref, classifyInputs{
 			declaredRoles:   declaredRoles,
+			voidRoles:       voidRoles,
 			declaredPublic:  declaredPublic,
 			supersededRoles: supersededRoles,
 			mintedBy:        mintedBy,
@@ -500,6 +543,13 @@ func declaredAccounts(lr *localrelay.LocalRelay) ([]string, error) {
 			for _, k := range set {
 				accounts = append(accounts, keyAccountsFor(chain.DID, k.ID, k.PublicKeyMultibase)...)
 			}
+		}
+		// Void memberships name accounts too. This list is what a backend that
+		// cannot enumerate itself gets probed against, so omitting them would make
+		// a held void key INVISIBLE on such a backend — the one place the ledger's
+		// honesty about voids would silently stop applying.
+		for _, void := range chain.State.VoidKeys {
+			accounts = append(accounts, keyAccountsFor(chain.DID, void.Key.ID, void.Key.PublicKeyMultibase)...)
 		}
 	}
 	return accounts, nil
@@ -601,7 +651,11 @@ func placementsFromLog(chain *relay.StoredIdentityChain, want map[string]bool) m
 }
 
 type classifyInputs struct {
-	declaredRoles  map[string][]string
+	declaredRoles map[string][]string
+	// voidRoles are the `<role> (void)` markers for memberships a chain declares
+	// and no proof admitted — kept apart from declaredRoles so "does this key
+	// work anywhere" stays a question with a one-map answer.
+	voidRoles      map[string][]string
 	declaredPublic map[string]string
 	// supersededRoles is what a retired key USED to be, read out of the log —
 	// keyed by account, and populated only for accounts current state cannot
@@ -672,11 +726,24 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.Identity = config.FindIdentityName(cfg, entry.DID)
 		entry.Deleted = in.deletedDID[entry.DID]
 		switch {
-		case len(in.declaredRoles[account]) > 0:
+		case len(in.declaredRoles[account]) > 0 || len(in.voidRoles[account]) > 0:
 			entry.Status = statusDeclared
-			entry.Roles = in.declaredRoles[account]
-			if entry.Deleted {
+			// Effective roles first, then the void ones. The order is the point:
+			// what the key DOES comes before what a chain merely says about it.
+			entry.Roles = append(append([]string{}, in.declaredRoles[account]...), in.voidRoles[account]...)
+			entry.Void = len(in.declaredRoles[account]) == 0
+			switch {
+			case entry.Void:
+				// The whole reason this branch exists. A key claimed by a chain
+				// and effective nowhere in it is a real state with a real fix, and
+				// a person who is not told will read the row as a working key.
+				entry.Reason = "declared by " + entry.DID + " and never proved — the membership is VOID: it is not in " +
+					"effective state, it never resolves, and it obligates nobody. A key becomes real by presenting its " +
+					"own proof ('dfos keys prove')"
+			case entry.Deleted:
 				entry.Reason = "declared by a DELETED identity's chain — deletion is not revocation, and 'identity restore' is real"
+			case len(in.voidRoles[account]) > 0:
+				entry.Reason = "some roles this chain declares for the key were never proved — those are void and confer nothing"
 			}
 		case entry.DID != "" && in.knownDID[entry.DID]:
 			entry.Status = statusSuperseded

@@ -85,15 +85,14 @@ func ingestIdentity(t *testing.T, r *Relay, services ...dfos.ServiceEntry) testI
 		}
 		return id
 	}
-	controller := newTestKeypair()
-	auth := newTestKeypair()
+	key := newTestKeypair()
 	token, did, opCID, err := dfos.SignIdentityCreateWithServices(
-		[]dfos.MultikeyPublicKey{controller.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		nil,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
 		services,
-		controller.keyID,
-		controller.priv,
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -101,17 +100,19 @@ func ingestIdentity(t *testing.T, r *Relay, services ...dfos.ServiceEntry) testI
 	if res := r.Ingest([]string{token}); res[0].Status != "new" {
 		t.Fatalf("ingest identity with services: %+v", res[0])
 	}
-	return testIdentity{token: token, did: did, opCID: opCID, controller: controller, auth: auth}
+	return testIdentity{token: token, did: did, opCID: opCID, controller: key, auth: key}
 }
 
 func updateIdentityServices(t *testing.T, r *Relay, id testIdentity, services []dfos.ServiceEntry) string {
 	t.Helper()
 	token, opCID, err := dfos.SignIdentityUpdateWithServices(
+		genesisState(id.did, id.controller),
 		id.opCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		nil,
 		services,
+		nil, // only the services set moves; introduces nothing
 		id.did+"#"+id.controller.keyID,
 		id.controller.priv,
 	)

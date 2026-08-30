@@ -284,20 +284,20 @@ func TestIdentityUpdate(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	// rotate: add a new auth key
-	newAuth := newKeypair()
+	// Rotate onto a fresh key, in all three roles. A WHOLE rotation because
+	// genesis declared one key in all three, so anything narrower leaves the old
+	// key current in the roles it did not touch. The rotation CARRIES the incoming
+	// key's possession envelope: introducing a key is exactly the transition
+	// possession gates, and without one the new key would be void — declared and
+	// never effective.
+	rotated := newKeypair()
 	kid := id.did + "#" + id.controller.keyID
-	token, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		kid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	token, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		kid, id.controller.priv)
 
 	res := postOperations(t, base, []string{token})
 	if res.StatusCode != 200 {
@@ -318,16 +318,15 @@ func TestIdentityUpdate(t *testing.T) {
 
 func TestIdentityBatchCreate(t *testing.T) {
 	base := relayURL(t)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 
-	// create
+	// create — genesis declares ONE key, in all three roles
 	createToken, did, genCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -335,19 +334,14 @@ func TestIdentityBatchCreate(t *testing.T) {
 
 	// update in same batch — small delay to ensure createdAt ordering
 	time.Sleep(2 * time.Millisecond)
-	newAuth := newKeypair()
-	kid := did + "#" + ctrl.keyID
-	updateToken, _, err := dfos.SignIdentityUpdate(
-		genCID,
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		kid,
-		ctrl.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rotated := newKeypair()
+	kid := did + "#" + key.keyID
+	updateToken, _ := signIdentityUpdateWithProofs(t, genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, did, genCID)},
+		kid, key.priv)
 
 	res := postOperations(t, base, []string{createToken, updateToken})
 	body := readBody(t, res)
@@ -380,15 +374,14 @@ func TestIdentityBatchCreate(t *testing.T) {
 
 func TestIdentityIdempotent(t *testing.T) {
 	base := relayURL(t)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 
 	token, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -458,19 +451,16 @@ func TestIdentityRejectPostDelete(t *testing.T) {
 	res := postOperations(t, base, []string{delToken})
 	res.Body.Close()
 
-	// try to update after delete
-	newAuth := newKeypair()
-	updateToken, _, err := dfos.SignIdentityUpdate(
-		delCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		kid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Try to update after delete. The update is otherwise IMPECCABLE — a whole
+	// rotation carrying the incoming key's envelope — so the only thing left to
+	// reject it for is the delete that precedes it.
+	rotated := newKeypair()
+	updateToken, _ := signIdentityUpdateWithProofs(t, delCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, delCID)},
+		kid, id.controller.priv)
 
 	res = postOperations(t, base, []string{updateToken})
 	body := readBody(t, res)
@@ -1305,24 +1295,22 @@ func TestAuthRotatedOutKey(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	// save old auth key
+	// save the genesis key, which is the auth key
 	oldAuth := id.auth
 
-	// rotate to new auth key
-	newAuth := newKeypair()
+	// Rotate onto a fresh key in ALL THREE roles, carrying its envelope. Whole
+	// because genesis declared one key everywhere: a rotation that replaced only
+	// authKeys would leave the old key a current controller key, and "rotated out"
+	// would be false of it.
+	rotated := newKeypair()
 	ctrlKid := id.did + "#" + id.controller.keyID
-	updateToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{updateToken}).Body.Close()
+	updateToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		ctrlKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{updateToken})
 
 	// try to use old auth key
 	oldSigner := signerForKey(id, oldAuth)
@@ -1453,17 +1441,19 @@ func TestRejectMalformedJWS(t *testing.T) {
 
 func TestRejectIdentityFutureTimestamp(t *testing.T) {
 	base := relayURL(t)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 
 	farFuture := time.Now().Add(25 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 
+	// Hand-rolled so the timestamp can be forced, but otherwise a CONFORMANT
+	// genesis — one key in all three roles — so the only thing wrong with it is
+	// the clock.
 	payload := map[string]any{
 		"version":        1,
 		"type":           "create",
-		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
-		"assertKeys":     []dfos.MultikeyPublicKey{},
-		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"authKeys":       []dfos.MultikeyPublicKey{key.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{key.mk},
+		"controllerKeys": []dfos.MultikeyPublicKey{key.mk},
 		"createdAt":      farFuture,
 	}
 
@@ -1475,11 +1465,11 @@ func TestRejectIdentityFutureTimestamp(t *testing.T) {
 	header := dfos.JWSHeader{
 		Alg: "EdDSA",
 		Typ: "did:dfos:identity-op",
-		Kid: ctrl.keyID,
+		Kid: key.keyID,
 		CID: cidStr,
 	}
 
-	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	token, err := dfos.CreateJWS(header, payload, key.priv)
 	if err != nil {
 		t.Fatalf("CreateJWS: %v", err)
 	}
@@ -1507,17 +1497,18 @@ func TestRejectIdentityFutureTimestamp(t *testing.T) {
 
 func TestAcceptIdentityNearFutureTimestamp(t *testing.T) {
 	base := relayURL(t)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 
 	nearFuture := time.Now().Add(23 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 
+	// A CONFORMANT genesis — one key in all three roles — dated inside the guard's
+	// window, so acceptance is about the clock and nothing else.
 	payload := map[string]any{
 		"version":        1,
 		"type":           "create",
-		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
-		"assertKeys":     []dfos.MultikeyPublicKey{},
-		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"authKeys":       []dfos.MultikeyPublicKey{key.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{key.mk},
+		"controllerKeys": []dfos.MultikeyPublicKey{key.mk},
 		"createdAt":      nearFuture,
 	}
 
@@ -1529,11 +1520,11 @@ func TestAcceptIdentityNearFutureTimestamp(t *testing.T) {
 	header := dfos.JWSHeader{
 		Alg: "EdDSA",
 		Typ: "did:dfos:identity-op",
-		Kid: ctrl.keyID,
+		Kid: key.keyID,
 		CID: cidStr,
 	}
 
-	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	token, err := dfos.CreateJWS(header, payload, key.priv)
 	if err != nil {
 		t.Fatalf("CreateJWS: %v", err)
 	}
@@ -1622,27 +1613,28 @@ func TestIdentityLogPagination(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	// create 2 identity updates so chain has 3 ops total
+	// Create 2 identity updates so the chain has 3 ops total. Each is a whole
+	// rotation carrying the incoming key's envelope, so the key it introduces is
+	// EFFECTIVE and can sign the next update — an unproved introduction would be
+	// void, and the second update would be signed by a key the chain does not
+	// admit.
 	prevCID := id.genCID
+	current := id.controller
 	for i := 0; i < 2; i++ {
-		newAuth := newKeypair()
-		token, opCID, err := dfos.SignIdentityUpdate(
-			prevCID,
-			[]dfos.MultikeyPublicKey{id.controller.mk},
-			[]dfos.MultikeyPublicKey{newAuth.mk},
-			[]dfos.MultikeyPublicKey{},
-			id.did+"#"+id.controller.keyID,
-			id.controller.priv,
-		)
-		if err != nil {
-			t.Fatalf("SignIdentityUpdate: %v", err)
-		}
+		next := newKeypair()
+		token, opCID := signIdentityUpdateWithProofs(t, prevCID,
+			[]dfos.MultikeyPublicKey{next.mk},
+			[]dfos.MultikeyPublicKey{next.mk},
+			[]dfos.MultikeyPublicKey{next.mk},
+			[]string{keyProof(t, next.priv, id.did, prevCID)},
+			id.did+"#"+current.keyID, current.priv)
 		res := postOperations(t, base, []string{token})
 		if res.StatusCode != 200 {
 			t.Fatalf("update %d: status %d", i, res.StatusCode)
 		}
 		res.Body.Close()
 		prevCID = opCID
+		current = next
 	}
 
 	// 1. Full log (no params) — should have 3 entries, next null (< default limit)

@@ -141,6 +141,11 @@ const verifyResponse = async (response: string, request: StoredSignRequest, stor
   if (base64urlEncode(payloadBytes) !== parts[1]) throw new Error('invalid response payload');
   if (!bytesEqual(payloadBytes, request.payloadBytes)) throw new Error('response payload mismatch');
 
+  // HAS-EVER-PROVED, via the historical resolver: the subject may have rotated
+  // between depositing the request and answering it, and the response is still
+  // the answer the request asked for. What the resolver will NOT hand back is a
+  // key the chain merely declared — no possession proof admitted it, so it never
+  // spoke for this identity and cannot complete a sign request in its name.
   const resolveIdentity = createHistoricalIdentityResolver(store);
   const identity = await resolveIdentity(request.subjectDID);
   if (!identity) throw new Error('subject identity unavailable');
@@ -218,7 +223,7 @@ export const registerSigningRoutes = (options: {
     const resolveHistorical = async (did: string): Promise<VerifiedIdentity | undefined> => {
       const local = await localHistorical(did);
       const bundled = bundle.get(did);
-      return local ?? (bundled ? mergeHistoricalIdentity(bundled.state, bundled.log) : undefined);
+      return local ?? (bundled ? mergeHistoricalIdentity(bundled.state) : undefined);
     };
 
     let verifiedRequest: Awaited<ReturnType<typeof verifySignRequest>>;

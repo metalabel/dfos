@@ -30,7 +30,9 @@ import (
 
 type fakeOracle struct {
 	server *httptest.Server
-	// rowsByKey is the has-ever-declared index: public multikey → identity rows.
+	// rowsByKey is the has-ever-proved index: public multikey → identity rows. Only
+	// memberships a possession proof admitted appear here, which is why a chain
+	// that merely declares a key can neither claim it nor burn it.
 	rowsByKey map[string][]client.IndexIdentityRow
 	// logsByDID is the proof plane: DID → ordered JWS tokens.
 	logsByDID map[string][]string
@@ -564,7 +566,7 @@ func TestRecoverFindsADeletedIdentityAndSaysItIsDeleted(t *testing.T) {
 		t.Fatal("the identity was not deleted")
 	}
 	oracle.logsByDID[did] = chain.Log
-	// The one minted key, found through has-ever-declared.
+	// The one minted key, found through has-ever-proved.
 	oracle.declare(derivedPublicKey(t, mnemonic, 0), did, true, "")
 
 	storeB, _, _ := setupDevices(t)
@@ -616,7 +618,9 @@ func TestRecoverFindsAKeyARotationLeftBehind(t *testing.T) {
 	chain, _ := lr.Relay.GetIdentity(did)
 	oracle.logsByDID[did] = chain.Log
 	// 0 the rotated-OUT genesis key, 1 the current one. The index answers
-	// has-ever-declared precisely so index 0 is findable.
+	// has-ever-proved precisely so index 0 is findable: rotating a key out
+	// removes it from current state without retracting the proof that admitted
+	// it.
 	for _, i := range []uint32{0, 1} {
 		oracle.declare(derivedPublicKey(t, mnemonic, i), did, false, "")
 	}

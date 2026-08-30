@@ -61,12 +61,19 @@ type IndexIdentityProfile struct {
 	Name       string `json:"name"`
 }
 
-// IdentitiesByKey runs the has-ever-declared reverse lookup: which identities
-// have ever declared this public key, in any role, in any accepted operation —
-// including operations a later update rotated the key out of. That history is
-// the point: a holder rediscovering identities from a restored seed may hold
-// exactly the keys that were rotated away, and a current-state match would hide
-// the chains that matter most.
+// IdentitiesByKey runs the has-ever-PROVED reverse lookup: which identities have
+// ever held this public key in a role a possession proof admitted, in any role,
+// in any accepted operation — including operations a later update rotated the key
+// out of. That history is the point: a holder rediscovering identities from a
+// restored seed may hold exactly the keys that were rotated away, and a
+// current-state match would hide the chains that matter most.
+//
+// PROVED, NOT MERELY DECLARED, and the distinction is what keeps the index
+// honest. A chain can declare any key its controller cares to write down; only an
+// introduction carrying that key's own signature makes the membership effective.
+// An unproved declaration is void — it never enters this index, so it can neither
+// be recovered by someone who does not hold the key nor burn the key for whoever
+// does.
 //
 // key is matched byte-for-byte as an opaque string, so a key no operation ever
 // declared simply matches nothing. A 501 returns ErrIndexUnavailable.

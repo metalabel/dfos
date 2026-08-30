@@ -33,8 +33,8 @@ const CID_V1 = /^baf[a-z2-7]+$/;
  *
  * Strict on purpose. A key is the only pasteable identifier with no view of its
  * own to render an honest not-found: the key page ASKS THE RELAY "which
- * identities ever declared this", and a relay answers a garbage string with an
- * empty page — indistinguishable from a real key nobody has used. So the
+ * identities has this been proved into", and a relay answers a garbage string
+ * with an empty page — indistinguishable from a real key nobody has used. So the
  * dispatcher, not the view, is where a non-key is refused, and anything that
  * fails this falls through to the name search.
  *

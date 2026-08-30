@@ -1,12 +1,29 @@
 /**
  * Well-known app description logic — the pure half of the domain view.
  *
- * The crypto cases run against the repo's ONE real carriage document
- * (examples/siwd-demo/public/.well-known/dfos-app.json), the same document
- * packages/dfos-protocol's schema spec pins. Assertions compare the derived DID
- * to the document's OWN client_did rather than to a hardcoded string, so a
- * re-minted demo identity does not break these tests — only a genuinely broken
- * binding does.
+ * TWO CARRIAGE DOCUMENTS, AND THE DIFFERENCE BETWEEN THEM IS THE POINT.
+ *
+ * The POSITIVE cases run against a minted fixture (tests/fixtures/dfos-app.minted.json,
+ * re-mintable via tests/fixtures/mint-dfos-app.ts): a single-key genesis followed by
+ * an introduction carrying that key's own possession proof. It exercises the same
+ * parse/verify surface a real document does — multi-operation carriage, a client_did
+ * the chain derives, an embedded envelope — and it verifies.
+ *
+ * The NEGATIVE case runs against the repo's one REAL carriage document
+ * (examples/siwd-demo/public/.well-known/dfos-app.json). Its chain predates key
+ * possession: the genesis declares several distinct keys, where a genesis declares
+ * exactly one, in all three roles, and proves it by signing itself. It no longer
+ * verifies, and the honest thing is to assert that rather than hide it — so it is
+ * pinned here as the documented rejection vector, at log[0], where it fails.
+ *
+ * That file is left BYTE-UNTOUCHED on purpose: it mirrors what the deployed demo
+ * actually serves, and editing it would make examples/ describe something no
+ * deployment has. The deployed demo's chain is re-minted in the platform migration;
+ * until then these tests tell the truth about it.
+ *
+ * Assertions compare a derived DID to the document's OWN client_did rather than to a
+ * hardcoded string, so re-minting either identity does not break them — only a
+ * genuinely broken binding does.
  */
 
 import { readFileSync } from 'node:fs';
@@ -28,8 +45,18 @@ const repoRoot = resolve(import.meta.dirname, '../../..');
 const readJson = (rel: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(repoRoot, rel), 'utf-8')) as Record<string, unknown>;
 
-const demoApp = (): AppDescription =>
+/**
+ * The real deployed demo's document. Its chain has a multi-key genesis and is a
+ * REJECTION vector now, not a passing one — see the file header.
+ */
+const legacyDemoApp = (): AppDescription =>
   readJson('examples/siwd-demo/public/.well-known/dfos-app.json') as unknown as AppDescription;
+
+/** The minted, verifying carriage the positive cases run against. */
+const demoApp = (): AppDescription =>
+  JSON.parse(
+    readFileSync(resolve(import.meta.dirname, 'fixtures/dfos-app.minted.json'), 'utf-8'),
+  ) as AppDescription;
 
 // -----------------------------------------------------------------------------
 // the proxy contract
@@ -254,6 +281,22 @@ describe('verifyCarriedChain', () => {
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toMatch(/no identity_chain/);
   });
+
+  // THE DEPLOYED DEMO'S OWN DOCUMENT, PINNED AS A REJECTION.
+  //
+  // Its genesis declares several distinct keys. A genesis declares exactly one, in
+  // all three roles, and proves it by signing itself — so this chain fails at its
+  // FIRST operation, before any question of what the later ones say. Asserting the
+  // rejection is what keeps the negative honest: the alternative is a suite that
+  // passes while the document a real deployment serves does not verify.
+  it('REJECTS the deployed demo document at log[0] — its genesis is multi-key', async () => {
+    const out = await verifyCarriedChain(legacyDemoApp());
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toMatch(/log\[0\]/);
+      expect(out.error).toMatch(/exactly one key/i);
+    }
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -370,7 +413,7 @@ describe('withRelayLog', () => {
 // -----------------------------------------------------------------------------
 
 describe('assessDocument', () => {
-  it('verifies the real demo document', async () => {
+  it('verifies a well-formed carriage document end to end', async () => {
     const out = await assessDocument({ kind: 'ok', document: demoApp() });
     expect(out.kind).toBe('verified');
     if (out.kind === 'verified') expect(out.did).toBe(demoApp().client_did);

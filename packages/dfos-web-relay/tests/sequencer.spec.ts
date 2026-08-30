@@ -53,14 +53,17 @@ const makeKey = () => {
 
 const ts = (offset = 0) => new Date(Date.now() + offset * 60_000).toISOString();
 
+// A genesis declares exactly ONE key, the same key in all three roles, and
+// proves it by signing itself with it. `authKey` is that key under the name the
+// content-op fixtures read it by.
 const createIdentity = async () => {
   const controller = makeKey();
-  const authKey = makeKey();
+  const authKey = controller;
   const createOp: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [authKey.key],
-    assertKeys: [],
+    authKeys: [controller.key],
+    assertKeys: [controller.key],
     controllerKeys: [controller.key],
     createdAt: ts(),
   };

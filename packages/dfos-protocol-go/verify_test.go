@@ -21,7 +21,19 @@ func testKeys(t *testing.T) (ed25519.PrivateKey, ed25519.PublicKey, MultikeyPubl
 	return priv, pub, mk, keyID
 }
 
-func testSignIdentityGenesis(t *testing.T, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, keyID string, priv ed25519.PrivateKey, createdAt string) (jws, did, cid string) {
+// testSignIdentityGenesis signs a well-formed genesis: ONE key, in all three
+// roles, signing itself. That signature is the key's possession proof and it
+// covers all three roles, so a chain built from here starts fully proved. The
+// structural negatives use testSignIdentityGenesisRaw.
+func testSignIdentityGenesis(t *testing.T, key MultikeyPublicKey, keyID string, priv ed25519.PrivateKey, createdAt string) (jws, did, cid string) {
+	t.Helper()
+	one := []MultikeyPublicKey{key}
+	return testSignIdentityGenesisRaw(t, one, one, one, keyID, priv, createdAt)
+}
+
+// testSignIdentityGenesisRaw signs a genesis with arbitrary key arrays, so the
+// single-key rule can be exercised from the outside.
+func testSignIdentityGenesisRaw(t *testing.T, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, keyID string, priv ed25519.PrivateKey, createdAt string) (jws, did, cid string) {
 	t.Helper()
 	if authKeys == nil {
 		authKeys = []MultikeyPublicKey{}
@@ -49,7 +61,49 @@ func testSignIdentityGenesis(t *testing.T, controllerKeys, authKeys, assertKeys 
 	return token, DeriveDID(cidBytes), cidStr
 }
 
+// testProofNonces makes every minted envelope's nonce distinct, the way a real
+// ceremony's would be. Nothing in the walk reads it — step 6 is the caller's — but
+// a shared nonce across fixtures would misrepresent the artifact.
+var testProofNonces int
+
+// testKeyProof mints one possession envelope for the key behind priv, at prevCID
+// on did. With no roles named it consents to all three, which is the ordinary
+// full-rotation ceremony.
+func testKeyProof(t *testing.T, priv ed25519.PrivateKey, did, prevCID string, roles ...KeyRole) string {
+	t.Helper()
+	if len(roles) == 0 {
+		roles = KeyRoles
+	}
+	roleSet, err := SerializeRoleSet(roles)
+	if err != nil {
+		t.Fatalf("SerializeRoleSet: %v", err)
+	}
+	testProofNonces++
+	proof, _, err := SignKeyProof(SignKeyProofInput{
+		Typ:        KeyAddJWSTyp,
+		Nonce:      fmt.Sprintf("nonce-possession-%d", testProofNonces),
+		Audience:   "relay.example",
+		DID:        did,
+		RoleSet:    roleSet,
+		PrevCID:    prevCID,
+		PrivateKey: priv,
+	})
+	if err != nil {
+		t.Fatalf("SignKeyProof: %v", err)
+	}
+	return proof
+}
+
 func testSignIdentityUpdate(t *testing.T, did string, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, keyID string, priv ed25519.PrivateKey, previousCID, createdAt string) (jws, cid string) {
+	t.Helper()
+	return testSignIdentityUpdateWithProofs(t, did, controllerKeys, authKeys, assertKeys, nil, keyID, priv, previousCID, createdAt)
+}
+
+// testSignIdentityUpdateWithProofs is testSignIdentityUpdate carrying possession
+// envelopes. A nil/empty slice omits the member entirely, which is CID-neutral —
+// an update that introduces nothing must encode identically to one that never had
+// the member.
+func testSignIdentityUpdateWithProofs(t *testing.T, did string, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, keyProofs []string, keyID string, priv ed25519.PrivateKey, previousCID, createdAt string) (jws, cid string) {
 	t.Helper()
 	if authKeys == nil {
 		authKeys = []MultikeyPublicKey{}
@@ -65,6 +119,9 @@ func testSignIdentityUpdate(t *testing.T, did string, controllerKeys, authKeys, 
 		"assertKeys":           assertKeys,
 		"controllerKeys":       controllerKeys,
 		"createdAt":            createdAt,
+	}
+	if len(keyProofs) > 0 {
+		payload["keyProofs"] = keyProofs
 	}
 	_, _, cidStr, err := DagCborCID(payload)
 	if err != nil {
@@ -193,10 +250,7 @@ func testSignContentDelete(t *testing.T, signerDID, previousCID, kid string, pri
 func TestVerifyIdentityChain_GenesisOnly(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	jws, did, cid := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	jws, did, cid := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	result, err := VerifyIdentityChain([]string{jws})
 	if err != nil {
@@ -222,16 +276,15 @@ func TestVerifyIdentityChain_GenesisOnly(t *testing.T) {
 func TestVerifyIdentityChain_GenesisAndUpdate(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
-	// create a second key for rotation
-	_, _, mk2, _ := testKeys(t)
+	// create a second key for rotation. It is INTRODUCED here, so it carries its
+	// own possession envelope — without one the memberships would be void.
+	priv2, _, mk2, _ := testKeys(t)
 
-	updateJWS, updateCID := testSignIdentityUpdate(t, did,
+	updateJWS, updateCID := testSignIdentityUpdateWithProofs(t, did,
 		[]MultikeyPublicKey{mk, mk2}, []MultikeyPublicKey{mk2}, nil,
+		[]string{testKeyProof(t, priv2, did, genCID, "auth", "controller")},
 		keyID, priv, genCID, "2026-03-07T00:01:00.000Z",
 	)
 
@@ -256,10 +309,7 @@ func TestVerifyIdentityChain_GenesisAndUpdate(t *testing.T) {
 func TestVerifyIdentityChain_GenesisAndDelete(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	deleteJWS, _ := testSignIdentityDelete(t, did, keyID, priv, genCID, "2026-03-07T00:01:00.000Z")
 
@@ -276,13 +326,20 @@ func TestVerifyIdentityChain_RotateDeleteRestoreUpdate(t *testing.T) {
 	oldPriv, _, oldKey, oldID := testKeys(t)
 	newPriv, _, newKey, newID := testKeys(t)
 	finalPriv, _, finalKey, finalID := testKeys(t)
-	_ = finalPriv
 	_ = finalID
-	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{oldKey}, []MultikeyPublicKey{oldKey}, nil, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
-	update, updateCID := testSignIdentityUpdate(t, did, []MultikeyPublicKey{newKey}, []MultikeyPublicKey{newKey}, nil, oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
+	gen, did, genCID := testSignIdentityGenesis(t, oldKey, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
+	update, updateCID := testSignIdentityUpdateWithProofs(t, did,
+		[]MultikeyPublicKey{newKey}, []MultikeyPublicKey{newKey}, nil,
+		[]string{testKeyProof(t, newPriv, did, genCID, "auth", "controller")},
+		oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
 	del, delCID := testSignIdentityDelete(t, did, newID, newPriv, updateCID, "2026-03-07T00:02:00.000Z")
 	restore, restoreCID := testSignIdentityRestore(t, did, newID, newPriv, delCID, "2026-03-07T00:03:00.000Z")
-	final, _ := testSignIdentityUpdate(t, did, []MultikeyPublicKey{finalKey}, nil, nil, newID, newPriv, restoreCID, "2026-03-07T00:04:00.000Z")
+	// The head an envelope must name is the RESTORE's CID — the operation this
+	// update builds on — not the last operation that touched keys.
+	final, _ := testSignIdentityUpdateWithProofs(t, did,
+		[]MultikeyPublicKey{finalKey}, nil, nil,
+		[]string{testKeyProof(t, finalPriv, did, restoreCID, "controller")},
+		newID, newPriv, restoreCID, "2026-03-07T00:04:00.000Z")
 
 	restored, err := VerifyIdentityChain([]string{gen, update, del, restore})
 	if err != nil || restored.State.IsDeleted || len(restored.State.ControllerKeys) != 1 || restored.State.ControllerKeys[0].ID != newID {
@@ -296,7 +353,7 @@ func TestVerifyIdentityChain_RotateDeleteRestoreUpdate(t *testing.T) {
 func TestVerifyIdentityChain_RejectsInvalidRestorePositionsAndSigner(t *testing.T) {
 	oldPriv, _, oldKey, oldID := testKeys(t)
 	newPriv, _, newKey, newID := testKeys(t)
-	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{oldKey}, nil, nil, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
+	gen, did, genCID := testSignIdentityGenesis(t, oldKey, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
 	restoreAfterCreate, _ := testSignIdentityRestore(t, did, oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
 	if _, err := VerifyIdentityChain([]string{gen, restoreAfterCreate}); err == nil {
 		t.Fatal("restore after create accepted")
@@ -341,10 +398,7 @@ func TestVerifyIdentityChain_NoControllerKeys(t *testing.T) {
 func TestVerifyIdentityChain_WrongTimestampOrder(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:01:00.000Z", // later time
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:01:00.000Z") // later time
 
 	// update with earlier timestamp
 	updateJWS, _ := testSignIdentityUpdate(t, did,
@@ -361,10 +415,7 @@ func TestVerifyIdentityChain_WrongTimestampOrder(t *testing.T) {
 func TestVerifyIdentityChain_WrongPreviousCID(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, _ := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	// update with wrong previous CID
 	updateJWS, _ := testSignIdentityUpdate(t, did,
@@ -381,10 +432,7 @@ func TestVerifyIdentityChain_WrongPreviousCID(t *testing.T) {
 func TestVerifyIdentityChain_CannotExtendDeleted(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 	deleteJWS, deleteCID := testSignIdentityDelete(t, did, keyID, priv, genCID, "2026-03-07T00:01:00.000Z")
 	updateJWS, _ := testSignIdentityUpdate(t, did,
 		[]MultikeyPublicKey{mk}, nil, nil,
@@ -425,10 +473,7 @@ func TestVerifyIdentityChain_ReferenceVector(t *testing.T) {
 func TestVerifyIdentityExtension_Update(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	genResult, err := VerifyIdentityChain([]string{genJWS})
 	if err != nil {
@@ -436,9 +481,10 @@ func TestVerifyIdentityExtension_Update(t *testing.T) {
 	}
 
 	// create update op
-	_, _, mk2, keyID2 := testKeys(t)
-	updateJWS, _ := testSignIdentityUpdate(t, did,
+	priv2, _, mk2, keyID2 := testKeys(t)
+	updateJWS, _ := testSignIdentityUpdateWithProofs(t, did,
 		[]MultikeyPublicKey{mk, mk2}, nil, nil,
+		[]string{testKeyProof(t, priv2, did, genCID, "controller")},
 		keyID, priv, genCID, "2026-03-07T00:01:00.000Z",
 	)
 
@@ -458,10 +504,7 @@ func TestVerifyIdentityExtension_Update(t *testing.T) {
 func TestVerifyIdentityExtension_Delete(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	genResult, err := VerifyIdentityChain([]string{genJWS})
 	if err != nil {
@@ -481,7 +524,7 @@ func TestVerifyIdentityExtension_Delete(t *testing.T) {
 
 func TestVerifyIdentityExtension_Restore(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
-	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{mk}, nil, nil, keyID, priv, "2026-03-07T00:00:00.000Z")
+	gen, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 	del, delCID := testSignIdentityDelete(t, did, keyID, priv, genCID, "2026-03-07T00:01:00.000Z")
 	deleted, err := VerifyIdentityChain([]string{gen, del})
 	if err != nil {
@@ -497,18 +540,12 @@ func TestVerifyIdentityExtension_Restore(t *testing.T) {
 func TestVerifyIdentityExtension_RejectsCreate(t *testing.T) {
 	priv, _, mk, keyID := testKeys(t)
 
-	genJWS, _, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, _, _ := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	genResult, _ := VerifyIdentityChain([]string{genJWS})
 
 	// try to extend with another genesis
-	anotherGenesis, _, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, nil, nil,
-		keyID, priv, "2026-03-07T00:01:00.000Z",
-	)
+	anotherGenesis, _, _ := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:01:00.000Z")
 
 	_, err := VerifyIdentityExtension(genResult.State, genResult.HeadCID, genResult.LastCreatedAt, anotherGenesis)
 	if err == nil {
@@ -524,10 +561,7 @@ func TestVerifyContentChain_GenesisOnly(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
 
 	// create an identity first to get a DID
-	genJWS, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 	idResult, _ := VerifyIdentityChain([]string{genJWS})
 
 	kid := did + "#" + keyID
@@ -564,10 +598,7 @@ func TestVerifyContentChain_GenesisOnly(t *testing.T) {
 
 func TestVerifyContentChain_GenesisAndUpdate(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	resolver := func(k string) (ed25519.PublicKey, error) {
@@ -597,10 +628,7 @@ func TestVerifyContentChain_GenesisAndUpdate(t *testing.T) {
 
 func TestVerifyContentChain_Delete(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	resolver := func(k string) (ed25519.PublicKey, error) {
@@ -628,17 +656,11 @@ func TestVerifyContentChain_Delete(t *testing.T) {
 
 func TestVerifyContentChain_DelegatedWriteRequiresCredential(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	// second identity (delegated writer)
 	priv2, pub2, _, keyID2 := testKeys(t)
-	_, did2, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID2, pub2)}, nil, nil,
-		keyID2, priv2, "2026-03-07T00:00:00.000Z",
-	)
+	_, did2, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID2, pub2), keyID2, priv2, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	kid2 := did2 + "#" + keyID2
@@ -685,17 +707,11 @@ func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
 
 	// creator identity
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	// delegated writer identity
 	priv2, pub2, _, keyID2 := testKeys(t)
-	_, did2, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID2, pub2)}, nil, nil,
-		keyID2, priv2, "2026-03-07T00:00:00.000Z",
-	)
+	_, did2, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID2, pub2), keyID2, priv2, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	kid2 := did2 + "#" + keyID2
@@ -751,10 +767,7 @@ func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
 
 func TestVerifyContentExtension_Update(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	resolver := func(k string) (ed25519.PublicKey, error) {
@@ -790,10 +803,7 @@ func TestVerifyContentExtension_Update(t *testing.T) {
 
 func TestVerifyArtifact(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	content := map[string]any{
@@ -833,10 +843,7 @@ func TestVerifyArtifact(t *testing.T) {
 // "accepts a $schema longer than 256 chars" test.
 func TestVerifyArtifact_LongSchema(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	longSchema := "urn:dfos:" + strings.Repeat("a", 400) // 409 chars, over the old 256
@@ -864,10 +871,7 @@ func TestVerifyArtifact_LongSchema(t *testing.T) {
 
 func TestVerifyArtifact_MissingSchema(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 
@@ -902,10 +906,7 @@ func TestVerifyArtifact_MissingSchema(t *testing.T) {
 
 func TestVerifyCountersignature(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	targetCID := "bafyreidykglsfhoixmivffc5uwhcz4mjwdulkiu3k44wgo4ml3ds3a5yfu"
@@ -939,10 +940,7 @@ func TestVerifyCountersignature(t *testing.T) {
 
 func TestVerifyCountersignature_WrongKey(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
 	csJWS, _, _ := SignCountersign(did, "some-cid", kid, priv)
@@ -966,10 +964,7 @@ func TestVerifyIdentityChain_FullRoundTrip(t *testing.T) {
 	mk := NewMultikeyPublicKey(keyID, pub)
 
 	// sign genesis with controlled timestamp
-	genJWS, did, genCID := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, []MultikeyPublicKey{mk},
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	genJWS, did, genCID := testSignIdentityGenesis(t, mk, keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	// sign update
 	updateJWS, updateCID := testSignIdentityUpdate(t, did,

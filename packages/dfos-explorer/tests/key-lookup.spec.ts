@@ -1,6 +1,7 @@
 /**
- * The pure half of the key detail page: the has-ever-declared standing fold, and
- * the sentinel probe that decides whether a relay honours `key=` at all.
+ * The pure half of the key detail page: the standing fold behind the
+ * has-ever-proved reverse lookup, and the sentinel probe that decides whether a
+ * relay honours `key=` at all.
  *
  * The multikey fixtures are REAL — minted here with the protocol's own encoder
  * rather than pasted — so a change to the multikey encoding breaks these tests
@@ -21,6 +22,7 @@ import {
   classesOf,
   headKeysOf,
   keyStanding,
+  voidClassesOf,
   type HeadKeys,
   type KeyStanding,
 } from '../src/lib/key-standing';
@@ -38,22 +40,30 @@ const head = (over: Partial<HeadKeys> = {}): HeadKeys => ({
   auth: [],
   assert: [],
   controller: [],
+  voids: [],
   ...over,
 });
 
 // -----------------------------------------------------------------------------
-// the standing fold — four states, and the fourth is the point
+// the standing fold — five states, and the two the fold must never conflate are
+// `unchecked` (we failed to observe) and `void` (we observed a membership that
+// does not work). Both would read as `rotated` under a naive fold, and both mean
+// something else entirely.
 // -----------------------------------------------------------------------------
 
 describe('keyStanding', () => {
-  it('is current when the head still declares the key, and names every class', () => {
+  it('is current when the head still carries the key, and names every class', () => {
     const s = keyStanding(A, head({ auth: [A], assert: [A, B], controller: [B] }));
-    expect(s).toEqual({ kind: 'current', classes: ['auth', 'assert'] });
+    expect(s).toEqual({ kind: 'current', classes: ['auth', 'assert'], voidClasses: [] });
   });
 
   it('names classes in the identity panel’s order', () => {
     const s = keyStanding(A, head({ controller: [A], assert: [A], auth: [A] }));
-    expect(s).toEqual({ kind: 'current', classes: ['auth', 'assert', 'controller'] });
+    expect(s).toEqual({
+      kind: 'current',
+      classes: ['auth', 'assert', 'controller'],
+      voidClasses: [],
+    });
   });
 
   it('is rotated out when the chain verifies and the head no longer carries it', () => {
@@ -85,11 +95,68 @@ describe('keyStanding', () => {
     expect(keyStanding(A, head({ auth: [`${A} `] })).kind).toBe('rotated');
     expect(keyStanding(A, head({ auth: [A.slice(0, -1)] })).kind).toBe('rotated');
   });
+
+  // A key the head NAMES is not a key the head rotated away. `rotated out` would
+  // tell a controller the opposite of what happened to their own chain.
+  it('is void — never rotated — when the head names the key with no proof behind it', () => {
+    const s = keyStanding(
+      A,
+      head({
+        auth: [B],
+        voids: [
+          { key: A, role: 'auth' },
+          { key: A, role: 'controller' },
+        ],
+      }),
+    );
+    expect(s).toEqual({ kind: 'void', classes: ['auth', 'controller'] });
+    expect(s.kind).not.toBe('rotated');
+  });
+
+  it('carries the void roles alongside current, so a partly-proved key reads as both', () => {
+    // proved into auth, named into assert without a proof covering that role
+    const s = keyStanding(A, head({ auth: [A], voids: [{ key: A, role: 'assert' }] }));
+    expect(s).toEqual({ kind: 'current', classes: ['auth'], voidClasses: ['assert'] });
+  });
+
+  it('ignores void memberships belonging to some other key', () => {
+    expect(keyStanding(A, head({ auth: [B], voids: [{ key: B, role: 'assert' }] }))).toEqual({
+      kind: 'rotated',
+    });
+  });
+
+  it('keeps deletion the headline even when the head has void memberships', () => {
+    expect(keyStanding(A, head({ isDeleted: true, voids: [{ key: A, role: 'auth' }] }))).toEqual({
+      kind: 'deleted',
+      classes: [],
+    });
+  });
 });
 
 describe('classesOf', () => {
   it('is empty for a key no head array carries', () => {
     expect(classesOf(C, head({ auth: [A], assert: [B] }))).toEqual([]);
+  });
+});
+
+describe('voidClassesOf', () => {
+  it('is empty on a fully-proved head', () => {
+    expect(voidClassesOf(A, head({ auth: [A] }))).toEqual([]);
+  });
+
+  it('names the void roles in panel order and deduplicates them', () => {
+    expect(
+      voidClassesOf(
+        A,
+        head({
+          voids: [
+            { key: A, role: 'controller' },
+            { key: A, role: 'auth' },
+            { key: A, role: 'auth' },
+          ],
+        }),
+      ),
+    ).toEqual(['auth', 'controller']);
   });
 });
 
@@ -103,12 +170,35 @@ describe('headKeysOf', () => {
       controllerKeys: [{ id: '#ctrl-1', type: 'Multikey', publicKeyMultibase: C }],
       services: [],
     } as unknown as VerifiedIdentity;
+    // no `voidKeys` member at all — an older relay's state, or a cached fold that
+    // predates it. Reads as no void memberships, which under-reports rather than
+    // inventing one.
     expect(headKeysOf(identity)).toEqual({
       isDeleted: false,
       auth: [A],
       assert: [B],
       controller: [C],
+      voids: [],
     });
+  });
+
+  it('flattens void memberships to (key, role) pairs', () => {
+    const identity = {
+      did: 'did:dfos:tn7kkfz7ehzvv6fzvate9rz2874nc3e',
+      isDeleted: false,
+      authKeys: [{ id: '#auth-1', type: 'Multikey', publicKeyMultibase: A }],
+      assertKeys: [],
+      controllerKeys: [],
+      services: [],
+      voidKeys: [
+        {
+          key: { id: '#assert-2', type: 'Multikey', publicKeyMultibase: B },
+          role: 'assert',
+          operationCID: 'bafyrei-op',
+        },
+      ],
+    } as unknown as VerifiedIdentity;
+    expect(headKeysOf(identity).voids).toEqual([{ key: B, role: 'assert' }]);
   });
 });
 
@@ -199,7 +289,7 @@ describe('KEY_PROBE_MULTIBASE', () => {
     expect(KEY_PROBE_MULTIBASE).toHaveLength(48);
   });
 
-  it('is not a key any of the fixtures declares', () => {
+  it('is not one of the fixture keys', () => {
     expect([A, B, C]).not.toContain(KEY_PROBE_MULTIBASE);
   });
 });

@@ -755,6 +755,23 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     if (!chain) return c.json({ error: 'not found' }, 404);
 
+    // THE VERIFIED STATE, VERBATIM — and that is the deliberate answer to "what
+    // should a consumer see", not an accident of serialization.
+    //
+    // The three key arrays are EFFECTIVE state: what a possession proof actually
+    // admitted. That is what the arrays have to mean, because every consumer
+    // that reads them is asking which keys resolve, and a void key must never
+    // resolve. The shape is unchanged for them.
+    //
+    // `voidKeys` rides along because its absence is the failure mode: a
+    // controller who introduced a key with no proof has a chain that verifies
+    // and a key that is simply not there, and NOTHING in the effective arrays
+    // can tell them so. `declared` and `provedKeys` come with it — the first is
+    // what the chain says, the second is has-ever-proved (what the `key=` index
+    // answers and what verifies an artifact signed before a rotation). All three
+    // are re-derivable from the public log, so serving them discloses nothing
+    // new; it just spares every consumer a chain walk to learn it. They are
+    // OPTIONAL in the document: a relay that omits them is still conformant.
     return c.json({
       did: chain.did,
       headCID: chain.headCID,
@@ -886,8 +903,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid DID' }, 400);
     }
     // OPAQUE, DELIBERATELY UNVALIDATED: `key=` matches multibase public-key
-    // strings byte-for-byte against the has-ever-declared reverse index. A
-    // NON-EMPTY value no operation ever declared matches nothing — there is no
+    // strings byte-for-byte against the has-ever-PROVED reverse index. A
+    // NON-EMPTY value no chain ever proved matches nothing — there is no
     // key format to enforce here and therefore no 400, unlike the DID-shaped
     // filters above. Spread on truthiness below, not on `!== undefined`: an
     // empty `key=` is no filter, the same posture `signerKey=` on

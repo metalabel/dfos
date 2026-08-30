@@ -1,26 +1,43 @@
-// `key=` on /index/v0/identities — the reverse lookup "which identities has
-// this key ever been declared by."
+// `key=` on /index/v0/identities — the reverse lookup "which identities has this
+// key ever been PROVED into."
 //
 // This is the SIBLING of `signerKey=` on /index/v0/operations
 // (conformance_index_operations_signer_key_test.go), and the two are one class:
 // both match a multibase public key BYTE-FOR-BYTE against strings the chains
-// declared, both are opaque (no format validation, no 400), and both are
-// actor-axis, proof-tier filters computed from accepted, signature-verified
-// operations alone. Where they differ is the axis: `key=` answers "which chains
-// declared this key", `signerKey=` answers "which operations did it sign".
+// declared, both are opaque (no format validation, no 400), both are actor-axis,
+// proof-tier filters computed from accepted, signature-verified operations alone,
+// and both are has-ever-PROVED. Where they differ is the axis: `key=` answers
+// "which chains proved this key", `signerKey=` answers "which operations did it
+// sign".
+//
+// WHY PROVED AND NOT DECLARED — the whole reason this filter has a rule at all.
+// This index is the ONE-KEY-ONE-DID ORACLE: a holder asks it before signing a key
+// proof and REFUSES when some chain already holds the key, because proving one
+// key into two chains publishes an irreversible public link between those two
+// identities (KEY-PROOF.md, Holder Obligations). An index of DECLARATIONS would
+// therefore be a burn weapon. Nothing structural stops anyone from writing anyone
+// else's public key into their own chain — and if that listing indexed, every
+// future ceremony for the key's true holder would refuse, forever, on evidence
+// the attacker manufactured for free. A declaration publishes no cross-DID link;
+// only a proof does. So only a proof enters the oracle, and a hostile listing is
+// void: never effective, never indexed, never a burn.
 //
 // The contract these tests pin, from WEB-RELAY's identities section:
 //
-//   - HAS-EVER-DECLARED, not current state. Any accepted genesis or update that
-//     ever declared the key matches, whether or not a later update rotated it
-//     out. Audit and key-loss recovery both need the full declaration history —
-//     a holder rediscovering identities from a restored key may hold exactly the
-//     keys later updates removed.
+//   - HAS-EVER-PROVED, not current state. Any accepted operation that ever
+//     proved the key into the chain matches, whether or not a later update
+//     rotated it out. Audit and key-loss recovery both need the full possession
+//     history — a holder rediscovering identities from a restored key may hold
+//     exactly the keys later updates removed — and possession, once demonstrated,
+//     does not become untrue.
+//   - A DECLARATION IS NOT A MATCH. A chain that lists a key no envelope ever
+//     proved resolves nothing, ever. This is the burn defense, and it is the
+//     single most important assertion in this file.
 //   - No key-class column: `authKeys`, `assertKeys`, and `controllerKeys` are
 //     all matched, and which array carried the key is the chain's answer.
 //   - A DELETED identity still matches; the row carries `isDeleted` and a
 //     consumer that does not want it filters client-side.
-//   - The value is opaque: a string no operation ever declared matches nothing.
+//   - The value is opaque: a string no operation ever proved matches nothing.
 package conformance
 
 import (
@@ -102,32 +119,38 @@ func keyParam(publicKeyMultibase string) string {
 }
 
 // TestIndexIdentitiesKeyMatchesEveryKeyArray covers the no-key-class rule: a key
-// declared in ANY of the three arrays resolves the chain that declared it, and
-// the filter does not leak chains that declared a different key.
+// PROVED into ANY of the three roles resolves the chain that proved it, and the
+// filter does not leak chains that proved a different key.
+//
+// The fixture is the two-operation shape the protocol now requires. A genesis
+// declares exactly ONE key, in all three roles, because its own signature is that
+// key's possession proof and one signature demonstrates possession of one key. A
+// distinct key per role is therefore reached the ordinary way: a single-key
+// genesis, then an update that introduces the other three, each carrying its own
+// envelope naming exactly the role it gains. That is not a workaround for the
+// rule — it is the rule, and it is also the only shape that distinguishes
+// "matches every role" from "matches whichever array the implementation happened
+// to index".
 func TestIndexIdentitiesKeyMatchesEveryKeyArray(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 
-	// One identity carrying a DISTINCT key in each array — the shape that
-	// separates "matches every array" from "matches whichever array the
-	// implementation happened to index".
-	controller := newKeypair()
+	id := createIdentity(t, base)
 	auth := newKeypair()
 	assert := newKeypair()
-	token, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{controller.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{assert.mk},
-		controller.keyID, controller.priv,
-	)
-	if err != nil {
-		t.Fatalf("SignIdentityCreate: %v", err)
-	}
-	res := postOperations(t, base, []string{token})
-	if res.StatusCode != 200 {
-		t.Fatalf("create identity: status %d, body: %s", res.StatusCode, readBody(t, res))
-	}
-	res.Body.Close()
+	controller := newKeypair()
+
+	token, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk, controller.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk, auth.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk, assert.mk},
+		[]string{
+			keyProof(t, auth.priv, id.did, id.genCID, "auth"),
+			keyProof(t, assert.priv, id.did, id.genCID, "assert"),
+			keyProof(t, controller.priv, id.did, id.genCID, "controller"),
+		},
+		id.did+"#"+id.controller.keyID, id.controller.priv)
+	postOperationsAccepted(t, base, []string{token})
 
 	other := createIdentity(t, base)
 	requireIdentityKeyFilter(t, base)
@@ -138,76 +161,131 @@ func TestIndexIdentitiesKeyMatchesEveryKeyArray(t *testing.T) {
 		"assertKeys":     assert,
 	} {
 		got := identitiesMatching(t, base, keyParam(kp.mk.PublicKeyMultibase))
-		if len(got) != 1 || got[0] != did {
-			t.Fatalf("key=<%s key> = %v, want exactly [%s] — every key array is matched, with no key-class column", name, got, did)
+		if len(got) != 1 || got[0] != id.did {
+			t.Fatalf("key=<%s key> = %v, want exactly [%s] — every key array is matched, with no key-class column", name, got, id.did)
 		}
 	}
 
 	// A different chain's key does not resolve this one.
-	if got := identitiesMatching(t, base, keyParam(other.auth.mk.PublicKeyMultibase)); contains(got, did) {
-		t.Fatalf("key=<another chain's key> leaked %s (rows: %v)", did, got)
+	if got := identitiesMatching(t, base, keyParam(other.auth.mk.PublicKeyMultibase)); contains(got, id.did) {
+		t.Fatalf("key=<another chain's key> leaked %s (rows: %v)", id.did, got)
 	}
 
 	// ANDs with did=: one key may match many chains, and `did=` narrows it. Here
 	// the composition is asserted on the honest-empty side too — the pair
 	// (this chain's key, the other chain's DID) matches nothing.
-	composed := identitiesMatching(t, base, keyParam(auth.mk.PublicKeyMultibase)+"&did="+url.QueryEscape(did))
-	if len(composed) != 1 || composed[0] != did {
-		t.Fatalf("key=<auth>&did=<self> = %v, want [%s]", composed, did)
+	composed := identitiesMatching(t, base, keyParam(auth.mk.PublicKeyMultibase)+"&did="+url.QueryEscape(id.did))
+	if len(composed) != 1 || composed[0] != id.did {
+		t.Fatalf("key=<auth>&did=<self> = %v, want [%s]", composed, id.did)
 	}
 	if got := identitiesMatching(t, base, keyParam(auth.mk.PublicKeyMultibase)+"&did="+url.QueryEscape(other.did)); len(got) != 0 {
 		t.Fatalf("key=<auth>&did=<other> = %v, want an empty page", got)
 	}
 }
 
-// TestIndexIdentitiesKeyIsHasEverDeclared pins the history semantics: a key a
-// later update rotates out KEEPS matching, and a deleted chain KEEPS matching
-// (carrying isDeleted). Both are the cases a current-state implementation gets
-// wrong, and both are exactly the cases key-loss recovery depends on.
-func TestIndexIdentitiesKeyIsHasEverDeclared(t *testing.T) {
+// TestIndexIdentitiesKeyIgnoresUnprovedDeclarations IS THE BURN DEFENSE, and it
+// is the assertion this file exists for.
+//
+// A chain writes a key it does not hold into its own key arrays with no
+// possession envelope. Anyone can do this to anyone — a public key is public —
+// and under a has-ever-DECLARED index it would be catastrophic: the true holder's
+// key would light up the one-key-one-DID oracle against a chain they never
+// touched, and every future key-add ceremony for that key would refuse, forever,
+// with no way to undo it.
+//
+// So the listing must resolve NOTHING. The key is void in the listing chain:
+// declared, never effective, never indexed. And the proof that it was never
+// burned is the second half — the key's actual holder then proves it into their
+// OWN chain, and the filter returns that chain and only that chain.
+func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+
+	// The key the attack targets. It belongs to nobody yet; what matters is that
+	// the hostile chain below cannot produce its signature.
+	victim := newKeypair()
+
+	// The HOSTILE LISTING: a chain declares the key in all three roles and carries
+	// no envelope, because it holds no envelope to carry. The operation is
+	// perfectly valid — void is a resolution verdict, not an ingest one — and it
+	// sequences like any other.
+	attacker := createIdentity(t, base)
+	hostile, _ := signIdentityUpdateWithProofs(t, attacker.genCID,
+		[]dfos.MultikeyPublicKey{attacker.controller.mk, victim.mk},
+		[]dfos.MultikeyPublicKey{attacker.controller.mk, victim.mk},
+		[]dfos.MultikeyPublicKey{attacker.controller.mk, victim.mk},
+		nil,
+		attacker.did+"#"+attacker.controller.keyID, attacker.controller.priv)
+	postOperationsAccepted(t, base, []string{hostile})
+
+	requireIdentityKeyFilter(t, base)
+
+	// The listing indexes NOTHING. Not the attacker's chain, not anything.
+	if got := identitiesMatching(t, base, keyParam(victim.mk.PublicKeyMultibase)); len(got) != 0 {
+		t.Fatalf("key=<declared-but-never-proved> = %v, want an empty page — a chain that merely LISTS a key it does not hold must not enter the one-key-one-DID oracle, or a stranger can burn any key by writing it down", got)
+	}
+
+	// The attacker's OWN genesis key, which the genesis signature proved, is
+	// indexed exactly as before — the refusal above is about possession and
+	// nothing else.
+	if got := identitiesMatching(t, base, keyParam(attacker.controller.mk.PublicKeyMultibase)); len(got) != 1 || got[0] != attacker.did {
+		t.Fatalf("key=<attacker's proved genesis key> = %v, want [%s]", got, attacker.did)
+	}
+
+	// AND THE KEY WAS NEVER BURNED. Its real holder proves it into their own
+	// chain, and the filter answers with that chain — only that chain.
+	holder := createIdentity(t, base)
+	introduceKey(t, base, &holder, victim)
+
+	got := identitiesMatching(t, base, keyParam(victim.mk.PublicKeyMultibase))
+	if len(got) != 1 || got[0] != holder.did {
+		t.Fatalf("key=<now-proved> = %v, want exactly [%s] — the hostile listing must not appear beside the real one, or the burn succeeded partially", got, holder.did)
+	}
+}
+
+// TestIndexIdentitiesKeyIsHasEverProved pins the history semantics: a key a later
+// update rotates out KEEPS matching, and a deleted chain KEEPS matching (carrying
+// isDeleted). Both are the cases a current-state implementation gets wrong, and
+// both are exactly the cases key-loss recovery depends on — possession, once
+// demonstrated, does not become untrue.
+func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	id := createIdentity(t, base)
 	requireIdentityKeyFilter(t, base)
 
-	rotatedOut := id.auth
+	// The genesis key is proved by the genesis signature itself.
+	rotatedOut := id.controller
 	replacement := newKeypair()
 	controllerKid := id.did + "#" + id.controller.keyID
-	rotateToken, rotateCID, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
+	// A WHOLE rotation carrying the replacement's envelope. Whole because genesis
+	// declared one key in all three roles, so a narrower update would leave the old
+	// key current in the roles it did not touch; with the envelope because an
+	// unproved replacement would be void, and the assertion below would be testing
+	// the wrong thing.
+	rotateToken, rotateCID := signIdentityUpdateWithProofs(t, id.genCID,
 		[]dfos.MultikeyPublicKey{replacement.mk},
-		[]dfos.MultikeyPublicKey{},
-		controllerKid, id.controller.priv,
-	)
-	if err != nil {
-		t.Fatalf("SignIdentityUpdate: %v", err)
-	}
-	res := postOperations(t, base, []string{rotateToken})
-	if res.StatusCode != 200 {
-		t.Fatalf("rotate: status %d, body: %s", res.StatusCode, readBody(t, res))
-	}
-	res.Body.Close()
+		[]dfos.MultikeyPublicKey{replacement.mk},
+		[]dfos.MultikeyPublicKey{replacement.mk},
+		[]string{keyProof(t, replacement.priv, id.did, id.genCID)},
+		controllerKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
-	// HAS-EVER-DECLARED: the rotated-out key is gone from head state and still
+	// HAS-EVER-PROVED: the rotated-out key is gone from head state and still
 	// resolves the chain. The replacement resolves it too.
 	if got := identitiesMatching(t, base, keyParam(rotatedOut.mk.PublicKeyMultibase)); len(got) != 1 || got[0] != id.did {
-		t.Fatalf("key=<rotated-out> = %v, want [%s] — the filter is has-ever-declared, not current state", got, id.did)
+		t.Fatalf("key=<rotated-out> = %v, want [%s] — the filter is has-ever-proved, not current state", got, id.did)
 	}
 	if got := identitiesMatching(t, base, keyParam(replacement.mk.PublicKeyMultibase)); len(got) != 1 || got[0] != id.did {
-		t.Fatalf("key=<replacement> = %v, want [%s]", got, id.did)
+		t.Fatalf("key=<replacement> = %v, want [%s] — a proved introduction indexes immediately", got, id.did)
 	}
 
 	// DELETION removes nothing from the reverse index; the row records it.
-	deleteToken, _, err := dfos.SignIdentityDelete(rotateCID, controllerKid, id.controller.priv)
+	deleteToken, _, err := dfos.SignIdentityDelete(rotateCID, id.did+"#"+replacement.keyID, replacement.priv)
 	if err != nil {
 		t.Fatalf("SignIdentityDelete: %v", err)
 	}
-	res = postOperations(t, base, []string{deleteToken})
-	if res.StatusCode != 200 {
-		t.Fatalf("delete: status %d, body: %s", res.StatusCode, readBody(t, res))
-	}
-	res.Body.Close()
+	postOperationsAccepted(t, base, []string{deleteToken})
 
 	rows := identityRowsMatching(t, base, keyParam(rotatedOut.mk.PublicKeyMultibase))
 	if len(rows) != 1 || rows[0].DID != id.did {
@@ -227,9 +305,11 @@ func TestIndexIdentitiesKeyIsOpaque(t *testing.T) {
 	requireIdentityKeyFilter(t, base)
 
 	// AS DECLARED, byte for byte: the exact string the genesis carried is the
-	// string the filter matches. A relay that re-encoded the key into its own
-	// canonical rendering would fail here, and would also hand back a value that
-	// appears nowhere in the chain a client can fetch and verify for itself.
+	// string the filter matches. (Declared is how the value is SPELLED; proved is
+	// which values are present at all — the two rules are about different things
+	// and the genesis key satisfies both.) A relay that re-encoded the key into its
+	// own canonical rendering would fail here, and would also hand back a value
+	// that appears nowhere in the chain a client can fetch and verify for itself.
 	declared := id.auth.mk.PublicKeyMultibase
 	if got := identitiesMatching(t, base, keyParam(declared)); len(got) != 1 || got[0] != id.did {
 		t.Fatalf("key=%q = %v, want [%s] — the value matched is the string the chain declared", declared, got, id.did)
@@ -240,7 +320,7 @@ func TestIndexIdentitiesKeyIsOpaque(t *testing.T) {
 		id.did,                        // a valid DID
 		id.did + "#" + id.auth.keyID,  // a valid kid
 		strings.ToUpper(declared),     // the right key, wrong bytes
-		"z" + strings.Repeat("0", 44), // multibase-SHAPED, declared by nothing
+		"z" + strings.Repeat("0", 44), // multibase-SHAPED, proved by nothing
 	} {
 		route := base + "/index/v0/identities?" + keyParam(garbage)
 		var body struct {

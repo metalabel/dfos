@@ -23,6 +23,7 @@ import { ingestOperations, NONCURRENT_SIGNING_KEY_ERROR } from '../src/ingest';
 import { createRelay } from '../src/relay';
 import { MemoryRelayStore } from '../src/store';
 import type { PeerClient } from '../src/types';
+import { chainKeyProof } from './key-proofs';
 
 const makeKey = () => {
   const keypair = createNewEd25519Keypair();
@@ -33,20 +34,26 @@ const makeKey = () => {
     publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey),
   };
   const signer = async (message: Uint8Array) => signPayloadEd25519(message, keypair.privateKey);
-  return { keyId, key, signer };
+  return { keypair, keyId, key, signer };
 };
 
 const timestamp = (offsetMinutes = 0) =>
   new Date(Date.now() + offsetMinutes * 60_000).toISOString();
 
+/**
+ * A genesis, which declares exactly ONE key in all three roles and proves it by
+ * signing itself with it. `oldAuth` is that key under the name the rotation
+ * tests read it by — after `rotateIdentity` it is the key that is no longer
+ * current, in every role at once.
+ */
 const createIdentity = async () => {
   const controller = makeKey();
-  const oldAuth = makeKey();
+  const oldAuth = controller;
   const operation: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [oldAuth.key],
-    assertKeys: [],
+    authKeys: [controller.key],
+    assertKeys: [controller.key],
     controllerKeys: [controller.key],
     createdAt: timestamp(),
   };
@@ -61,6 +68,12 @@ const createIdentity = async () => {
   return { did, controller, oldAuth, ...genesis };
 };
 
+/**
+ * Rotate the genesis key out completely and a fresh one in, carrying the key
+ * proof that admits the new key to all three roles. The OLD key signs it: signer
+ * validity reads the prior DECLARED controller set, so a key can author the very
+ * operation that removes it.
+ */
 const rotateIdentity = async (
   identity: Awaited<ReturnType<typeof createIdentity>>,
   store: MemoryRelayStore,
@@ -71,9 +84,16 @@ const rotateIdentity = async (
     type: 'update',
     previousOperationCID: identity.operationCID,
     authKeys: [currentAuth.key],
-    assertKeys: [],
-    controllerKeys: [identity.controller.key],
+    assertKeys: [currentAuth.key],
+    controllerKeys: [currentAuth.key],
     createdAt: timestamp(1),
+    keyProofs: [
+      await chainKeyProof({
+        privateKey: currentAuth.keypair.privateKey,
+        did: identity.did,
+        prevCID: identity.operationCID,
+      }),
+    ],
   };
   const rotation = await signIdentityOperation({
     operation,

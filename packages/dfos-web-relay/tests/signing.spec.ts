@@ -24,6 +24,7 @@ import { ingestOperations } from '../src/ingest';
 import { createRelay } from '../src/relay';
 import { MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT, MemoryRelayStore } from '../src/store';
 import type { RelayStore, StoredSignRequest } from '../src/types';
+import { chainKeyProof } from './key-proofs';
 
 const CONTENT_ID = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
 const SIGNING = '/signing/v0';
@@ -44,14 +45,17 @@ const key = () => {
   };
 };
 
+// A genesis declares exactly ONE key, the same key in all three roles, and
+// proves it by signing itself with it. `auth` is that key under the name the
+// response fixtures read it by.
 const identity = async () => {
   const controller = key();
-  const auth = key();
+  const auth = controller;
   const operation: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [auth.publicKey],
-    assertKeys: [],
+    authKeys: [controller.publicKey],
+    assertKeys: [controller.publicKey],
     controllerKeys: [controller.publicKey],
     createdAt: new Date().toISOString(),
   };
@@ -727,15 +731,26 @@ describe('signing mailbox', () => {
       ).status,
     ).toBe(400);
 
+    // `second` is a genuine introduction, so it carries the key proof that
+    // admits it — without one the membership is void and the key never resolves,
+    // which would answer 500 rather than the 409 this asserts.
     const second = key();
     const update: IdentityOperation = {
       version: 1,
       type: 'update',
       authKeys: [f.subject.auth.publicKey, second.publicKey],
-      assertKeys: [],
+      assertKeys: [f.subject.auth.publicKey],
       controllerKeys: [f.subject.controller.publicKey],
       previousOperationCID: f.subject.headCID,
       createdAt: new Date(Date.now() + 1_000).toISOString(),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: second.pair.privateKey,
+          did: f.subject.did,
+          prevCID: f.subject.headCID,
+          roles: ['auth'],
+        }),
+      ],
     };
     const signedUpdate = await signIdentityOperation({
       operation: update,

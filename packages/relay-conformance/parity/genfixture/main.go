@@ -97,6 +97,17 @@ type Fixture struct {
 	QueryRotationDID            string `json:"queryRotationDid"`
 	QueryRotatedOutKeyMultibase string `json:"queryRotatedOutKeyMultibase"`
 	QueryRotationKeyMultibase   string `json:"queryRotationKeyMultibase"`
+
+	// The VOID chain (user F): one identity whose update DECLARES a second key
+	// and carries no possession envelope for it. The key is void — declared,
+	// never effective — so the identity route serves a non-empty `voidKeys`, a
+	// `declared` that differs from the effective arrays, and a `provedKeys` that
+	// never saw it. Without this chain every twin's identity state would have
+	// voidKeys:[] and declared == effective, and the parity gate would compare
+	// three members that are structurally incapable of disagreeing.
+	QueryVoidDID          string `json:"queryVoidDid"`
+	QueryVoidKeyMultibase string `json:"queryVoidKeyMultibase"`
+	QueryProvedDID        string `json:"queryProvedDid"`
 }
 
 // seededKey returns a deterministic ed25519 keypair from a single seed byte.
@@ -201,11 +212,45 @@ func identityDelete(did, prevCID, keyID, createdAt string, priv ed25519.PrivateK
 	return signJWS("did:dfos:identity-op", kid, payload, priv)
 }
 
+// pinnedKeyProof mints the possession envelope an introduction carries, with a
+// PINNED timestamp so the whole fixture stays byte-stable run to run. The
+// envelope is signed by the CANDIDATE key itself — that self-proving circularity
+// is the artifact — and `audience` is the target chain's own DID, which is the
+// controller-verified leg of KEY-PROOF.md: a chain's controller introducing a key
+// its own tooling can reach, with no host mediating. Chain-walk verification
+// treats audience as byte-fixed transport and never re-checks it, so the value
+// only has to satisfy the grammar and the leg's did-equality rule.
+func pinnedKeyProof(did, prevCID string, priv ed25519.PrivateKey, roles ...dfos.KeyRole) string {
+	if len(roles) == 0 {
+		roles = dfos.KeyRoles
+	}
+	roleSet := must(dfos.SerializeRoleSet(roles))
+	proof, _, err := dfos.SignKeyProof(dfos.SignKeyProofInput{
+		Typ:        dfos.KeyAddJWSTyp,
+		Nonce:      "parity-nonce-" + prevCID,
+		Audience:   did,
+		DID:        did,
+		RoleSet:    roleSet,
+		PrevCID:    prevCID,
+		PrivateKey: priv,
+		Timestamp:  pinnedTime,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return proof
+}
+
 // identityUpdate builds an update op that REPLACES the entire key set, signed
 // by a controller key of the state BEFORE the update (a DID-URL kid). That is
 // what rotates a key out: the op's own signer is the key the op removes, so the
 // update row itself is indexed under the ROTATED-OUT key.
-func identityUpdate(did, prevCID, signingKeyID, createdAt string, next dfos.MultikeyPublicKey, priv ed25519.PrivateKey) (token, opCID string) {
+//
+// It CARRIES the incoming key's possession envelope. That is not optional
+// decoration: an introduction with no proof is VOID, the incoming key would never
+// enter effective state, and the artifact it signs downstream would be refused —
+// which is exactly how this fixture broke when possession proofs landed.
+func identityUpdate(did, prevCID, signingKeyID, createdAt string, next dfos.MultikeyPublicKey, nextPriv, priv ed25519.PrivateKey) (token, opCID string) {
 	kid := did + "#" + signingKeyID
 	payload := map[string]any{
 		"version":              1,
@@ -214,6 +259,29 @@ func identityUpdate(did, prevCID, signingKeyID, createdAt string, next dfos.Mult
 		"authKeys":             []dfos.MultikeyPublicKey{next},
 		"assertKeys":           []dfos.MultikeyPublicKey{next},
 		"controllerKeys":       []dfos.MultikeyPublicKey{next},
+		"keyProofs":            []string{pinnedKeyProof(did, prevCID, nextPriv)},
+		"createdAt":            createdAt,
+	}
+	return signJWS("did:dfos:identity-op", kid, payload, priv)
+}
+
+// identityDeclareUnproved builds an update that ADDS a key alongside the current
+// one, in all three roles, and carries NO possession envelope for it.
+//
+// The operation is valid and sequences like any other — void is a resolution
+// verdict, never an ingest one — and the added key is void in all three roles.
+// This is what gives the parity gate an identity whose `voidKeys` is non-empty
+// and whose `declared` differs from its effective arrays.
+func identityDeclareUnproved(did, prevCID, signingKeyID, createdAt string, current, added dfos.MultikeyPublicKey, priv ed25519.PrivateKey) (token, opCID string) {
+	kid := did + "#" + signingKeyID
+	both := []dfos.MultikeyPublicKey{current, added}
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "update",
+		"previousOperationCID": prevCID,
+		"authKeys":             both,
+		"assertKeys":           both,
+		"controllerKeys":       both,
 		"createdAt":            createdAt,
 	}
 	return signJWS("did:dfos:identity-op", kid, payload, priv)
@@ -448,8 +516,24 @@ func main() {
 	eNextKeyID := "key_userE20000000000000000000000"
 	eGenesis, eDID, eGenesisCID := identityCreate(ePriv, ePub, eKeyID)
 	eNextMK := dfos.NewMultikeyPublicKey(eNextKeyID, eNextPub)
-	eUpdate, _ := identityUpdate(eDID, eGenesisCID, eKeyID, pinnedTimeAt(1), eNextMK, ePriv)
+	eUpdate, _ := identityUpdate(eDID, eGenesisCID, eKeyID, pinnedTimeAt(1), eNextMK, eNextPriv, ePriv)
 	eArtifact, _ := artifactOp(eDID, eDID+"#"+eNextKeyID, "signed after the rotation", pinnedTimeAt(2), eNextPriv)
+
+	// --- user F (seeds 8/9): ONE identity, ONE proved key, ONE VOID key ---
+	//
+	// F declares a second key with no envelope. The operation sequences; the key
+	// does not resolve. F is the only chain in the fixture whose identity state has
+	// a non-empty voidKeys and a `declared` that differs from its effective arrays,
+	// which is what makes the identity-route parity case able to fail at all.
+	fPriv, fPub := seededKey(8)
+	fVoidPriv, fVoidPub := seededKey(9)
+	fKeyID := "key_userF00000000000000000000000"
+	fVoidKeyID := "key_userFvoid000000000000000000"
+	fGenesis, fDID, fGenesisCID := identityCreate(fPriv, fPub, fKeyID)
+	fVoidMK := dfos.NewMultikeyPublicKey(fVoidKeyID, fVoidPub)
+	fDeclare, _ := identityDeclareUnproved(fDID, fGenesisCID, fKeyID, pinnedTimeAt(1),
+		dfos.NewMultikeyPublicKey(fKeyID, fPub), fVoidMK, fPriv)
+	_ = fVoidPriv // deliberately never used: the whole point is that nothing signs for this key
 
 	fixture := Fixture{
 		RelayDID:        relayDID,
@@ -476,6 +560,8 @@ func main() {
 			eGenesis,
 			eUpdate,
 			eArtifact,
+			fGenesis,
+			fDeclare,
 		},
 		Blobs: []FixtureBlob{
 			{ContentID: contentID, OperationCID: cUpdateCID, Body: contentBody},
@@ -501,6 +587,10 @@ func main() {
 		QueryRotationDID:            eDID,
 		QueryRotatedOutKeyMultibase: dfos.NewMultikeyPublicKey(eKeyID, ePub).PublicKeyMultibase,
 		QueryRotationKeyMultibase:   eNextMK.PublicKeyMultibase,
+
+		QueryVoidDID:          fDID,
+		QueryVoidKeyMultibase: fVoidMK.PublicKeyMultibase,
+		QueryProvedDID:        aDID,
 	}
 
 	data, err := json.MarshalIndent(fixture, "", "  ")

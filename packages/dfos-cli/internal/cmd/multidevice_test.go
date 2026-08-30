@@ -159,12 +159,21 @@ func mustSetFlag(t *testing.T, cmd *cobra.Command, name, val string) {
 	}
 }
 
-// TestMultiDevice_HappyPath exercises the full handoff: A creates an identity,
-// B generates a device key, A adds B's public key, then B publishes content
-// signed with its OWN key. Under the old slot-0 signer code B's publish would
-// fail with "auth key not in keychain" because AuthKeys[0] is A's key; with
-// selectHeldKey B signs with its own key.
-func TestMultiDevice_HappyPath(t *testing.T) {
+// TestMultiDevice_AddKeyRefusesAKeyItCannotProve is what became of the old
+// add-key handoff.
+//
+// A device generating a key and handing its PUBLIC half to a controller was how a
+// second device used to join an identity. It no longer is, and the reason is the
+// whole point of key possession: a key enters a chain carrying its OWN signature
+// over the introduction, and a controller holds no such signature for a key that
+// lives on another device. Authoring it anyway would publish a membership no
+// proof admits — void, resolving nowhere, indexed nowhere — so `add-key` refuses
+// and names the two ways forward.
+//
+// Everything before the refusal still holds and is still asserted: B generates
+// its own key, B alone holds the private half, and both machines derive the same
+// id from the public key without exchanging one.
+func TestMultiDevice_AddKeyRefusesAKeyItCannotProve(t *testing.T) {
 	storeA, storeB, lr := setupDevices(t)
 
 	did := createIdentity(t, "alice", storeA)
@@ -193,66 +202,44 @@ func TestMultiDevice_HappyPath(t *testing.T) {
 	if want := protocol.DeriveKeyID(dev.PublicKeyMultibase); dev.ID != want {
 		t.Fatalf("device-pubkey id = %q, want the derived %q", dev.ID, want)
 	}
-	bKid := did + "#" + dev.ID
-
-	// --- device A: add B's public key to the auth set ---
+	// --- device A: try to add B's public key to the auth set ---
 	keys = storeA
 	ak := newIdentityAddKeyCmd()
 	mustSetFlag(t, ak, "auth-key", "true")
 	mustSetFlag(t, ak, "id", dev.ID)
 	mustSetFlag(t, ak, "pubkey", dev.PublicKeyMultibase)
-	if err := ak.RunE(ak, nil); err != nil {
-		t.Fatalf("add-key: %v", err)
+	err := ak.RunE(ak, nil)
+	if err == nil {
+		t.Fatal("add-key published a key it cannot prove")
+	}
+	// The refusal names the key, the roles, and both ways forward — a person
+	// holding two devices has to be able to act on it without reading the spec.
+	for _, want := range []string{
+		"cannot prove", dev.ID, dev.PublicKeyMultibase, "(auth)",
+		"VOID", "REMOVE", "RE-PROVE", "dfos keys prove", "nothing was signed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal is missing %q:\n%v", want, err)
+		}
 	}
 
-	// chain now has 2 auth keys, including B's
-	chain, err := lr.Relay.GetIdentity(did)
-	if err != nil || chain == nil {
-		t.Fatalf("get identity: %v", err)
+	// NOTHING was written. A refusal that still appended the operation would be
+	// the void membership arriving by another door.
+	chain, getErr := lr.Relay.GetIdentity(did)
+	if getErr != nil || chain == nil {
+		t.Fatalf("get identity: %v", getErr)
 	}
-	if got := len(chain.State.AuthKeys); got != 2 {
-		t.Fatalf("expected 2 auth keys after add-key, got %d", got)
+	if got := len(chain.State.AuthKeys); got != 1 {
+		t.Fatalf("auth keys after a refused add-key = %d, want the genesis key alone", got)
 	}
-	if !hasKeyID(chain.State.AuthKeys, dev.ID) {
-		t.Fatalf("B's key %s not found in auth set", dev.ID)
+	if hasKeyID(chain.State.AuthKeys, dev.ID) {
+		t.Fatalf("B's key %s reached the chain through a refusal", dev.ID)
 	}
-
-	// selectHeldKey resolves to B's key when B's keystore is active
-	keys = storeB
-	got, err := selectHeldKey(did, chain.State.AuthKeys, "auth")
-	if err != nil {
-		t.Fatalf("selectHeldKey for B: %v", err)
+	if len(chain.State.VoidKeys) != 0 {
+		t.Fatalf("a refused add-key left void memberships behind: %+v", chain.State.VoidKeys)
 	}
-	if got.KID != bKid {
-		t.Fatalf("selectHeldKey returned kid %s, want %s", got.KID, bKid)
-	}
-	if got.Account != bAccount {
-		t.Fatalf("selectHeldKey returned account %s, want %s", got.Account, bAccount)
-	}
-
-	// --- device B publishes content signed with its own key ---
-	keys = storeB
-	cc := newContentCreateCmd()
-	mustSetFlag(t, cc, "no-schema-warn", "true")
-	docPath := writeTempDoc(t, `{"hello":"from device B"}`)
-	var content struct {
-		ContentID string `json:"contentId"`
-	}
-	runJSON(t, cc, []string{docPath}, &content)
-	if content.ContentID == "" {
-		t.Fatalf("expected a content id from device B's publish")
-	}
-
-	// the content op is in the relay
-	chains, err := lr.Store.ListContentChains()
-	if err != nil {
-		t.Fatalf("list content chains: %v", err)
-	}
-	if len(chains) != 1 {
-		t.Fatalf("expected 1 content chain, got %d", len(chains))
-	}
-	if chains[0].State.CreatorDID != did {
-		t.Fatalf("content creator %s, want %s", chains[0].State.CreatorDID, did)
+	if len(chain.Log) != 1 {
+		t.Fatalf("chain has %d operations after a refused add-key, want 1", len(chain.Log))
 	}
 }
 

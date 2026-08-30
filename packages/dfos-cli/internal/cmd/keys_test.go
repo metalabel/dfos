@@ -929,3 +929,194 @@ func writeLoginClientFile(t *testing.T, did, keyID string) {
 		t.Fatalf("write login client: %v", err)
 	}
 }
+
+// A key a chain DECLARES but no possession proof admitted is void: absent from
+// effective state, absent from the index, conferring nothing. The ledger's job is
+// to say that out loud.
+//
+// The failure this guards against is specific and was real: reading only
+// effective state, a held key under a void declaration fell through every
+// placement branch and came out an ORPHAN, reason "no identity in the local relay
+// declares this key" — which is exactly backwards. A chain declares it. The
+// declaration is simply empty, and `prune`'s whole contract rests on orphan
+// meaning nothing claims a key.
+func TestKeys_AVoidMembershipIsDeclaredAndVoidNeverAnOrphan(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil || chain == nil {
+		t.Fatalf("get identity: chain=%v err=%v", chain, err)
+	}
+	signer, err := selectHeldKey(did, chain.State.ControllerKeys, "controller")
+	if err != nil {
+		t.Fatalf("held controller key: %v", err)
+	}
+	controllerPriv, err := keys.GetPrivateKey(signer.Account)
+	if err != nil {
+		t.Fatalf("read controller key: %v", err)
+	}
+
+	// A second key this machine holds, introduced to the chain WITHOUT a proof —
+	// the shape another implementation can still author and a relay still
+	// sequences, because an unproved introduction voids a membership rather than
+	// invalidating an operation.
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	unproved := protocol.EncodeMultikey(pub)
+	keyID := protocol.DeriveKeyID(unproved)
+	mk := protocol.NewMultikeyPublicKey(keyID, pub)
+	account := keyAccount(unproved)
+	if _, err := keys.PutKey(account, priv); err != nil {
+		t.Fatalf("store the unproved key: %v", err)
+	}
+
+	head := chain.Log[len(chain.Log)-1]
+	h, _, err := protocol.DecodeJWSUnsafe(head)
+	if err != nil {
+		t.Fatalf("decode head: %v", err)
+	}
+	jws := signUnprovedIdentityUpdate(t, unprovedUpdate{
+		previousCID:    h.CID,
+		after:          chain.LastCreatedAt,
+		controllerKeys: chain.State.ControllerKeys,
+		authKeys:       append(append([]protocol.MultikeyPublicKey{}, chain.State.AuthKeys...), mk),
+		assertKeys:     chain.State.AssertKeys,
+		kid:            signer.KID,
+		privateKey:     controllerPriv,
+	})
+	if res := lr.Relay.Ingest([]string{jws}); len(res) > 0 && res[0].Status == "rejected" {
+		t.Fatalf("the relay rejected an unproved introduction instead of voiding it: %s", res[0].Error)
+	}
+
+	after, err := lr.Relay.GetIdentity(did)
+	if err != nil || after == nil {
+		t.Fatalf("get identity after: chain=%v err=%v", after, err)
+	}
+	if len(after.State.VoidKeys) == 0 {
+		t.Fatalf("the chain records no void membership: %+v", after.State)
+	}
+
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	entry := entryFor(t, ledger, account)
+	if entry.Status == statusOrphan {
+		t.Fatalf("a key its own chain declares reported as an orphan: %+v", entry)
+	}
+	if entry.Status != statusDeclared {
+		t.Fatalf("status %q, want %q", entry.Status, statusDeclared)
+	}
+	if !entry.Void {
+		t.Fatalf("a wholly-void key is not marked void: %+v", entry)
+	}
+	if entry.Prunable {
+		t.Fatal("a void key is prunable — prune would delete a key its chain still names")
+	}
+	if !contains(entry.Roles, "auth (void)") {
+		t.Fatalf("roles %v, want the void marker", entry.Roles)
+	}
+	if !strings.Contains(entry.Reason, "VOID") {
+		t.Fatalf("the reason does not say the membership is void: %q", entry.Reason)
+	}
+}
+
+// unprovedUpdate is one identity update authored WITHOUT a possession proof for
+// the keys it introduces.
+type unprovedUpdate struct {
+	previousCID string
+	// after is the createdAt of the operation this one extends. A chain requires
+	// each operation to be strictly later than the last, and a test that builds
+	// two operations back to back can land both inside the same millisecond — so
+	// this timestamp is derived from the parent rather than read off the clock and
+	// hoped about. Getting it from the clock produces a test that passes alone and
+	// fails in a full run, which is the worst kind of test.
+	after                                string
+	controllerKeys, authKeys, assertKeys []protocol.MultikeyPublicKey
+	kid                                  string
+	privateKey                           ed25519.PrivateKey
+}
+
+// signUnprovedIdentityUpdate hand-rolls an identity update operation from the
+// kit's LOWER-LEVEL primitives — the CID computation and the JWS constructor —
+// rather than going through SignIdentityUpdate.
+//
+// WHY THIS IS NOT LAZINESS OR A BACK DOOR. The kit's writers refuse to author an
+// introduction that carries no proof, which is correct: this CLI must never mint
+// a void membership. But a void membership is still a state that ARRIVES — a
+// different implementation can author one, and operations already on the network
+// may carry them — and a relay sequences such an operation rather than rejecting
+// it, because an unproved introduction voids a membership without invalidating
+// the operation that made it. So the receiving path needs coverage, and coverage
+// needs a fixture the writer door is designed to make unobtainable.
+//
+// This is therefore a deliberate HOSTILE-IMPLEMENTATION FIXTURE: it stands in for
+// a peer that does not enforce what we enforce. It lives here, in a test, and
+// nothing in the command path can reach it. Building it from the primitives
+// rather than from an exported unsafe signer is the point — the kit exposes no
+// way to mint an unproved introduction, and this does not ask it to.
+//
+// It mirrors SignIdentityUpdateWithServices's payload exactly (member set, member
+// names, and the whole-second timestamp spelling). If that shape ever changes,
+// this fixture stops producing a chain the relay will sequence, and the test that
+// depends on it fails rather than silently testing nothing.
+func signUnprovedIdentityUpdate(t *testing.T, in unprovedUpdate) string {
+	t.Helper()
+
+	empty := func(s []protocol.MultikeyPublicKey) []protocol.MultikeyPublicKey {
+		if s == nil {
+			return []protocol.MultikeyPublicKey{}
+		}
+		return s
+	}
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "update",
+		"previousOperationCID": in.previousCID,
+		"authKeys":             empty(in.authKeys),
+		"assertKeys":           empty(in.assertKeys),
+		"controllerKeys":       empty(in.controllerKeys),
+		"createdAt":            afterTimestamp(t, in.after),
+	}
+
+	_, _, cid, err := protocol.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("compute the operation CID: %v", err)
+	}
+	jws, err := protocol.CreateJWS(protocol.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: in.kid,
+		CID: cid,
+	}, payload, in.privateKey)
+	if err != nil {
+		t.Fatalf("sign the unproved update: %v", err)
+	}
+	return jws
+}
+
+// afterTimestamp returns a protocol timestamp strictly later than prior, and no
+// further into the future than it has to be.
+//
+// A chain rejects an operation whose createdAt does not advance, and it also
+// rejects one too far ahead of the verifier's clock — so this takes the later of
+// "one second past the parent" and "now", which satisfies both ends without
+// depending on how fast the test ran.
+func afterTimestamp(t *testing.T, prior string) string {
+	t.Helper()
+	const layout = "2006-01-02T15:04:05.000Z"
+	next := time.Now().UTC()
+	if prior != "" {
+		parsed, err := time.Parse(layout, prior)
+		if err != nil {
+			t.Fatalf("parse the parent operation's createdAt %q: %v", prior, err)
+		}
+		if bump := parsed.Add(time.Second); bump.After(next) {
+			next = bump
+		}
+	}
+	return next.Format(layout)
+}

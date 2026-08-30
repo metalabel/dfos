@@ -25,9 +25,22 @@ import {
   importEd25519Keypair,
   signPayloadEd25519,
 } from '../src/crypto';
+import { KEY_ADD_JWS_TYP, serializeRoleSet, signKeyProof } from '../src/key-proof';
 
 /** Fixed iat for deterministic credential examples (2026-03-07T00:00:00Z) */
 const FIXED_IAT = Math.floor(new Date('2026-03-07T00:00:00.000Z').getTime() / 1000);
+
+/**
+ * The reference key-proof envelope's fixed inputs — the same three literals the
+ * protocol-reference generator uses, so the rotation fixture and the spec's
+ * deterministic artifacts are the same bytes. The nonce follows the
+ * `dfos-protocol-reference-*` seed naming; the timestamp sits between genesis
+ * (00:00:00) and the rotation it proves (00:01:00), which is where a real
+ * ceremony's signature would fall.
+ */
+const REFERENCE_KEY_PROOF_NONCE = 'dfos-protocol-reference-nonce-1';
+const REFERENCE_KEY_PROOF_AUDIENCE = 'keys.dfos.com';
+const REFERENCE_KEY_PROOF_TIMESTAMP = '2026-03-07T00:00:30.000Z';
 
 const sha256 = async (input: string) =>
   new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
@@ -84,6 +97,20 @@ const main = async () => {
   const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesisJws] });
 
   // --- key rotation ---
+  // The rotation INTRODUCES key 2 to all three roles, so it carries key 2's own
+  // possession proof, headed at the genesis CID. Without it the rotation would
+  // still be a valid operation — and key 2 would be void in every role.
+  const { proof: rotateKeyProof } = await signKeyProof({
+    typ: KEY_ADD_JWS_TYP,
+    nonce: REFERENCE_KEY_PROOF_NONCE,
+    audience: REFERENCE_KEY_PROOF_AUDIENCE,
+    did: identity.did,
+    roleSet: serializeRoleSet(['auth', 'assert', 'controller']),
+    prevCID: genesisCID,
+    privateKey: keypair2.privateKey,
+    timestamp: REFERENCE_KEY_PROOF_TIMESTAMP,
+  });
+
   const rotateOp: IdentityOperation = {
     version: 1,
     type: 'update',
@@ -92,8 +119,9 @@ const main = async () => {
     assertKeys: [key2],
     controllerKeys: [key2],
     createdAt: '2026-03-07T00:01:00.000Z',
+    keyProofs: [rotateKeyProof],
   };
-  const { jwsToken: rotateJws } = await signIdentityOperation({
+  const { jwsToken: rotateJws, operationCID: rotateCID } = await signIdentityOperation({
     operation: rotateOp,
     signer: signer1,
     keyId: keyId1,
@@ -102,6 +130,40 @@ const main = async () => {
   const identityRotated = await verifyIdentityChain({
     didPrefix: 'did:dfos',
     log: [genesisJws, rotateJws],
+  });
+
+  // --- delete + restore, on top of the rotation ---
+  // The same four operations the protocol reference publishes, so the fixture
+  // and specs/PROTOCOL.md cannot drift apart. Generated here rather than
+  // hand-maintained: the rotation's CID moves whenever its key proof does.
+  const rotatedDeleteOp: IdentityOperation = {
+    version: 1,
+    type: 'delete',
+    previousOperationCID: rotateCID,
+    createdAt: '2026-03-07T00:02:00.000Z',
+  };
+  const { jwsToken: rotatedDeleteJws, operationCID: rotatedDeleteCID } =
+    await signIdentityOperation({
+      operation: rotatedDeleteOp,
+      signer: signer2,
+      keyId: keyId2,
+      identityDID: identity.did,
+    });
+  const restoreOp: IdentityOperation = {
+    version: 1,
+    type: 'restore',
+    previousOperationCID: rotatedDeleteCID,
+    createdAt: '2026-03-07T00:03:00.000Z',
+  };
+  const { jwsToken: restoreJws } = await signIdentityOperation({
+    operation: restoreOp,
+    signer: signer2,
+    keyId: keyId2,
+    identityDID: identity.did,
+  });
+  const identityRestored = await verifyIdentityChain({
+    didPrefix: 'did:dfos',
+    log: [genesisJws, rotateJws, rotatedDeleteJws, restoreJws],
   });
 
   // --- delete ---
@@ -419,6 +481,17 @@ const main = async () => {
       did: identityRotated.did,
       isDeleted: false,
       controllerKeys: identityRotated.controllerKeys,
+    },
+  });
+
+  write('identity-restore', {
+    description: 'Identity chain: genesis + key rotation + delete + restore',
+    type: 'identity',
+    chain: [genesisJws, rotateJws, rotatedDeleteJws, restoreJws],
+    expected: {
+      did: identityRestored.did,
+      isDeleted: false,
+      controllerKeys: identityRestored.controllerKeys,
     },
   });
 

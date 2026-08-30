@@ -29,21 +29,33 @@ func ingestAndRotateTestIdentity(t *testing.T, relay *Relay) rotatedTestIdentity
 	return rotatedTestIdentity{identity: id, current: current, rotation: rotation}
 }
 
+// rotateExistingTestIdentity rotates a genesis-head identity onto a fresh key and
+// returns the key that took over.
+//
+// A WHOLE rotation — the new key replaces the genesis key in all three roles —
+// because a genesis declares one key in all three, so anything narrower would
+// leave the old key current in the roles it did not touch and the "rotated-out"
+// half of every downstream assertion would be false.
+//
+// The rotation CARRIES A POSSESSION ENVELOPE, because introducing a key is
+// exactly the transition possession proofs gate: without one the new key would be
+// void — declared, never effective — and every downstream assertion about it
+// signing, resolving or indexing would be asserting the wrong thing. One envelope
+// consenting to all three roles proves all three introductions; the departing key
+// needs none, since a removal demonstrates nothing.
 func rotateExistingTestIdentity(t *testing.T, relay *Relay, id testIdentity) (testKeypair, string) {
 	t.Helper()
 	time.Sleep(2 * time.Millisecond)
 	current := newTestKeypair()
-	rotation, _, err := dfos.SignIdentityUpdate(
+	rotation, _ := signIdentityUpdateWithKeyProofs(t,
 		id.opCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{current.mk},
-		nil,
+		[]dfos.MultikeyPublicKey{current.mk},
+		[]dfos.MultikeyPublicKey{current.mk},
+		[]string{testKeyProof(t, current.priv, id.did, id.opCID)},
 		id.did+"#"+id.controller.keyID,
 		id.controller.priv,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if result := relay.Ingest([]string{rotation})[0]; result.Status != "new" {
 		t.Fatalf("rotate identity: %s (%s)", result.Status, result.Error)
 	}
@@ -156,8 +168,9 @@ func TestCommittedOldKeyHistorySurvivesRotationAndPeerSync(t *testing.T) {
 	}
 
 	current := newTestKeypair()
-	rotation, _, err := dfos.SignIdentityUpdate(id.opCID,
+	rotation, _, err := dfos.SignIdentityUpdate(genesisState(id.did, id.controller), id.opCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk}, []dfos.MultikeyPublicKey{current.mk}, nil,
+		[]string{testKeyProof(t, current.priv, id.did, id.opCID, "auth")},
 		id.did+"#"+id.controller.keyID, id.controller.priv)
 	if err != nil {
 		t.Fatal(err)

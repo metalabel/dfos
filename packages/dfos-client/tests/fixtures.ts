@@ -27,6 +27,12 @@ import {
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
+import {
+  KEY_ADD_JWS_TYP,
+  serializeRoleSet,
+  signKeyProof,
+  type KeyRole,
+} from '@metalabel/dfos-protocol/key-proof';
 import type { PeerClient, PeerLogEntry } from '@metalabel/dfos-web-relay/peer-client';
 
 const DOC_CID = 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y';
@@ -38,6 +44,8 @@ export interface Key {
   keyId: string;
   key: MultikeyPublicKey;
   signer: (msg: Uint8Array) => Promise<Uint8Array>;
+  /** The raw seed — a key proof is signed by the candidate key ITSELF. */
+  privateKey: Uint8Array;
 }
 
 export const makeKey = (): Key => {
@@ -49,7 +57,32 @@ export const makeKey = (): Key => {
     publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey),
   };
   const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair.privateKey);
-  return { keyId, key, signer };
+  return { keyId, key, signer, privateKey: keypair.privateKey };
+};
+
+/**
+ * A possession proof for one key at one chain position. An update that
+ * INTRODUCES a key must carry one, or the membership is void and the key
+ * resolves nowhere — so every fixture rotation below builds one.
+ */
+let fixtureNonce = 0;
+export const keyProofFor = async (input: {
+  key: Key;
+  did: string;
+  prevCID: string;
+  roles?: KeyRole[];
+}): Promise<string> => {
+  fixtureNonce += 1;
+  const { proof } = await signKeyProof({
+    typ: KEY_ADD_JWS_TYP,
+    nonce: `nonce-client-fixture-${fixtureNonce}`,
+    audience: 'relay.example',
+    did: input.did,
+    roleSet: serializeRoleSet(input.roles ?? ['auth', 'assert', 'controller']),
+    prevCID: input.prevCID,
+    privateKey: input.key.privateKey,
+  });
+  return proof;
 };
 
 export const cidOf = (jws: string): string => {
@@ -105,6 +138,10 @@ export const buildIdentity = async (opts?: {
       assertKeys: [k.key],
       controllerKeys: [k.key],
       createdAt: ts(-5),
+      // k2 joins `auth` only, and the envelope consents to exactly that.
+      keyProofs: [
+        await keyProofFor({ key: k2, did, prevCID: g.operationCID, roles: ['auth'] }),
+      ],
     };
     const u = await signIdentityOperation({
       operation: update,

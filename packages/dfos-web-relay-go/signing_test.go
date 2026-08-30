@@ -492,19 +492,19 @@ func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store 
 		t.Fatalf("oversized response body: %d %s", got.Code, got.Body.String())
 	}
 
+	// A SECOND auth key on the subject, PROVED into the chain. The envelope is not
+	// decoration: without it the introduction is void, `second` never enters
+	// effective state, and the "second valid response" below would be refused for
+	// an unresolvable signer rather than as the conflict this test is about.
 	second := newTestKeypair()
-	genesisHeader, genesisPayload, _ := dfos.DecodeJWSUnsafe(f.subject.token)
-	createdAt, _ := time.Parse(time.RFC3339Nano, genesisPayload["createdAt"].(string))
-	updatePayload := map[string]any{
-		"version": int64(1), "type": "update",
-		"authKeys":             []dfos.MultikeyPublicKey{f.subject.auth.mk, second.mk},
-		"assertKeys":           []dfos.MultikeyPublicKey{},
-		"controllerKeys":       []dfos.MultikeyPublicKey{f.subject.controller.mk},
-		"previousOperationCID": genesisHeader.CID,
-		"createdAt":            createdAt.Add(time.Second).UTC().Format(signingTimeFormat),
-	}
-	_, _, updateCID, _ := dfos.DagCborCID(updatePayload)
-	update, _ := dfos.CreateJWS(dfos.JWSHeader{Alg: "EdDSA", Typ: "did:dfos:identity-op", Kid: f.subject.did + "#" + f.subject.controller.keyID, CID: updateCID}, updatePayload, ed25519.PrivateKey(f.subject.controller.priv))
+	genesisHeader, _, _ := dfos.DecodeJWSUnsafe(f.subject.token)
+	update, _ := signIdentityUpdateWithKeyProofs(t, genesisHeader.CID,
+		[]dfos.MultikeyPublicKey{f.subject.controller.mk},
+		[]dfos.MultikeyPublicKey{f.subject.auth.mk, second.mk},
+		nil,
+		[]string{testKeyProof(t, second.priv, f.subject.did, genesisHeader.CID, "auth")},
+		f.subject.did+"#"+f.subject.controller.keyID,
+		ed25519.PrivateKey(f.subject.controller.priv))
 	if result := IngestOperations([]string{update}, store)[0]; result.Status != "new" {
 		t.Fatalf("identity update: %+v", result)
 	}

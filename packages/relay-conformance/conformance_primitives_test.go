@@ -65,7 +65,7 @@ func TestArtifactFromUnknownIdentity(t *testing.T) {
 	_, did, _, err := dfos.SignIdentityCreate(
 		[]dfos.MultikeyPublicKey{kp.mk},
 		[]dfos.MultikeyPublicKey{kp.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{kp.mk},
 		kp.keyID,
 		kp.priv,
 	)
@@ -191,24 +191,24 @@ func TestArtifactRetrieveByCID(t *testing.T) {
 func TestArtifactInBatchWithIdentity(t *testing.T) {
 	base := relayURL(t)
 
-	// create identity + artifact in the same batch
-	ctrl := newKeypair()
-	auth := newKeypair()
+	// create identity + artifact in the same batch. Genesis declares ONE key in
+	// all three roles, so the artifact is signed by that same key.
+	key := newKeypair()
 
 	identityToken, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("SignIdentityCreate: %v", err)
 	}
 
-	kid := did + "#" + auth.keyID
+	kid := did + "#" + key.keyID
 	content := map[string]any{"$schema": "test/v1", "title": "batched artifact"}
-	artifactToken, _, err := dfos.SignArtifact(did, content, kid, auth.priv)
+	artifactToken, _, err := dfos.SignArtifact(did, content, kid, key.priv)
 	if err != nil {
 		t.Fatalf("SignArtifact: %v", err)
 	}

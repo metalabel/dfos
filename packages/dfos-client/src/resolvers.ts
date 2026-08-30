@@ -70,69 +70,49 @@ const opMeta = (jws: string): { cid: string; createdAt: string } => {
 // but sourced from a cached, verified log instead of a RelayStore)
 // -----------------------------------------------------------------------------
 
-const allCurrentKeys = (state: VerifiedIdentity): MultikeyPublicKey[] => [
-  ...state.authKeys,
-  ...state.assertKeys,
-  ...state.controllerKeys,
-];
-
-/** Merge every key that ever appeared in a create/update op — credential validity
- * persists across rotations, so credential verification needs historical keys. */
-const mergeHistoricalIdentity = (state: VerifiedIdentity, log: string[]): VerifiedIdentity => {
-  const maps = {
-    authKeys: new Map(state.authKeys.map((k) => [k.id, k])),
-    assertKeys: new Map(state.assertKeys.map((k) => [k.id, k])),
-    controllerKeys: new Map(state.controllerKeys.map((k) => [k.id, k])),
-  };
-  for (const jws of log) {
-    const decoded = decodeJwsUnsafe(jws);
-    if (!decoded) continue;
-    const payload = decoded.payload as Record<string, unknown>;
-    if (payload['type'] !== 'create' && payload['type'] !== 'update') continue;
-    for (const field of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
-      const keys = payload[field];
-      if (!Array.isArray(keys)) continue;
-      for (const k of keys) {
-        if (k && typeof k === 'object' && 'id' in k && 'publicKeyMultibase' in k) {
-          const id = (k as { id: string }).id;
-          if (!maps[field].has(id)) maps[field].set(id, k as MultikeyPublicKey);
-        }
-      }
-    }
-  }
-  return {
-    ...state,
-    authKeys: [...maps.authKeys.values()],
-    assertKeys: [...maps.assertKeys.values()],
-    controllerKeys: [...maps.controllerKeys.values()],
-  };
+/**
+ * HAS-EVER-PROVED, as the chain walk already computed it.
+ *
+ * WHAT THIS REPLACED, AND WHY IT HAD TO GO. Both helpers below used to re-walk
+ * the raw log and take every key any `create` or `update` DECLARED. That rule is
+ * now wrong in both directions at once:
+ *
+ *  - A DECLARATION IS NOT A DEMONSTRATION. Anyone can write anyone's public key
+ *    into their own chain; only a possession proof admits it. Resolving against
+ *    declarations would let a stranger have clients verify signatures against a
+ *    key they do not hold, simply by naming it.
+ *  - A PROVED KEY STAYS RESOLVABLE FOREVER. Credential validity persists across
+ *    rotations — revocation, not rotation, is the invalidation mechanism — so
+ *    dropping to current effective state alone would silently un-verify every
+ *    artifact signed before a rotation.
+ *
+ * `verifyIdentityChain` folds exactly that set onto `provedKeys`. Re-deriving it
+ * here meant maintaining a second answer to the same question under a rule that
+ * quietly disagreed with the chain's, which is the drift this package exists to
+ * avoid — the relay's twin of this code went the same way.
+ *
+ * An absent `provedKeys` reads as current effective state: exactly right for any
+ * chain with no void memberships, and the only reading available for a cached
+ * state that predates the member.
+ */
+const provedKeys = (state: VerifiedIdentity): MultikeyPublicKey[] => {
+  const proved = state.provedKeys ?? state;
+  return [...proved.authKeys, ...proved.assertKeys, ...proved.controllerKeys];
 };
 
-const keyBytesFor = (state: VerifiedIdentity, log: string[], keyId: string): Uint8Array | null => {
-  const current = allCurrentKeys(state).find((k) => k.id === keyId);
-  if (current) return decodeMultikey(current.publicKeyMultibase).keyBytes;
-  for (const jws of log) {
-    const decoded = decodeJwsUnsafe(jws);
-    if (!decoded) continue;
-    const payload = decoded.payload as Record<string, unknown>;
-    if (payload['type'] !== 'create' && payload['type'] !== 'update') continue;
-    for (const field of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
-      const keys = payload[field];
-      if (!Array.isArray(keys)) continue;
-      for (const k of keys) {
-        if (
-          k &&
-          typeof k === 'object' &&
-          'id' in k &&
-          k.id === keyId &&
-          'publicKeyMultibase' in k
-        ) {
-          return decodeMultikey((k as { publicKeyMultibase: string }).publicKeyMultibase).keyBytes;
-        }
-      }
-    }
-  }
-  return null;
+/** The identity as long-lived artifacts must see it: every key ever proved. */
+const historicalIdentity = (state: VerifiedIdentity): VerifiedIdentity => ({
+  ...state,
+  ...(state.provedKeys ?? {
+    authKeys: state.authKeys,
+    assertKeys: state.assertKeys,
+    controllerKeys: state.controllerKeys,
+  }),
+});
+
+const keyBytesFor = (state: VerifiedIdentity, keyId: string): Uint8Array | null => {
+  const key = provedKeys(state).find((k) => k.id === keyId);
+  return key ? decodeMultikey(key.publicKeyMultibase).keyBytes : null;
 };
 
 // -----------------------------------------------------------------------------
@@ -282,8 +262,8 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   // the bound protocol-lib callbacks — the trunk product
   const resolveIdentity = async (did: string): Promise<VerifiedIdentity | undefined> => {
     try {
-      const { state, log } = await getIdentityChain(did);
-      return mergeHistoricalIdentity(state, log);
+      const { state } = await getIdentityChain(did);
+      return historicalIdentity(state);
     } catch {
       return undefined;
     }
@@ -294,8 +274,8 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
-    const { state, log } = await getIdentityChain(did);
-    const bytes = keyBytesFor(state, log, keyId);
+    const { state } = await getIdentityChain(did);
+    const bytes = keyBytesFor(state, keyId);
     if (!bytes) throw new Error(`unknown key ${keyId} on identity ${did}`);
     return bytes;
   };

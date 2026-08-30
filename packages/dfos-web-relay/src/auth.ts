@@ -87,7 +87,11 @@ export const createCurrentStateProofResolver =
     return {
       isDeleted: identity.state.isDeleted,
       // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-      // current-state") — auth, assert, or controller.
+      // current-state") — auth, assert, or controller. CURRENT means EFFECTIVE:
+      // these arrays carry only memberships a possession proof admitted, so a
+      // key the chain declared and nothing proved cannot authenticate. Neither
+      // `provedKeys` (has-ever — it would resurrect a rotated-out key) nor
+      // `declared` (it would admit a void one) belongs on this path.
       keys: [
         ...identity.state.authKeys,
         ...identity.state.assertKeys,

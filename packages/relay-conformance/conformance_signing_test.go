@@ -213,11 +213,12 @@ type offlineIdentity struct {
 
 func createIdentityOffline(t *testing.T) offlineIdentity {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
-	token, did, cid, err := dfos.SignIdentityCreate([]dfos.MultikeyPublicKey{ctrl.mk}, []dfos.MultikeyPublicKey{auth.mk}, nil, ctrl.keyID, ctrl.priv)
+	key := newKeypair()
+	token, did, cid, err := dfos.SignIdentityCreate(
+		[]dfos.MultikeyPublicKey{key.mk}, []dfos.MultikeyPublicKey{key.mk}, []dfos.MultikeyPublicKey{key.mk},
+		key.keyID, key.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return offlineIdentity{identity: identity{did: did, genCID: cid, headCID: cid, controller: ctrl, auth: auth}, genesisToken: token}
+	return offlineIdentity{identity: identity{did: did, genCID: cid, headCID: cid, controller: key, auth: key}, genesisToken: token}
 }

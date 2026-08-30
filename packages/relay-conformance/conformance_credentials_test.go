@@ -278,21 +278,18 @@ func TestPublicCredentialIngestionAfterKeyRotation(t *testing.T) {
 	kid := id.did + "#" + id.auth.keyID
 	credToken := createPublicCredential(t, id.did, kid, "read", cc.contentID, 5*time.Minute, id.auth.priv)
 
-	// rotate the auth key BEFORE submitting the credential
-	newAuth := newKeypair()
+	// Rotate before submitting the credential — a whole rotation onto a fresh key, carrying
+	// that key's possession envelope, so the genesis key is genuinely rotated out
+	// of every role rather than left current in the ones the update did not touch.
+	rotated := newKeypair()
 	ctrlKid := id.did + "#" + id.controller.keyID
-	rotateToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{rotateToken}).Body.Close()
+	rotateToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		ctrlKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
 	// submit the credential signed with the OLD (rotated-out) key
 	// it should still be accepted — revocation, not key rotation, invalidates
@@ -346,21 +343,18 @@ func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// rotate the auth key AFTER issuing the credential
-	newAuth := newKeypair()
+	// Rotate after issuing the credential — a whole rotation onto a fresh key, carrying
+	// that key's possession envelope, so the genesis key is genuinely rotated out
+	// of every role rather than left current in the ones the update did not touch.
+	rotated := newKeypair()
 	ctrlKid := id.did + "#" + id.controller.keyID
-	rotateToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{rotateToken}).Body.Close()
+	rotateToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		ctrlKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
 	// reader uses credential signed with the OLD key — should still work
 	readerSigner := signerFor(reader)

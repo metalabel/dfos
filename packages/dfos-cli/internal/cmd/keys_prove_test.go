@@ -32,29 +32,42 @@ import (
 // --- the stub ceremony operator ---
 
 const (
-	stubCode       = "ABCD2345"
-	stubCeremonyID = "cer_01HQ"
-	stubNonce      = "n0nce-64-bits-of-nothing"
+	stubCode        = "ABCD2345"
+	stubNonce       = "n0nce-64-bits-of-nothing"
+	stubDID         = "did:dfos:z6MkadoptadoptadoptadoptadoptA"
+	stubHandle      = "alice"
+	stubDisplayName = "Alice Example"
+	stubRoleSet     = "auth,assert"
+	stubPrevCID     = "bafyreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"
+	stubExpiresAt   = "2026-08-30T12:00:00.000Z"
+	stubPresentPath = "/keys/present"
 )
 
 type stubCeremony struct {
 	server *httptest.Server
 
-	// knobs
-	resolveStatus  int    // non-zero: answer the well-known with this status
-	resolveBody    string // non-empty: answer the well-known with this body
-	resolveURI     string // non-empty: the carriage URI answered instead of the real one
-	resolveRelay   string // non-empty: the optional `relay` member of the resolution
-	completeStatus int    // non-zero: answer the completion with this status
-	completeBody   string // non-empty: the completion body
-	answerDID      string // non-empty: the identity the operator says adopted the key
+	// knobs — the resolution
+	resolveStatus   int      // non-zero: answer the well-known with this status
+	resolveBody     string   // non-empty: answer the well-known with this body
+	resolveOmit     []string // members dropped from the resolution ("adopts.did" reaches inside)
+	resolveAudience string   // non-empty: the audience answered instead of this authority
+	resolvePresent  string   // non-empty: the presentation endpoint answered instead of the real one
+	resolvePurpose  string   // non-empty: the purpose answered instead of key-add
+	resolveRoleSet  string   // non-empty: the role set answered instead of the canonical one
+	resolveRelay    string   // non-empty: the optional `relay` member of the resolution
+
+	// knobs — the presentation
+	presentStatus int    // non-zero: answer the presentation with this status
+	presentBody   string // non-empty: the presentation body
+	presentHangup bool   // drop the connection mid-request, so the POST gets no answer at all
+	answerDID     string // non-empty: the identity the operator says already adopted the key
 
 	// observations
-	wellKnownHits  int
-	completeHits   int
-	lastCode       string
-	lastCompletion map[string]string
-	lastQuery      url.Values
+	wellKnownHits int
+	presentHits   int
+	lastCode      string
+	lastPresented map[string]string
+	lastQuery     url.Values
 }
 
 func newStubCeremony(t *testing.T) *stubCeremony {
@@ -80,25 +93,34 @@ func (s *stubCeremony) handle(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"error":"unknown or expired code"}`))
 			return
 		}
-		answer := map[string]any{"uri": s.carriageURI()}
-		if s.resolveRelay != "" {
-			answer["relay"] = s.resolveRelay
-		}
-		writeJSON(w, answer)
+		writeJSON(w, s.resolution())
 
-	case r.URL.Path == "/keys/complete" && r.Method == http.MethodPost:
-		s.completeHits++
+	case r.URL.Path == stubPresentPath && r.Method == http.MethodPost:
+		s.presentHits++
 		s.lastQuery = r.URL.Query()
-		s.lastCompletion = map[string]string{}
-		_ = json.NewDecoder(r.Body).Decode(&s.lastCompletion)
-		if s.completeStatus != 0 {
-			w.WriteHeader(s.completeStatus)
-			_, _ = w.Write([]byte(s.completeBody))
+		s.lastPresented = map[string]string{}
+		_ = json.NewDecoder(r.Body).Decode(&s.lastPresented)
+		// The partition case: the request arrived and the answer never did. It is
+		// the one presentation failure that is not a refusal, and the CLI has to
+		// say so differently.
+		if s.presentHangup {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
 			return
 		}
-		answer := map[string]any{"status": "completed", "keyId": "key_ceremony"}
+		if s.presentStatus != 0 {
+			w.WriteHeader(s.presentStatus)
+			_, _ = w.Write([]byte(s.presentBody))
+			return
+		}
+		// The ordinary answer names no key id and no DID: presenting stores the
+		// proof and stops, and a chain row appears only once a human approves it.
+		answer := map[string]any{"status": "presented"}
 		if s.answerDID != "" {
 			answer["did"] = s.answerDID
+			answer["keyId"] = "key_ceremony"
 		}
 		writeJSON(w, answer)
 
@@ -108,13 +130,53 @@ func (s *stubCeremony) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// carriageURI is what the short code resolves to: the completion endpoint plus
-// the ceremony and the nonce, and no identity.
-func (s *stubCeremony) carriageURI() string {
-	if s.resolveURI != "" {
-		return s.resolveURI
+// resolution is the full signing context a live code answers with: everything
+// the payload binds, and everything render-before-sign displays.
+func (s *stubCeremony) resolution() map[string]any {
+	adopts := map[string]any{"did": stubDID, "handle": stubHandle, "displayName": stubDisplayName}
+	answer := map[string]any{
+		"present":   s.presentURL(),
+		"nonce":     stubNonce,
+		"audience":  s.authority(),
+		"purpose":   protocol.KeyAddJWSTyp,
+		"adopts":    adopts,
+		"roleSet":   stubRoleSet,
+		"prevCID":   stubPrevCID,
+		"expiresAt": stubExpiresAt,
 	}
-	return s.server.URL + "/keys/complete?ceremony=" + stubCeremonyID + "&nonce=" + url.QueryEscape(stubNonce)
+	if s.resolveAudience != "" {
+		answer["audience"] = s.resolveAudience
+	}
+	if s.resolvePresent != "" {
+		answer["present"] = s.resolvePresent
+	}
+	if s.resolvePurpose != "" {
+		answer["purpose"] = s.resolvePurpose
+	}
+	if s.resolveRoleSet != "" {
+		answer["roleSet"] = s.resolveRoleSet
+	}
+	if s.resolveRelay != "" {
+		answer["relay"] = s.resolveRelay
+	}
+	for _, member := range s.resolveOmit {
+		if inner, ok := strings.CutPrefix(member, "adopts."); ok {
+			delete(adopts, inner)
+			continue
+		}
+		delete(answer, member)
+	}
+	return answer
+}
+
+func (s *stubCeremony) presentURL() string {
+	return s.server.URL + stubPresentPath
+}
+
+// carriageURI is the QR form: a URL naming this operator's resolution with its
+// code. It carries no signing context — that is the whole point of the shape.
+func (s *stubCeremony) carriageURI() string {
+	return s.server.URL + keyProofWellKnownPath + "?code=" + url.QueryEscape(stubCode)
 }
 
 // shortCode is what the operator's settings screen displays. A real one carries
@@ -172,7 +234,9 @@ func plantCandidate(t *testing.T, store *keystore.MemoryStore) string {
 }
 
 // wireOracle points the resolution stack at an oracle that answers the
-// has-ever-declared question, which is what the linkage refusal turns on.
+// has-ever-PROVED question, which is what the linkage refusal turns on. An
+// unproved declaration on some other chain is not a link and not a burn — it is
+// void, it never indexes, and it never obligates the true holder.
 func wireOracle(t *testing.T) *fakeOracle {
 	t.Helper()
 	oracle := newFakeOracle(t)
@@ -183,31 +247,30 @@ func wireOracle(t *testing.T) *fakeOracle {
 
 // --- parsing ---
 
-func TestKeysProve_ParsesTheCarriageURIForm(t *testing.T) {
-	car, err := resolveCeremony("https://ceremony.example/keys/complete?ceremony=cer_1&nonce=abc&tenant=t1")
-	if err != nil {
-		t.Fatalf("parse carriage URI: %v", err)
-	}
-	if car.Ceremony != "cer_1" || car.Nonce != "abc" {
-		t.Fatalf("triple: %+v", car)
-	}
-	if car.Audience != "ceremony.example" {
-		t.Fatalf("audience: %q", car.Audience)
-	}
-	// The endpoint drops ceremony and nonce, and ONLY those: another member is
-	// the operator's own routing and posting without it is posting elsewhere.
-	if car.Endpoint != "https://ceremony.example/keys/complete?tenant=t1" {
-		t.Fatalf("endpoint: %q", car.Endpoint)
-	}
-}
-
-func TestKeysProve_AudienceCarriesANonDefaultPort(t *testing.T) {
-	car, err := resolveCeremony("https://ceremony.example:8443/c?ceremony=x&nonce=y")
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if car.Audience != "ceremony.example:8443" {
-		t.Fatalf("audience: %q", car.Audience)
+// A carriage is TWO values, whichever form carried it: the authority to ask, and
+// the code to ask about. Nothing else in the URL is a value.
+func TestKeysProve_ACarriageIsAnAuthorityAndACode(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, wantHost, wantCode, wantVia string
+	}{
+		{"the URI form", "https://ceremony.example/.well-known/dfos-key-proof?code=xyz789",
+			"ceremony.example", "xyz789", "carriage URI"},
+		{"a deep link is the same two values", "https://ceremony.example/join?code=xyz789&tenant=t1",
+			"ceremony.example", "xyz789", "carriage URI"},
+		{"the short form", "ceremony.example/ABCD2345",
+			"ceremony.example", "ABCD2345", "short code at ceremony.example"},
+		{"a non-default port rides along", "https://ceremony.example:8443/ABCD2345",
+			"ceremony.example:8443", "ABCD2345", "short code at ceremony.example:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			car, err := parseCarriage(tc.input)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.input, err)
+			}
+			if car.Authority() != tc.wantHost || car.Code != tc.wantCode || car.Via != tc.wantVia {
+				t.Fatalf("parsed %+v, want authority %q code %q via %q", car, tc.wantHost, tc.wantCode, tc.wantVia)
+			}
+		})
 	}
 }
 
@@ -220,18 +283,39 @@ func TestKeysProve_RejectsMalformedInput(t *testing.T) {
 		{"lowercase alphabet is normalized, not the length", "host.example/abcd234", "not a ceremony code"},
 		{"two path segments", "host.example/a/ABCD2345", "neither carriage form"},
 		{"no host", "ABCD2345", "neither carriage form"},
-		{"carriage URI missing the nonce", "https://host.example/c?ceremony=x", "no 'nonce' member"},
-		{"carriage URI missing the ceremony", "https://host.example/c?nonce=y", "no 'ceremony' member"},
-		{"duplicated ceremony member", "https://h.example/c?ceremony=a&ceremony=b&nonce=y", "carries 'ceremony' 2 times"},
-		{"cleartext off loopback", "http://host.example/c?ceremony=x&nonce=y", "refusing a cleartext ceremony"},
-		{"not http at all", "ftp://host.example/c?ceremony=x&nonce=y", "refusing scheme 'ftp'"},
+		{"an empty code member", "https://host.example/c?code=", "'code' member is empty"},
+		{"a code that is not a token", "https://host.example/c?code=" + url.QueryEscape("a b/c"), "not a ceremony code"},
+		{"duplicated code member", "https://h.example/c?code=a&code=b", "carries 'code' 2 times"},
+		{"userinfo", "https://user:pw@h.example/c?code=abc", "userinfo"},
+		{"cleartext off loopback", "http://host.example/c?code=abc", "refusing a cleartext ceremony"},
+		{"not http at all", "ftp://host.example/c?code=abc", "refusing scheme 'ftp'"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := resolveCeremony(tc.input)
+			_, err := parseCarriage(tc.input)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("input %q: want error containing %q, got %v", tc.input, tc.want, err)
 			}
 		})
+	}
+}
+
+// A URL carrying the signing context instead of a code is refused, and refused
+// by name. There is no self-contained carriage: a context nobody resolved is a
+// context somebody else chose, and reading one would skip the step that binds
+// the ceremony to the authority the human typed.
+func TestKeysProve_RefusesACarriageThatCarriesItsOwnContext(t *testing.T) {
+	for _, input := range []string{
+		"https://h.example/c?ceremony=cer_1&nonce=abc",
+		"https://h.example/c?nonce=abc",
+		"https://h.example/c?ceremony=cer_1&nonce=abc&did=did:dfos:z6Mk&roleSet=auth,assert",
+	} {
+		_, err := parseCarriage(input)
+		if err == nil || !strings.Contains(err.Error(), "rather than a code") {
+			t.Fatalf("input %q: want the context-carriage refusal, got %v", input, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "resolving that code at that authority") {
+			t.Fatalf("the refusal does not say where context comes from: %v", err)
+		}
 	}
 }
 
@@ -244,11 +328,121 @@ func TestKeysProve_ShortCodeIsCaseNormalized(t *testing.T) {
 	if stub.lastCode != stubCode {
 		t.Fatalf("resolved with %q, want %q", stub.lastCode, stubCode)
 	}
-	if car.Nonce != stubNonce || car.Ceremony != stubCeremonyID {
-		t.Fatalf("triple: %+v", car)
+	if car.Nonce != stubNonce || car.Code != stubCode {
+		t.Fatalf("ceremony: %+v", car)
 	}
 	if car.Via != "short code at "+stub.authority() {
 		t.Fatalf("via: %q", car.Via)
+	}
+}
+
+// The whole signing context comes out of the resolution, and both carriage forms
+// land on the same one. What the carriage carried was an authority and a code.
+func TestKeysProve_ResolutionCarriesTheWholeSigningContext(t *testing.T) {
+	for _, form := range []string{"short code", "carriage URI"} {
+		t.Run(form, func(t *testing.T) {
+			stub := newStubCeremony(t)
+			input := stub.shortCode()
+			if form == "carriage URI" {
+				input = stub.carriageURI()
+			}
+
+			cer, err := resolveCeremony(input)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if cer.DID != stubDID || cer.Handle != stubHandle || cer.DisplayName != stubDisplayName {
+				t.Fatalf("adopts: %+v", cer)
+			}
+			if cer.RoleSet != stubRoleSet || cer.PrevCID != stubPrevCID {
+				t.Fatalf("position: %+v", cer)
+			}
+			if cer.Nonce != stubNonce || cer.Audience != stub.authority() {
+				t.Fatalf("challenge: %+v", cer)
+			}
+			if cer.Present != stub.presentURL() || cer.Code != stubCode {
+				t.Fatalf("presentation: %+v", cer)
+			}
+			if cer.ExpiresAt != stubExpiresAt {
+				t.Fatalf("expiresAt: %q", cer.ExpiresAt)
+			}
+		})
+	}
+}
+
+// A holder MUST NOT sign on a resolution that omits the identity, the roles, or
+// the head — those are what the payload binds and what the human is shown, and a
+// partial position is consent to something nobody saw. Every missing member is
+// named at once, so a person is not made to re-run a ceremony to find the next.
+func TestKeysProve_RefusesAResolutionMissingThePosition(t *testing.T) {
+	for _, member := range []string{
+		"present", "nonce", "audience", "adopts.did", "adopts.handle", "adopts.displayName", "roleSet", "prevCID",
+	} {
+		t.Run(member, func(t *testing.T) {
+			stub := newStubCeremony(t)
+			stub.resolveOmit = []string{member}
+
+			_, err := resolveCeremony(stub.shortCode())
+			if err == nil || !strings.Contains(err.Error(), "missing "+member) {
+				t.Fatalf("omitting %q: want a refusal naming it, got %v", member, err)
+			}
+			if !strings.Contains(err.Error(), "nothing was signed") {
+				t.Fatalf("the refusal does not say nothing was signed: %v", err)
+			}
+		})
+	}
+
+	// All at once, named in one sentence rather than one per run.
+	stub := newStubCeremony(t)
+	stub.resolveOmit = []string{"adopts.did", "roleSet", "prevCID"}
+	_, err := resolveCeremony(stub.shortCode())
+	if err == nil {
+		t.Fatal("a resolution missing the whole position was accepted")
+	}
+	for _, want := range []string{"adopts.did", "roleSet", "prevCID"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal names only some of what is missing (%q absent): %v", want, err)
+		}
+	}
+}
+
+// A role set outside its one canonical spelling names a set no envelope can
+// carry. Catching it at resolution means the refusal lands before a key is
+// minted, rather than coming back out of the signer.
+func TestKeysProve_RefusesANonCanonicalRoleSet(t *testing.T) {
+	for _, roleSet := range []string{"assert,auth", "auth, assert", "auth,auth", "auth,owner", "owner", " auth"} {
+		t.Run(roleSet, func(t *testing.T) {
+			stub := newStubCeremony(t)
+			stub.resolveRoleSet = roleSet
+
+			_, err := resolveCeremony(stub.shortCode())
+			if err == nil || !strings.Contains(err.Error(), "role set this envelope cannot carry") {
+				t.Fatalf("role set %q: want a refusal, got %v", roleSet, err)
+			}
+			if !strings.Contains(err.Error(), "Nothing was signed") {
+				t.Fatalf("the refusal does not say nothing was signed: %v", err)
+			}
+		})
+	}
+}
+
+// A resolution naming some OTHER ceremony purpose is not this command's to
+// complete. An absent purpose is tolerated — silence is not a claim about
+// another ceremony — but a different one is.
+func TestKeysProve_RefusesAForeignPurpose(t *testing.T) {
+	stub := newStubCeremony(t)
+	stub.resolvePurpose = "did:dfos:something-else"
+
+	_, err := resolveCeremony(stub.shortCode())
+	if err == nil || !strings.Contains(err.Error(), "did:dfos:something-else") ||
+		!strings.Contains(err.Error(), protocol.KeyAddJWSTyp) {
+		t.Fatalf("want a purpose refusal naming both, got %v", err)
+	}
+
+	absent := newStubCeremony(t)
+	absent.resolveOmit = []string{"purpose"}
+	if _, err := resolveCeremony(absent.shortCode()); err != nil {
+		t.Fatalf("an absent purpose failed the ceremony: %v", err)
 	}
 }
 
@@ -281,7 +475,7 @@ func TestKeysProve_ResolvesACodeTypedWithSeparators(t *testing.T) {
 		t.Fatalf("resolved with %q, want %q", stub.lastCode, stubCode)
 	}
 	if car.Nonce != stubNonce {
-		t.Fatalf("triple: %+v", car)
+		t.Fatalf("ceremony: %+v", car)
 	}
 }
 
@@ -315,36 +509,59 @@ func TestKeysProve_ReadsTheResolutionsOptionalRelay(t *testing.T) {
 	}
 }
 
-// A carriage URI is three values. A `relay` query member on one is the
-// operator's own routing, carried through to the endpoint like any other — it is
-// not an oracle, because only a resolution can name one.
-func TestKeysProve_ACarriageURICarriesNoRelay(t *testing.T) {
-	car, err := resolveCeremony("https://ceremony.example/c?ceremony=x&nonce=y&relay=https%3A%2F%2Frelay.example")
+// A carriage is an authority and a code. A `relay` query member on one is not an
+// oracle — only a resolution names one — and it is not carried anywhere, because
+// nothing but the code is read off the URL.
+func TestKeysProve_ACarriageURIsQueryIsNotAnOracle(t *testing.T) {
+	car, err := parseCarriage("https://ceremony.example/c?code=abc&relay=https%3A%2F%2Frelay.example")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if car.Relay != "" {
-		t.Fatalf("relay: %q, want none", car.Relay)
-	}
-	if car.Endpoint != "https://ceremony.example/c?relay=https%3A%2F%2Frelay.example" {
-		t.Fatalf("endpoint: %q", car.Endpoint)
+	if car.Code != "abc" || car.Authority() != "ceremony.example" {
+		t.Fatalf("parsed: %+v", car)
 	}
 }
 
-// The rule that makes the short form safe: a code typed at one host can never
-// resolve to a ceremony completing at another.
+// The rule that makes both carriage forms safe: a code typed at one host can
+// never resolve to a ceremony that lands anywhere else. Two members carry the
+// authority, and either one moving is the same refusal.
 func TestKeysProve_RefusesAnOffAuthorityResolution(t *testing.T) {
-	stub := newStubCeremony(t)
-	stub.resolveURI = "https://elsewhere.example/keys/complete?ceremony=cer&nonce=n"
+	t.Run("the audience moved", func(t *testing.T) {
+		stub := newStubCeremony(t)
+		stub.resolveAudience = "elsewhere.example"
 
-	_, err := resolveCeremony(stub.shortCode())
-	if err == nil || !strings.Contains(err.Error(), "REFUSING") ||
-		!strings.Contains(err.Error(), "elsewhere.example") {
-		t.Fatalf("want an off-authority refusal, got %v", err)
-	}
-	if stub.wellKnownHits != 1 {
-		t.Fatalf("asked the well-known %d times, want exactly 1", stub.wellKnownHits)
-	}
+		_, err := resolveCeremony(stub.shortCode())
+		if err == nil || !strings.Contains(err.Error(), "REFUSING") ||
+			!strings.Contains(err.Error(), "elsewhere.example") {
+			t.Fatalf("want an off-authority refusal, got %v", err)
+		}
+		if stub.wellKnownHits != 1 {
+			t.Fatalf("asked the well-known %d times, want exactly 1", stub.wellKnownHits)
+		}
+	})
+
+	t.Run("the presentation endpoint moved", func(t *testing.T) {
+		stub := newStubCeremony(t)
+		stub.resolvePresent = "https://elsewhere.example/keys/present"
+
+		_, err := resolveCeremony(stub.shortCode())
+		if err == nil || !strings.Contains(err.Error(), "REFUSING") ||
+			!strings.Contains(err.Error(), "elsewhere.example") {
+			t.Fatalf("want an off-authority refusal, got %v", err)
+		}
+	})
+
+	// An audience that byte-equals the authority does not license a presentation
+	// endpoint that does not: both are checked, independently.
+	t.Run("a matching audience does not cover a moved endpoint", func(t *testing.T) {
+		stub := newStubCeremony(t)
+		stub.resolvePresent = "https://elsewhere.example/keys/present"
+		stub.resolveAudience = stub.authority()
+
+		if _, err := resolveCeremony(stub.shortCode()); err == nil {
+			t.Fatal("a moved presentation endpoint rode in behind a matching audience")
+		}
+	})
 }
 
 // A code that does not resolve is not retried and not polled: the route is rate
@@ -392,53 +609,70 @@ func TestKeysProve_HappyPath(t *testing.T) {
 		t.Fatalf("keys prove: %v", err)
 	}
 
-	// The disclosure a human is owed, before anything was signed.
-	for _, want := range []string{"Audience:", stub.authority(), protocol.KeyAddJWSTyp, "no identity has ever declared this key"} {
+	// The disclosure a human is owed, before anything was signed: the audience,
+	// the identity being joined, and the roles being consented to.
+	for _, want := range []string{
+		"Audience:", stub.authority(), protocol.KeyAddJWSTyp,
+		"Adds to:", stubDID, stubDisplayName, "@" + stubHandle,
+		"Roles:", "auth — sign in and act as this identity", "assert — publish and attest as this identity",
+		"Builds on:", stubPrevCID,
+		"no identity has ever proved this key",
+	} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("disclosure missing %q:\n%s", want, stderr)
 		}
 	}
+	// A ceremony that grants auth and assert does not mention controller. The
+	// role lines are the human's only warning that one is being asked for.
+	if strings.Contains(stderr, "controller") {
+		t.Fatalf("the disclosure named a role this ceremony does not grant:\n%s", stderr)
+	}
 
-	if result.Status != "completed" || result.KeyID != "key_ceremony" {
+	if result.Status != "presented" {
 		t.Fatalf("result: %+v", result)
 	}
-	if result.Audience != stub.authority() || result.Ceremony != stubCeremonyID {
+	if result.Audience != stub.authority() || result.Code != stubCode {
 		t.Fatalf("result carriage: %+v", result)
+	}
+	if result.Adopts != stubDID || result.RoleSet != stubRoleSet || result.PrevCID != stubPrevCID {
+		t.Fatalf("result position: %+v", result)
 	}
 	if !result.Linkage.Checked || len(result.Linkage.Declaring) != 0 {
 		t.Fatalf("linkage: %+v", result.Linkage)
 	}
 
-	// The completion body's shape, and what does NOT ride in it: the ceremony id
-	// and the description travel beside the envelope, and the nonce rides only
-	// inside the signed payload.
-	if got := stub.lastCompletion["ceremony"]; got != stubCeremonyID {
-		t.Fatalf("completion ceremony: %q", got)
+	// The presentation body's shape, and what does NOT ride in it: the code and
+	// the description travel beside the envelope, and the nonce rides only inside
+	// the signed payload.
+	if got := stub.lastPresented["code"]; got != stubCode {
+		t.Fatalf("presented code: %q", got)
 	}
-	envelope := stub.lastCompletion["envelope"]
+	envelope := stub.lastPresented["envelope"]
 	if envelope == "" {
-		t.Fatal("completion carried no envelope")
+		t.Fatal("the presentation carried no envelope")
 	}
 	// A machine that can name neither its user nor itself sends no description at
 	// all, so the member count follows the default rather than assuming it.
 	wantMembers := 2
 	if want := defaultKeyDescription(); want != "" {
 		wantMembers = 3
-		if got := stub.lastCompletion["description"]; got != want {
-			t.Fatalf("completion description: %q, want %q", got, want)
+		if got := stub.lastPresented["description"]; got != want {
+			t.Fatalf("presented description: %q, want %q", got, want)
 		}
 	}
-	if len(stub.lastCompletion) != wantMembers {
-		t.Fatalf("completion body has extra members: %v", stub.lastCompletion)
+	if len(stub.lastPresented) != wantMembers {
+		t.Fatalf("the presentation body has extra members: %v", stub.lastPresented)
 	}
-	if stub.lastQuery.Get("ceremony") != "" || stub.lastQuery.Get("nonce") != "" {
-		t.Fatalf("the completion POST carried the carriage query: %v", stub.lastQuery)
+	if stub.lastQuery.Get("code") != "" || stub.lastQuery.Get("nonce") != "" {
+		t.Fatalf("the presentation POST carried the context in its query: %v", stub.lastQuery)
 	}
 
-	// The envelope itself, through the kit's own verifier: typ, audience,
+	// The envelope itself, through the kit's own verifier, against EVERY arm a
+	// real operator checks: the typ, the audience, the three positional members,
 	// freshness, and the signature against the payload's OWN public key.
 	verified, err := protocol.VerifyKeyProof(envelope, protocol.KeyProofExpectations{
 		Typ: protocol.KeyAddJWSTyp, Audience: stub.authority(),
+		DID: stubDID, RoleSet: stubRoleSet, PrevCID: stubPrevCID,
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("verify the envelope: %v", err)
@@ -453,8 +687,9 @@ func TestKeysProve_HappyPath(t *testing.T) {
 		t.Fatal("private material surfaced")
 	}
 
-	// The key is held, under a candidate account, because this operator did not
-	// name the identity that adopted it.
+	// The key is held, under a candidate account. That is the NORMAL resting
+	// place: presenting stores the proof, and a chain row appears only once a
+	// human approves it on the operator's own surface.
 	if result.Account != candidateAccountPrefix+result.PublicKey {
 		t.Fatalf("account: %q", result.Account)
 	}
@@ -475,7 +710,7 @@ func TestKeysProve_AdoptedKeyIsFiledUnderItsIdentity(t *testing.T) {
 	createVault(t, "personal")
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	stub.answerDID = "did:dfos:z6MkexampleexampleexampleexA"
+	stub.answerDID = stubDID
 
 	var result proveResult
 	if _, _, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result); err != nil {
@@ -553,10 +788,10 @@ func TestKeysProve_RefusesAKeyAnIdentityHasDeclared(t *testing.T) {
 
 	_, _, err := runProve(t, stub.carriageURI(), map[string]string{"yes": "true", "key": held}, nil)
 	if err == nil || !strings.Contains(err.Error(), "REFUSING") ||
-		!strings.Contains(err.Error(), "HAS-EVER-DECLARED") {
+		!strings.Contains(err.Error(), "HAS-EVER-PROVED") {
 		t.Fatalf("want a linkage refusal, got %v", err)
 	}
-	if stub.completeHits != 0 {
+	if stub.presentHits != 0 {
 		t.Fatal("a refused ceremony was completed anyway")
 	}
 
@@ -565,10 +800,10 @@ func TestKeysProve_RefusesAKeyAnIdentityHasDeclared(t *testing.T) {
 	if _, stderr, err := runProve(t, stub.carriageURI(),
 		map[string]string{"yes": "true", "key": held, "force-linked": "true"}, &result); err != nil {
 		t.Fatalf("--force-linked: %v", err)
-	} else if !strings.Contains(stderr, "already declares this key") {
+	} else if !strings.Contains(stderr, "has already proved this key") {
 		t.Fatalf("the forced run did not say what it was overriding:\n%s", stderr)
 	}
-	if result.Status != "completed" || !result.Forced {
+	if result.Status != "presented" || !result.Forced {
 		t.Fatalf("result: %+v", result)
 	}
 }
@@ -596,10 +831,10 @@ func TestKeysProve_RefusesAKeyTheLocalRelayDeclares(t *testing.T) {
 	}
 
 	_, _, err = runProve(t, stub.carriageURI(), map[string]string{"yes": "true", "key": declared}, nil)
-	if err == nil || !strings.Contains(err.Error(), "already declared by "+did) {
+	if err == nil || !strings.Contains(err.Error(), "already proved into "+did) {
 		t.Fatalf("want a local linkage refusal, got %v", err)
 	}
-	if stub.completeHits != 0 {
+	if stub.presentHits != 0 {
 		t.Fatal("a refused ceremony was completed anyway")
 	}
 }
@@ -611,7 +846,7 @@ func TestKeysProve_AnAdoptedAnswerNeverMovesAnExistingAccount(t *testing.T) {
 	did := createIdentity(t, "alice", storeA)
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	stub.answerDID = "did:dfos:z6MkexampleexampleexampleexA"
+	stub.answerDID = stubDID
 
 	ledger, err := buildKeyLedger()
 	if err != nil {
@@ -672,7 +907,7 @@ func TestKeysProve_UnanswerableCheckRequiresAcknowledgment(t *testing.T) {
 			if !strings.Contains(err.Error(), "NOT 'no identity declares this key'") {
 				t.Fatalf("the refusal read silence as an answer: %v", err)
 			}
-			if stub.completeHits != 0 {
+			if stub.presentHits != 0 {
 				t.Fatal("signed anyway")
 			}
 
@@ -683,7 +918,7 @@ func TestKeysProve_UnanswerableCheckRequiresAcknowledgment(t *testing.T) {
 			} else if !strings.Contains(stderr, "NOT CHECKED") {
 				t.Fatalf("the forced run did not disclose the unchecked linkage:\n%s", stderr)
 			}
-			if result.Linkage.Checked || result.Status != "completed" {
+			if result.Linkage.Checked || result.Status != "presented" {
 				t.Fatalf("result: %+v", result)
 			}
 		})
@@ -707,7 +942,7 @@ func TestKeysProve_NoOracleConfiguredRequiresAcknowledgment(t *testing.T) {
 	if !strings.Contains(err.Error(), "Nor did this ceremony name one") {
 		t.Fatalf("the refusal did not say the ceremony offered no relay either: %v", err)
 	}
-	if stub.completeHits != 0 {
+	if stub.presentHits != 0 {
 		t.Fatal("signed anyway")
 	}
 }
@@ -836,7 +1071,7 @@ func TestKeysProve_ANamedOracleThatFailsIsNotReplacedByTheCeremonys(t *testing.T
 			if theirs.indexQueries != 0 {
 				t.Fatalf("the ceremony's relay answered %d times for a machine that named its own", theirs.indexQueries)
 			}
-			if stub.completeHits != 0 {
+			if stub.presentHits != 0 {
 				t.Fatal("signed anyway")
 			}
 			// A relay WAS offered by the ceremony, so the refusal must not claim
@@ -882,7 +1117,7 @@ func TestKeysProve_AFallbackOracleThatCannotAnswerStillRefuses(t *testing.T) {
 			if strings.Contains(err.Error(), "Nor did this ceremony name one") {
 				t.Fatalf("the refusal reported no relay when one answered: %v", err)
 			}
-			if stub.completeHits != 0 {
+			if stub.presentHits != 0 {
 				t.Fatal("signed anyway")
 			}
 		})
@@ -905,7 +1140,7 @@ func TestKeysProve_NonInteractiveWithoutYesSignsNothing(t *testing.T) {
 	if !strings.Contains(stderr, "Audience:") {
 		t.Fatalf("the audience was not disclosed before the refusal:\n%s", stderr)
 	}
-	if stub.completeHits != 0 {
+	if stub.presentHits != 0 {
 		t.Fatal("completed without a confirmation")
 	}
 	// The minted key is not lost — it is named in the refusal and held.
@@ -922,40 +1157,66 @@ func TestKeysProve_ARefusedCompletionIsBurnedAndNotRetried(t *testing.T) {
 	createVault(t, "personal")
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	stub.completeStatus = http.StatusBadRequest
-	stub.completeBody = `{"error":"nonce already consumed"}`
+	stub.presentStatus = http.StatusBadRequest
+	stub.presentBody = `{"error":"nonce already consumed"}`
 
 	_, _, err := runProve(t, stub.carriageURI(), map[string]string{"yes": "true"}, nil)
 	if err == nil {
 		t.Fatal("a refused completion succeeded")
 	}
 	for _, want := range []string{"refused the proof (HTTP 400)", "nonce already consumed",
-		"This ceremony is spent", "Mint a fresh code", "--key "} {
+		"Treat this ceremony as spent", "Mint a fresh code", "--key "} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("failure message missing %q:\n%v", want, err)
 		}
 	}
-	if stub.completeHits != 1 {
-		t.Fatalf("completed %d times — a burned ceremony is never retried", stub.completeHits)
+	if stub.presentHits != 1 {
+		t.Fatalf("presented %d times — a burned ceremony is never retried", stub.presentHits)
 	}
 }
 
+// A presentation that got no answer is NOT a refusal, and the failure has to
+// distinguish them: a refusal is something the operator said, and a partition is
+// not. Here the resolution succeeds and the POST is what goes unanswered.
 func TestKeysProve_AnUnreachableOperatorReadsAsUnreachable(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
 	createVault(t, "personal")
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	uri := stub.carriageURI()
-	stub.server.Close() // the operator is gone before the completion is posted
+	stub.presentHangup = true
 
-	_, _, err := runProve(t, uri, map[string]string{"yes": "true"}, nil)
+	_, _, err := runProve(t, stub.carriageURI(), map[string]string{"yes": "true"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "could not reach the ceremony operator") {
 		t.Fatalf("want an unreachable-operator failure, got %v", err)
 	}
 	// It is still spent as far as this machine knows, and it still is not retried.
-	if !strings.Contains(err.Error(), "If the request arrived, the ceremony is spent") {
+	if !strings.Contains(err.Error(), "If the request arrived, the proof was presented") {
 		t.Fatalf("the failure did not state the ambiguity: %v", err)
+	}
+	if stub.presentHits != 1 {
+		t.Fatalf("presented %d times — an unanswered presentation is not retried either", stub.presentHits)
+	}
+}
+
+// A host that cannot be reached AT ALL fails at the resolution, before any key
+// material is touched — a different sentence, because nothing was signed and the
+// code is still live.
+func TestKeysProve_AnUnreachableResolutionCostsNothing(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+	wireOracle(t)
+	stub := newStubCeremony(t)
+	uri := stub.carriageURI()
+	stub.server.Close() // the operator is gone before the code is resolved
+
+	_, _, err := runProve(t, uri, map[string]string{"yes": "true"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "to resolve the code") {
+		t.Fatalf("want a resolution failure, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Nothing was signed and nothing was sent") {
+		t.Fatalf("the failure did not say the ceremony survived: %v", err)
 	}
 }
 
@@ -965,11 +1226,11 @@ func TestKeysProve_A200ThatDoesNotCompleteIsAFailure(t *testing.T) {
 	createVault(t, "personal")
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	stub.completeStatus = http.StatusOK
-	stub.completeBody = `{"status":"pending","message":"awaiting operator approval"}`
+	stub.presentStatus = http.StatusOK
+	stub.presentBody = `{"status":"pending","message":"awaiting operator approval"}`
 
 	_, _, err := runProve(t, stub.carriageURI(), map[string]string{"yes": "true"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "without completing the ceremony") ||
+	if err == nil || !strings.Contains(err.Error(), "without accepting the proof") ||
 		!strings.Contains(err.Error(), "awaiting operator approval") {
 		t.Fatalf("want an incomplete-answer failure, got %v", err)
 	}
@@ -1017,7 +1278,7 @@ func TestKeysProve_WithNoVaultSelectedSaysSo(t *testing.T) {
 	if vaults, listErr := getVaults().List(); listErr != nil || len(vaults) != 0 {
 		t.Fatalf("vaults after the refusal: %v (%v)", vaults, listErr)
 	}
-	if stub.completeHits != 0 {
+	if stub.presentHits != 0 {
 		t.Fatal("signed anyway")
 	}
 }
@@ -1038,9 +1299,9 @@ func TestKeysProve_TheCompletionCarriesAKeyDescription(t *testing.T) {
 			t.Fatalf("keys prove: %v", err)
 		}
 		want := defaultKeyDescription()
-		if result.Description != want || stub.lastCompletion["description"] != want {
+		if result.Description != want || stub.lastPresented["description"] != want {
 			t.Fatalf("description: result %q, wire %q, want %q",
-				result.Description, stub.lastCompletion["description"], want)
+				result.Description, stub.lastPresented["description"], want)
 		}
 		if want != "" && !strings.Contains(stderr, want) {
 			t.Fatalf("the disclosure did not show the label being sent:\n%s", stderr)
@@ -1060,16 +1321,17 @@ func TestKeysProve_TheCompletionCarriesAKeyDescription(t *testing.T) {
 		if err != nil {
 			t.Fatalf("keys prove: %v", err)
 		}
-		if stub.lastCompletion["description"] != "work laptop" || result.Description != "work laptop" {
-			t.Fatalf("description: result %q, wire %q", result.Description, stub.lastCompletion["description"])
+		if stub.lastPresented["description"] != "work laptop" || result.Description != "work laptop" {
+			t.Fatalf("description: result %q, wire %q", result.Description, stub.lastPresented["description"])
 		}
 		if !strings.Contains(stderr, "work laptop") {
 			t.Fatalf("the disclosure did not show the label being sent:\n%s", stderr)
 		}
 		// It is a label beside the proof, and nothing about the signed bytes.
-		envelope := stub.lastCompletion["envelope"]
+		envelope := stub.lastPresented["envelope"]
 		verified, err := protocol.VerifyKeyProof(envelope, protocol.KeyProofExpectations{
 			Typ: protocol.KeyAddJWSTyp, Audience: stub.authority(),
+			DID: stubDID, RoleSet: stubRoleSet, PrevCID: stubPrevCID,
 		}, time.Now())
 		if err != nil {
 			t.Fatalf("verify the envelope: %v", err)
@@ -1094,8 +1356,8 @@ func TestKeysProve_TheCompletionCarriesAKeyDescription(t *testing.T) {
 			map[string]string{"yes": "true", "name": ""}, &result); err != nil {
 			t.Fatalf("keys prove: %v", err)
 		}
-		if _, present := stub.lastCompletion["description"]; present {
-			t.Fatalf("--name '' still sent a description: %v", stub.lastCompletion)
+		if _, present := stub.lastPresented["description"]; present {
+			t.Fatalf("--name '' still sent a description: %v", stub.lastPresented)
 		}
 		if result.Description != "" {
 			t.Fatalf("description: %q", result.Description)
@@ -1111,7 +1373,7 @@ func TestKeysProve_TheReceiptPointsAtTheKeyInPublic(t *testing.T) {
 	createVault(t, "personal")
 	wireOracle(t)
 	stub := newStubCeremony(t)
-	stub.answerDID = "did:dfos:z6MkexampleexampleexampleexA"
+	stub.answerDID = stubDID
 
 	stdout, _, err := runProveHuman(t, stub.shortCode(), map[string]string{"yes": "true"})
 	if err != nil {
@@ -1133,7 +1395,9 @@ func TestKeysProve_TheReceiptPointsAtTheKeyInPublic(t *testing.T) {
 		t.Fatalf("the receipt does not say where the name can be changed:\n%s", stdout)
 	}
 
-	// An operator that named no identity has no settings screen to point at.
+	// An operator that has not adopted the key yet — the ORDINARY answer — has no
+	// settings screen to point at, and the receipt says what is actually true:
+	// presented, awaiting approval, held here as a candidate.
 	bare := newStubCeremony(t)
 	stdout, _, err = runProveHuman(t, bare.shortCode(), map[string]string{"yes": "true"})
 	if err != nil {
@@ -1144,6 +1408,48 @@ func TestKeysProve_TheReceiptPointsAtTheKeyInPublic(t *testing.T) {
 	}
 	if !strings.Contains(stdout, explorerKeyBase) {
 		t.Fatalf("a candidate key got no explorer link:\n%s", stdout)
+	}
+	// The receipt reports PRESENTED and never claims the key was added.
+	for _, want := range []string{
+		"Presented:", stubDID, stubDisplayName, stubRoleSet,
+		"Nothing is added to the chain until you approve it there",
+		"held here as a candidate",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("the receipt is missing %q:\n%s", want, stdout)
+		}
+	}
+	// The fingerprint a person compares against the operator's dialog.
+	key := receiptField(t, stdout, "Key:")
+	if !strings.Contains(stdout, truncateKey(key)) {
+		t.Fatalf("the receipt gives no fingerprint to compare:\n%s", stdout)
+	}
+}
+
+// An operator that answers with an identity OTHER than the one the human
+// consented to files nothing. The key stays a candidate and no provenance is
+// written against a chain nobody was shown.
+func TestKeysProve_AnAdoptionNamingAnotherIdentityFilesNothing(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+	wireOracle(t)
+	stub := newStubCeremony(t)
+	stub.answerDID = "did:dfos:z6MksomeoneelseentirelyentirelyA"
+
+	var result proveResult
+	if _, _, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result); err != nil {
+		t.Fatalf("keys prove: %v", err)
+	}
+	if result.Account != candidateAccountPrefix+result.PublicKey {
+		t.Fatalf("the key was filed against an identity the human never saw: %q", result.Account)
+	}
+	meta, err := getVaults().Load("personal")
+	if err != nil {
+		t.Fatalf("load vault: %v", err)
+	}
+	if len(meta.Minted) != 0 {
+		t.Fatalf("provenance was written for an unconsented identity: %+v", meta.Minted)
 	}
 }
 

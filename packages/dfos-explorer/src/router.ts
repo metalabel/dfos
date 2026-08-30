@@ -8,7 +8,7 @@
     #/documents        browse public documents
     #/artifacts        browse standalone signed artifacts
     #/did/<did>        identity
-    #/key/<multibase>  a public key, and the identities that declared it
+    #/key/<multibase>  a public key, and the identities it has been proved into
     #/domain/<host>    an origin's app description document
     #/content/<id>     content chain
     #/op/<cid>         operation

@@ -37,6 +37,7 @@
 
 */
 
+import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import {
   artifactIndexRow,
@@ -46,7 +47,12 @@ import {
   type IndexArtifactRow,
   type IndexCountersignatureQueryRow,
 } from './index-routes';
-import type { IngestionResult, RelayStore, StoredPublicCredential } from './types';
+import {
+  provedKeyState,
+  type IngestionResult,
+  type RelayStore,
+  type StoredPublicCredential,
+} from './types';
 
 /**
  * Upper bound for the maintenance-time enumerate-all fallback used by the two
@@ -179,38 +185,37 @@ const contentIdsFromCredentialToken = (
 };
 
 /**
- * Every public key ONE identity operation declares, across all three key
- * classes — the material behind the has-ever-declared `key=` reverse index.
+ * Every public key an identity chain has EVER PROVED, across all three key
+ * classes — the material behind the has-ever-proved `key=` reverse index.
  *
- * WHY THE OPERATION AND NOT THE HEAD STATE: an identity `update` REPLACES the
- * key arrays, so the chain's current state knows only its live keys. Capturing
- * each operation's own arrays as it is accepted is what makes a rotated-out key
- * still findable — the case the filter exists for (key-loss recovery holds
- * exactly the keys later updates dropped). `delete` / `restore` carry no key
- * arrays and contribute nothing.
+ * PROVED, NOT DECLARED, AND THE DIFFERENCE IS THE WHOLE POINT. This index is the
+ * one-key-one-DID oracle a holder consults before signing a key proof, and it
+ * refuses when some chain already proved the key, because proving one key into
+ * two chains publishes an irreversible public link between them. A DECLARATION
+ * publishes no such link — anyone can write anyone's public key into their own
+ * chain — so an index of declarations would let a stranger BURN a key they do
+ * not hold, by writing it into a chain and making every future ceremony refuse
+ * it. See specs/KEY-PROOF.md § Holder Obligations.
+ *
+ * WHY THE RESULTING STATE'S `provedKeys` AND NOT THE OPERATION'S OWN ARRAYS: an
+ * operation's arrays are declarations, and whether a declaration is proved is a
+ * verdict of the chain walk, not of the payload. `provedKeys` is the walk's
+ * monotonic has-ever-proved union as of the accepted operation, so writing it
+ * after each accepted op is exactly right — see the monotonicity note on
+ * `collectIndexDirtyAfterOp`. `delete` / `restore` carry the same union forward
+ * and simply rewrite rows that already exist.
  *
  * There is no key-class column: which array carried the key is the chain's
  * answer, not the index's, so all three fold into one flat row set.
  */
-const declaredKeys = (
-  payload: Record<string, unknown> | undefined,
-): { publicKeyMultibase: string; id: string }[] => {
-  const declared: { publicKeyMultibase: string; id: string }[] = [];
-  for (const field of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
-    const keys = payload?.[field];
-    if (!Array.isArray(keys)) continue;
-    for (const entry of keys) {
-      const key = entry as Record<string, unknown> | null;
-      const publicKeyMultibase = key?.['publicKeyMultibase'];
-      const id = key?.['id'];
-      // stored VERBATIM — the filter is an opaque byte match, so nothing here
-      // normalizes, validates, or re-encodes the multibase string
-      if (typeof publicKeyMultibase === 'string' && typeof id === 'string') {
-        declared.push({ publicKeyMultibase, id });
-      }
-    }
-  }
-  return declared;
+const provedKeys = (state: VerifiedIdentity): { publicKeyMultibase: string; id: string }[] => {
+  const proved = provedKeyState(state);
+  // stored VERBATIM — the filter is an opaque byte match, so nothing here
+  // normalizes, validates, or re-encodes the multibase string
+  return [...proved.authKeys, ...proved.assertKeys, ...proved.controllerKeys].map((key) => ({
+    publicKeyMultibase: key.publicKeyMultibase,
+    id: key.id,
+  }));
 };
 
 /**
@@ -225,10 +230,29 @@ const declaredKeys = (
  *                                        currently-public subset, while restore
  *                                        sweeps all content because suspended
  *                                        rows are no longer in that subset
- *  - any identity op for D             → also record every key the op DECLARES
- *                                        into the has-ever-declared reverse
- *                                        index (never a diff against head state
- *                                        — an update replaces the arrays)
+ *  - any identity op for D             → also record the chain's `provedKeys` AS
+ *                                        OF that op into the has-ever-proved
+ *                                        reverse index (see the monotonicity
+ *                                        note below)
+ *
+ * THE `key=` INDEX IS APPEND-ONLY AND `provedKeys` IS MONOTONIC, and those two
+ * facts are what make "write the resulting state's provedKeys after every
+ * accepted op" the right rule rather than a convenient one. Because
+ * `putIndexIdentityKey` only ever adds, the index after N ops is the UNION of
+ * what each op wrote; because `provedKeys` never shrinks, that union equals the
+ * last op's `provedKeys`. So the index converges on has-ever-proved no matter
+ * which ops happened to trigger a write, which is exactly the convergence the
+ * rest of this projection relies on — incremental maintenance and a full rebuild
+ * land on the same rows.
+ *
+ * Two consequences fall out, and both are correct:
+ *
+ *  - A key introduced UNPROVED never enters. It is void, it publishes no link
+ *    between chains, and indexing it would let a stranger burn a key they do not
+ *    hold by writing it into their own chain.
+ *  - A key that goes void at op N and is RESCUED by a correctly-headed envelope
+ *    at N+1 enters at N+1, on its own merits. Void is a state a chain can climb
+ *    out of, and the index follows the chain out of it.
  *  - content-op for chain C            → dirty content row C (+ anchored identities)
  *  - credential grant                  → dirty the att-named content rows, or all
  *                                        content rows on a `chain:*` grant
@@ -257,8 +281,13 @@ export const collectIndexDirtyAfterOp = async (
           const opType = payload?.['type'];
           if (opType === 'delete') dirty.allPublicContent = true;
           if (opType === 'restore') dirty.allContent = true;
-          for (const key of declaredKeys(payload)) {
-            await store.putIndexIdentityKey(result.chainId, key.publicKeyMultibase, key.id);
+          // Read the chain state this operation just produced, not the payload:
+          // the payload declares, the walk decides what is proved.
+          const chain = await store.getIdentityChain(result.chainId);
+          if (chain) {
+            for (const key of provedKeys(chain.state)) {
+              await store.putIndexIdentityKey(result.chainId, key.publicKeyMultibase, key.id);
+            }
           }
         }
         break;

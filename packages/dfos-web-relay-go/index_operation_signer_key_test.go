@@ -39,19 +39,24 @@ func signerKeyQuery(publicKey string) string {
 type signedCorpus struct {
 	author    testIdentity
 	witness   testIdentity
-	identity  string // the author's genesis op — signed by the CONTROLLER key
-	content   string // content genesis — signed by the author's auth key
+	identity  string // the author's genesis op — the one row with a BARE kid
+	content   string // content genesis — signed by the author's key
 	artifact  string
 	countersn string // signed by the WITNESS, not the author
 	credentl  string
 	revocatn  string
 }
 
-// ingestSignedCorpus mints one op of every kind. The author signs everything with
-// its auth key EXCEPT its own genesis (controller key, self-declared in the same
-// op), and the countersignature is the witness's signature over the author's
-// content op — the two cases where "whose key is this row?" has a wrong answer
-// available.
+// ingestSignedCorpus mints one op of every kind.
+//
+// The author signs everything with its single genesis key — a genesis declares
+// exactly one, in all three roles — so the interesting split here is not which
+// role signed but which KID SHAPE the row carries: genesis names a bare key ID
+// (the DID does not exist until the op that declares it, so the key is
+// self-declared in the same payload), every later row names a DID URL. The
+// countersignature is the second trap: it is the WITNESS's signature over the
+// author's content op, so "whose key is this row?" has a wrong answer available
+// that is also a real key in the same corpus.
 func ingestSignedCorpus(t *testing.T, r *Relay) signedCorpus {
 	t.Helper()
 	author := ingestIdentity(t, r)
@@ -113,33 +118,25 @@ func ingestSignedCorpus(t *testing.T, r *Relay) signedCorpus {
 }
 
 // Every row kind carries a signer key, and it is uniformly the key the row's own
-// JWS header resolved to at ingest: the author's auth key for its content,
-// artifact, credential and revocation; its CONTROLLER key for its own genesis
-// (the only op the auth key did not sign); and the WITNESS's key for the
+// JWS header resolved to at ingest: the author's key for its genesis, content,
+// artifact, credential and revocation, and the WITNESS's key for the
 // countersignature over the author's content — never the countersigned op's
-// author. No per-kind branch, because the header is uniform.
+// author. No per-kind branch, because the header is uniform, and the genesis's
+// bare kid resolves the same way as every DID-URL kid after it.
 func TestIndexOperationSignerKeyCoversEveryRowKind(t *testing.T) {
 	r, _ := indexRelay(t)
 	corpus := ingestSignedCorpus(t, r)
-
-	authorAuth := corpus.author.auth.mk.PublicKeyMultibase
-	authorController := corpus.author.controller.mk.PublicKeyMultibase
-	witnessAuth := corpus.witness.auth.mk.PublicKeyMultibase
 
 	for _, test := range []struct {
 		label string
 		key   string
 		want  []string
 	}{
-		{"author auth key", authorAuth,
-			[]string{corpus.content, corpus.artifact, corpus.credentl, corpus.revocatn}},
-		{"author controller key (its own genesis)", authorController,
-			[]string{corpus.identity}},
-		{"witness auth key (only the countersignature)", witnessAuth,
-			[]string{corpus.countersn}},
-		{"witness controller key (only its own genesis)",
-			corpus.witness.controller.mk.PublicKeyMultibase,
-			[]string{corpus.witness.opCID}},
+		{"author key (its genesis included)", corpus.author.auth.mk.PublicKeyMultibase,
+			[]string{corpus.identity, corpus.content, corpus.artifact, corpus.credentl, corpus.revocatn}},
+		{"witness key (its own genesis and the countersignature)",
+			corpus.witness.auth.mk.PublicKeyMultibase,
+			[]string{corpus.witness.opCID, corpus.countersn}},
 	} {
 		want := append([]string{}, test.want...)
 		sort.Strings(want)
@@ -254,8 +251,8 @@ func TestIndexOperationSignerKeyPagination(t *testing.T) {
 	key := signerKeyQuery(corpus.author.auth.mk.PublicKeyMultibase)
 
 	all := operationCIDsMatching(t, r, key)
-	if len(all) != 4 {
-		t.Fatalf("author key matched %v, want 4 rows to page through", all)
+	if len(all) != 5 {
+		t.Fatalf("author key matched %v, want 5 rows to page through", all)
 	}
 
 	for _, order := range []string{"ingestedAt.desc", "createdAt.desc"} {
@@ -320,7 +317,8 @@ func TestIndexOperationSignerKeySurvivesRotation(t *testing.T) {
 // versioned projection rebuild re-resolves it from each row's stored JWS. Unlike
 // every other projection pass this one fills a column in place — the operation
 // log is authoritative and is never cleared — and it has to reach a rotated-out
-// key through the identity chain's historical declarations.
+// key through the chain's HAS-EVER-PROVED state, which is where a key possession
+// once admitted survives its own removal.
 func TestIndexOperationSignerKeyRebuildsPreExistingRows(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "operation-signer-keys.db")
 	store, err := NewSQLiteStore(dbPath)
@@ -337,8 +335,10 @@ func TestIndexOperationSignerKeyRebuildsPreExistingRows(t *testing.T) {
 	rotatedOut := corpus.author.auth.mk.PublicKeyMultibase
 	rotated, _ := rotateExistingTestIdentity(t, r, corpus.author)
 
-	if got := operationCIDsMatching(t, r, signerKeyQuery(rotatedOut)); len(got) != 4 {
-		t.Fatalf("pre-rebuild author key matched %v, want 4 rows", got)
+	// Six rows: the author's genesis, its content, artifact, credential and
+	// revocation, and the rotation that retired the key itself.
+	if got := operationCIDsMatching(t, r, signerKeyQuery(rotatedOut)); len(got) != 6 {
+		t.Fatalf("pre-rebuild author key matched %v, want 6 rows", got)
 	}
 
 	// Simulate a store whose operation log predates the column: strip every
@@ -366,19 +366,18 @@ func TestIndexOperationSignerKeyRebuildsPreExistingRows(t *testing.T) {
 		t.Fatalf("projection_version = %d, want %d", v, IndexProjectionVersion)
 	}
 
-	// The rotated-out key is only reachable from the chain's historical
-	// declarations — head state no longer carries it.
-	if got := operationCIDsMatching(t, r2, signerKeyQuery(rotatedOut)); len(got) != 4 {
-		t.Fatalf("post-rebuild rotated-out author key matched %v, want the 4 rows it signed", got)
+	// The rotated-out key is only reachable from the chain's has-ever-proved
+	// state — head state no longer carries it.
+	if got := operationCIDsMatching(t, r2, signerKeyQuery(rotatedOut)); len(got) != 6 {
+		t.Fatalf("post-rebuild rotated-out author key matched %v, want the 6 rows it signed", got)
 	}
-	// The controller key is still current, so it resolves through the head-state
-	// fast path — and it signed BOTH the genesis (a bare kid, self-declared in
-	// its own payload) and the rotation, the two shapes the resolver splits on.
-	controllerSigned := operationCIDsMatching(t, r2,
-		signerKeyQuery(corpus.author.controller.mk.PublicKeyMultibase)+"&kind=identity-op")
-	if len(controllerSigned) != 2 || !containsString(controllerSigned, corpus.identity) {
-		t.Fatalf("post-rebuild author controller key matched %v, want its genesis %s and its rotation",
-			controllerSigned, corpus.identity)
+	// It signed BOTH identity ops — the genesis (a bare kid, self-declared in its
+	// own payload) and the rotation (a DID URL) — the two kid shapes the resolver
+	// splits on, and both resolve to the same rotated-out key.
+	identitySigned := operationCIDsMatching(t, r2, signerKeyQuery(rotatedOut)+"&kind=identity-op")
+	if len(identitySigned) != 2 || !containsString(identitySigned, corpus.identity) {
+		t.Fatalf("post-rebuild author key matched %v on identity ops, want its genesis %s and its rotation",
+			identitySigned, corpus.identity)
 	}
 	witnessSigned := operationCIDsMatching(t, r2,
 		signerKeyQuery(corpus.witness.auth.mk.PublicKeyMultibase)+"&kind=countersign")

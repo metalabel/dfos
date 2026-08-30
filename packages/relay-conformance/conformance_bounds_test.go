@@ -17,41 +17,45 @@ import (
 // enforced in the TS schema (.max(MAX_KEYS_PER_ROLE)) and the Go library
 // (payloadMultikeyArray). The op-size cap is the real byte arbiter; this cap
 // rarely binds in practice.
+//
+// THE CAP IS EXERCISED ON AN UPDATE, not a genesis, because a genesis declares
+// exactly one key in each role and any other shape is refused for THAT reason —
+// a 257-key create would come back rejected without the cap ever running.
+//
+// The 256-key positive control carries NO possession envelopes, and is accepted
+// anyway. That is not an oversight: cardinality is structural and possession is
+// not, so the 255 introduced keys are void — declared, never effective — while
+// the operation itself sequences exactly as any other. An accept here is the
+// cap's answer, and nothing else's.
 func TestKeysPerRoleCap(t *testing.T) {
 	base := relayURL(t)
 
-	// 257 auth keys → over the cap → rejected.
-	ctrlOver := newKeypair()
+	// 257 auth keys on an update → over the cap → rejected.
+	overID := createIdentity(t, base)
 	over := make([]dfos.MultikeyPublicKey, 257)
 	for i := range over {
 		over[i] = newKeypair().mk
 	}
-	overTok, _, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrlOver.mk}, over, []dfos.MultikeyPublicKey{},
-		ctrlOver.keyID, ctrlOver.priv,
+	overTok, _ := signIdentityUpdateWithProofs(t, overID.genCID,
+		[]dfos.MultikeyPublicKey{overID.controller.mk}, over, []dfos.MultikeyPublicKey{},
+		nil, overID.did+"#"+overID.controller.keyID, overID.controller.priv,
 	)
-	if err != nil {
-		t.Fatalf("SignIdentityCreate (over): %v", err)
-	}
 	if st, _ := postStatus(t, base, overTok); st != "rejected" {
 		t.Fatalf("257 authKeys should be rejected, got status %q", st)
 	}
 
 	// 256 auth keys → at the cap → accepted (positive control).
-	ctrlUnder := newKeypair()
+	underID := createIdentity(t, base)
 	under := make([]dfos.MultikeyPublicKey, 256)
 	for i := range under {
 		under[i] = newKeypair().mk
 	}
-	underTok, _, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrlUnder.mk}, under, []dfos.MultikeyPublicKey{},
-		ctrlUnder.keyID, ctrlUnder.priv,
+	underTok, _ := signIdentityUpdateWithProofs(t, underID.genCID,
+		[]dfos.MultikeyPublicKey{underID.controller.mk}, under, []dfos.MultikeyPublicKey{},
+		nil, underID.did+"#"+underID.controller.keyID, underID.controller.priv,
 	)
-	if err != nil {
-		t.Fatalf("SignIdentityCreate (under): %v", err)
-	}
-	if st, _ := postStatus(t, base, underTok); st != "new" {
-		t.Fatalf("256 authKeys should be accepted, got status %q", st)
+	if st, e := postStatus(t, base, underTok); st != "new" {
+		t.Fatalf("256 authKeys should be accepted, got status %q (%s)", st, e)
 	}
 }
 

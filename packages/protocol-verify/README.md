@@ -31,6 +31,7 @@ Each suite **hardcodes the reference constants inline** — there is no shared f
 9. **Services genesis** — an identity create whose payload carries a full-state services discovery array (relay locator + content/artifact anchors); the operation CID and DID are re-derived over the decoded payload
 10. **DFOS credentials** — UCAN-style credentials with resource/action attenuations
 11. **Number encoding determinism** — integers MUST encode as CBOR integers, not floats
+12. **Possession proof** — the key proof the rotation carries: a `did:dfos:key-add` envelope whose payload is closed to exactly seven members in one order, whose presented octets are byte-compared against the canonical serialization, and whose signature verifies under the key its own payload names (key 2), inside an operation signed by key 1
 
 ### Out of cross-language scope
 
@@ -39,7 +40,7 @@ Each suite **hardcodes the reference constants inline** — there is no shared f
 ## Adding a New Language
 
 1. Create a new directory (e.g., `kotlin/`)
-2. Implement the 11 verification sections above using only native libraries
+2. Implement the 12 verification sections above using only native libraries
 3. Hard-code the same reference constants (JWS tokens, expected CIDs, etc.) from any existing suite
 4. Add a CI job in `.github/workflows/ci.yml`
 

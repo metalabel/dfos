@@ -5,16 +5,16 @@
   `key_1` is a FRAGMENT. It names a slot on one identity document and means
   nothing off it: two identities can both call a key `key_1` and mean two
   different keys, and one identity can rotate `key_1` and mean two different keys
-  itself. The public key is the thing — byte-for-byte the same string on every
-  chain that ever declared it, the comparison the relay's `key=` filter makes,
-  and the address of the key detail page. So every surface leads with a truncated
-  multibase, and the `key_xxx` id sits beside it as metadata. Both link to the
-  key's own page, because a reader who recognizes either should land where the
-  key lives.
+  itself. The public key is the thing — byte-for-byte the same string wherever it
+  appears, the comparison the relay's `key=` reverse index makes (over the keys
+  each chain has PROVED, never the ones it merely named), and the address of the
+  key detail page. So every surface leads with a truncated multibase, and the
+  `key_xxx` id sits beside it as metadata. Both link to the key's own page,
+  because a reader who recognizes either should land where the key lives.
 
   RESOLUTION IS FROM A DOCUMENT IN HAND, NEVER A GUESS. A JWS header's `kid` is
   `did:dfos:<chain>#key_1` — it carries the slot name, not the key. Turning one
-  into a public key needs that identity's declared key set, so:
+  into a public key needs that identity's own key set, so:
 
     document in hand  → the row shows the key
     document not held → the row shows the kid, exactly as it stands
@@ -48,10 +48,22 @@ export type KeyDirectory = ReadonlyMap<string, readonly KeyDeclaration[]>;
 /** Nothing in hand — every kid renders as itself. */
 export const EMPTY_KEY_DIRECTORY: KeyDirectory = new Map();
 
-/** The three key arrays an identity document declares, flattened in panel order
- *  (auth, assert, controller) — the order the identity view's key table reads,
- *  so both surfaces walk the same list. */
-export const declaredKeys = (state: {
+/**
+ * The three role arrays of whatever key state is handed in, flattened in panel
+ * order (auth, assert, controller) — the order the identity view's key table
+ * reads, so both surfaces walk the same list.
+ *
+ * WHICH STATE IS THE CALLER'S CHOICE, and the two differ now. An identity's
+ * `authKeys`/`assertKeys`/`controllerKeys` are EFFECTIVE state — the memberships
+ * a key proof admitted — while its `declared` member is what the chain SAYS,
+ * void memberships included. Effective is the right source almost everywhere.
+ * The one exception is resolving the `kid` of an operation this chain signed:
+ * signer validity is declared-state-based on purpose (identity-chain.ts), so an
+ * operation can be validly signed by a controller key that never proved, and a
+ * directory built from effective state alone would render that signer as a bare
+ * kid. Hence the neutral name — this flattens a key state, it does not pick one.
+ */
+export const roleKeys = (state: {
   authKeys?: readonly KeyDeclaration[] | undefined;
   assertKeys?: readonly KeyDeclaration[] | undefined;
   controllerKeys?: readonly KeyDeclaration[] | undefined;

@@ -2,13 +2,14 @@
 
   KEY OPS — what a public key has signed, and what may honestly be counted
 
-  The key page's two questions run on two different axes and only one of them is
-  proof-tier. `/index/v0/identities?key=` answers "which identities have ever
-  DECLARED this key" — a state-projection lookup over key arrays. This module
-  serves the other one: `/index/v0/operations?signerKey=` answers "what has this
-  key SIGNED", an exact match against the public key each row's signature verified
-  against at ingest. A key can sign on chains no identity document of its own ever
-  mentions, so the two lists are not subsets of each other.
+  The key page's two questions run on two different axes. `/index/v0/identities?key=`
+  answers "which identities has this key ever been PROVED into" — a lookup over
+  each chain's proved key set, which is the memberships a key proof admitted and
+  never the ones a chain merely named. This module serves the other one:
+  `/index/v0/operations?signerKey=` answers "what has this key SIGNED", an exact
+  match against the public key each row's signature verified against at ingest. A
+  key can sign on chains no identity document of its own ever mentions, so the two
+  lists are not subsets of each other.
 
   THE COUNT IS THE HONESTY PROBLEM. A key page that shows a number next to
   "operations" is read as "this is how many times this key signed", and there are

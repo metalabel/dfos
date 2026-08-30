@@ -1321,9 +1321,11 @@ func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error 
 	return err
 }
 
-// PutIndexIdentityKey records one (publicKey, did, keyID) declaration. The PK
-// covers the `key=` lookup directly (public_key is its leftmost column), so no
-// secondary index is needed — nothing queries this table by did.
+// PutIndexIdentityKey records one (publicKey, did, keyID) PROVED membership. The
+// PK covers the `key=` lookup directly (public_key is its leftmost column), so no
+// secondary index is needed — nothing queries this table by did. INSERT OR IGNORE
+// because the caller rewrites the chain's whole has-ever-proved union on every
+// accepted operation: the union is monotonic, so the re-writes are idempotent.
 func (s *SQLiteStore) PutIndexIdentityKey(did string, keyID string, publicKey string) error {
 	_, err := s.writerDB().Exec(
 		"INSERT OR IGNORE INTO identity_keys (public_key, did, key_id) VALUES (?, ?, ?)",
@@ -1350,9 +1352,9 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		args = append(args, q.DID)
 	}
 	if q.Key != "" {
-		// Has-ever-declared, mirroring the content family's signer= EXISTS probe.
-		// The value is opaque: a string no operation ever declared simply matches
-		// nothing.
+		// Has-ever-proved, mirroring the content family's signer= EXISTS probe.
+		// The value is opaque: a string no chain ever proved simply matches nothing —
+		// including a key some chain merely declared, which never lands in the table.
 		where = append(where, "EXISTS (SELECT 1 FROM identity_keys WHERE identity_keys.did = index_identity.did AND identity_keys.public_key = ?)")
 		args = append(args, q.Key)
 	}

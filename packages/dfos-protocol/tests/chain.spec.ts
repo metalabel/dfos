@@ -29,6 +29,7 @@ import {
   generateId,
   signPayloadEd25519,
 } from '../src/crypto';
+import { KEY_ADD_JWS_TYP, serializeRoleSet, signKeyProof, type KeyRole } from '../src/key-proof';
 
 // =============================================================================
 // multikey
@@ -84,6 +85,32 @@ describe('identity chain', () => {
   };
 
   const ts = (offset = 0) => new Date(Date.now() + offset * 60_000).toISOString();
+
+  /**
+   * A possession proof for one key at one position. Every rotation below carries
+   * one: without it the introduced key is declared and void, which is the whole
+   * point of the bimodal rule and is asserted directly in the possession-proof
+   * suite further down.
+   */
+  let nonceCounter = 0;
+  const proofFor = async (input: {
+    key: Awaited<ReturnType<typeof makeKey>>;
+    did: string;
+    prevCID: string;
+    roles?: KeyRole[];
+  }): Promise<string> => {
+    nonceCounter += 1;
+    const { proof } = await signKeyProof({
+      typ: KEY_ADD_JWS_TYP,
+      nonce: `nonce-chain-spec-${nonceCounter}`,
+      audience: 'relay.example',
+      did: input.did,
+      roleSet: serializeRoleSet(input.roles ?? ['auth', 'assert', 'controller']),
+      prevCID: input.prevCID,
+      privateKey: input.key.keypair.privateKey,
+    });
+    return proof;
+  };
 
   const createGenesis = async () => {
     const k = makeKey();
@@ -142,6 +169,9 @@ describe('identity chain', () => {
       assertKeys: [newK.key],
       controllerKeys: [newK.key],
       createdAt: ts(1),
+      keyProofs: [
+        await proofFor({ key: newK, did: gen.identity.did, prevCID: gen.operationCID }),
+      ],
     };
     const { jwsToken: updateJws } = await signIdentityOperation({
       operation: update,
@@ -157,6 +187,7 @@ describe('identity chain', () => {
 
     expect(result.did).toBe(gen.identity.did);
     expect(result.controllerKeys[0]?.id).toBe(newK.keyId);
+    expect(result.voidKeys).toEqual([]);
 
     expect(result.isDeleted).toBe(false);
   });
@@ -224,6 +255,9 @@ describe('identity chain', () => {
       assertKeys: [rotated.key],
       controllerKeys: [rotated.key],
       createdAt: ts(1),
+      keyProofs: [
+        await proofFor({ key: rotated, did: gen.identity.did, prevCID: gen.operationCID }),
+      ],
     };
     const signedUpdate = await signIdentityOperation({
       operation: update,
@@ -275,6 +309,13 @@ describe('identity chain', () => {
       assertKeys: [final.key],
       controllerKeys: [final.key],
       createdAt: ts(4),
+      keyProofs: [
+        await proofFor({
+          key: final,
+          did: gen.identity.did,
+          prevCID: signedRestore.operationCID,
+        }),
+      ],
     };
     const signedFinal = await signIdentityOperation({
       operation: finalUpdate,
@@ -653,6 +694,16 @@ describe('identity chain', () => {
       assertKeys: [],
       controllerKeys: [newK.key],
       createdAt: ts(1),
+      // The envelope consents to `controller` alone, matching the one role this
+      // update actually introduces the key to.
+      keyProofs: [
+        await proofFor({
+          key: newK,
+          did: gen.identity.did,
+          prevCID: gen.operationCID,
+          roles: ['controller'],
+        }),
+      ],
     };
     const { jwsToken: updateJws } = await signIdentityOperation({
       operation: update,
@@ -671,24 +722,36 @@ describe('identity chain', () => {
     expect(result.isDeleted).toBe(false);
   });
 
-  it('should reject create with no controller keys', async () => {
+  it('should reject a genesis that does not declare exactly one key in all three roles', async () => {
     const k = makeKey();
-    const op: IdentityOperation = {
-      version: 1,
-      type: 'create',
-      authKeys: [k.key],
-      assertKeys: [],
-      controllerKeys: [],
-      createdAt: ts(),
-    };
-    const { jwsToken } = await signIdentityOperation({
-      operation: op,
-      signer: k.signer,
-      keyId: k.keyId,
-    });
-    await expect(verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] })).rejects.toThrow(
-      /at least one controller key/i,
-    );
+    const other = makeKey();
+    const genesis = (over: Partial<IdentityOperation>): IdentityOperation =>
+      ({
+        version: 1,
+        type: 'create',
+        authKeys: [k.key],
+        assertKeys: [k.key],
+        controllerKeys: [k.key],
+        createdAt: ts(),
+        ...over,
+      }) as IdentityOperation;
+
+    for (const [label, op] of [
+      ['no controller key', genesis({ controllerKeys: [] })],
+      ['no auth key', genesis({ authKeys: [] })],
+      ['two controller keys', genesis({ controllerKeys: [k.key, other.key] })],
+      ['a different key in assert', genesis({ assertKeys: [other.key] })],
+    ] as const) {
+      const { jwsToken } = await signIdentityOperation({
+        operation: op,
+        signer: k.signer,
+        keyId: k.keyId,
+      });
+      await expect(
+        verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] }),
+        label,
+      ).rejects.toThrow(/exactly one key|SAME key/);
+    }
   });
 });
 

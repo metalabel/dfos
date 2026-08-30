@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { KEY_ROLES } from '../key-proof/role-set';
 
 /** Function that signs a byte array and returns a signature */
 export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
@@ -28,6 +29,15 @@ export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
  * never approaches this in practice.
  */
 const MAX_KEYS_PER_ROLE = 256;
+/**
+ * Max number of key-proof envelopes an update may carry — a cardinality ceiling
+ * matching MAX_KEYS_PER_ROLE, since an operation never needs more envelopes than
+ * it introduces keys. The operation-size cap is still the real byte arbiter; this
+ * bounds the walk's per-operation verification work so a single 64 KiB operation
+ * cannot ask a verifier for an unbounded number of signature checks.
+ * VALIDITY-determining: MUST match maxKeyProofs in the Go reference.
+ */
+export const MAX_KEY_PROOFS = 256;
 /** Max length for a countersignature relation tag (open-namespace string) */
 const MAX_RELATION = 64;
 /**
@@ -202,6 +212,27 @@ const IdentityUpdate = z.looseObject({
   // Full-state: an update REPLACES the entire services set (omit to clear).
   services: ServicesArray.optional(),
   createdAt: Iso8601,
+  /**
+   * POSSESSION PROOFS FOR THE KEYS THIS OPERATION INTRODUCES — compact key-proof
+   * JWS strings (specs/KEY-PROOF.md), each signed by the key it speaks for.
+   *
+   * Optional, and optional in the CID-neutral sense: omitting it encodes
+   * identically to an operation that never had it (undefined strips under
+   * canonical CBOR), so the overwhelming majority of updates — the ones that
+   * merely replay keys already in effective state — carry nothing. Proofs are
+   * never replayed forward with the keys; full-state carriage applies to key
+   * ARRAYS, not to the evidence that admitted them.
+   *
+   * PRESENT ON `update` ONLY. A `create` needs none (its single genesis key is
+   * proved by signing genesis) and `delete`/`restore` introduce nothing, so an
+   * envelope on any of the three is a rejected operation, not an ignored member
+   * — see the carriage gate in identity-chain.ts.
+   *
+   * A MISSING OR BAD PROOF DOES NOT INVALIDATE THE OPERATION. It voids the
+   * key-role membership it would have admitted: the operation stands, the chain
+   * stands, and the key is simply absent from EFFECTIVE state for that role.
+   */
+  keyProofs: z.array(z.string()).max(MAX_KEY_PROOFS).optional(),
 });
 
 /** Identity chain: delete — deactivate identity */
@@ -230,6 +261,51 @@ export type IdentityOperation = z.infer<typeof IdentityOperation>;
 
 // ---
 
+/**
+ * The key arrays exactly as the chain's operations DECLARE them, before any
+ * question of possession. Structural state: what the controller wrote.
+ */
+export const DeclaredKeyState = z.strictObject({
+  authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
+  assertKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
+  controllerKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
+});
+export type DeclaredKeyState = z.infer<typeof DeclaredKeyState>;
+
+/**
+ * ONE DECLARED-BUT-UNPROVED KEY-ROLE MEMBERSHIP. The chain says this key holds
+ * this role; no possession proof ever admitted it, so consumers do not see it.
+ *
+ * VOID IS NOT INVALID. The operation that declared it is valid, the chain is
+ * valid, and the membership is simply absent from effective state. Enumerating
+ * these loudly is the point: a controller who introduced a key without a proof
+ * has a chain that verifies and a key that does not resolve, and the only way
+ * they learn that is if tooling can see the list.
+ */
+export const VoidKeyMembership = z.strictObject({
+  /** The key as declared. */
+  key: MultikeyPublicKey,
+  /** The role it was declared into but is not effective for. */
+  role: z.enum(KEY_ROLES),
+  /** The CID of the operation whose declaration is currently unproved. */
+  operationCID: z.string(),
+});
+export type VoidKeyMembership = z.infer<typeof VoidKeyMembership>;
+
+/**
+ * THE VERIFIED IDENTITY. `authKeys`/`assertKeys`/`controllerKeys` are EFFECTIVE
+ * state — the memberships a possession proof actually admitted — because
+ * effective state is what every consumer wants: a void key must never resolve,
+ * never index, and never enter a has-ever surface.
+ *
+ * `declared` and `voidKeys` carry the structural half alongside it, so the
+ * surfaces that genuinely need "what does the chain SAY" can ask. There is
+ * exactly one such surface in the protocol: SIGNER VALIDITY, which stays
+ * declared-state-based on purpose (see identity-chain.ts). Both are optional
+ * because a caller may hand a hand-built state to the extension verifier;
+ * absent `declared` is read as "the arrays are also the declared arrays", which
+ * is exactly true for any chain with no void memberships.
+ */
 export const VerifiedIdentity = z.strictObject({
   did: z.string(),
   isDeleted: z.boolean(),
@@ -238,6 +314,34 @@ export const VerifiedIdentity = z.strictObject({
   controllerKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   /** Resolved discovery vocabulary — projection of the winning head's services */
   services: ServicesArray,
+  /** What the chain declares, void memberships included. */
+  declared: DeclaredKeyState.optional(),
+  /** Declared memberships no proof admitted. Empty on a fully-proved chain. */
+  voidKeys: z.array(VoidKeyMembership).optional(),
+  /**
+   * HAS-EVER-PROVED: the union of every effective key state this chain has held,
+   * across its whole history. Monotonic — a key that was proved into a role and
+   * later removed stays here forever, because the fact it names is that the
+   * holder once demonstrated possession, and that does not become untrue.
+   *
+   * TWO SURFACES NEED EXACTLY THIS, and both are wrong without it:
+   *
+   *  - THE `key=` REVERSE INDEX, which is the one-key-one-DID oracle. A holder
+   *    asks it before signing a key proof, and refuses when some chain already
+   *    proved the key — because proving one key into two chains publishes an
+   *    irreversible public link between them. A DECLARATION publishes no such
+   *    link: anyone can write anyone's public key into their own chain, so
+   *    indexing declarations would let a stranger burn a key they do not hold,
+   *    by writing it into a chain and making every future ceremony refuse it.
+   *  - HISTORICAL KEY RESOLUTION, which verifies long-lived artifacts across
+   *    rotations. A credential signed by a key that was proved and later rotated
+   *    out must still verify; one signed by a key no chain ever proved must not.
+   *
+   * Computed during the walk, where the fold already runs, so consumers stop
+   * re-deriving it from the raw log under a declared-state rule that quietly
+   * disagrees with this one.
+   */
+  provedKeys: DeclaredKeyState.optional(),
 });
 export type VerifiedIdentity = z.infer<typeof VerifiedIdentity>;
 

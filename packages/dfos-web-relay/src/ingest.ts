@@ -42,7 +42,13 @@ import {
   flushIndexMaintenance,
   logIndexMaintenanceError,
 } from './index-maintenance';
-import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
+import {
+  provedKeyState,
+  type IngestionResult,
+  type RelayStore,
+  type StoredContentChain,
+  type StoredIdentityChain,
+} from './types';
 
 // -----------------------------------------------------------------------------
 // shared error prefixes
@@ -275,9 +281,11 @@ const classify = (jwsToken: string): ClassifiedOperation => {
  * Create a key resolver that looks up Ed25519 public keys from identity chains
  * in the store. Used for chain re-verification during ingestion.
  *
- * Searches all keys that have ever appeared in the identity chain log, not just
- * current state. This is necessary because re-verifying a full content chain log
- * needs to resolve keys from operations signed before a key rotation.
+ * Searches every key the chain has EVER PROVED, not just current state. This is
+ * necessary because re-verifying a full content chain log needs to resolve keys
+ * from operations signed before a key rotation — and it stops at proved, because
+ * a key no possession proof ever admitted never signed anything on this chain's
+ * behalf and must not resolve here (see `provedKeyMultibase`).
  *
  * CID fidelity invariant: countersignature ingestion derives the operation CID
  * by re-encoding the decoded payload via dagCborCanonicalEncode. This relies on
@@ -297,15 +305,28 @@ export const createKeyResolver =
     const identity = await store.getIdentityChain(did);
     if (!identity) throw new Error(`unknown identity: ${did}`);
 
-    const publicKeyMultibase = declaredKeyMultibase(identity, keyId);
+    const publicKeyMultibase = provedKeyMultibase(identity, keyId);
     if (!publicKeyMultibase) throw new Error(`unknown key ${keyId} on identity ${did}`);
     return decodeMultikey(publicKeyMultibase).keyBytes;
   };
 
 /**
- * The multibase public-key string an identity chain declares for `keyId` —
- * current state first (fast path), then the chain's whole declaration history
- * (which is what resolves a key a later update rotated out).
+ * The multibase public-key string an identity chain has EVER PROVED for `keyId`.
+ *
+ * HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. `state.provedKeys` is the monotonic
+ * union of every effective key state the chain ever held, computed by the chain
+ * walk itself (see the `provedKeys` doc comment in dfos-protocol's schemas.ts).
+ * It is exactly the right basis here: a key that was proved and later rotated
+ * out still resolves — that is what verifying long-lived artifacts across a
+ * rotation requires — while a key some operation merely DECLARED, with no
+ * possession proof admitting it, never resolves at all, because it never signed
+ * anything on this chain's behalf and a void membership is not a key.
+ *
+ * The chain walk hands this over directly, so nothing here re-walks the raw log.
+ * That re-walk was the bug: it collected declarations, which is a rule that
+ * quietly disagrees with the one the walk applies. When `provedKeys` is absent —
+ * a state produced before the member existed — the effective arrays stand in for
+ * it, the same reading `verifyIdentityExtensionFromTrustedState` takes.
  *
  * This is THE key lookup, shared deliberately: `createKeyResolver` decodes its
  * result into the bytes a signature verifies against, and
@@ -314,42 +335,12 @@ export const createKeyResolver =
  * stored column "the key this signature resolved to" rather than a second,
  * independently drifting answer to the same question.
  */
-const declaredKeyMultibase = (identity: StoredIdentityChain, keyId: string): string | null => {
-  const currentKeys = [
-    ...identity.state.authKeys,
-    ...identity.state.assertKeys,
-    ...identity.state.controllerKeys,
-  ];
-  const currentKey = currentKeys.find((k) => k.id === keyId);
-  if (currentKey) return currentKey.publicKeyMultibase;
-
-  // search historical keys from the identity chain log — handles rotated-out keys
-  for (const token of identity.log) {
-    const decoded = decodeJwsUnsafe(token);
-    if (!decoded) continue;
-    const payload = decoded.payload as Record<string, unknown>;
-    const opType = payload['type'];
-    if (opType !== 'create' && opType !== 'update') continue;
-
-    const keyArrays = ['authKeys', 'assertKeys', 'controllerKeys'] as const;
-    for (const arrayName of keyArrays) {
-      const keys = payload[arrayName];
-      if (!Array.isArray(keys)) continue;
-      for (const k of keys) {
-        if (
-          k &&
-          typeof k === 'object' &&
-          'id' in k &&
-          k.id === keyId &&
-          'publicKeyMultibase' in k
-        ) {
-          return k.publicKeyMultibase as string;
-        }
-      }
-    }
-  }
-
-  return null;
+const provedKeyMultibase = (identity: StoredIdentityChain, keyId: string): string | null => {
+  const proved = provedKeyState(identity.state);
+  const key = [...proved.authKeys, ...proved.assertKeys, ...proved.controllerKeys].find(
+    (k) => k.id === keyId,
+  );
+  return key ? key.publicKeyMultibase : null;
 };
 
 /**
@@ -359,7 +350,7 @@ const declaredKeyMultibase = (identity: StoredIdentityChain, keyId: string): str
  * /index/v0/identities matches. A client that found a key through that filter
  * can paste it straight into `signerKey=`.
  *
- * Returns null when the identity is unknown or declares no such key id; callers
+ * Returns null when the identity is unknown or proved no such key id; callers
  * store nothing in that case (see the RelayStore contract — a row with no
  * recorded signer key matches no `signerKey=` value).
  */
@@ -369,70 +360,39 @@ export const resolveSignerKeyMultibase = async (
   store: RelayStore,
 ): Promise<string | null> => {
   const identity = await store.getIdentityChain(did);
-  return identity ? declaredKeyMultibase(identity, keyId) : null;
+  return identity ? provedKeyMultibase(identity, keyId) : null;
 };
 
 /**
- * Create an identity resolver that includes all historical keys.
+ * Project a verified identity onto its HAS-EVER-PROVED key state, so a consumer
+ * that resolves keys against the ordinary arrays resolves rotated-out keys too.
  *
  * Credentials are long-lived artifacts — their validity persists across key
- * rotations. This resolver walks the full identity chain log to collect all
- * keys that have ever appeared in create and update operations, ensuring
- * credentials signed by rotated-out keys still verify. Revocation (not key
- * rotation) is the invalidation mechanism.
+ * rotations, and revocation (not key rotation) is the invalidation mechanism. So
+ * a credential signed by a key that was PROVED and later rotated out MUST still
+ * verify. A credential signed by a key no chain ever proved MUST NOT: nothing
+ * ever demonstrated possession of it, so it never spoke for this identity.
+ *
+ * `provedKeys` is exactly that set and the chain walk computes it, so this no
+ * longer re-walks the raw log collecting declarations — a rule that admitted
+ * void memberships the walk itself excludes.
  *
  * Used for credential verification at both ingestion and access-check time.
  */
-export const mergeHistoricalIdentity = (
-  state: VerifiedIdentity,
-  log: string[],
-): VerifiedIdentity => {
-  const keyMaps = {
-    authKeys: new Map(state.authKeys.map((k) => [k.id, k])),
-    assertKeys: new Map(state.assertKeys.map((k) => [k.id, k])),
-    controllerKeys: new Map(state.controllerKeys.map((k) => [k.id, k])),
-  };
-
-  for (const token of log) {
-    const decoded = decodeJwsUnsafe(token);
-    if (!decoded) continue;
-    const payload = decoded.payload as Record<string, unknown>;
-    const opType = payload['type'];
-    if (opType !== 'create' && opType !== 'update') continue;
-
-    for (const arrayName of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
-      const keys = payload[arrayName];
-      if (!Array.isArray(keys)) continue;
-      const map = keyMaps[arrayName];
-      for (const k of keys) {
-        if (
-          k &&
-          typeof k === 'object' &&
-          'id' in k &&
-          'publicKeyMultibase' in k &&
-          !map.has((k as { id: string }).id)
-        ) {
-          map.set(
-            (k as { id: string }).id,
-            k as { id: string; type: 'Multikey'; publicKeyMultibase: string },
-          );
-        }
-      }
-    }
-  }
-
+export const mergeHistoricalIdentity = (state: VerifiedIdentity): VerifiedIdentity => {
+  const proved = provedKeyState(state);
   return {
     ...state,
-    authKeys: [...keyMaps.authKeys.values()],
-    assertKeys: [...keyMaps.assertKeys.values()],
-    controllerKeys: [...keyMaps.controllerKeys.values()],
+    authKeys: proved.authKeys,
+    assertKeys: proved.assertKeys,
+    controllerKeys: proved.controllerKeys,
   };
 };
 
 export const createHistoricalIdentityResolver = (store: RelayStore) => async (did: string) => {
   const chain = await store.getIdentityChain(did);
   if (!chain) return undefined;
-  return mergeHistoricalIdentity(chain.state, chain.log);
+  return mergeHistoricalIdentity(chain.state);
 };
 
 /**
@@ -455,6 +415,11 @@ export const createCurrentKeyResolver =
     if (!identity) throw new Error(`unknown identity: ${did}`);
     if (identity.state.isDeleted) throw new Error('signing identity is deleted');
 
+    // CURRENT means EFFECTIVE — the arrays already exclude every membership no
+    // possession proof admitted, so a key the chain merely declared cannot
+    // author a fresh op. `provedKeys` is the has-ever set and deliberately NOT
+    // consulted here: that is the whole difference between this resolver and
+    // `createKeyResolver`.
     const currentKeys = [
       ...identity.state.authKeys,
       ...identity.state.assertKeys,
@@ -1309,7 +1274,7 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
  * payload, so they belong with the projection builders. A signer key is not a
  * payload field — it is a VERIFICATION OUTCOME, and the only honest way to
  * record "the key this signature resolved to" is to resolve it exactly the way
- * ingestion just did (`declaredKeyMultibase`, shared with `createKeyResolver`).
+ * ingestion just did (`provedKeyMultibase`, shared with `createKeyResolver`).
  * Nothing re-decodes the corpus at query time; this is the one resolution.
  *
  * The kid carries the DID for every kind except an identity GENESIS, whose kid

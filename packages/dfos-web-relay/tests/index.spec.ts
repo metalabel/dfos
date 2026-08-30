@@ -26,6 +26,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
 import type { RelayIdentity } from '../src';
+import { chainKeyProof } from './key-proofs';
 
 const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
 const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
@@ -43,14 +44,17 @@ const makeKey = () => {
 const ts = (offset = 0) =>
   new Date(Date.now() + offset * 60_000).toISOString().replace(/\d{4}Z$/, (m) => m);
 
+// A genesis declares exactly ONE key, the same key in all three roles, and
+// proves it by signing itself with it. `authKey` is that key under the name the
+// artifact / content fixtures read it by.
 const createIdentityOp = async (services?: ServiceEntry[]) => {
   const controller = makeKey();
-  const authKey = makeKey();
+  const authKey = controller;
   const createOp: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [authKey.key],
-    assertKeys: [],
+    authKeys: [controller.key],
+    assertKeys: [controller.key],
     controllerKeys: [controller.key],
     ...(services ? { services } : {}),
     createdAt: ts(),
@@ -850,22 +854,20 @@ describe('index v0', () => {
     expect(none).not.toContain(boris);
   });
 
-  it('filters identities by a key ever declared, across classes, rotations, and deletion', async () => {
+  it('filters identities by a key ever PROVED, across roles, rotations, and deletion', async () => {
     const { deriveChainIdentifier } = await import('@metalabel/dfos-protocol/chain');
 
-    // genesis declaring a caller-chosen key in each class, so one key can be
-    // planted in two different chains and in the assert class the default
-    // helper leaves empty
-    const createDeclaring = async (declared: {
-      auth?: MultikeyPublicKey[];
-      assert?: MultikeyPublicKey[];
-    }) => {
+    // A genesis declares exactly one key in all three roles and proves it with
+    // its own signature; every later membership is an introduction and needs an
+    // envelope. So planting one key in two chains takes two ceremonies, which is
+    // exactly the cross-chain link this index exists to make visible.
+    const createChain = async () => {
       const controller = makeKey();
       const createOp: IdentityOperation = {
         version: 1,
         type: 'create',
-        authKeys: declared.auth ?? [],
-        assertKeys: declared.assert ?? [],
+        authKeys: [controller.key],
+        assertKeys: [controller.key],
         controllerKeys: [controller.key],
         createdAt: ts(),
       };
@@ -880,6 +882,35 @@ describe('index v0', () => {
       return { did, controller, operationCID };
     };
 
+    /** Extend a chain with an update, carrying the proofs it names. */
+    const extend = async (
+      chain: { did: string; controller: ReturnType<typeof makeKey>; operationCID: string },
+      arrays: {
+        authKeys: MultikeyPublicKey[];
+        assertKeys: MultikeyPublicKey[];
+        controllerKeys: MultikeyPublicKey[];
+      },
+      proofs: string[],
+      offset: number,
+    ) => {
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: chain.operationCID,
+        ...arrays,
+        createdAt: ts(offset),
+        ...(proofs.length > 0 ? { keyProofs: proofs } : {}),
+      };
+      const { jwsToken, operationCID } = await signIdentityOperation({
+        operation: updateOp,
+        signer: chain.controller.signer,
+        keyId: chain.controller.keyId,
+        identityDID: chain.did,
+      });
+      expect((await json(await postOps([jwsToken]))).results[0].status).toBe('new');
+      return { ...chain, operationCID };
+    };
+
     const dids = async (key: string): Promise<string[]> =>
       (
         await json(await req(`/index/v0/identities?key=${encodeURIComponent(key)}&limit=1000`))
@@ -888,40 +919,119 @@ describe('index v0', () => {
     const shared = makeKey();
     const rotatedOut = makeKey();
     const asserted = makeKey();
+    const unproved = makeKey();
 
-    // A declares the shared key at genesis and rotates it out later; B declares
-    // the same key and keeps it; C declares only an assert-class key
-    const a = await createDeclaring({ auth: [shared.key, rotatedOut.key] });
-    const b = await createDeclaring({ auth: [shared.key] });
-    const c = await createDeclaring({ assert: [asserted.key] });
+    // A proves the shared key and a second auth key in, and rotates both out
+    // later; B proves the same shared key in and keeps it; C proves a key into
+    // the assert role only
+    let a = await createChain();
+    const b = await createChain();
+    const c = await createChain();
+    a = await extend(
+      a,
+      {
+        authKeys: [a.controller.key, shared.key, rotatedOut.key],
+        assertKeys: [a.controller.key],
+        controllerKeys: [a.controller.key],
+      },
+      [
+        await chainKeyProof({
+          privateKey: shared.keypair.privateKey,
+          did: a.did,
+          prevCID: a.operationCID,
+          roles: ['auth'],
+        }),
+        await chainKeyProof({
+          privateKey: rotatedOut.keypair.privateKey,
+          did: a.did,
+          prevCID: a.operationCID,
+          roles: ['auth'],
+        }),
+      ],
+      1,
+    );
+    await extend(
+      b,
+      {
+        authKeys: [b.controller.key, shared.key],
+        assertKeys: [b.controller.key],
+        controllerKeys: [b.controller.key],
+      },
+      [
+        await chainKeyProof({
+          privateKey: shared.keypair.privateKey,
+          did: b.did,
+          prevCID: b.operationCID,
+          roles: ['auth'],
+        }),
+      ],
+      1,
+    );
+    await extend(
+      c,
+      {
+        authKeys: [c.controller.key],
+        assertKeys: [c.controller.key, asserted.key],
+        controllerKeys: [c.controller.key],
+      },
+      [
+        await chainKeyProof({
+          privateKey: asserted.keypair.privateKey,
+          did: c.did,
+          prevCID: c.operationCID,
+          roles: ['assert'],
+        }),
+      ],
+      1,
+    );
 
-    // every key class produces matches — auth, assert, and the controller key
-    // each genesis signs with
+    // every role produces matches — auth, assert, and the controller key each
+    // genesis signs with
     expect(await dids(shared.key.publicKeyMultibase)).toEqual(
       expect.arrayContaining([a.did, b.did]),
     );
     expect(await dids(asserted.key.publicKeyMultibase)).toEqual([c.did]);
     expect(await dids(a.controller.key.publicKeyMultibase)).toEqual([a.did]);
 
+    // THE BURN DEFENSE. A chain can DECLARE any key it likes — including one it
+    // does not hold. That membership is void, and it must never enter the index:
+    // this is the one-key-one-DID oracle a holder consults before signing, so an
+    // index of declarations would let a stranger make every future ceremony
+    // refuse a key they never touched.
+    const hostile = await createChain();
+    await extend(
+      hostile,
+      {
+        authKeys: [hostile.controller.key, unproved.key],
+        assertKeys: [hostile.controller.key],
+        controllerKeys: [hostile.controller.key],
+      },
+      [],
+      1,
+    );
+    expect(await dids(unproved.key.publicKeyMultibase)).toEqual([]);
+
     // ROTATION: an update REPLACES the key arrays, so A's head no longer carries
-    // either genesis auth key — and both still match, which is the whole point
+    // either proved auth key — and both still match, which is the whole point
     const replacement = makeKey();
-    const updateOp: IdentityOperation = {
-      version: 1,
-      type: 'update',
-      previousOperationCID: a.operationCID,
-      authKeys: [replacement.key],
-      assertKeys: [],
-      controllerKeys: [a.controller.key],
-      createdAt: ts(2),
-    };
-    const { jwsToken: updateToken, operationCID: updateCID } = await signIdentityOperation({
-      operation: updateOp,
-      signer: a.controller.signer,
-      keyId: a.controller.keyId,
-      identityDID: a.did,
-    });
-    expect((await json(await postOps([updateToken]))).results[0].status).toBe('new');
+    a = await extend(
+      a,
+      {
+        authKeys: [replacement.key],
+        assertKeys: [a.controller.key],
+        controllerKeys: [a.controller.key],
+      },
+      [
+        await chainKeyProof({
+          privateKey: replacement.keypair.privateKey,
+          did: a.did,
+          prevCID: a.operationCID,
+          roles: ['auth'],
+        }),
+      ],
+      2,
+    );
+    const updateCID = a.operationCID;
 
     expect(await dids(rotatedOut.key.publicKeyMultibase)).toEqual([a.did]);
     expect(await dids(shared.key.publicKeyMultibase)).toEqual(
@@ -963,7 +1073,7 @@ describe('index v0', () => {
     expect(afterDelete.identities).toHaveLength(1);
     expect(afterDelete.identities[0]).toMatchObject({ did: a.did, isDeleted: true });
 
-    // OPAQUE: a value no operation ever declared matches nothing — 200 with an
+    // OPAQUE: a value no chain ever proved matches nothing — 200 with an
     // empty page, never a 400, because there is no key format to enforce
     const garbage = await req('/index/v0/identities?key=not-a-multibase-key%20%21');
     expect(garbage.status).toBe(200);
@@ -1657,14 +1767,52 @@ describe('index v0', () => {
   });
 
   /**
+   * Introduce a SECOND auth key to an identity, carrying the proof that admits
+   * it, and return the identity with `authKey` pointing at the new key.
+   *
+   * A genesis declares exactly one key, so two keys under one DID is now a thing
+   * a chain ARRIVES at rather than starts with — and the second key needs an
+   * envelope, or the membership is void and it signs nothing that resolves.
+   */
+  const addProvedAuthKey = async (identity: TestIdentity, offset: number): Promise<TestIdentity> => {
+    const added = makeKey();
+    const updateOp: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: identity.operationCID,
+      authKeys: [identity.controller.key, added.key],
+      assertKeys: [identity.controller.key],
+      controllerKeys: [identity.controller.key],
+      createdAt: ts(offset),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: added.keypair.privateKey,
+          did: identity.did,
+          prevCID: identity.operationCID,
+          roles: ['auth'],
+        }),
+      ],
+    };
+    const { jwsToken, operationCID } = await signIdentityOperation({
+      operation: updateOp,
+      signer: identity.controller.signer,
+      keyId: identity.controller.keyId,
+      identityDID: identity.did,
+    });
+    expect((await postOps([jwsToken])).status).toBe(200);
+    return { ...identity, authKey: added, operationCID };
+  };
+
+  /**
    * One corpus touching every row kind, with the two keys of one identity used
-   * for different ops (controller signs the genesis, auth key signs everything
-   * else) — the discriminating shape for a KEY-addressed filter: a DID-addressed
-   * one could not tell those two op sets apart.
+   * for different ops (the controller key signs the identity ops, a separately
+   * proved auth key signs everything else) — the discriminating shape for a
+   * KEY-addressed filter: a DID-addressed one could not tell those two op sets
+   * apart.
    */
   const signerKeyCorpus = async () => {
-    const author = await createIdentity();
-    const witness = await createIdentity();
+    const author = await addProvedAuthKey(await createIdentity(), 5);
+    const witness = await addProvedAuthKey(await createIdentity(), 6);
     const content = await createContent(author, { $schema: 'example/signer-key' }, 10);
     const artifact = await createArtifact(author, { $schema: 'example/signer-key-art' }, 11);
     const credentialCID = await grantPublicRead(author, content.contentId);
@@ -1710,9 +1858,13 @@ describe('index v0', () => {
       expect.arrayContaining([content.operationCID, artifact.artifactCID]),
     );
 
+    // the controller key signed the chain's identity ops and nothing else — the
+    // genesis, and the update that introduced the auth key
     const byControllerKey = await operationsFor(signerKeyQuery(controllerKey));
-    expect(byControllerKey).toHaveLength(1);
-    expect(byControllerKey[0]).toMatchObject({ kind: 'identity-op', chainId: author.did });
+    expect(byControllerKey).toHaveLength(2);
+    for (const row of byControllerKey) {
+      expect(row).toMatchObject({ kind: 'identity-op', chainId: author.did });
+    }
 
     const byWitnessKey = await operationsFor(signerKeyQuery(witnessKey));
     expect(byWitnessKey).toHaveLength(1);
@@ -1752,7 +1904,7 @@ describe('index v0', () => {
           limit: 100,
         })
       ).map((row) => row.chainId),
-    ).toEqual([author.did]);
+    ).toEqual([author.did, author.did]);
   });
 
   it('treats an unknown signerKey as opaque bytes: 200 with an empty page, never 400', async () => {
@@ -1794,19 +1946,28 @@ describe('index v0', () => {
   });
 
   it('freezes the resolved key at ingest, so a later rotation never moves a row', async () => {
-    const author = await createIdentity();
+    const author = await addProvedAuthKey(await createIdentity(), 5);
     const content = await createContent(author, { $schema: 'example/rotation' }, 10);
     const rotatedOutKey = author.authKey.key.publicKeyMultibase;
 
+    // rotate the content-signing auth key out and a freshly proved one in
     const replacement = makeKey();
     const rotation: IdentityOperation = {
       version: 1,
       type: 'update',
       previousOperationCID: author.operationCID,
       authKeys: [replacement.key],
-      assertKeys: [],
+      assertKeys: [author.controller.key],
       controllerKeys: [author.controller.key],
       createdAt: ts(20),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: replacement.keypair.privateKey,
+          did: author.did,
+          prevCID: author.operationCID,
+          roles: ['auth'],
+        }),
+      ],
     };
     const { jwsToken } = await signIdentityOperation({
       operation: rotation,
