@@ -57,6 +57,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'A key joins an identity in two steps, and both are required. One of the identity’s operations names the key in a role, and the key itself signs a key proof agreeing to join that identity, in that role, at that point in the chain; the proof travels inside the same operation. A key an identity names without that proof is not part of its key state: it does not resolve, it signs nothing for that identity, and it does not appear in the relay’s key index. Naming a key is something anyone can do with anyone’s public key — signing the proof takes the key itself.',
   },
   {
+    key: 'keyWords',
+    term: 'word fingerprint',
+    def: 'Six words a key renders as for a human: the first six bytes of SHA-256 over the key’s multikey string, each byte read through the PGP word list. Every surface that shows a key to a person shows the same six — the CLI prints them in its key disclosure, a ceremony dialog renders them beside the key that arrived, and this page derives them from the same string through the same function — so a person can compare a key across two screens by reading six words whole instead of comparing the ends of 48 base58 characters. It is a display form and never a validator: nothing matches, indexes, or verifies against these words, the multikey string is the identifier everywhere bytes are compared, and two keys sharing a fingerprint costs a human a second look and costs the protocol nothing.',
+  },
+  {
     key: 'signerKey',
     term: 'signed by this key',
     def: 'The relay records, for every operation it accepts, the public key whose signature it actually verified — so it can list the operations one key signed, across every chain and every kind. That is a different question from which identities this key has joined: a key can sign on a content chain no identity document of its own mentions, and an identity can carry a key that never signs anything.',

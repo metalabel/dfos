@@ -45,6 +45,17 @@ const CID_V1 = /^baf[a-z2-7]+$/;
 const PUBLIC_KEY_MULTIBASE = /^z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
 
 /**
+ * Whether a string is a `publicKeyMultibase` this protocol could have minted.
+ *
+ * The dispatcher's own test, exported because the key view reaches the same
+ * question from the other side: `#/key/<anything>` routes on a non-empty
+ * segment, so a view rendering a DERIVED form of the key — one a reader will
+ * compare against another surface — has to know whether the string it was handed
+ * is a key at all. One pattern, so the two answers cannot drift.
+ */
+export const isPublicKeyMultibase = (value: string): boolean => PUBLIC_KEY_MULTIBASE.test(value);
+
+/**
  * A hostname, deliberately conservative: labels joined by dots, ending in an
  * alphabetic TLD of two or more characters. The strictness is the point — this
  * branch runs LAST, but a loose pattern would still swallow ordinary searches

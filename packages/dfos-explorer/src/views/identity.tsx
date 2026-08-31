@@ -72,6 +72,7 @@ import {
   type IndexCreditRow,
 } from '../lib/index-raw';
 import { keyDirectoryOf, roleKeys } from '../lib/key-identity';
+import { keyWordsNote } from '../lib/key-words';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import {
@@ -1816,7 +1817,15 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
               {page.rows.map(([id, row]) => (
                 <tr key={id}>
                   <td>
-                    <KeyLink multibase={row.publicKeyMultibase} />
+                    {/* the six words the key page, the CLI disclosure and a
+                        ceremony dialog all render for this key — carried in the
+                        title the cell already has, because a fourth column would
+                        crowd the table and this is a hover-depth detail, not a
+                        field of the key state */}
+                    <KeyLink
+                      multibase={row.publicKeyMultibase}
+                      note={keyWordsNote(row.publicKeyMultibase)}
+                    />
                   </td>
                   <td>
                     {row.roles.map((role) => (

@@ -87,6 +87,7 @@ import {
 import { useIndexIdentitiesByKey } from '../lib/index-raw';
 import { signerOpCount, signerOpCountLabel } from '../lib/key-ops';
 import { useKeyStanding, type KeyStanding } from '../lib/key-standing';
+import { keyWords } from '../lib/key-words';
 import { useSignerKeyLog, type LogRow } from '../lib/log-feed';
 import { useHashParam } from '../router';
 
@@ -556,6 +557,10 @@ const SignedPanel = (props: { multibase: string; indexed: boolean | null }) => {
 
 export const Key = (props: { multibase: string }) => {
   const indexed = useIndexCapable();
+  // derived from the string this page already holds — no fetch, nothing to await.
+  // `null` is a route segment that is not a multikey, and the row is then absent
+  // rather than showing six words for a string no chain declares (lib/key-words.ts)
+  const words = keyWords(props.multibase);
   return (
     <>
       <Panel
@@ -571,7 +576,12 @@ export const Key = (props: { multibase: string }) => {
             outlive its place on any of them. This page asks the relay index which identities this
             key has been <Term word="proved into" def={GLOSSARY['keyProved'] ?? ''} /> — folding
             each of those chains here to say where it stands now — and then what it has actually{' '}
-            <Term word="signed" def={GLOSSARY['signerKey'] ?? ''} />, which is a different list.
+            <Term word="signed" def={GLOSSARY['signerKey'] ?? ''} />, which is a different list. The
+            six words beside the key are its{' '}
+            <Term word="word fingerprint" def={GLOSSARY['keyWords'] ?? ''} /> — the same six the
+            CLI's key disclosure and a ceremony dialog render for this key, derived here from the
+            same string. They are a display form for a human comparing a key across two screens,
+            never a validator: the multikey string is the identifier everywhere bytes are matched.
           </>
         }
       >
@@ -582,6 +592,20 @@ export const Key = (props: { multibase: string }) => {
           <div class="v">
             <TruncId value={props.multibase} head={48} tail={0} />
           </div>
+          {words ? (
+            <>
+              <div class="k">
+                <Term word="words" def={GLOSSARY['keyWords'] ?? ''} />{' '}
+                <span class="lbl">click to copy</span>
+              </div>
+              <div class="v">
+                {/* whole, never elided: six words held against another screen are
+                    read all the way through, and an ellipsis in the middle of them
+                    reads as a difference between two keys */}
+                <TruncId value={words} head={words.length} tail={0} />
+              </div>
+            </>
+          ) : null}
         </div>
       </Panel>
       <ProvedPanel multibase={props.multibase} indexed={indexed} />
