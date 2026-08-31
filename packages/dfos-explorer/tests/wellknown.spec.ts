@@ -9,17 +9,17 @@
  * parse/verify surface a real document does — multi-operation carriage, a client_did
  * the chain derives, an embedded envelope — and it verifies.
  *
- * The NEGATIVE case runs against the repo's one REAL carriage document
- * (examples/siwd-demo/public/.well-known/dfos-app.json). Its chain predates key
- * possession: the genesis declares several distinct keys, where a genesis declares
- * exactly one, in all three roles, and proves it by signing itself. It no longer
- * verifies, and the honest thing is to assert that rather than hide it — so it is
- * pinned here as the documented rejection vector, at log[0], where it fails.
+ * The NEGATIVE case runs against tests/fixtures/dfos-app.plural-genesis.json —
+ * the byte-preserved document the demo served before key possession, whose
+ * genesis declares several distinct keys where a genesis declares exactly one,
+ * in all three roles, and proves it by signing itself. It fails at log[0], and
+ * it is kept as the documented rejection vector precisely because it is real:
+ * a chain an actual deployment once carried, not a synthetic mutation.
  *
- * That file is left BYTE-UNTOUCHED on purpose: it mirrors what the deployed demo
- * actually serves, and editing it would make examples/ describe something no
- * deployment has. The deployed demo's chain is re-minted in the platform migration;
- * until then these tests tell the truth about it.
+ * The repo's one REAL carriage document
+ * (examples/siwd-demo/public/.well-known/dfos-app.json) carries the demo's
+ * re-minted possession-conformant chain and is asserted here as a positive:
+ * the suite fails if the document a real deployment serves stops verifying.
  *
  * Assertions compare a derived DID to the document's OWN client_did rather than to a
  * hardcoded string, so re-minting either identity does not break them — only a
@@ -46,10 +46,17 @@ const readJson = (rel: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(repoRoot, rel), 'utf-8')) as Record<string, unknown>;
 
 /**
- * The real deployed demo's document. Its chain has a multi-key genesis and is a
- * REJECTION vector now, not a passing one — see the file header.
+ * The pre-possession demo document, bytes preserved from the deployment that
+ * served it. Its multi-key genesis makes it the REJECTION vector — see the
+ * file header.
  */
-const legacyDemoApp = (): AppDescription =>
+const pluralGenesisApp = (): AppDescription =>
+  JSON.parse(
+    readFileSync(resolve(import.meta.dirname, 'fixtures/dfos-app.plural-genesis.json'), 'utf-8'),
+  ) as AppDescription;
+
+/** The real deployed demo's document — re-minted under key possession, verifying. */
+const deployedDemoApp = (): AppDescription =>
   readJson('examples/siwd-demo/public/.well-known/dfos-app.json') as unknown as AppDescription;
 
 /** The minted, verifying carriage the positive cases run against. */
@@ -282,20 +289,33 @@ describe('verifyCarriedChain', () => {
     if (!out.ok) expect(out.error).toMatch(/no identity_chain/);
   });
 
-  // THE DEPLOYED DEMO'S OWN DOCUMENT, PINNED AS A REJECTION.
+  // THE PRE-POSSESSION DEMO DOCUMENT, PINNED AS A REJECTION.
   //
   // Its genesis declares several distinct keys. A genesis declares exactly one, in
   // all three roles, and proves it by signing itself — so this chain fails at its
-  // FIRST operation, before any question of what the later ones say. Asserting the
-  // rejection is what keeps the negative honest: the alternative is a suite that
-  // passes while the document a real deployment serves does not verify.
-  it('REJECTS the deployed demo document at log[0] — its genesis is multi-key', async () => {
-    const out = await verifyCarriedChain(legacyDemoApp());
+  // FIRST operation, before any question of what the later ones say. The bytes are
+  // preserved from the deployment that served them, which is what keeps this
+  // negative honest: it is a chain the world actually held, not a mutation built
+  // to fail.
+  it('REJECTS the pre-possession demo document at log[0] — its genesis is multi-key', async () => {
+    const out = await verifyCarriedChain(pluralGenesisApp());
     expect(out.ok).toBe(false);
     if (!out.ok) {
       expect(out.error).toMatch(/log\[0\]/);
       expect(out.error).toMatch(/exactly one key/i);
     }
+  });
+
+  // THE DEPLOYED DEMO'S OWN DOCUMENT, ASSERTED AS A POSITIVE.
+  //
+  // The re-minted chain: a single-key genesis, then an introduction carrying the
+  // key's own possession proof. The DID comparison is derived-vs-own, so a future
+  // re-mint moves nothing here — only a genuinely broken binding fails.
+  it('VERIFIES the deployed demo document, deriving its own client_did', async () => {
+    const doc = deployedDemoApp();
+    const out = await verifyCarriedChain(doc);
+    expect(out.ok, out.ok ? '' : out.error).toBe(true);
+    if (out.ok) expect(out.did).toBe(doc.client_did);
   });
 });
 
