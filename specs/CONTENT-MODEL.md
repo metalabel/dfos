@@ -59,16 +59,16 @@ Schema files live in [`schemas/`](https://github.com/metalabel/dfos/tree/main/pa
 
 The primary content type. Covers short posts and long-form posts via the `format` discriminator. Comments and replies are deliberately **not** `post/v1` surface: threaded content needs signed target linkage (see [Intra-Chain References](#intra-chain-references-targetoperationcid)) and arrives as its own schema rather than as additional `format` values.
 
-| Field         | Type     | Required | Description                                                                                                   |
-| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                          |
-| `format`      | enum     | yes      | `"short-post"`, `"long-post"` — fixed at chain genesis and not changed by later revisions                     |
+| Field         | Type     | Required | Description                                                                                                                                                                  |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                                                                                         |
+| `format`      | enum     | yes      | `"short-post"`, `"long-post"` — fixed at chain genesis and not changed by later revisions                                                                                    |
 | `publishedAt` | string   | no       | Asserted original publication time — an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) `date-time` string, per the published schema's `format`; see **Two clocks** below |
-| `title`       | string   | no       | Post title (typically for long-post format)                                                                   |
-| `body`        | string   | no       | Post body content — markdown (CommonMark) text                                                                |
-| `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                                |
-| `attachments` | media[]  | no       | Attached media as [Media objects](#media-object)                                                              |
-| `credits`     | credit[] | no       | Ordered authorship credits — `{ did, role?, name?, claim? }` entries; see below and [Authorship](#authorship) |
+| `title`       | string   | no       | Post title (typically for long-post format)                                                                                                                                  |
+| `body`        | string   | no       | Post body content — markdown (CommonMark) text                                                                                                                               |
+| `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                                                                                               |
+| `attachments` | media[]  | no       | Attached media as [Media objects](#media-object)                                                                                                                             |
+| `credits`     | credit[] | no       | Ordered authorship credits — `{ did, role?, name?, claim? }` entries; see below and [Authorship](#authorship)                                                                |
 
 **Two clocks.** A post document and its operations carry two distinct times, and conflating them corrupts both. The operation's `createdAt` records **when the operation was signed** — it is load-bearing protocol state (head selection orders by it) and always tells the truth about chain history. `publishedAt` records **when the content was originally published**, as asserted inside the signed document: a chain anchored long after the fact carries the original publication time here while its genesis operation truthfully records the later anchoring time. `publishedAt` is assertion-tier (like `credits` — the protocol verifies the signer, never the claim), and author-revisable: a later revision MAY change it — deliberate back-dating or correction is an ordinary content edit, and the operation log preserves every previously committed value, so re-dating is always auditable. Never backdate operation `createdAt` to encode publication time.
 
