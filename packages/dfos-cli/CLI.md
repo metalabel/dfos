@@ -415,7 +415,7 @@ An oracle failure under `--json` carries a `reason` code beside its prose — `o
 
 `dfos identity create` mints **one** key, from one derivation index, and declares it in all three role arrays — `controllerKeys`, `authKeys`, `assertKeys`. The same entry appears in each: same id, same `publicKeyMultibase`.
 
-That is a statement about custody rather than about roles. Two keys minted from one seed, written into one keychain, on one machine, are one custody arrangement wearing two names — every event that reaches one reaches the other, so a controller/auth separation drawn there separates nothing. A role split becomes real when a second custodian holds a key the first cannot reach, and the CLI has exactly one moment where that happens: [`keys prove`](#proving-a-key-to-a-ceremony), which presents a key to a ceremony someone else custodies the chain for. It is the only one because a key enters a chain carrying its own signature over the introduction, and the device that holds the key is the only party that can produce it. **The first key-add is the split.**
+That is a statement about custody rather than about roles. Two keys minted from one seed, written into one keychain, on one machine, are one custody arrangement wearing two names — every event that reaches one reaches the other, so a controller/auth separation drawn there separates nothing. A role split becomes real when a second custodian holds a key the first cannot reach, and the CLI has exactly one moment where that happens: [`keys add`](#proving-a-key-to-a-ceremony), which presents a key to a ceremony someone else custodies the chain for. It is the only one because a key enters a chain carrying its own signature over the introduction, and the device that holds the key is the only party that can produce it. **The first key-add is the split.**
 
 The chain grammar requires exactly this shape at genesis. PROTOCOL.md's single-key rule declares one key as the sole entry of all three role arrays, self-signed — the signature is the key's own possession proof — and states no separation rule past it; a key id is an opaque string. One key in three arrays is what genesis is.
 
@@ -466,7 +466,7 @@ dfos keys prune                # what removing the orphans would cost — remove
 dfos keys prune --yes          # remove them
 dfos keys remove <key-id>      # what removing ONE named key would cost — removes nothing
 dfos keys remove <key-id> --yes  # remove it
-dfos keys prove <code-or-uri>  # prove a key to a key-add ceremony
+dfos keys add <code-or-uri>    # add a key to an identity through a key-add ceremony
 ```
 
 The manifest is **derived**, not stored. Every column is folded on the spot out of state that already exists — the keystore backend, each vault's minted-key records, the identity chains in the local relay, and `login-client.json` — and no file records it. A cached list of keys is a list that can disagree with the keystore, and `prune` acts on what it reads.
@@ -478,7 +478,7 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | `vault`        | a vault's minted-key record names it, with the derivation index that produced it                  |
 | `standalone`   | generated straight into the keystore; no vault record names it, so this keystore is its only copy |
 | `pending`      | held under a `pending:` account — an `identity create` an earlier version interrupted             |
-| `candidate`    | held under a `candidate:` account — a key [`keys prove`](#proving-a-key-to-a-ceremony) presented  |
+| `candidate`    | held under a `candidate:` account — a key [`keys add`](#proving-a-key-to-a-ceremony) presented    |
 | `login-client` | this installation's Sign In With DFOS client key                                                  |
 
 | Status                                    | Meaning                                                                                                                                       |
@@ -519,14 +519,17 @@ What `keys list` can see depends on whether the active backend can enumerate its
 
 ### Proving a key to a ceremony
 
-A **key-add ceremony** is how a key held on this machine is added to an identity whose chain someone else custodies: the ceremony operator's own surface displays a code, and `dfos keys prove` is what presents a key to it from the machine that actually holds one. The envelope, its carriage, and the obligations on both sides are [KEY-PROOF](https://protocol.dfos.com/key-proof).
+A **key-add ceremony** is how a key held on this machine is added to an identity whose chain someone else custodies: the ceremony operator's own surface displays a code, and `dfos keys add` is what presents a key to it from the machine that actually holds one. The envelope, its carriage, and the obligations on both sides are [KEY-PROOF](https://protocol.dfos.com/key-proof).
 
 ```bash
-dfos keys prove app.example/ABCD2345                  # the short code an operator displays
-dfos keys prove 'https://app.example/…?code=ABCD2345' # the carriage URI a QR code carries
-dfos keys prove app.example/ABCD2345 --key z6Mk…      # prove a key this machine already holds
-dfos keys prove app.example/ABCD2345 --name 'work laptop'   # what the operator files the key under
+dfos keys add app.example/ABCD2345                  # the short code an operator displays
+dfos keys add 'https://app.example/…?code=ABCD2345' # the carriage URI a QR code carries
+dfos keys add app.example/ABCD2345 --key z6Mk…      # prove a key this machine already holds
+dfos keys add app.example/ABCD2345 --name 'work laptop'   # what the operator files the key under
+dfos keys add app.example/ABCD2345 --no-wait        # stop at presented, for a script
 ```
+
+`keys prove` is an alias of `keys add`: one command, two names, both permanent. `add` is the name an operator's dialog prints, and it is what this document uses.
 
 **A carriage is two values: an authority and a code.** Both forms carry exactly that — a short code is `<authority>/<CODE>`, eight characters of `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` with the confusable glyphs left out of the alphabet; a carriage URI is a URL naming the same resolution with its `code` member, and a QR code is that URI verbatim. Neither carries the signing context, so every form funnels through one `GET https://<authority>/.well-known/dfos-key-proof?code=<CODE>` and nothing is signed before it has resolved. A URL carrying a ceremony and a nonce in its query is not a carriage and is refused by name: a context nobody resolved is a context somebody else chose.
 
@@ -551,20 +554,34 @@ On a machine that holds no vault yet, a pasted code refuses without minting anyt
 
 Two gates stand before the signature, and neither is skipped quietly:
 
-- **The audience and the position are shown, and confirmed.** The identity being joined — display name, handle, and full DID — the roles being consented to, the audience, the purpose, and the chain head all print before anything is signed, and a terminal is asked to confirm. Audience binding is what makes a relayed challenge useless: a proof names the authority its human confirmed and is dead bytes everywhere else. Position binding is what keeps consent to sign as an author from being consent to become a controller. Neither defends anyone who did not see it, so each role prints as the power it actually confers rather than as a bare token — `controller` reads "CONTROL this identity: add and remove its keys, including yours". `--quiet` does not suppress the disclosure; `--yes` is how a script asserts a human already checked it.
+- **The audience and the position are shown, and confirmed.** The identity being joined — display name, handle, and full DID — the roles being consented to, the audience, the purpose, the chain head, and the key's six-word fingerprint all print before anything is signed, and a terminal is asked to confirm. Audience binding is what makes a relayed challenge useless: a proof names the authority its human confirmed and is dead bytes everywhere else. Position binding is what keeps consent to sign as an author from being consent to become a controller. Neither defends anyone who did not see it, so each role prints as the power it actually confers rather than as a bare token — `controller` reads "CONTROL this identity: add and remove its keys, including yours". `--quiet` does not suppress the disclosure; `--yes` is how a script asserts a human already checked it.
 - **One key, one DID.** Before signing, a named oracle relay is asked whether any identity has ever **proved** this key, through the same `key=` lookup [`dfos recover`](#recovery) scans with. Any answer that is not "nothing has proved it" refuses: the lookup is has-ever-proved, its rows survive rotation and deletion, and one key proved into two chains publishes an irreversible public link between them. A declaration nobody proved is not a link and is not a refusal — it is void, it never indexes, and it obligates nobody, so refusing on it would let anyone freeze a key out of its own ceremony by declaring it and proving nothing. An oracle that cannot answer — no relay to ask, a 501, an unreachable relay, one predating the `key=` filter — is a refusal too, never a silent skip. `--force-linked` is the explicit override for both cases, and it prints what it is overriding.
 
 The oracle is this machine's configured peer whenever it has one. A short code's resolution may also answer a `relay` member — an absolute URL of a relay serving the `key=` index — and that relay is used **only** when this machine has no peer at all, for that one check. "No peer at all" means exactly that: a `--relay` this machine cannot resolve, or a peer whose DID pin has moved, is a relay the operator did name, and the ceremony's relay does not stand in for it — those refuse, with the pin refusal keeping its own words. It is never registered, never pinned, and never written to config: a holder that adopted an operator's relay as a standing peer would be extending trust the ceremony never asked for. The disclosure says which oracle answered and, when it came from the resolution, says that too. A `relay` member that is absent, blank, unparseable, or cleartext off loopback is simply no relay — a courtesy never fails a ceremony — and a machine with neither a peer nor a resolution relay gets the refusal above, naming both halves.
 
 `--name` labels the key in the operator's own list of signing keys, and defaults to `<user>@<hostname>`. It travels beside the envelope as an unsigned `description`, so it is a label the operator may keep, rename, or refuse by its own bounds, and it is nothing the proof depends on; `--name ''` sends no label at all. The disclosure block shows it before it goes, since it is going to the operator.
 
+**The six words are what a human compares.** A key's **word fingerprint** is the first six bytes of `SHA-256` over its multikey string — the UTF-8 bytes of the `z…` form — each byte rendered through the [PGP word list](https://en.wikipedia.org/wiki/PGP_word_list), the even table at even offsets and the odd table at odd ones. The reference genesis key `z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp` renders as `mohawk cumbersome zulu dinosaur goldfish opulent`. The CLI prints it beside the key in the disclosure block, before anything is signed, and again on the receipt; the operator's dialog renders the same six words from the same string, through the same function in the protocol kits, so the two surfaces agree by construction. Comparing them is the human half of catching a proof that landed in the wrong ceremony — 48 base58 characters get read at their ends and six words get read whole, and the even/odd alternation means a transposed pair reads with the wrong syllable count instead of reading fine. What the fingerprint is **not** is a validator: nothing matches, indexes, or verifies against it, the multikey string is the identifier everywhere bytes are compared, and two keys sharing a fingerprint costs a human a second look and costs the protocol nothing. `--json` carries it as `fingerprint`.
+
 A presentation is posted once and is **never retried**. A presentation refused at the signature arm burns its ceremony, and nothing in the answer tells the command which arm refused it — so it treats every failure as spending the ceremony rather than retrying against a nonce that may already be dead. The failure names what the operator said, distinguishes a refusal from a host that could not be reached, and points at minting a fresh code. The key survives it — it stays in the keystore, and `--key` re-presents that same key to the new ceremony rather than minting another.
 
 What goes on the wire is the JWS, the ceremony's code, and the label. The envelope's seven members are the nonce, the audience, the identity being joined, the role set, the chain head the introduction builds on, the candidate's **public** key, and a timestamp; the private key stays in the keystore, and the payload has no member for content, intent, or authority to ride in. The code travels beside the envelope rather than inside it — the nonce is the binding, so linking an envelope to a ceremony is the verifier's own bookkeeping.
 
-**Presenting is not adoption.** A verified proof leaves the ceremony awaiting a human's approval on the operator's own surface; nothing reaches the chain until that happens. The receipt says so, and reports `Presented` rather than anything that sounds finished: the identity being joined, the roles, the key in full, the key shortened — which is the form a person compares against the operator's dialog, and the human half of catching a proof that landed in the wrong ceremony — and its public address, `https://explore.dfos.com/#/key/<publicKeyMultibase>`, with the whole key in the URL.
+**Presenting is not adoption**, so the command waits for the decision. A verified proof leaves the ceremony awaiting a human's approval on the operator's own surface, and nothing reaches the chain until that happens — so after the presentation the CLI polls `GET <origin>/v1/key-proof/status?code=<CODE>` every two seconds, backing off to five after the first thirty, until the ceremony reaches a terminal state. The status URL is **derived** from the presentation endpoint's origin with a fixed path, never read off an answer; the presentation endpoint's authority was already checked to byte-equal the authority the human typed, so the poll cannot reach a host they never named. The poll carries the ceremony's code and nothing else, spends nothing, and re-posts nothing.
 
-Until a chain declares it, the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes; `dfos keys remove <public-key>` is how a candidate from a ceremony that went nowhere leaves the keystore. An operator that answers that the key was already adopted — naming the same identity the human consented to — moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible. An answer naming a _different_ identity files nothing: the provenance it would write is a claim the human never saw.
+Five outcomes end the wait, and each is reported as what it is:
+
+- **Adopted.** A human approved it, and the answer names the chain row: the adopting DID, the key id that identity files it under, and the CID of the operation that introduced it. The key moves from its `candidate:` account to its ordinary address, `key:<publicKeyMultibase>`, and the vault records the provenance the DID and key id make possible. The receipt reports `Adopted`, with the key id, the chain operation, and the key's public address, `https://explore.dfos.com/#/key/<publicKeyMultibase>`, with the whole key in the URL. An answer naming a _different_ identity than the one the human consented to files **nothing** — the provenance it would write is a claim nobody saw — and the receipt says so plainly.
+- **Refused.** A human declined. The key stays a held candidate, no chain declares it, and `dfos keys remove <public-key>` is the way out.
+- **Expired.** The ceremony lapsed before anyone decided. Nothing was refused; the key stays a held candidate, and a fresh code with `--key <public-key>` presents the same key again.
+- **Failed.** The operator could not finish the ceremony and does not say the key was added or refused. It is treated as spent — a fresh code, the same key — and the receipt says to check the operator's own list of signing keys first, because a ceremony that finished after all leaves a key `dfos identity fetch` can bring here.
+- **The wait ends without a decision** — Ctrl-C, five consecutive unanswered polls, a status route that reports the ceremony is gone without saying how it ended, or fifteen minutes of nothing. None of those undo anything: the proof is still presented, the decision is still a human's to make on the operator's surface, and the key is still held here as a candidate. The receipt says exactly that, and `--json` carries `waitStopped` beside the status.
+
+**`--no-wait`** presents and stops, for scripts: the same document as ever plus `fingerprint`, `status: "presented"`, and no poll. It changes nothing about the ceremony — the decision is still a human's — only that nobody here is watching for it.
+
+**A head that moves under a live ceremony is re-signed, not lost.** `prevCID` binds a proof to one chain position, so when the custodian publishes something between the presentation and the decision, the stored envelope names a head that is no longer the head and the status answers `stale`. The recovery is [KEY-PROOF](https://protocol.dfos.com/key-proof)'s: the **same** code is re-resolved — a live ceremony re-resolves, answering the same nonce against the current head — the **same** key signs again, and the replacement is presented. That is not a retry of a refused presentation; a presented ceremony accepts a replacement envelope only from the `publicKeyMultibase` already on it, so it is a path only the holder who opened the ceremony can walk. The human is told it happened and the receipt names the head the envelope finally bound. Three re-signs is the cap: a head that will not settle stops the wait loudly rather than spending signatures in a loop. And the position cannot move across a re-sign — a re-resolution answering a different identity, role set, or audience is refused rather than signed, because those are what the human consented to and only the head was allowed to differ.
+
+Until a chain declares it, the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes; `dfos keys remove <public-key>` is how a candidate from a ceremony that went nowhere leaves the keystore. An operator that answers the adoption at presentation time — naming the same identity the human consented to — files the key the same way an adoption learned from the poll does, through one gate and one rename.
 
 ### Backends
 
@@ -678,12 +695,13 @@ dfos identity fetch alice --peer prod --name alice
 # 3. The operator custodying the chain displays a key-add code.
 
 # 4. On B: present B's own key to that ceremony. B mints the key, shows the
-#    identity and roles it is consenting to, and signs the proof with the key
-#    itself — the private half never leaves B.
-dfos keys prove app.example/ABCD2345
+#    identity, the roles, and the key's six words it is consenting to, signs the
+#    proof with the key itself — the private half never leaves B — and waits.
+dfos keys add app.example/ABCD2345
 
-# 5. A human approves the presented key on the operator's own surface. The
-#    operator appends the introduction with B's envelope embedded.
+# 5. A human compares those six words against the operator's dialog and approves
+#    there. The operator appends the introduction with B's envelope embedded, and
+#    the command B is still running reports the adoption and files the key.
 
 # 6. On B: re-fetch so B sees its now-in-chain key.
 dfos identity fetch alice --peer prod

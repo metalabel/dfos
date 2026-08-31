@@ -1,14 +1,24 @@
 package cmd
 
-// `dfos keys prove` — the holder's half of a key-add ceremony (specs/KEY-PROOF.md).
+// `dfos keys add` (alias `keys prove`) — the holder's half of a key-add ceremony
+// (specs/KEY-PROOF.md).
 //
 // A ceremony operator displays a code on one screen; this command is what the
 // human runs on the machine that actually holds a key. It resolves the code,
 // picks the candidate key, shows the human the identity and the roles they are
 // about to consent to, signs the seven-member KEY-PROOF envelope with the
-// candidate key ITSELF, and presents it. Adoption — the operator appending the
-// key to its chain — happens afterwards on the operator's own authenticated
-// surface, outside this command and outside the envelope.
+// candidate key ITSELF, presents it, and then waits for the decision a human
+// makes on the operator's own surface — the epilogue lives in keys_prove_wait.go.
+// Adoption is still the operator's act, performed on its own authenticated
+// surface, outside this command and outside the envelope; what the wait does is
+// report it, and file the key the moment it happens.
+//
+// THE COMMAND IS `add` AND THE CODE SAYS `prove`, deliberately. `add` is the verb
+// the operator's dialog prints — a human told to add a key runs the command that
+// says add — and `prove` remains an alias forever, because it is what the older
+// dialogs printed and what scripts already call. The identifiers in this file
+// keep the proof's name because what they build is a KEY-PROOF envelope, and that
+// artifact is not renamed by the command that carries it.
 //
 // THE CARRIAGE IS TWO VALUES, AND RESOLUTION IS MANDATORY. A carriage conveys an
 // authority and a code, and nothing else; the code IS the ceremony identifier.
@@ -48,7 +58,9 @@ package cmd
 //     burns its ceremony, and nothing in an HTTP status tells this command which
 //     arm refused it. So there is one attempt, ever: a retry would risk spending a
 //     live ceremony's rate limit on a nonce that is already dead. The fix is
-//     always a fresh code.
+//     always a fresh code. The one place a second envelope goes on the wire is the
+//     stale-head recovery, where the operator has said the chain moved and asked
+//     for a replacement — that is an invitation, not a retry of anything refused.
 //  4. THE PRIVATE KEY NEVER LEAVES. What goes on the wire is a JWS over seven
 //     members, one of which is the PUBLIC key. Nothing prints a seed.
 //
@@ -167,6 +179,11 @@ type ceremony struct {
 	// usable. It is a courtesy for a machine that has no relay of its own: it
 	// reaches exactly one linkage check and configures nothing.
 	Relay string
+	// carriage is the authority and code this resolution came from, kept so the
+	// stale-head recovery can re-resolve the SAME code at the SAME authority
+	// through the same rules. It is unexported because it is not a signing
+	// context and never becomes one — it names where to ask, and nothing else.
+	carriage parsedCarriage
 }
 
 // ceremonyHTTPClient is the client both ceremony requests use.
@@ -481,6 +498,7 @@ func resolveCode(car *parsedCarriage) (*ceremony, error) {
 		ExpiresAt:   answer.ExpiresAt,
 		Via:         car.Via,
 		Relay:       usableCeremonyRelay(answer.Relay),
+		carriage:    *car,
 	}, nil
 }
 
@@ -604,7 +622,7 @@ func errCeremonyNoVault() error {
 		"other screen is still live for the rest of its lifetime. Create a seed, then paste the same code again:\n" +
 		"  dfos vault create <name>                 writes down the phrase that covers every key it mints\n" +
 		"  dfos config set default-vault <name>     the standing default, when this machine has more than one\n" +
-		"  dfos keys prove <the same code>          the same paste, now that there is a seed\n" +
+		"  dfos keys add <the same code>            the same paste, now that there is a seed\n" +
 		"Or pass --no-vault for a standalone key no phrase covers, held only in this keystore.")
 }
 
@@ -771,7 +789,7 @@ func linkageExplanation() string {
 	return "The relay index's key lookup is HAS-EVER-PROVED: its rows survive rotation and deletion, so a key\n" +
 		"proved into two identities publishes an irreversible public link between them. A declaration nobody\n" +
 		"proved is not a link — it is void, it never indexes, and it never obligates you. Mint a fresh key\n" +
-		"instead — 'dfos keys prove <code>' with no --key does exactly that. Pass --force-linked to publish\n" +
+		"instead — 'dfos keys add <code>' with no --key does exactly that. Pass --force-linked to publish\n" +
 		"the link anyway."
 }
 
@@ -923,7 +941,7 @@ func presentEnvelope(cer *ceremony, envelope, description string) (*presentation
 func burnedCeremonyAdvice(cand *candidateKey) string {
 	return fmt.Sprintf("\nTreat this ceremony as spent: a refusal at the signature arm burns it, and nothing here can tell\n"+
 		"which arm refused, so it is not retried. Mint a fresh code where the last one was displayed, then:\n"+
-		"  dfos keys prove <code> --key %s\n"+
+		"  dfos keys add <code> --key %s\n"+
 		"The key is still held here — that re-presents this same key rather than minting another.", cand.PublicKey)
 }
 
@@ -946,10 +964,14 @@ type proveResult struct {
 	ExpiresAt   string `json:"expiresAt,omitempty"`
 
 	PublicKey string `json:"publicKey"`
-	Account   string `json:"account"`
-	KeyOrigin string `json:"keyOrigin"`
-	Vault     string `json:"vault,omitempty"`
-	Backend   string `json:"keystoreBackend"`
+	// Fingerprint is the key's six-word rendering — what a human compares against
+	// the operator's dialog. It is a display of the key and never a name for one:
+	// PublicKey is the identifier everywhere bytes are matched.
+	Fingerprint string `json:"fingerprint"`
+	Account     string `json:"account"`
+	KeyOrigin   string `json:"keyOrigin"`
+	Vault       string `json:"vault,omitempty"`
+	Backend     string `json:"keystoreBackend"`
 	// Description is the label sent to the operator beside the proof. It is not
 	// in the envelope and nothing here depends on it.
 	Description string `json:"description,omitempty"`
@@ -962,8 +984,20 @@ type proveResult struct {
 	// AdoptedDID is the identity an operator said ADOPTED the key, when it said
 	// so. It is distinct from Adopts, which is the identity the ceremony targets:
 	// the first is a chain row that exists, the second is the position consented
-	// to. Ordinarily only the second is known when this command stops.
+	// to. On a ceremony that ended in anything but an adoption, only the second is
+	// known.
 	AdoptedDID string `json:"adoptedDID,omitempty"`
+	// ChainOpCID is the operation that introduced the key, named by an adoption.
+	// It is the chain-level receipt: the operation whose keyProofs member carries
+	// the envelope this command signed.
+	ChainOpCID string `json:"chainOpCID,omitempty"`
+	// WaitStopped says why the wait ended without a decision, and is empty when a
+	// decision arrived or when --no-wait declined to wait at all. A script reads
+	// Status for the outcome and this for why there is not one.
+	WaitStopped string `json:"waitStopped,omitempty"`
+	// Resigned counts the stale-head recoveries this ceremony took — how many
+	// times the chain moved under it and the proof was signed again.
+	Resigned int `json:"resigned,omitempty"`
 	// ExplorerURL is where this key can be looked up in public. It is written
 	// only on a presented ceremony, because until then there is nothing to look
 	// up.
@@ -1031,28 +1065,37 @@ func newKeysProveCmd() *cobra.Command {
 	var assumeYes bool
 	var forceLinked bool
 	var description string
+	var noWait bool
 
 	cmd := &cobra.Command{
-		Use:   "prove <code-or-uri>",
-		Short: "Prove a key to a key-add ceremony (KEY-PROOF)",
-		Long: "Present a key to a key-add ceremony an operator started: resolve the code it displayed, sign a " +
-			"KEY-PROOF envelope with the candidate key itself, and post it to the ceremony's presentation " +
-			"endpoint. The argument is either the short code an operator shows — '<authority>/<CODE>', where " +
-			"spaces and dashes between the characters are ignored — or the carriage URI a QR code carries. Both " +
-			"are an authority and a code; the identity, the roles, the chain head and the nonce all come from " +
-			"resolving that code at that authority.\n\n" +
+		Use: "add <code-or-uri>",
+		// `prove` is what this command was called when it stopped at the
+		// presentation, and it is what scripts and older operator dialogs say. It
+		// resolves to this command and always will.
+		Aliases: []string{"prove"},
+		Short:   "Add a key to an identity through a key-add ceremony (KEY-PROOF)",
+		Long: "Present a key to a key-add ceremony an operator started, and wait for the decision: resolve the " +
+			"code it displayed, sign a KEY-PROOF envelope with the candidate key itself, post it to the " +
+			"ceremony's presentation endpoint, and watch the ceremony until a human approves or refuses it. The " +
+			"argument is either the short code an operator shows — '<authority>/<CODE>', where spaces and dashes " +
+			"between the characters are ignored — or the carriage URI a QR code carries. Both are an authority " +
+			"and a code; the identity, the roles, the chain head and the nonce all come from resolving that code " +
+			"at that authority.\n\n" +
 			"By default it MINTS the key it proves, from the default vault or --vault: the candidate is a new " +
 			"self-held key being added to an identity someone else custodies the chain for. --key proves a key " +
 			"this machine already holds. --name labels the key in the operator's own list; the label rides " +
 			"beside the proof, unsigned, and defaults to <user>@<hostname>.\n\n" +
-			"Before signing it shows the audience, the identity being joined and the roles being consented to, " +
-			"and asks — that binding only defends a human who saw it — and it refuses a key any identity has " +
-			"ever proved, because the relay index's key lookup is has-ever-proved and one key proved into two " +
-			"chains is a permanent public link between them. That check runs against this machine's peer; a " +
-			"machine with none uses the relay the resolution named, for this ceremony only and never as a " +
-			"registered peer. A presentation is never retried.\n\n" +
-			"Presenting is not adoption. A verified proof leaves the ceremony awaiting a human's approval on the " +
-			"operator's own surface; the key is held here as a candidate until a chain declares it.",
+			"Before signing it shows the audience, the identity being joined, the roles being consented to, and " +
+			"the key's six-word fingerprint — the words the operator's dialog shows for the same key — and asks; " +
+			"that binding only defends a human who saw it. It refuses a key any identity has ever proved, " +
+			"because the relay index's key lookup is has-ever-proved and one key proved into two chains is a " +
+			"permanent public link between them. That check runs against this machine's peer; a machine with " +
+			"none uses the relay the resolution named, for this ceremony only and never as a registered peer. A " +
+			"presentation is never retried.\n\n" +
+			"Presenting is not adoption. The wait reports what the human decided: an adoption files the key " +
+			"under its ordinary address with the chain operation that introduced it, and a refusal, a lapse, or " +
+			"a ceremony the operator could not finish leaves the key held here as a candidate. Stopping the wait " +
+			"— Ctrl-C, a host that stops answering, --no-wait — never takes the presentation back.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The default is computed here rather than registered as the flag's
@@ -1069,6 +1112,7 @@ func newKeysProveCmd() *cobra.Command {
 				assumeYes:   assumeYes,
 				forceLinked: forceLinked,
 				description: description,
+				noWait:      noWait,
 			})
 		},
 	}
@@ -1080,6 +1124,8 @@ func newKeysProveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation — the audience has already been checked by a human")
 	cmd.Flags().BoolVar(&forceLinked, "force-linked", false,
 		"Sign even when an identity has already proved this key, or when the check could not run")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false,
+		"Stop at presented instead of waiting for the human's decision (the ceremony is unaffected)")
 	return cmd
 }
 
@@ -1090,6 +1136,7 @@ type proveOptions struct {
 	assumeYes   bool
 	forceLinked bool
 	description string
+	noWait      bool
 }
 
 func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
@@ -1139,7 +1186,7 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 		Purpose: protocol.KeyAddJWSTyp,
 		Adopts:  cer.DID, Handle: cer.Handle, DisplayName: cer.DisplayName,
 		RoleSet: cer.RoleSet, PrevCID: cer.PrevCID, ExpiresAt: cer.ExpiresAt,
-		PublicKey: cand.PublicKey, Account: cand.Account,
+		PublicKey: cand.PublicKey, Fingerprint: keyFingerprint(cand.PublicKey), Account: cand.Account,
 		KeyOrigin: cand.Origin, Vault: cand.Vault, Backend: keys.Backend(),
 		Description: opts.description, Linkage: linkage, Forced: opts.forceLinked,
 	}
@@ -1182,36 +1229,23 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	result.ExplorerURL = explorerKeyURL(cand.PublicKey)
 
 	// 7. File the key where the identity that adopted it will name it — only if
-	//    the operator said the adoption already happened.
+	//    the operator said the adoption already happened AT PRESENTATION.
 	//
 	//    Ordinarily it has not: presentation stores the proof and stops, and the
-	//    chain row appears when a human approves it elsewhere. So this branch is
-	//    the exception, not the path, and the candidate account is the normal
-	//    resting place.
+	//    chain row appears when a human approves it elsewhere — which is what the
+	//    wait below is for. An operator that answers the adoption inline is the
+	//    exception, and this is where that answer is honored.
+	fileAdoptedKey(answer, cer, cand, result)
+
+	// 8. The epilogue: watch the ceremony until a human decides, unless a script
+	//    said not to.
 	//
-	//    Only a CANDIDATE account is renamed. A key already filed under some
-	//    other account is filed there because something else named it, and
-	//    moving it on an operator's say-so would take that key away from whatever
-	//    was using it.
-	if ok := adoptionNamesAnIdentity(answer, cer); ok && strings.HasPrefix(cand.Account, candidateAccountPrefix) {
-		account := keyAccount(cand.PublicKey)
-		if !keys.HasKey(account) {
-			if err := keys.RenameKey(cand.Account, account); err == nil {
-				result.Account = account
-				if cand.Minted && cand.Vault != "" {
-					roles := []string{}
-					if parsed, ok := protocol.ParseRoleSet(cer.RoleSet); ok {
-						for _, role := range parsed {
-							roles = append(roles, string(role))
-						}
-					}
-					_ = getVaults().Record(cand.Vault, vault.MintedKey{
-						Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
-						Roles: roles, PublicKey: cand.PublicKey,
-					})
-				}
-			}
-		}
+	//    --no-wait is the stop-at-presented shape, and it changes nothing about
+	//    the ceremony — the proof is presented, the decision is still a human's,
+	//    and the only difference is that nobody here is looking. A ceremony that
+	//    already answered its adoption inline has nothing left to watch either.
+	if !opts.noWait && !ceremonyDecided(result.Status) && result.AdoptedDID == "" {
+		applyWaitOutcome(waitForCeremonyDecision(cer, cand, opts.description), result, cer, cand)
 	}
 
 	if jsonFlag {
@@ -1220,6 +1254,46 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	}
 	printProveResult(result)
 	return nil
+}
+
+// fileAdoptedKey moves an adopted key out of the candidate namespace and into
+// its ordinary address, and records the vault provenance the adoption makes
+// possible. It is the one filing path, run from the presentation answer and from
+// the wait's adoption alike.
+//
+// Only a CANDIDATE account is renamed. A key already filed under some other
+// account is filed there because something else named it, and moving it on an
+// operator's say-so would take that key away from whatever was using it.
+//
+// A rename that fails is not an error the ceremony reports. The key is held
+// either way, under the account this result already names, and a keystore that
+// would not rename it is a local condition — nothing about the adoption, which
+// happened on a chain this machine does not custody.
+func fileAdoptedKey(answer *presentationAnswer, cer *ceremony, cand *candidateKey, result *proveResult) {
+	if !adoptionNamesAnIdentity(answer, cer) || !strings.HasPrefix(cand.Account, candidateAccountPrefix) {
+		return
+	}
+	account := keyAccount(cand.PublicKey)
+	if keys.HasKey(account) {
+		return
+	}
+	if err := keys.RenameKey(cand.Account, account); err != nil {
+		return
+	}
+	result.Account = account
+	if !cand.Minted || cand.Vault == "" {
+		return
+	}
+	roles := []string{}
+	if parsed, ok := protocol.ParseRoleSet(cer.RoleSet); ok {
+		for _, role := range parsed {
+			roles = append(roles, string(role))
+		}
+	}
+	_ = getVaults().Record(cand.Vault, vault.MintedKey{
+		Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
+		Roles: roles, PublicKey: cand.PublicKey,
+	})
 }
 
 // adoptionNamesAnIdentity reports whether a presentation actually said the key
@@ -1298,6 +1372,14 @@ func printCeremonyDisclosure(r *proveResult, localLinkage error) {
 		fmt.Fprintf(out, "  Expires:   %s\n", r.ExpiresAt)
 	}
 	fmt.Fprintf(out, "  Key:       %s\n", r.PublicKey)
+	// The six words, beside the key and before the signature. This is the form a
+	// human actually compares: 48 base58 characters get read at their ends, and a
+	// person asked to check two of them checks four characters and stops. The
+	// operator's dialog renders the same six words from the same multikey string,
+	// so a proof that landed in the wrong ceremony shows up as words that do not
+	// match — which only works if the human knows to look, hence the line beside it.
+	fmt.Fprintf(out, "  Words:     %s\n", r.Fingerprint)
+	fmt.Fprintf(out, "             %s\n", fingerprintNote())
 	fmt.Fprintf(out, "  Origin:    %s\n", r.KeyOrigin)
 	if r.Description != "" {
 		// It goes to the operator, so the human confirming this ceremony sees it
@@ -1349,43 +1431,68 @@ func confirmCeremony(in io.Reader, cand *candidateKey) error {
 	case "y", "yes":
 		return nil
 	}
-	return fmt.Errorf("nothing was signed. The candidate key is held as %s — 'dfos keys prove <code> --key %s' presents it to a fresh ceremony",
+	return fmt.Errorf("nothing was signed. The candidate key is held as %s — 'dfos keys add <code> --key %s' presents it to a fresh ceremony",
 		cand.Account, cand.PublicKey)
 }
 
-// printProveResult is the receipt. It reports what happened — the proof was
-// PRESENTED — and never more than that.
+// printProveResult is the receipt. It reports what actually happened and never
+// more than that: a ceremony that reached a decision says which one, and a
+// ceremony still waiting on a human says that it is.
 //
-// THE CEREMONY IS NOT OVER WHEN THIS COMMAND STOPS, and the receipt's job is to
-// say so plainly. A presented proof waits for a human to approve it on the
-// operator's own surface; until that happens no chain declares the key, the key
-// is a candidate here, and telling someone their key was "added" would be telling
-// them a step they still have to take is already done.
+// THE FACTS COME FIRST AND ARE THE SAME IN EVERY OUTCOME — the identity, the
+// roles, the key, its six words, where the key is filed — because a person
+// reading a refusal needs the same block a person reading an adoption does. What
+// differs is the tail, and the tail is printCeremonyEpilogue's.
+//
+// TELLING SOMEONE THEIR KEY WAS "ADDED" WHEN IT WAS PRESENTED would be telling
+// them a step they still have to take is already done, so the heading is the
+// status and nothing more generous than it.
 func printProveResult(r *proveResult) {
-	fmt.Printf("\nPresented:\n")
+	fmt.Printf("\n%s\n", ceremonyOutcomeHeading(r.Status))
 	fmt.Printf("  Adds to:   %s (@%s)\n", r.DisplayName, r.Handle)
 	fmt.Printf("             %s\n", r.Adopts)
 	fmt.Printf("  Roles:     %s\n", r.RoleSet)
 	fmt.Printf("  Audience:  %s\n", r.Audience)
 	fmt.Printf("  Key:       %s\n", r.PublicKey)
+	// The six words again, on the way out. A person who compared them at the
+	// dialog reads them here to confirm it was this key that was decided on, and a
+	// person who did not compare them still has them in their scrollback.
+	fmt.Printf("  Words:     %s\n", r.Fingerprint)
 	if r.KeyID != "" {
 		// The operator's name for the key, and beside it the shortened key —
 		// which is what a person compares against the row on the other screen,
 		// where a key id means nothing.
 		fmt.Printf("  Key id:    %s (%s)\n", r.KeyID, truncateKey(r.PublicKey))
 	}
+	if r.ChainOpCID != "" {
+		// The operation that introduced the key. It is the chain-level receipt:
+		// the operation whose keyProofs member carries the envelope signed here.
+		fmt.Printf("  Chain op:  %s\n", r.ChainOpCID)
+	}
 	fmt.Printf("  Account:   %s (%s)\n", r.Account, r.Backend)
 	if r.ExplorerURL != "" {
 		fmt.Printf("  Explorer:  %s\n", r.ExplorerURL)
 	}
+	if r.Resigned > 0 {
+		// A head that moved under the ceremony, and a proof signed again for the
+		// new one. It is reported because the position a proof was spent at is the
+		// member that does the most work, and it is not the one first displayed.
+		fmt.Printf("  Re-signed: %d× — the chain moved, and the proof was signed again at %s\n", r.Resigned, r.PrevCID)
+	}
 	fmt.Println()
 
-	// The fingerprint, and what to do with it. This is the human's half of the
-	// wrong-ceremony defense: the operator's dialog shows the key it received, and
-	// comparing the two is what catches a proof that landed in someone else's
-	// ceremony before it is approved.
+	if ceremonyDecided(r.Status) || r.WaitStopped != "" {
+		printCeremonyEpilogue(r)
+		return
+	}
+
+	// Nobody waited — --no-wait, or an operator that answered its adoption inline.
+	// The fingerprint, and what to do with it: this is the human's half of the
+	// wrong-ceremony defense, and the operator's dialog is where the comparison
+	// happens.
 	fmt.Printf("Approve it at %s — it shows the key it received, and %s\n", r.Audience, truncateKey(r.PublicKey))
-	fmt.Printf("is what should be on that screen. Nothing is added to the chain until you approve it there.\n\n")
+	fmt.Printf("(%s) is what should be on that screen.\n", r.Fingerprint)
+	fmt.Printf("Nothing is added to the chain until you approve it there.\n\n")
 
 	if r.AdoptedDID == "" {
 		fmt.Printf("Until then the key is held here as a candidate: 'dfos keys list' shows it, 'dfos keys prune'\n")
