@@ -36,6 +36,7 @@ const HELP_KEYS = [
   'keyIdentity',
   'keyProved',
   'keyRoles',
+  'keyWords',
   'localDivergence',
   'localIndex',
   'publicProjection',
@@ -112,6 +113,16 @@ describe('GLOSSARY — the inline help vocabulary', () => {
     const def = (GLOSSARY['localDivergence'] ?? '').toLowerCase();
     expect(def).toContain('distinct from');
     expect(def).toContain('local sync');
+  });
+
+  // The word fingerprint is a DISPLAY of a key, and a reader who takes it for a
+  // check has been told something false by this app: nothing in the protocol
+  // matches or verifies against six words. The definition has to say so, in the
+  // same breath as naming the multikey as the identifier that does.
+  it('keeps the word fingerprint a display form and never a check', () => {
+    const def = (GLOSSARY['keyWords'] ?? '').toLowerCase();
+    expect(def).toContain('never a validator');
+    expect(def).toContain('multikey string is the identifier');
   });
 
   // Absence must be DEFINITIVE (lib/divergence.ts): only an answered "not found"
