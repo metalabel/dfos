@@ -87,7 +87,7 @@ endpoint.
 ```json
 {
   "name": "SIWD Demo",
-  "client_did": "did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke",
+  "client_did": "did:dfos:avnz738z332z2cva3k86c27ek4796dt",
   "redirect_uris": ["https://dfos-siwd-demo.vercel.app/"],
   "identity_chain": ["<genesis identity-op JWS>", "<add-key identity-op JWS>"]
 }
