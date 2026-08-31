@@ -20,7 +20,11 @@
 
 */
 
-import { KEY_ADD_JWS_TYP, serializeRoleSet, signKeyProof } from '@metalabel/dfos-protocol/key-proof';
+import {
+  KEY_ADD_JWS_TYP,
+  serializeRoleSet,
+  signKeyProof,
+} from '@metalabel/dfos-protocol/key-proof';
 import type { KeyRole } from '@metalabel/dfos-protocol/key-proof';
 
 /** All three roles, the default a rotation or a fresh key wants. */

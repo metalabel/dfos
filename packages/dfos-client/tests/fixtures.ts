@@ -139,9 +139,7 @@ export const buildIdentity = async (opts?: {
       controllerKeys: [k.key],
       createdAt: ts(-5),
       // k2 joins `auth` only, and the envelope consents to exactly that.
-      keyProofs: [
-        await keyProofFor({ key: k2, did, prevCID: g.operationCID, roles: ['auth'] }),
-      ],
+      keyProofs: [await keyProofFor({ key: k2, did, prevCID: g.operationCID, roles: ['auth'] })],
     };
     const u = await signIdentityOperation({
       operation: update,

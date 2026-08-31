@@ -331,11 +331,17 @@ describe('role set — one spelling per set', () => {
 
   it('refuses a non-canonical roleSet inside the envelope — same class as member order', () => {
     for (const roleSet of ['assert,auth', 'auth, assert', 'auth,auth', 'auth,owner', '']) {
-      const forged = forge({ alg: 'EdDSA', typ: KEY_ADD_JWS_TYP }, {
-        ...vectorPayload(),
+      const forged = forge(
+        { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+        {
+          ...vectorPayload(),
+          roleSet,
+        },
+      );
+      expect(
+        reasonOf(() => verifyKeyProof(forged, expectAt())),
         roleSet,
-      });
-      expect(reasonOf(() => verifyKeyProof(forged, expectAt())), roleSet).toBe('schema');
+      ).toBe('schema');
     }
     // ...and the producer half refuses the same spellings before there are bytes.
     expect(() => keyProofSigningInput({ ...vectorPayload(), roleSet: 'assert,auth' })).toThrow(
@@ -579,12 +585,15 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     // at another, and each refusal is separately observable.
     expect(
       reasonOf(() =>
-        verifyKeyProof(VECTOR_JWS, expectAt({ expectedDid: 'did:dfos:someotherchain00000000000000' })),
+        verifyKeyProof(
+          VECTOR_JWS,
+          expectAt({ expectedDid: 'did:dfos:someotherchain00000000000000' }),
+        ),
       ),
     ).toBe('did');
-    expect(
-      reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedRoleSet: 'auth' }))),
-    ).toBe('roleSet');
+    expect(reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedRoleSet: 'auth' })))).toBe(
+      'roleSet',
+    );
     expect(
       reasonOf(() =>
         verifyKeyProof(
@@ -770,9 +779,9 @@ describe('key-proof verification — chain walk', () => {
     // could replay. There is no clock parameter here at all — the absence is the
     // contract.
     expect(() => verifyChainKeyProof(VECTOR_JWS, walkFor())).not.toThrow();
-    expect(reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ now: at(VECTOR_UNIX + 315_360_000) })))).toBe(
-      'freshness',
-    );
+    expect(
+      reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ now: at(VECTOR_UNIX + 315_360_000) }))),
+    ).toBe('freshness');
     // ...and no audience parameter either: the envelope is audienced to
     // keys.dfos.com, and a walker on any other host still reads it.
     expect(Object.keys(walkFor())).not.toContain('expectedAudience');
@@ -821,10 +830,13 @@ describe('key-proof verification — chain walk', () => {
       vectorPayload(),
     );
     expect(reasonOf(() => verifyChainKeyProof(withKid, walkFor()))).toBe('header');
-    const extra = forge({ alg: 'EdDSA', typ: KEY_ADD_JWS_TYP }, {
-      ...vectorPayload(),
-      intent: 'send all my money',
-    });
+    const extra = forge(
+      { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+      {
+        ...vectorPayload(),
+        intent: 'send all my money',
+      },
+    );
     expect(reasonOf(() => verifyChainKeyProof(extra, walkFor()))).toBe('schema');
     // ...and the signature, against the key the payload names.
     const mismatched = forge({ alg: 'EdDSA', typ: KEY_ADD_JWS_TYP }, vectorPayload(), OTHER_SEED);

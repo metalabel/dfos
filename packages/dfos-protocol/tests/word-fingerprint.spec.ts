@@ -42,8 +42,7 @@ import { keyWordFingerprint } from '../src/key-proof/word-fingerprint';
  * SHA-256 over the newline-joined concatenation of the even table then the odd
  * table. The cross-language pin: this constant appears verbatim in the Go suite.
  */
-const WORD_LIST_CHECKSUM =
-  '41db18a831d9c40dc35b374ef36f0bf616d4f563768fcc1a5aa11c7b6530cf5e';
+const WORD_LIST_CHECKSUM = '41db18a831d9c40dc35b374ef36f0bf616d4f563768fcc1a5aa11c7b6530cf5e';
 
 /** The worked example from the PGP word list's own documentation. */
 const PUBLISHED_EXAMPLE_HEX = 'e58294f2e9a227486e8b061b31cc528fd7fa3f19';
@@ -157,12 +156,8 @@ describe('keyWordFingerprint', () => {
     // The obligation is that both surfaces render the SAME string — the `z…` form
     // as the chain declares it. Anything else is a different fingerprint, which is
     // exactly the mismatch a human comparison is there to catch.
-    expect(keyWordFingerprint(`did:key:${REFERENCE_KEY_A}`)).not.toBe(
-      REFERENCE_KEY_A_FINGERPRINT,
-    );
-    expect(keyWordFingerprint(REFERENCE_KEY_A.slice(0, 20))).not.toBe(
-      REFERENCE_KEY_A_FINGERPRINT,
-    );
+    expect(keyWordFingerprint(`did:key:${REFERENCE_KEY_A}`)).not.toBe(REFERENCE_KEY_A_FINGERPRINT);
+    expect(keyWordFingerprint(REFERENCE_KEY_A.slice(0, 20))).not.toBe(REFERENCE_KEY_A_FINGERPRINT);
   });
 
   it('renders a fingerprint for the empty string rather than failing', () => {

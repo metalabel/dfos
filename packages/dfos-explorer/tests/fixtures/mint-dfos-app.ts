@@ -25,7 +25,6 @@
 
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-
 import {
   encodeEd25519Multikey,
   signIdentityOperation,
@@ -38,7 +37,11 @@ import {
   importEd25519Keypair,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
-import { KEY_ADD_JWS_TYP, serializeRoleSet, signKeyProof } from '@metalabel/dfos-protocol/key-proof';
+import {
+  KEY_ADD_JWS_TYP,
+  serializeRoleSet,
+  signKeyProof,
+} from '@metalabel/dfos-protocol/key-proof';
 
 const GENESIS_AT = '2026-03-07T00:00:00.000Z';
 const INTRO_AT = '2026-03-07T00:01:00.000Z';

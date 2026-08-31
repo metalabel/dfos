@@ -426,7 +426,6 @@ export const signKeyProof = async (
   return { proof, payload };
 };
 
-
 // -----------------------------------------------------------------------------
 // decode — the steps BOTH verification modes share
 // -----------------------------------------------------------------------------

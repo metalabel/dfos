@@ -481,14 +481,14 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | `candidate`    | held under a `candidate:` account — a key [`keys prove`](#proving-a-key-to-a-ceremony) presented  |
 | `login-client` | this installation's Sign In With DFOS client key                                                  |
 
-| Status                                    | Meaning                                                                                                  |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Status                                    | Meaning                                                                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `declared`                                | an identity chain in the local relay names it in a current role (`controller` / `auth` / `assert`), whether that membership is proved or void |
-| `superseded`                              | that identity's chain is local and no longer names the key — a rotation left it behind                   |
-| `login-client`                            | infrastructure: the per-install sign-in client key                                                       |
-| `candidate`                               | presented to a key-add ceremony; the chain that adopts it is the ceremony operator's, not this machine's |
-| `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                        |
-| `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                                    |
+| `superseded`                              | that identity's chain is local and no longer names the key — a rotation left it behind                                                        |
+| `login-client`                            | infrastructure: the per-install sign-in client key                                                                                            |
+| `candidate`                               | presented to a key-add ceremony; the chain that adopts it is the ceremony operator's, not this machine's                                      |
+| `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                                                             |
+| `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                                                                         |
 
 Roles are reported for a `superseded` key as well as a `declared` one: a declared key's `roles` are its current roles, and a superseded key's are the roles it held before the rotation that retired it, read back out of the chain's own log. The status field is what separates the two, and the human table spells the second out as `was auth, no longer current`.
 
@@ -564,7 +564,7 @@ What goes on the wire is the JWS, the ceremony's code, and the label. The envelo
 
 **Presenting is not adoption.** A verified proof leaves the ceremony awaiting a human's approval on the operator's own surface; nothing reaches the chain until that happens. The receipt says so, and reports `Presented` rather than anything that sounds finished: the identity being joined, the roles, the key in full, the key shortened — which is the form a person compares against the operator's dialog, and the human half of catching a proof that landed in the wrong ceremony — and its public address, `https://explore.dfos.com/#/key/<publicKeyMultibase>`, with the whole key in the URL.
 
-Until a chain declares it, the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes; `dfos keys remove <public-key>` is how a candidate from a ceremony that went nowhere leaves the keystore. An operator that answers that the key was already adopted — naming the same identity the human consented to — moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible. An answer naming a *different* identity files nothing: the provenance it would write is a claim the human never saw.
+Until a chain declares it, the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes; `dfos keys remove <public-key>` is how a candidate from a ceremony that went nowhere leaves the keystore. An operator that answers that the key was already adopted — naming the same identity the human consented to — moves the key to its ordinary address, `key:<publicKeyMultibase>`, and records the vault provenance the DID and key id make possible. An answer naming a _different_ identity files nothing: the provenance it would write is a claim the human never saw.
 
 ### Backends
 

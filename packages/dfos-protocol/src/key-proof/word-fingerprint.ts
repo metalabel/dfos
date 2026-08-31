@@ -62,6 +62,4 @@ const FINGERPRINT_BYTES = 6;
  * ```
  */
 export const keyWordFingerprint = (publicKeyMultibase: string): string =>
-  pgpWords(
-    sha256(new TextEncoder().encode(publicKeyMultibase)).slice(0, FINGERPRINT_BYTES),
-  );
+  pgpWords(sha256(new TextEncoder().encode(publicKeyMultibase)).slice(0, FINGERPRINT_BYTES));

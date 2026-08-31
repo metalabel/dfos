@@ -169,9 +169,7 @@ describe('identity chain', () => {
       assertKeys: [newK.key],
       controllerKeys: [newK.key],
       createdAt: ts(1),
-      keyProofs: [
-        await proofFor({ key: newK, did: gen.identity.did, prevCID: gen.operationCID }),
-      ],
+      keyProofs: [await proofFor({ key: newK, did: gen.identity.did, prevCID: gen.operationCID })],
     };
     const { jwsToken: updateJws } = await signIdentityOperation({
       operation: update,

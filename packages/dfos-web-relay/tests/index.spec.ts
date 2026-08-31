@@ -1774,7 +1774,10 @@ describe('index v0', () => {
    * a chain ARRIVES at rather than starts with — and the second key needs an
    * envelope, or the membership is void and it signs nothing that resolves.
    */
-  const addProvedAuthKey = async (identity: TestIdentity, offset: number): Promise<TestIdentity> => {
+  const addProvedAuthKey = async (
+    identity: TestIdentity,
+    offset: number,
+  ): Promise<TestIdentity> => {
     const added = makeKey();
     const updateOp: IdentityOperation = {
       version: 1,
