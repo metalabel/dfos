@@ -46,6 +46,8 @@ The domain answers the chain's claim by publishing the DID. Two methods are defi
 GET https://<domain>/.well-known/dfos-did
 ```
 
+`dfos-did` is a suffix minted in [RFC 8615](https://www.rfc-editor.org/rfc/rfc8615)'s well-known namespace, whose §3 requires registering new suffixes in the IANA Well-Known URIs registry — the [extension registry's external-registrations table](https://protocol.dfos.com/extensions#external-registrations) tracks it.
+
 A `200` response whose body — after trimming ASCII whitespace — is **exactly one DFOS DID** (`did:dfos:<31-char id>`) attests that DID. The response SHOULD be served as `text/plain`, but verifiers judge the trimmed body, not the media type. Origins SHOULD serve the document with `Access-Control-Allow-Origin: *` — like the [app description document](https://protocol.dfos.com/siwd), it is public by construction, and the header's absence only blocks browser-based tooling from reading what every other client already can.
 
 Verifiers MUST fetch over HTTPS with ordinary TLS validation, MUST NOT follow a redirect to a different origin (the attestation must come from the named domain — a cross-origin redirect attests nothing; same-origin redirects MAY be followed), and SHOULD bound the read: a conforming body is under a hundred bytes, so a small cap (e.g. 1024 bytes) rejects garbage before reading it.
@@ -61,6 +63,8 @@ did=did:dfos:<31-char id>
 ```
 
 attests that DID. TXT records at that name not beginning `did=` are ignored. **More than one** `did=` record at the name is a contradiction — the domain is attesting two answers, and a verifier MUST treat the binding as broken, never pick one.
+
+`_dfos` is a global underscored node name: [RFC 8552 §4.1.5](https://www.rfc-editor.org/rfc/rfc8552#section-4.1.5) requires entering it, with its `TXT` RR type, in the IANA Underscored and Globally Scoped DNS Node Names registry — the [extension registry's external-registrations table](https://protocol.dfos.com/extensions#external-registrations) tracks it.
 
 ### Agreement
 

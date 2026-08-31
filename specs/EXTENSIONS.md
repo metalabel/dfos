@@ -1,6 +1,6 @@
 # DFOS Extension Registry
 
-> **Status — companion document, no clock of its own.** This document defines no protocol rules; it is the single index of the names the specs register — service types under the core's open [services namespace](https://protocol.dfos.com/spec#services), and JWS `typ` values under the core's [`typ` convention](https://protocol.dfos.com/spec#typ-header). Each name's semantics live in its owner spec, which remains normative wherever the two could be read to disagree. A new name lands by adding its row here in the same PR that specifies it, never by minting locally ([CONTRIBUTING](https://github.com/metalabel/dfos/blob/main/CONTRIBUTING.md), item 2). Discuss in the [DFOS](https://nce.dfos.com) space.
+> **Status — companion document, no clock of its own.** This document defines no protocol rules; it is the single index of the names the specs register — service types under the core's open [services namespace](https://protocol.dfos.com/spec#services), JWS `typ` values under the core's [`typ` convention](https://protocol.dfos.com/spec#typ-header), and the names the corpus mints in global registries it does not own ([External Registrations](#external-registrations)). Each name's semantics live in its owner spec, which remains normative wherever the two could be read to disagree. A new name lands by adding its row here in the same PR that specifies it, never by minting locally ([CONTRIBUTING](https://github.com/metalabel/dfos/blob/main/CONTRIBUTING.md), item 2). Discuss in the [DFOS](https://nce.dfos.com) space.
 
 ## Service Types
 
@@ -36,6 +36,20 @@ Every DFOS JWS envelope is typ-scoped: the protected header names exactly one re
 | `did:dfos:request-proof`  | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API request proofs — ride the `Authorization` header of a credential-gated API request and die with the freshness window.                                                                         |
 | `did:dfos:identity-proof` | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API identity proofs — the request proof's credential-less sibling: bind one exact request to a bare DID, authentication only.                                                                     |
 | `did:dfos:key-add`        | [KEY-PROOF](https://protocol.dfos.com/key-proof)      | no    | Key introduction proofs — the candidate key's position-bound possession-and-consent proof; self-signed, presented to ceremonies and embedded in the introducing identity operation's `keyProofs`. |
+
+## External Registrations
+
+The corpus also mints names in two global namespaces DFOS does not own, and there the obligation runs outward: [RFC 8615 §3](https://www.rfc-editor.org/rfc/rfc8615#section-3) requires that an application minting a new well-known URI register its suffix in the IANA [Well-Known URIs registry](https://www.iana.org/assignments/well-known-uris/), and [RFC 8552 §4.1.5](https://www.rfc-editor.org/rfc/rfc8552#section-4.1.5) requires that a public specification calling for a global underscored DNS node name enter it in the IANA [Underscored and Globally Scoped DNS Node Names registry](https://www.iana.org/assignments/dns-parameters/). This table tracks those registrations the way the tables above track the internal ones — one row per name, corrected in place as the registries change. A **Registered** cell of `—` is a name the registry does not list.
+
+| Name                          | Registry                                              | Owner spec                                                                                          | Registered |
+| ----------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------- |
+| `/.well-known/dfos-relay`     | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))          | [WEB-RELAY](https://protocol.dfos.com/web-relay#well-known-endpoint-get-well-knowndfos-relay)       | —          |
+| `/.well-known/dfos-app.json`  | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))          | [SIWD](https://protocol.dfos.com/siwd#the-app-description-document)                                 | —          |
+| `/.well-known/dfos-did`       | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))          | [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding#https--well-knowndfos-did)                | —          |
+| `/.well-known/dfos-key-proof` | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))          | [KEY-PROOF](https://protocol.dfos.com/key-proof#carriage)                                           | —          |
+| `_dfos` (TXT)                 | IANA Underscored DNS Node Names ([RFC 8552](https://www.rfc-editor.org/rfc/rfc8552)) | [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding#dns--txt-at-_dfosdomain)                  | —          |
+
+Registration is an act of the project's stewards, outside any PR; what a PR owns is this table's accuracy and the registration note in each minting spec. A future spec that mints a well-known path or an underscored name adds its row here in the same PR that specifies it, exactly as internal names do.
 
 ## Registries That Live in Their Owner Spec
 

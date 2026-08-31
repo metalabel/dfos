@@ -210,7 +210,7 @@ The protocol does NOT limit individual field string lengths, **document content 
 | Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                            |
 | Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)                     |
 | ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                                    |
-| Timestamp encoding  | Strict ISO-8601 / RFC 3339 UTC, fixed millisecond precision (see Timestamp Grammar) |
+| Timestamp encoding  | ECMA-262 Date Time String Format, UTC form — a strict ISO-8601 / RFC 3339 profile, fixed millisecond precision (see Timestamp Grammar) |
 
 ### ID Alphabet
 
@@ -227,6 +227,8 @@ DIDs: `did:dfos:` + 31-char ID derived from `SHA-256(genesis CID raw bytes)`
 There is a single canonical identifier width. Verifiers MUST reject any `did:dfos:` identifier that is not exactly 31 characters over this alphabet — whether it appears in an operation's signing-key `kid`, in an operation payload, or as the DID of a resolved identity state.
 
 Key IDs: `key_` + 31-char ID. Convention: derive from the key (`key_` + `customAlpha(SHA-256(publicKeyMultibase))` — the input is the multibase **string** a chain carries, not the raw key bytes), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
+
+The nearest standard for a derived key identifier — [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638)'s JWK Thumbprint, with [RFC 8037 §2](https://www.rfc-editor.org/rfc/rfc8037#section-2) supplying the OKP members — is deliberately not used: the thumbprint is defined over a JWK's JSON representation (`{crv, kty, x}`, lexicographically ordered, no whitespace, SHA-256, base64url), and a protocol whose keys are W3C Multikey strings has no JWK — synthesizing one would add a representation hop no standard governs, to produce an identifier shaped unlike every other identifier here. Hashing the multikey string keeps key IDs uniform with `did:dfos:` and content ids: one derivation, one alphabet, one width.
 
 ### Multikey Encoding (W3C Multikey for Ed25519)
 
@@ -276,6 +278,8 @@ That is, in order, with no other characters and no surrounding or internal white
 The value MUST be a real calendar instant: the month/day combination MUST be valid (leap years are honored — e.g. `2024-02-29` is valid, `2023-02-29` is not). A **timezone offset** (e.g. `+00:00`, `-05:00`) MUST NOT appear; only the literal `Z` is permitted. **Leap seconds** (`:60`) MUST be rejected. A lowercase `z`, a missing or differently-sized fractional part, a space in place of `T`, non-zero-padded fields, or any leading/trailing/embedded whitespace MUST be rejected.
 
 A verifier MUST reject any operation whose `createdAt` does not match this grammar. This applies on the read/verify path, not only at write time.
+
+The grammar has a name outside this document: it is [ECMA-262 §21.4.1.32](https://tc39.es/ecma262/#sec-date-time-string-format)'s Date Time String Format in its UTC form — a strict profile of ISO 8601 / [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) that excludes the offset forms, week dates, ordinal dates, and comma separators those admit. That is why JavaScript's `toISOString()` and Zod's `z.iso.datetime({ offset: false, precision: 3 })` land on it with no formatting code, and it gives an implementer in any language a published grammar to target beyond this document's prose.
 
 This grammar is load-bearing for ordering. Timestamp ordering (Chain Validity → **Timestamp ordering** — successor ordering on identity chains, per-branch on content chains) and deterministic head selection (Chain Validity, step 2 — "highest `createdAt`") are implemented as a **lexicographic string comparison** of the `createdAt` field. Because the grammar is fixed-width and zero-padded, lexicographic byte order is identical to chronological order, so the comparison is correct without parsing. An implementation that accepted a looser grammar — variable fractional-second width, an offset form, a space separator, etc. — would compare strings whose lexicographic order no longer tracks time, forking ordering and head selection from conforming implementations. The grammar is therefore a validity rule, not a formatting suggestion.
 
@@ -380,7 +384,7 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   assertKeys: MultikeyPublicKey[],       //   the same single key in all three
   controllerKeys: MultikeyPublicKey[],   //   arrays, which also signs (see Key Possession)
   services?: ServiceEntry[],              // discovery vocabulary (optional)
-  createdAt: string }                     // ISO 8601, ms precision, UTC
+  createdAt: string }                     // timestamp grammar — ms precision, UTC
 
 // Key rotation / modification
 { version: 1, type: "update",
@@ -553,6 +557,8 @@ DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all co
 
 There is no algorithm agility: the verifier never branches on `alg` to select a primitive. Ed25519 (`EdDSA`) is the only signature algorithm.
 
+The profile is, deliberately, the hardened-JWT playbook rather than an invention: §1–§3 are [RFC 8725](https://www.rfc-editor.org/rfc/rfc8725) (JSON Web Token Best Current Practices)'s core recommendations — pin the algorithm, reject `"none"`, never trust header-supplied key material, type every token explicitly (the [`typ` convention](#typ-header)) — applied with algorithm agility removed entirely rather than merely constrained.
+
 ### 1. Algorithm pinning (`alg`)
 
 The protected header `alg` member MUST equal the exact string `"EdDSA"`. Any other value MUST be rejected before any signature check, including (non-exhaustively) `"none"`, `"HS256"`, `"RS256"`, `"ES256"`, the lowercase `"eddsa"`, or an absent `alg`. Verifiers MUST NOT use `alg` to choose a verification primitive; it is checked only for exact equality.
@@ -585,6 +591,8 @@ The following hardening axes are intentionally **not part of v1**. v1 verifiers 
 - **Canonical point encoding (`y < p`)** — rejecting non-canonical `y`-coordinate encodings of `R` and `A`.
 - **Small-order public key rejection** — beyond whatever the underlying library already rejects.
 - **Strict base64url tightening** — rejecting non-canonical base64url padding/alphabet beyond what the decoder already enforces.
+
+The signature-verification axes here are the divergence taxonomy of [Chalkias, Garillot & Nikolaenko, _Taming the Many EdDSAs_](https://eprint.iacr.org/2020/1244) (SSR 2020) — cofactored versus cofactorless verification, small-order and mixed-order components, non-canonical point and scalar encodings — the same analysis behind §4's `S < L` gate and its `ed25519-dalek` note.
 
 These axes only matter for adversarially-constructed keys. Honest DFOS keys are full-order and canonically encoded, and honest signers produce canonical `S`, so honest participants are unaffected. Any residual cross-implementation divergence on these axes is reachable only with adversarial keys and sits outside the v1 profile.
 

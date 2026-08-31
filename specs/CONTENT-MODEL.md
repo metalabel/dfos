@@ -30,6 +30,8 @@ The protocol requires one thing of the content object: it must include a `$schem
 
 Because `$schema` is part of the content object, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema. Documents are self-describing.
 
+The obvious prior art for this vocabulary is [ActivityStreams 2.0](https://www.w3.org/TR/activitystreams-core/) (a W3C Recommendation): `post/v1`, `profile/v1`, and `index/v1` cover the ground of AS2's `Note`/`Article`, `Person`, and `Collection`. It is not adopted for one clean reason: AS2 is JSON-LD, whose whole purpose is that differently-serialized documents can be semantically equal — the exact property a CID-committed document must not have. A vocabulary committed to by hash needs one byte form per document, so DFOS mints plain JSON Schema shapes and keeps semantic equivalence out of the model.
+
 ---
 
 ## Schema Evolution
@@ -61,7 +63,7 @@ The primary content type. Covers short posts and long-form posts via the `format
 | ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                          |
 | `format`      | enum     | yes      | `"short-post"`, `"long-post"` — fixed at chain genesis and not changed by later revisions                     |
-| `publishedAt` | string   | no       | Asserted original publication time (ISO 8601) — see **Two clocks** below                                      |
+| `publishedAt` | string   | no       | Asserted original publication time — an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) `date-time` string, per the published schema's `format`; see **Two clocks** below |
 | `title`       | string   | no       | Post title (typically for long-post format)                                                                   |
 | `body`        | string   | no       | Post body content — markdown (CommonMark) text                                                                |
 | `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                                |
@@ -263,7 +265,7 @@ The [Event Fold](#event-fold) interpretation says a chain's resolved state is th
 
 The canonical order is the [web relay's deterministic head-selection comparator](https://protocol.dfos.com/web-relay#fork-acceptance) generalized from "pick one tip" to "order the whole log."
 
-Head selection prefers, among the chain's tips (operations with no child), the operation with the **highest `createdAt`**, breaking ties by the **highest operation CID** — both compared **byte-wise** over the multibase CID string and the ASCII ISO-8601 timestamp (a code-point comparison, never locale collation, so every implementation agrees; see [Threat Model → Head Selection Is Convergent, Not Canonical](https://protocol.dfos.com/threat-model#head-selection-is-convergent-not-canonical--and-content-only)).
+Head selection prefers, among the chain's tips (operations with no child), the operation with the **highest `createdAt`**, breaking ties by the **highest operation CID** — both compared **byte-wise** over the multibase CID string and the fixed-width ASCII [timestamp-grammar](https://protocol.dfos.com/spec#timestamp-grammar) string (a code-point comparison, never locale collation, so every implementation agrees; see [Threat Model → Head Selection Is Convergent, Not Canonical](https://protocol.dfos.com/threat-model#head-selection-is-convergent-not-canonical--and-content-only)).
 
 The canonical linearization lays that same preference out in full, **ascending**, so the operation head selection would prefer sorts **last**:
 

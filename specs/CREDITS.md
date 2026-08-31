@@ -22,6 +22,8 @@ Anything on the proof plane is world-readable by construction. Operations gossip
 
 Putting the claim **inside the document bytes** puts attribution on the same side of the boundary as the thing it attributes. A claim on gated content is exactly as visible as the content: readers who can fetch the document can verify the credit; readers who cannot, cannot. Nothing about the claim needs its own access-control story, because it inherits the document's. This is not a limitation worked around — it is the coherent position, and it is why credits are a document-layer envelope rather than a fourth kind of gossiped operation.
 
+The two-way bind itself has a named neighbor. Separating _who signed the container_ from _who made the work_ is the problem [C2PA](https://c2pa.org/specifications/)'s Creator Assertions Working Group solves with its [identity assertion](https://cawg.io/identity/): a credited party's own cryptographic signature inside a manifest someone else signed — structurally the same move as `claim` inside a `credits[]` entry. C2PA's machinery — X.509 credential chains, trust lists, manifests embedded in the asset via JUMBF — is genuinely wrong for DFOS, and the reason is this boundary: an asset-embedded manifest travels wherever the file's bytes go, which makes attribution exactly as public as the file's distribution. A claim living in gated document bytes makes the opposite promise — attribution can never become more public than its content — and that promise is the design. Same problem, opposite privacy posture.
+
 The cost is real and worth naming: there is no global "show me everything Alice claims" query. That index would be precisely the enumeration leak above. A consumer verifies the credits on content it can already read.
 
 ---
