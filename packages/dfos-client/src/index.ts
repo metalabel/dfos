@@ -11,6 +11,7 @@
 */
 
 export { createClient, resolvers } from './client';
+export { DivergenceError, divergenceErrorFrom } from './resolvers';
 export { createRevocationChecker } from './revocation';
 export { memoryStore } from './store/memory';
 

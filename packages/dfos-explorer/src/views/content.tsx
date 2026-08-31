@@ -10,11 +10,17 @@
 
 */
 
-import type { Resolved, ResolvedContent } from '@metalabel/dfos-client';
+import {
+  divergenceErrorFrom,
+  type DivergenceError,
+  type Resolved,
+  type ResolvedContent,
+} from '@metalabel/dfos-client';
 import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { Credits, documentCredits } from '../components/credits';
+import { DivergedPanel } from '../components/diverged';
 import { IndexPanel } from '../components/index-view';
 import { JsonView } from '../components/json-view';
 import { MediaPanel } from '../components/media';
@@ -117,6 +123,13 @@ export const Content = (props: { id: string }) => {
   // ever ADD a revocation, never license "active"
   const [localRevoked, setLocalRevoked] = useState<RevocationView>(emptyRevocations);
   const [error, setError] = useState('');
+  // The failure with its own way out. It can name the CREATOR's identity chain
+  // rather than this content chain — resolving a content chain resolves the
+  // identity that signed it — so the panel discards whichever chain diverged,
+  // read off the error rather than assumed from the page (components/diverged.tsx).
+  const [diverged, setDiverged] = useState<DivergenceError | null>(null);
+  // bumped by the discard; dropping the pin is only half the escape hatch
+  const [reverify, setReverify] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -128,6 +141,7 @@ export const Content = (props: { id: string }) => {
     setGrants(null);
     setRevoked(emptyRevocations());
     setError('');
+    setDiverged(null);
     const relays = getRelays();
     const client = getClient();
 
@@ -202,7 +216,11 @@ export const Content = (props: { id: string }) => {
             });
         }
       } catch (e) {
-        if (!dead) setError(e instanceof Error ? e.message : String(e));
+        if (dead) return;
+        // wrapped once by the fan-out, twice when the creator's chain is the one
+        // that diverged — the client's own reader unwraps it either way
+        setDiverged(divergenceErrorFrom(e) ?? null);
+        setError(e instanceof Error ? e.message : String(e));
       }
     })();
 
@@ -232,7 +250,9 @@ export const Content = (props: { id: string }) => {
     return () => {
       dead = true;
     };
-  }, [props.id]);
+    // `reverify` is the discard's other half: a dropped pin only becomes a
+    // resolved page once this lane runs again against a cold cache
+  }, [props.id, reverify]);
 
   // separate index lane: the credentials-by-resource reverse lookup only exists on
   // an index-capable relay, so it keys on [id, indexed] and stands apart from the
@@ -301,13 +321,18 @@ export const Content = (props: { id: string }) => {
   // the credentials route answered; otherwise the local fold (which always exists).
   const grantsFromRelayIndex = indexCredSource(indexed, grantsIndexErr);
 
-  const pill = error
-    ? { state: 'bad' as const, text: 'verification failed' }
-    : !resolved
-      ? { state: 'pending' as const, text: 'verifying locally…' }
-      : headMatch
-        ? { state: 'ok' as const, text: 'verified locally' }
-        : { state: 'warn' as const, text: 'verified · tip drift' };
+  // a divergence is its own verdict, not a shade of "failed": nothing is
+  // unproven, two proved histories disagree — and it is the one bad state with
+  // an action attached, so it says which state it is
+  const pill = diverged
+    ? { state: 'bad' as const, text: 'chain pin diverged' }
+    : error
+      ? { state: 'bad' as const, text: 'verification failed' }
+      : !resolved
+        ? { state: 'pending' as const, text: 'verifying locally…' }
+        : headMatch
+          ? { state: 'ok' as const, text: 'verified locally' }
+          : { state: 'warn' as const, text: 'verified · tip drift' };
   // Credits read THIS doc's bytes, so surface them only once the served bytes have
   // been re-hashed to the committed document CID AND the chain verified — the same
   // gate the avatar path uses (see SchemaPanels). Otherwise a relay could dress up
@@ -399,48 +424,52 @@ export const Content = (props: { id: string }) => {
         {resolved ? <ProvenanceLine provenance={resolved.provenance} /> : null}
       </Panel>
 
-      <Panel title="verification" right={<span class="lbl">re-run in your browser</span>}>
-        <Checks>
-          {error ? (
-            <Check state="bad" note={error}>
-              verification failed
-            </Check>
-          ) : !resolved ? (
-            <Check state="pend">resolving creator identity + folding chain…</Check>
-          ) : (
-            <>
-              <Check state="ok" note={short(creatorDID)}>
-                creator identity verified locally
+      {diverged ? (
+        <DivergedPanel err={diverged} onDiscarded={() => setReverify((n) => n + 1)} />
+      ) : (
+        <Panel title="verification" right={<span class="lbl">re-run in your browser</span>}>
+          <Checks>
+            {error ? (
+              <Check state="bad" note={error}>
+                verification failed
               </Check>
-              <Check state="ok" note="signatures, CIDs, and linkage recomputed here">
-                {rows.length} content op(s) re-verified
-              </Check>
-              {claimHead ? (
-                <Check
-                  state={headMatch ? 'ok' : 'warn'}
-                  note={
-                    headMatch
-                      ? undefined
-                      : `local ${short(chain?.headCID)} vs relay ${short(claimHead)}`
-                  }
-                >
-                  {headMatch
-                    ? 'local tip == relay-asserted tip'
-                    : 'local tip differs from relay-asserted tip'}
+            ) : !resolved ? (
+              <Check state="pend">resolving creator identity + folding chain…</Check>
+            ) : (
+              <>
+                <Check state="ok" note={short(creatorDID)}>
+                  creator identity verified locally
                 </Check>
-              ) : null}
-              {revAxis ? (
-                <Check
-                  state="warn"
-                  note="this chain contains delegated ops; non-revocation of the authorizing credential is not provable"
-                >
-                  revocation status unverifiable
+                <Check state="ok" note="signatures, CIDs, and linkage recomputed here">
+                  {rows.length} content op(s) re-verified
                 </Check>
-              ) : null}
-            </>
-          )}
-        </Checks>
-      </Panel>
+                {claimHead ? (
+                  <Check
+                    state={headMatch ? 'ok' : 'warn'}
+                    note={
+                      headMatch
+                        ? undefined
+                        : `local ${short(chain?.headCID)} vs relay ${short(claimHead)}`
+                    }
+                  >
+                    {headMatch
+                      ? 'local tip == relay-asserted tip'
+                      : 'local tip differs from relay-asserted tip'}
+                  </Check>
+                ) : null}
+                {revAxis ? (
+                  <Check
+                    state="warn"
+                    note="this chain contains delegated ops; non-revocation of the authorizing credential is not provable"
+                  >
+                    revocation status unverifiable
+                  </Check>
+                ) : null}
+              </>
+            )}
+          </Checks>
+        </Panel>
+      )}
 
       <SchemaPanels
         contentId={props.id}

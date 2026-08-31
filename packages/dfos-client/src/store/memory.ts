@@ -18,5 +18,8 @@ export const memoryStore = (): Store => {
     async set(key: string, value: unknown): Promise<void> {
       map.set(key, value);
     },
+    async delete(key: string): Promise<void> {
+      map.delete(key);
+    },
   };
 };

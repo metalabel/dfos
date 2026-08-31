@@ -361,6 +361,7 @@ export const createClient = (config: ClientConfig): Client => {
   return {
     callbacks,
     resolve,
+    discardCachedChain: resolvers.discardCachedChain,
     identity,
     content,
     credential,

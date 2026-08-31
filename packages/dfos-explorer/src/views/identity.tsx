@@ -9,11 +9,13 @@
 
 */
 
-import type {
-  IndexContentRow,
-  IndexCountersignatureRow,
-  IndexCredentialRow,
-  Resolved,
+import {
+  divergenceErrorFrom,
+  type DivergenceError,
+  type IndexContentRow,
+  type IndexCountersignatureRow,
+  type IndexCredentialRow,
+  type Resolved,
 } from '@metalabel/dfos-client';
 import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
@@ -22,6 +24,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { BindingEvidence } from '../components/binding-evidence';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { ContentChip } from '../components/content-chip';
+import { DivergedPanel } from '../components/diverged';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { OpTable } from '../components/op-table';
 import { ProfileCard } from '../components/profile';
@@ -208,6 +211,13 @@ export const Identity = (props: { did: string }) => {
   const witnessRun = useRef(0);
   const issuedRun = useRef(0);
   const [error, setError] = useState('');
+  // The failure that has its own way out: the relays' log CONTRADICTS the prefix
+  // this browser verified earlier, so no amount of retrying resolves it — the pin
+  // has to be discarded, and only a person can decide that (components/diverged.tsx).
+  const [diverged, setDiverged] = useState<DivergenceError | null>(null);
+  // bumped by the discard, and read by the fold effect below: dropping the pin is
+  // only half the escape hatch, re-verifying is the other half
+  const [reverify, setReverify] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -219,6 +229,7 @@ export const Identity = (props: { did: string }) => {
     setWitnessRelation(null);
     setWitnessRelations([]);
     setError('');
+    setDiverged(null);
     const relays = getRelays();
 
     void fetchClaim('identities', props.did, relays).then((c) => {
@@ -242,7 +253,11 @@ export const Identity = (props: { did: string }) => {
         // up there without a full sync (relay-asserted routing metadata only)
         void jitIndexChain(props.did, 'identity-op', log.value, generation);
       } catch (e) {
-        if (!dead) setError(e instanceof Error ? e.message : String(e));
+        if (dead) return;
+        // a divergence arrives wrapped by the fan-out (and, for a chain reached
+        // through another, wrapped twice) — the client's own reader unwraps it
+        setDiverged(divergenceErrorFrom(e) ?? null);
+        setError(e instanceof Error ? e.message : String(e));
       }
     })();
 
@@ -286,7 +301,9 @@ export const Identity = (props: { did: string }) => {
     return () => {
       dead = true;
     };
-  }, [props.did]);
+    // `reverify` is the discard's other half: a dropped pin only becomes a
+    // resolved page once this lane runs again against a cold cache
+  }, [props.did, reverify]);
 
   /**
    * One page of the countersignatures-by-witness lookup, ready to append.
@@ -532,13 +549,18 @@ export const Identity = (props: { did: string }) => {
   const localHead = rows.length > 0 ? rows[rows.length - 1]?.cid : undefined;
   const headMatch = !!localHead && !!claimHead && localHead === claimHead;
 
-  const pill = error
-    ? { state: 'bad' as CheckState, text: 'verification failed' }
-    : !verified
-      ? { state: 'pend' as CheckState, text: 'verifying locally…' }
-      : !claimHead || headMatch
-        ? { state: 'ok' as CheckState, text: 'verified locally' }
-        : { state: 'warn' as CheckState, text: 'verified · tip drift' };
+  // a divergence is its own verdict, not a shade of "failed": nothing here is
+  // unproven, two proved histories disagree — and it is the one bad state with an
+  // action attached, so it says which state it is
+  const pill = diverged
+    ? { state: 'bad' as CheckState, text: 'chain pin diverged' }
+    : error
+      ? { state: 'bad' as CheckState, text: 'verification failed' }
+      : !verified
+        ? { state: 'pend' as CheckState, text: 'verifying locally…' }
+        : !claimHead || headMatch
+          ? { state: 'ok' as CheckState, text: 'verified locally' }
+          : { state: 'warn' as CheckState, text: 'verified · tip drift' };
 
   const services = ('services' in state ? state.services : undefined) ?? [];
 
@@ -625,53 +647,57 @@ export const Identity = (props: { did: string }) => {
         {verified ? <ProvenanceLine provenance={verified.provenance} /> : null}
       </Panel>
 
-      <Panel title="verification" right={<span class="lbl">re-run in your browser</span>}>
-        <Checks>
-          {error ? (
-            <Check state="bad" note={error}>
-              verification failed
-            </Check>
-          ) : !verified ? (
-            <Check state="pend">folding op log…</Check>
-          ) : (
-            <>
-              <Check state="ok" note="did re-derived from genesis op CID — matches">
-                DID self-certifies
+      {diverged ? (
+        <DivergedPanel err={diverged} onDiscarded={() => setReverify((n) => n + 1)} />
+      ) : (
+        <Panel title="verification" right={<span class="lbl">re-run in your browser</span>}>
+          <Checks>
+            {error ? (
+              <Check state="bad" note={error}>
+                verification failed
               </Check>
-              <Check
-                state="ok"
-                note={
-                  verified.provenance.fromCache
-                    ? 'verified prefix from cache + verified forward'
-                    : 'fetched and verified live'
-                }
-              >
-                {rows.length} operation(s) — every signature and CID recomputed here
-              </Check>
-              {/* one amber bucket, several very different underlying situations.
+            ) : !verified ? (
+              <Check state="pend">folding op log…</Check>
+            ) : (
+              <>
+                <Check state="ok" note="did re-derived from genesis op CID — matches">
+                  DID self-certifies
+                </Check>
+                <Check
+                  state="ok"
+                  note={
+                    verified.provenance.fromCache
+                      ? 'verified prefix from cache + verified forward'
+                      : 'fetched and verified live'
+                  }
+                >
+                  {rows.length} operation(s) — every signature and CID recomputed here
+                </Check>
+                {/* one amber bucket, several very different underlying situations.
                   The domain view splits the same comparison into ahead / behind /
                   diverged because it holds two ORDERED logs; here we hold one tip
                   and one asserted tip, and a tip mismatch alone cannot tell a
                   relay that is simply behind from one signing a contradiction. So
                   the note says so rather than implying the amber means one thing. */}
-              {claimHead ? (
-                <Check
-                  state={headMatch ? 'ok' : 'warn'}
-                  note={
-                    headMatch
-                      ? undefined
-                      : `local ${short(localHead)} vs relay ${short(claimHead)}. drift covers everything from benign lag to a signed contradiction — the operation history below, and the domain page's relay checks, are what tell those apart`
-                  }
-                >
-                  {headMatch
-                    ? 'local tip == relay-asserted tip'
-                    : 'local tip differs from relay-asserted tip'}
-                </Check>
-              ) : null}
-            </>
-          )}
-        </Checks>
-      </Panel>
+                {claimHead ? (
+                  <Check
+                    state={headMatch ? 'ok' : 'warn'}
+                    note={
+                      headMatch
+                        ? undefined
+                        : `local ${short(localHead)} vs relay ${short(claimHead)}. drift covers everything from benign lag to a signed contradiction — the operation history below, and the domain page's relay checks, are what tell those apart`
+                    }
+                  >
+                    {headMatch
+                      ? 'local tip == relay-asserted tip'
+                      : 'local tip differs from relay-asserted tip'}
+                  </Check>
+                ) : null}
+              </>
+            )}
+          </Checks>
+        </Panel>
+      )}
 
       {stateVerified && originClaim.kind === 'claimed' ? (
         <OriginBindingPanel did={props.did} claim={originClaim} />
