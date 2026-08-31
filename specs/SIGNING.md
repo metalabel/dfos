@@ -65,16 +65,16 @@ A sign request is a JWS in the same envelope family as [credentials](https://pro
 }
 ```
 
-| Field        | Type             | Required | Description                                                                   |
-| ------------ | ---------------- | -------- | ----------------------------------------------------------------------------- |
-| `version`    | `1`              | yes      | Schema version (literal `1`)                                                  |
-| `type`       | `"sign-request"` | yes      | Literal discriminator                                                         |
-| `did`        | string           | yes      | The requester DID — MUST equal the `kid`'s DID                                |
-| `subject`    | string           | yes      | The target signer DID — the only identity being asked                         |
-| `payloadTyp` | string           | yes      | The JWS `typ` the produced artifact MUST carry (e.g. `did:dfos:credit-claim`) |
-| `payload`    | string           | yes      | **Unpadded base64url of the exact bytes to be signed** — see below            |
-| `createdAt`  | string           | yes      | ISO 8601, millisecond precision, UTC                                          |
-| `expiresAt`  | string           | yes      | ISO 8601, millisecond precision, UTC — hard deadline                          |
+| Field        | Type             | Required | Description                                                                                                            |
+| ------------ | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `version`    | `1`              | yes      | Schema version (literal `1`)                                                                                           |
+| `type`       | `"sign-request"` | yes      | Literal discriminator                                                                                                  |
+| `did`        | string           | yes      | The requester DID — MUST equal the `kid`'s DID                                                                         |
+| `subject`    | string           | yes      | The target signer DID — the only identity being asked                                                                  |
+| `payloadTyp` | string           | yes      | The JWS `typ` the produced artifact MUST carry (e.g. `did:dfos:credit-claim`)                                          |
+| `payload`    | string           | yes      | **Unpadded base64url of the exact bytes to be signed** — see below                                                     |
+| `createdAt`  | string           | yes      | The [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar) (millisecond precision, UTC)                 |
+| `expiresAt`  | string           | yes      | The [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar) (millisecond precision, UTC) — hard deadline |
 
 Unknown top-level fields on the **envelope** are preserved-and-ignored, per the protocol's MUST-ignore-unknown rule — the CID commits to the exact bytes, so a verifier that stripped unknown keys would fail its own CID check. (The **target payload** inside `payload` is held to the opposite, stricter standard at signing time — see [Signer Obligations](#signer-obligations-wysiwys).)
 
@@ -84,7 +84,7 @@ Unknown top-level fields on the **envelope** are preserved-and-ignored, per the 
 
 **`payloadTyp` names the artifact, and the artifact's own spec governs it.** The envelope does not say which of the subject's keys should sign, what the payload schema is, or what the artifact will mean — the spec behind `payloadTyp` already says all three, and restating any of it here would create a second authority that could disagree with the first. In particular there is no `keyRole` field: if `did:dfos:credit-claim` accepts any key role, so does a requested credit claim.
 
-**Timestamps are whole-second.** Signers of the envelope MUST normalize `createdAt` and `expiresAt` to whole seconds (`.000Z` millisecond component) — the canonical form this envelope family uses, applied to caller-supplied overrides exactly as to "now" (floor, never round). The grammar remains millisecond-precision ISO 8601; the normalization binds producers so that re-deriving a request from the same inputs lands on the same CID on every implementation.
+**Timestamps are whole-second.** Signers of the envelope MUST normalize `createdAt` and `expiresAt` to whole seconds (`.000Z` millisecond component) — the canonical form this envelope family uses, applied to caller-supplied overrides exactly as to "now" (floor, never round). The grammar remains the millisecond-precision [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar); the normalization binds producers so that re-deriving a request from the same inputs lands on the same CID on every implementation.
 
 ### Expiry
 
@@ -123,7 +123,7 @@ To verify a sign-request envelope, given the token, a way to resolve identities,
 
 1. **Size.** If the token exceeds **8192 bytes**, reject. Check this before any decode.
 2. **Decode** the JWS and apply the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile) header gates: `typ` MUST be exactly `did:dfos:sign-request`, `alg` exactly `EdDSA`, a `crit` member rejects, an embedded key member (`jwk`, `x5c`, …) rejects. A header whose `typ` or `kid` is missing or not a string rejects.
-3. **Payload schema.** `version` MUST be `1`, `type` MUST be `"sign-request"`, `did` and `subject` MUST be non-empty and carry the `did:` prefix, `payloadTyp` MUST be a non-empty string, `payload` MUST be a non-empty string, `createdAt` and `expiresAt` MUST parse as ISO 8601 millisecond-precision UTC. (The `did:` checks are prefix checks, not full `did:dfos` validation.)
+3. **Payload schema.** `version` MUST be `1`, `type` MUST be `"sign-request"`, `did` and `subject` MUST be non-empty and carry the `did:` prefix, `payloadTyp` MUST be a non-empty string, `payload` MUST be a non-empty string, `createdAt` and `expiresAt` MUST parse per the [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar). (The `did:` checks are prefix checks, not full `did:dfos` validation.)
 4. **Target bytes.** `payload` MUST decode as unpadded base64url; the decoded bytes MUST be non-empty and MUST NOT exceed **4096 bytes**.
 5. **`kid` ↔ `did`.** The `kid`'s DID portion MUST equal `payload.did`.
 6. **Resolve the requester** named by `did` to its **current** identity state. Unresolvable → **unverifiable**. Deleted → reject. Resolvable with no key matching the `kid` fragment in current state → reject.

@@ -67,15 +67,15 @@ Historical resolution is a **requirement on the resolver a verifier is given**, 
 }
 ```
 
-| Field             | Type             | Required | Description                                                       |
-| ----------------- | ---------------- | -------- | ----------------------------------------------------------------- |
-| `version`         | `1`              | yes      | Schema version (literal `1`)                                      |
-| `type`            | `"credit-claim"` | yes      | Literal discriminator                                             |
-| `contentId`       | string           | yes      | The 31-char content chain id this claim binds to — **the binder** |
-| `did`             | string           | yes      | The claimant DID — MUST equal the `kid`'s DID                     |
-| `role`            | string           | yes      | The claimed role — open vocabulary, compared byte-exact           |
-| `createdAt`       | string           | yes      | ISO 8601, millisecond precision, UTC                              |
-| `asOfDocumentCID` | CID              | no       | Optional pinned document state (see **Content-strength claims**)  |
+| Field             | Type             | Required | Description                                                                                            |
+| ----------------- | ---------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `version`         | `1`              | yes      | Schema version (literal `1`)                                                                           |
+| `type`            | `"credit-claim"` | yes      | Literal discriminator                                                                                  |
+| `contentId`       | string           | yes      | The 31-char content chain id this claim binds to — **the binder**                                      |
+| `did`             | string           | yes      | The claimant DID — MUST equal the `kid`'s DID                                                          |
+| `role`            | string           | yes      | The claimed role — open vocabulary, compared byte-exact                                                |
+| `createdAt`       | string           | yes      | The [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar) (millisecond precision, UTC) |
+| `asOfDocumentCID` | CID              | no       | Optional pinned document state (see **Content-strength claims**)                                       |
 
 Unknown top-level fields are preserved-and-ignored, per the protocol's MUST-ignore-unknown rule. The CID commits to the exact bytes, so a verifier that stripped unknown keys would fail its own CID check.
 
@@ -203,7 +203,7 @@ To verify one `credits[]` entry, given the entry, the `contentId` of the chain w
 2. **Size.** If the `claim` token exceeds **4096 bytes**, the entry is **invalid**. Check this before any decode.
 3. **Decode** the JWS. Failure to decode → **invalid**.
 4. **`typ`.** MUST be `did:dfos:credit-claim`. Anything else → **invalid**. (In particular, another envelope type from this family — a credential, a revocation, a countersign — is not a credit claim, no matter how well it verifies.)
-5. **Payload schema.** `version` MUST be `1`, `type` MUST be `credit-claim`, `contentId` MUST be a 31-char content chain id, `did` MUST be non-empty and carry the `did:` prefix, `role` MUST be non-empty, `createdAt` MUST parse as ISO 8601 millisecond-precision UTC, and `asOfDocumentCID` — if the key is PRESENT — MUST be a non-empty string. Otherwise → **invalid**. (The `did:` check is a prefix check, not full `did:dfos` validation: a claimant is not required to be a `did:dfos` identifier.)
+5. **Payload schema.** `version` MUST be `1`, `type` MUST be `credit-claim`, `contentId` MUST be a 31-char content chain id, `did` MUST be non-empty and carry the `did:` prefix, `role` MUST be non-empty, `createdAt` MUST parse per the [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar), and `asOfDocumentCID` — if the key is PRESENT — MUST be a non-empty string. Otherwise → **invalid**. (The `did:` check is a prefix check, not full `did:dfos` validation: a claimant is not required to be a `did:dfos` identifier.)
 6. **`kid` ↔ `did`.** The `kid`'s DID portion MUST equal `payload.did`. Otherwise → **invalid**.
 7. **Resolve the claimant identity** named by `payload.did` and find the key named by the `kid` fragment. Unresolvable identity → **unverifiable**. Resolvable identity with no such key → **invalid**.
 8. **Signature.** Verify the JWS under that key. Failure → **invalid**.
