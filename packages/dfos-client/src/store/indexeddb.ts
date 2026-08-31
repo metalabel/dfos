@@ -26,6 +26,7 @@ interface IdbRequest<T> {
 interface IdbObjectStore {
   get(key: string): IdbRequest<unknown>;
   put(value: unknown, key: string): IdbRequest<unknown>;
+  delete(key: string): IdbRequest<unknown>;
 }
 
 interface IdbTransaction {
@@ -94,6 +95,14 @@ export const indexedDbStore = (dbName = 'dfos-client'): Store => {
       const db = await open();
       const store = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
       await promisify(store.put(value, key));
+    },
+    // IndexedDB's own delete succeeds on a key that is not there, which is
+    // exactly the idempotence the caller wants: discarding a chain that was
+    // never cached is not a failure, it is already the requested state.
+    async delete(key: string): Promise<void> {
+      const db = await open();
+      const store = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
+      await promisify(store.delete(key));
     },
   };
 };

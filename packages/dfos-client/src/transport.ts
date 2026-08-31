@@ -201,10 +201,15 @@ export const fanOutLog = async <V>(
   }
 
   // candidates existed but every one failed verification — that is an error,
-  // not an absence: surface it rather than pretending nothing answered
+  // not an absence: surface it rather than pretending nothing answered. The
+  // original is carried as `cause`: the summary message is what a human reads,
+  // but a TYPED failure (a divergence against the cached prefix) has to survive
+  // the wrap or the caller can only match on message text.
   if (lastVerifyError !== undefined) {
     const message = lastVerifyError instanceof Error ? lastVerifyError.message : 'unknown error';
-    throw new Error(`all candidate logs failed verification: ${message}`);
+    throw new Error(`all candidate logs failed verification: ${message}`, {
+      cause: lastVerifyError,
+    });
   }
 
   // no relay answered at all

@@ -148,6 +148,13 @@ export interface Callbacks {
 export interface Store {
   get(key: string): Promise<unknown | undefined>;
   set(key: string, value: unknown): Promise<void>;
+  /**
+   * Forget one key. Idempotent, and absent keys are not an error. Optional so a
+   * store written against the two-method shape still satisfies this interface;
+   * a store without it makes `client.discardCachedChain()` answer `false`
+   * instead of quietly doing nothing. Both bundled stores implement it.
+   */
+  delete?(key: string): Promise<void>;
 }
 
 // -----------------------------------------------------------------------------
@@ -354,6 +361,18 @@ export interface Client {
 
   /** No-throw, self-routing "is this legit". */
   verify(jws: string, options?: CallOptions): Promise<VerifyResult<unknown>>;
+
+  /**
+   * Forget the verified prefix cached for ONE chain, so the next read of it
+   * folds cold from genesis. The explicit way out of a `DivergenceError`: the
+   * client never discards a pinned prefix on its own, because a contradiction
+   * that heals itself is a contradiction nobody sees. Narrow (this chain only),
+   * idempotent, and local — no relay is touched and no operation is destroyed.
+   *
+   * `false` means the configured store exposes no `delete` and nothing was
+   * forgotten; both bundled stores return `true`.
+   */
+  discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
 
   /** Raw floor. */
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;

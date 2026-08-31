@@ -55,6 +55,81 @@ interface CachedChain<T> {
   lastCreatedAt: string;
 }
 
+/** The store key one chain's verified prefix is filed under. The ONE place the
+ *  format lives — the resolvers write it and `discardCachedChain` deletes it. */
+const cacheKey = (kind: 'identity' | 'content', id: string): string => `${kind}:${id}`;
+
+// -----------------------------------------------------------------------------
+// divergence — the live log CONTRADICTS the verified prefix
+// -----------------------------------------------------------------------------
+
+/**
+ * The relays' log for a chain disagrees with the verified prefix this client
+ * cached: at a position the cache already covers, the operation served is not
+ * the operation this client proved. Distinct from `StaleAnswerError` (a relay
+ * merely behind) and from a failed proof (a chain that does not verify) — here
+ * two histories contradict each other about what already happened, so verifying
+ * forward from the trusted prefix is not a thing that can be done.
+ *
+ * NOTHING IS DISCARDED HERE. Dropping a verified prefix is a decision about
+ * trust, not an error path: a client that healed itself silently would erase the
+ * only evidence that a rewrite happened, which is the whole reason the prefix is
+ * pinned. `client.discardCachedChain()` is the explicit undo, and it is the
+ * caller's to call.
+ *
+ * The error is thrown as a CANDIDATE FILTER, inside the fan-out. A fan-out where
+ * every relay diverges surfaces its own error carrying this one as `cause`, so
+ * callers reach it with `divergenceErrorFrom(err)` rather than a bare
+ * `instanceof` on what they caught.
+ */
+export class DivergenceError extends Error {
+  readonly chainType: 'identity' | 'content';
+  readonly chainId: string;
+  /** Head CID of the verified prefix this client holds. */
+  readonly cachedHeadCID: string;
+  /**
+   * Head CID of the log the relays served, as that operation's own JWS header
+   * names it — orientation for a human, never a proof. Empty when the served log
+   * was empty or its head named no CID.
+   */
+  readonly liveHeadCID: string;
+
+  constructor(input: {
+    chainType: 'identity' | 'content';
+    chainId: string;
+    cachedHeadCID: string;
+    liveHeadCID: string;
+  }) {
+    super(`${input.chainType} log diverges from the verified cached prefix: ${input.chainId}`);
+    // survives bundlers that rewrite class names, and cross-realm callers where
+    // `instanceof` is already unreliable
+    this.name = 'DivergenceError';
+    this.chainType = input.chainType;
+    this.chainId = input.chainId;
+    this.cachedHeadCID = input.cachedHeadCID;
+    this.liveHeadCID = input.liveHeadCID;
+  }
+}
+
+/** How far down a `cause` chain to look. A content read whose creator identity
+ *  diverges nests two fan-out wrappers; nothing nests deeper than that. */
+const CAUSE_DEPTH = 8;
+
+/**
+ * Find the `DivergenceError` behind a caught error, walking the `cause` chain —
+ * the fan-out wraps a candidate's verification failure, and a content read wraps
+ * the identity read inside it. Returns `undefined` when the failure was anything
+ * else, so a caller can branch on the answer instead of matching message text.
+ */
+export const divergenceErrorFrom = (err: unknown): DivergenceError | undefined => {
+  let cursor = err;
+  for (let depth = 0; depth < CAUSE_DEPTH && cursor instanceof Error; depth++) {
+    if (cursor instanceof DivergenceError) return cursor;
+    cursor = cursor.cause;
+  }
+  return undefined;
+};
+
 const opMeta = (jws: string): { cid: string; createdAt: string } => {
   const decoded = decodeJwsUnsafe(jws);
   const cid = typeof decoded?.header.cid === 'string' ? decoded.header.cid : '';
@@ -155,6 +230,7 @@ interface VerifiedCandidate<T> {
 export interface Resolvers {
   getIdentityChain(did: string, options?: CallOptions): Promise<IdentityResolution>;
   getContentChain(contentId: string, options?: CallOptions): Promise<ContentResolution>;
+  discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
   callbacks(): Callbacks;
 }
 
@@ -165,7 +241,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     did: string,
     options?: CallOptions,
   ): Promise<IdentityResolution> => {
-    const key = `identity:${did}`;
+    const key = cacheKey('identity', did);
     const cached = options?.fresh
       ? undefined
       : ((await deps.store.get(key)) as CachedChain<VerifiedIdentity> | undefined);
@@ -196,7 +272,12 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       if (
         cached.log.some((jws, index) => index < entries.length && entries[index]!.jwsToken !== jws)
       ) {
-        throw new Error(`identity log diverges from the verified cached prefix: ${did}`);
+        throw new DivergenceError({
+          chainType: 'identity',
+          chainId: did,
+          cachedHeadCID: cached.headCID,
+          liveHeadCID: opMeta(entries[entries.length - 1]?.jwsToken ?? '').cid,
+        });
       }
       if (entries.length < cached.log.length) {
         throw new StaleAnswerError(`identity log is behind the verified cached prefix: ${did}`);
@@ -290,7 +371,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     contentId: string,
     options?: CallOptions,
   ): Promise<ContentResolution> => {
-    const key = `content:${contentId}`;
+    const key = cacheKey('content', contentId);
     const cached = options?.fresh
       ? undefined
       : ((await deps.store.get(key)) as CachedChain<VerifiedContentChain> | undefined);
@@ -323,7 +404,12 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       if (
         cached.log.some((jws, index) => index < entries.length && entries[index]!.jwsToken !== jws)
       ) {
-        throw new Error(`content log diverges from the verified cached prefix: ${contentId}`);
+        throw new DivergenceError({
+          chainType: 'content',
+          chainId: contentId,
+          cachedHeadCID: cached.headCID,
+          liveHeadCID: opMeta(entries[entries.length - 1]?.jwsToken ?? '').cid,
+        });
       }
       if (entries.length < cached.log.length) {
         throw new StaleAnswerError(
@@ -386,5 +472,22 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     };
   };
 
-  return { getIdentityChain, getContentChain, callbacks };
+  /**
+   * Forget the verified prefix for ONE chain. Narrow by construction — it names
+   * a single store key and touches nothing else — idempotent, and a no-op when
+   * that chain was never cached. The next read of the chain is a cold one: the
+   * log drains from zero and every signature and CID is verified again.
+   *
+   * Reports whether the cache was actually asked to forget: `false` means the
+   * configured store has no `delete` seam, which is a real answer a caller can
+   * show rather than a silent nothing. Both bundled stores have one.
+   */
+  const discardCachedChain = async (kind: 'identity' | 'content', id: string): Promise<boolean> => {
+    const remove = deps.store.delete?.bind(deps.store);
+    if (!remove) return false;
+    await remove(cacheKey(kind, id));
+    return true;
+  };
+
+  return { getIdentityChain, getContentChain, discardCachedChain, callbacks };
 };

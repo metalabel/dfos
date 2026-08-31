@@ -57,6 +57,34 @@ createClient({ relays: [...], quorum: 2 }); // require 2 relays to return the sa
 
 `quorum: 1` (default) is first-wins with failover. `provenance.agreed` reports whether the threshold was met.
 
+### Divergence — and the way out of it
+
+The cached prefix is a **pin**: once a chain's first N operations have verified here, a later read has to extend them. A relay answering with a _different_ operation at a position the pin covers is contradicting proof rather than carrying news, so the read fails with a `DivergenceError`.
+
+```typescript
+import { divergenceErrorFrom } from '@metalabel/dfos-client';
+
+try {
+  await client.identity(did);
+} catch (err) {
+  const d = divergenceErrorFrom(err); // walks `cause` — the fan-out wraps its candidate's failure
+  if (d) {
+    d.chainType; // 'identity' | 'content' — a content read can diverge on its CREATOR's chain
+    d.chainId;
+    d.cachedHeadCID; // the tip this client proved
+    d.liveHeadCID; // the tip the relays serve now
+  }
+}
+```
+
+**Nothing is discarded automatically.** A client that healed itself would erase the only evidence a rewrite happened, which is the reason the prefix is pinned at all. The undo is explicit and per-chain:
+
+```typescript
+await client.discardCachedChain('identity', did); // this chain's prefix only; nothing else, nowhere else
+```
+
+The next read of that chain folds cold from genesis and recomputes every signature and CID. Deleting is local: no relay is touched and no operation is destroyed. It is idempotent, safe for a chain that was never cached, and answers `false` only when the configured `Store` exposes no `delete` (both bundled stores do).
+
 ### The free floor
 
 ```typescript
