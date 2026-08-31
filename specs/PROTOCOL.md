@@ -226,7 +226,7 @@ DIDs: `did:dfos:` + 31-char ID derived from `SHA-256(genesis CID raw bytes)`
 
 There is a single canonical identifier width. Verifiers MUST reject any `did:dfos:` identifier that is not exactly 31 characters over this alphabet — whether it appears in an operation's signing-key `kid`, in an operation payload, or as the DID of a resolved identity state.
 
-Key IDs: `key_` + 31-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
+Key IDs: `key_` + 31-char ID. Convention: derive from the key (`key_` + `customAlpha(SHA-256(publicKeyMultibase))` — the input is the multibase **string** a chain carries, not the raw key bytes), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
 
 ### Multikey Encoding (W3C Multikey for Ed25519)
 

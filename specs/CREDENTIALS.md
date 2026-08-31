@@ -230,7 +230,7 @@ The child's `exp` MUST be less than or equal to every parent's `exp`. A delegate
 
 #### Time Basis Conversion and Boundaries (Normative)
 
-The ingest time basis is derived from the operation's `createdAt` (an ISO-8601, millisecond-precision, UTC string) by converting to **integer Unix seconds**:
+The ingest time basis is derived from the operation's `createdAt` (a string in the [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar)) by converting to **integer Unix seconds**:
 
 ```
 now_s = floor(createdAt_epoch_ms / 1000)
@@ -397,13 +397,13 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 }
 ```
 
-| Field           | Type           | Description                         |
-| --------------- | -------------- | ----------------------------------- |
-| `version`       | `1`            | Schema version (literal `1`)        |
-| `type`          | `"revocation"` | Literal discriminator               |
-| `did`           | string         | Issuer DID revoking the credential  |
-| `credentialCID` | CID            | CID of the credential being revoked |
-| `createdAt`     | string         | ISO 8601 timestamp                  |
+| Field           | Type           | Description                                                                            |
+| --------------- | -------------- | -------------------------------------------------------------------------------------- |
+| `version`       | `1`            | Schema version (literal `1`)                                                           |
+| `type`          | `"revocation"` | Literal discriminator                                                                  |
+| `did`           | string         | Issuer DID revoking the credential                                                     |
+| `credentialCID` | CID            | CID of the credential being revoked                                                    |
+| `createdAt`     | string         | Timestamp in the [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar) |
 
 ### Rules
 
