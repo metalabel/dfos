@@ -741,14 +741,18 @@ paths:
           schema:
             type: string
           description: >-
-            Reverse lookup "which identities has this key ever been declared
-            by". Matched byte-for-byte against the multibase public-key strings
-            in the authKeys / assertKeys / controllerKeys arrays of every
-            accepted operation on the chain, not just the current head — a key
-            a later update rotated out still matches. One key may match many
-            identities, and a deleted identity still matches. The value is
-            opaque: a string no operation ever declared matches nothing, with
-            no format validation and no 400.
+            Reverse lookup "which identities has this key ever been PROVED
+            into". Matched byte-for-byte against the multibase public-key
+            strings of every key-role membership a possession proof admitted
+            across the chain's whole history — auth, assert and controller
+            alike, not just the current head, so a key a later update rotated
+            out still matches. A key a chain merely DECLARED, with no possession
+            proof admitting it, never matches: that membership is void, it
+            publishes no link between chains, and indexing it would let a
+            stranger burn a key they do not hold by writing it into a chain. One
+            key may match many identities, and a deleted identity still matches.
+            The value is opaque: a string no chain ever proved matches nothing,
+            with no format validation and no 400.
         - name: hasPublicProfile
           in: query
           required: false
@@ -2053,6 +2057,12 @@ components:
           description: CID of the current head operation
         state:
           type: object
+          description: >-
+            Verified terminal state. The three key arrays are EFFECTIVE state —
+            the key-role memberships a possession proof admitted — so a key the
+            chain declared but nothing ever proved does not appear in them and
+            does not resolve. The optional declared / voidKeys / provedKeys
+            members carry the rest of the picture; a relay MAY omit them.
           required: [did, isDeleted, authKeys, assertKeys, controllerKeys, services]
           properties:
             did:
@@ -2061,16 +2071,82 @@ components:
               type: boolean
             authKeys:
               type: array
+              description: Effective authentication keys.
               items:
                 $ref: '#/components/schemas/MultikeyPublicKey'
             assertKeys:
               type: array
+              description: Effective assertion keys.
               items:
                 $ref: '#/components/schemas/MultikeyPublicKey'
             controllerKeys:
               type: array
+              description: Effective controller keys.
               items:
                 $ref: '#/components/schemas/MultikeyPublicKey'
+            declared:
+              type: object
+              description: >-
+                What the chain's head operation SAYS, void memberships included.
+                Structural state — never a resolution basis.
+              required: [authKeys, assertKeys, controllerKeys]
+              properties:
+                authKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+                assertKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+                controllerKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+            voidKeys:
+              type: array
+              description: >-
+                Declared key-role memberships no possession proof admitted, and
+                therefore absent from effective state. Empty on a fully-proved
+                chain. Served so a controller can DISCOVER that a key they added
+                does not resolve — a chain that verifies and a key that is not
+                there is otherwise invisible to them. A void membership never
+                invalidates the operation that declared it or the chain.
+              items:
+                type: object
+                required: [key, role, operationCID]
+                properties:
+                  key:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+                  role:
+                    type: string
+                    enum: [auth, assert, controller]
+                  operationCID:
+                    type: string
+                    description: CID of the operation whose declaration is unproved.
+            provedKeys:
+              type: object
+              description: >-
+                HAS-EVER-PROVED — the union of every effective key state this
+                chain has held. Monotonic: a key proved into a role and later
+                rotated out stays, because the fact it names is that possession
+                was once demonstrated. This is the basis for verifying long-lived
+                artifacts across a rotation, and the basis of the key= reverse
+                index on /index/v0/identities.
+              required: [authKeys, assertKeys, controllerKeys]
+              properties:
+                authKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+                assertKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
+                controllerKeys:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MultikeyPublicKey'
             services:
               type: array
               description: >-

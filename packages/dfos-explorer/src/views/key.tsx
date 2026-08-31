@@ -7,29 +7,44 @@
   reverse lookup. There are TWO, on two different axes, and the page keeps them
   apart because they answer different questions:
 
-    DECLARED  `/index/v0/identities?key=`      — which identities have ever named
-                                                 this key in their state. A claim
-                                                 in a document.
-    SIGNED    `/index/v0/operations?signerKey=` — which operations this key put a
-                                                 signature on, across every chain
-                                                 and every kind. A fact the relay
-                                                 verified at ingest.
+    PROVED  `/index/v0/identities?key=`      — which identities this key has ever
+                                               joined: named in a role by one of
+                                               their operations AND proved into
+                                               it by an envelope the key signed.
+    SIGNED  `/index/v0/operations?signerKey=` — which operations this key put a
+                                               signature on, across every chain
+                                               and every kind. A fact the relay
+                                               verified at ingest.
 
   Neither contains the other. A key signs on content chains no identity document
-  of its own mentions, and an identity can declare a key that never signs
-  anything. The page's consumers are audit ("what has this key ever controlled")
-  and key-loss recovery, where the matches that matter most are exactly the ones a
+  of its own mentions, and an identity can carry a key that never signs anything.
+  The page's consumers are audit ("what has this key ever controlled") and
+  key-loss recovery, where the matches that matter most are exactly the ones a
   current-state filter would hide.
+
+  PROVED, NOT MERELY DECLARED — and the whole page is built on that word.
+  Declaring a key is writing a public key into your own chain's key arrays;
+  anyone can do it for anyone, because a public key is public. Proving it means
+  the key itself signed a KEY-PROOF envelope consenting to join that chain, in
+  those roles, at that point, and that envelope rides in the operation that
+  introduced it. A declared-but-unproved membership is VOID: the operation is
+  valid and relays serve it, but the membership is absent from effective key
+  state, it resolves nowhere, and it never enters this index.
+
+  The index has to work this way because it is the one-key-one-DID oracle a
+  holder's tool consults before signing a key proof, where a hit means "refuse".
+  Indexing declarations would let anyone burn a key they do not hold, forever, by
+  writing it into a chain of their own.
 
   THREE HONESTY PROBLEMS, all handled here rather than papered over.
 
-  1. THE DECLARED ROWS ARE A HINT AND THEY ARE ALSO STALE BY DESIGN. "Ever
-     declared" is read by a human as "controls", and those are different claims.
-     So each row carries the key's CURRENT standing, folded from that identity's
-     own chain in this tab (lib/key-standing.ts) — current / rotated out /
-     identity deleted / could not check. The rows render before any fold lands;
+  1. THE MATCHED ROWS ARE A HINT AND THEY ARE ALSO STALE BY DESIGN. "Ever proved"
+     is read by a human as "controls", and those are different claims. So each row
+     carries the key's CURRENT standing, folded from that identity's own chain in
+     this tab (lib/key-standing.ts) — current / declared, not proved / rotated out
+     / identity deleted / could not check. The rows render before any fold lands;
      the labels arrive after. `could not check` is its own state and is never
-     rounded to `rotated`.
+     rounded to `rotated`, and neither is a void membership.
 
   2. A RELAY PREDATING EITHER FILTER IGNORES IT and answers with the UNFILTERED
      list — every identity on the relay, or every operation on it. Rendering
@@ -80,9 +95,12 @@ import { useHashParam } from '../router';
  *  and the plain rendering sits one hover away, the same split the verdict pills
  *  make everywhere else. */
 const STANDING_DEFS = {
-  current: 'This identity’s head state still declares this key, in the classes named beside it.',
+  current: 'This identity’s current key state carries this key, in the roles named beside it.',
+  currentPartial:
+    'This identity also names this key in these roles without a key proof, so it does not hold them. The roles beside the current badge are the ones it holds.',
+  void: 'This identity’s chain names this key in these roles and carries no key proof for it, so the key is not part of this identity’s key state — it resolves nowhere and signs nothing for this identity. The row is here because an earlier operation did prove the key into this chain.',
   rotated:
-    'This identity’s chain verifies here and its head no longer declares this key — a later update rotated it out. The index entry stays, because the declaration happened.',
+    'This identity’s chain verifies here and its head neither carries nor names this key — a later update rotated it out. The index entry stays, because the key was proved into this chain.',
   deleted:
     'This identity’s chain verifies here and the identity is deactivated. Whatever the key’s place in the head state, the chain it belonged to is deleted.',
   unchecked:
@@ -118,6 +136,29 @@ const StandingChip = (props: { standing: KeyStanding | null }) => {
               {c}
             </span>
           ))}
+          {/* proved into one role and named into another is BOTH states at once,
+              and the current badge alone would report the chain as sound */}
+          {standing.voidClasses.length > 0 ? (
+            <>
+              {' '}
+              <span class="badge warn" title={STANDING_DEFS.currentPartial}>
+                {standing.voidClasses.join(', ')} not proved
+              </span>
+            </>
+          ) : null}
+        </>
+      );
+    case 'void':
+      return (
+        <>
+          <span class="badge warn" title={STANDING_DEFS.void}>
+            declared, not proved
+          </span>{' '}
+          {standing.classes.map((c) => (
+            <span key={c} class="k-role">
+              {c}
+            </span>
+          ))}
         </>
       );
     case 'rotated':
@@ -143,7 +184,7 @@ const StandingChip = (props: { standing: KeyStanding | null }) => {
 
 /**
  * One matched identity. The row is the index's claim that this identity once
- * declared the key; the standing cell is this tab's answer about what its chain
+ * proved the key; the standing cell is this tab's answer about what its chain
  * says now. The name runs its usual attributed→verified beats, started once the
  * fold this page already needed has landed — the same chain answers both.
  */
@@ -170,13 +211,13 @@ const KeyMatchRow = (props: { row: IndexIdentityRow; multibase: string }) => {
 };
 
 /**
- * DECLARED — the has-ever-declared reverse lookup, and each match's standing.
+ * PROVED — the has-ever-proved reverse lookup, and each match's standing.
  *
  * Carries its own two gates (an index at all, and `key=` honoured) rather than
  * short-circuiting the page: the signed lane runs on a different route with a
  * different filter, and a relay can serve one and not the other.
  */
-const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) => {
+const ProvedPanel = (props: { multibase: string; indexed: boolean | null }) => {
   const { indexed } = props;
   // WHICH relays honour `key=`? An older relay IGNORES it and returns the
   // UNFILTERED identity list — every row of which would be a fabricated match —
@@ -191,7 +232,7 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
     onCursor: setCursor,
   });
   // a disabled pager holds `loading: false`, so the raw state would settle on
-  // `empty` and announce that no identity declared this key before anything had
+  // `empty` and announce that no identity proved this key before anything had
   // been asked. Either gate answering NO returns its own panel below, so what
   // reaches the list is settled-and-enabled or still pending — and pending is
   // LOADING.
@@ -213,10 +254,10 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
     return (
       <Panel title="identities" accent="warn" right={<span class="lbl">route unsupported</span>}>
         <span class="muted">
-          no configured relay supports key lookup. Each one either answered a key no chain can have
-          declared with a full page of identities — which means it ignores the <code>key=</code>{' '}
-          filter rather than applying it — or could not be reached to check. Asking one of them
-          anyway would present every identity it holds as one that declared this key.
+          no configured relay supports key lookup. Each one either answered a key nothing can hold
+          with a full page of identities — which means it ignores the <code>key=</code> filter
+          rather than applying it — or could not be reached to check. Asking one of them anyway
+          would present every identity it holds as one that proved this key.
         </span>
         <div class="ck-note" style={{ marginTop: 10 }}>
           The filter is served by <code>web-relay</code> 0.39.0 and later. Add a relay whose index
@@ -230,18 +271,21 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
     <Panel
       title={
         <>
-          identities that declared this key{' '}
+          identities this key has joined{' '}
           {state === 'rows' ? <Pill state="warn">{fmtCount(page.rows.length)}</Pill> : null}
         </>
       }
       accent="warn"
-      right={<span class="lbl">has ever declared · from relay index</span>}
+      right={<span class="lbl">has ever proved · from relay index</span>}
       orient={
         <>
-          Every identity whose accepted operations ever declared this key — genesis or update,
-          whether or not a later update rotated it out. Rotation and deletion never remove an entry,
-          which is what makes the list useful for audit and key-loss recovery. Rows are{' '}
-          <b>attributed</b> relay hints: the{' '}
+          Every identity this key has ever been{' '}
+          <Term word="proved into" def={GLOSSARY['keyProved'] ?? ''} /> — at genesis or in a later
+          operation, whether or not a rotation has since removed it. Rotation and deletion never
+          remove an entry, which is what makes the list useful for audit and key-loss recovery. A
+          key an identity names without a key proof is not part of that identity's keys and gets no
+          row here, which is why a key can appear in a chain's <code>authKeys</code> on an operation
+          page and still be absent from this list. Rows are <b>attributed</b> relay hints: the{' '}
           <Term word="index is a hint" def={GLOSSARY['indexLight'] ?? ''} />, the chain is the
           authority, so each row's <b>standing</b> is folded from that identity's own chain in your
           tab.
@@ -253,12 +297,12 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
           {page.routeAbsent ? (
             <>
               every configured relay answered <b>no such route</b> for the identity index. Nothing
-              was learned about this key — this is not a statement that no identity declared it.
+              was learned about this key — this is not a statement that no identity proved it.
             </>
           ) : (
             <>
               couldn’t reach the relay index just now — so this says nothing about whether any
-              identity declared this key.{' '}
+              identity proved this key.{' '}
               <button onClick={page.retry} disabled={page.loading}>
                 {page.loading ? 'retrying…' : 'retry'}
               </button>
@@ -274,12 +318,14 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
             ? 'checking relay capabilities…'
             : keyFilter === null
               ? 'checking which relays support key lookup…'
-              : 'asking the relay index which identities declared this key…'}
+              : 'asking the relay index which identities this key has joined…'}
         </span>
       ) : state === 'empty' ? (
         <span class="muted">
-          no identity in this relay's index has ever declared this key. An index can withhold rows,
-          so this is what this relay surfaces — never a proof that none exists.
+          no identity in this relay's index has ever proved this key. So far as this relay can see,
+          the key has never joined a chain — the state a key is in before it is added to an
+          identity. An index can withhold rows, so this is what this relay surfaces — never a proof
+          that none exists.
         </span>
       ) : (
         <div class="index-rows">
@@ -344,7 +390,7 @@ const SignedOpRow = (props: { row: LogRow }) => {
 
 /**
  * SIGNED — the operations this key put a signature on, one query on the actor
- * axis (`signerKey=`) rather than a fan-out over the identities that declared it.
+ * axis (`signerKey=`) rather than a fan-out over the identities it has joined.
  * The chain column carries whatever ownership annotation a chainId can honestly
  * give — an identity resolves to its public profile name, a content chain to its
  * title — so a key serving several identities reads as several named chains
@@ -434,10 +480,10 @@ const SignedPanel = (props: { multibase: string; indexed: boolean | null }) => {
         <>
           Every operation this relay holds whose signature it verified against this key at ingest —{' '}
           <Term word="signed by this key" def={GLOSSARY['signerKey'] ?? ''} />, across every chain
-          and every kind, including chains owned by no identity that declared it. Rows are browsing
-          metadata and carry no signature: open one to fold its proof. The count is what this
-          enumeration has loaded — a keyset cursor serves no total, so it is never a claim about how
-          many exist.
+          and every kind, including chains owned by no identity this key has joined. Rows are
+          browsing metadata and carry no signature: open one to fold its proof. The count is what
+          this enumeration has loaded — a keyset cursor serves no total, so it is never a claim
+          about how many exist.
         </>
       }
     >
@@ -520,12 +566,12 @@ export const Key = (props: { multibase: string }) => {
             A key, as the thing itself: the{' '}
             <Term word="public key, not a key id" def={GLOSSARY['keyIdentity'] ?? ''} /> — a{' '}
             <code>key_1</code> names a slot on one identity document and travels nowhere. An
-            identity declares keys by <Term word="role" def={GLOSSARY['keyRoles'] ?? ''} /> and
+            identity carries keys by <Term word="role" def={GLOSSARY['keyRoles'] ?? ''} /> and
             rotates them over time, so the same key can appear on more than one chain and can
-            outlive its place on any of them. This page asks the relay index which identities have
-            ever declared it — folding each of those chains here to say where it stands now — and
-            then what it has actually <Term word="signed" def={GLOSSARY['signerKey'] ?? ''} />,
-            which is a different list.
+            outlive its place on any of them. This page asks the relay index which identities this
+            key has been <Term word="proved into" def={GLOSSARY['keyProved'] ?? ''} /> — folding
+            each of those chains here to say where it stands now — and then what it has actually{' '}
+            <Term word="signed" def={GLOSSARY['signerKey'] ?? ''} />, which is a different list.
           </>
         }
       >
@@ -538,7 +584,7 @@ export const Key = (props: { multibase: string }) => {
           </div>
         </div>
       </Panel>
-      <DeclaredPanel multibase={props.multibase} indexed={indexed} />
+      <ProvedPanel multibase={props.multibase} indexed={indexed} />
       <SignedPanel multibase={props.multibase} indexed={indexed} />
     </>
   );

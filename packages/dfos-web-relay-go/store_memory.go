@@ -56,7 +56,7 @@ type MemoryStore struct {
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
 	indexCreditRows      map[string][]indexCreditRow            // grouped by contentId
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
-	indexIdentityKeys    map[string]map[string]struct{}         // DID → has-ever-declared public key set
+	indexIdentityKeys    map[string]map[string]struct{}         // DID → has-ever-proved public key set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
 	// operation cid → the multibase public key its signature verified against at
@@ -758,9 +758,9 @@ func (s *MemoryStore) PutIndexContentSigner(contentID string, did string) error 
 	return nil
 }
 
-// PutIndexIdentityKey adds one declared public key to a DID's has-ever-declared
-// set. keyID is not retained: nothing queries by it, and the durable store's
-// (public_key, did, key_id) row only uses it to keep one row per declaration.
+// PutIndexIdentityKey adds one proved public key to a DID's has-ever-proved set.
+// keyID is not retained: nothing queries by it, and the durable store's
+// (public_key, did, key_id) row only uses it to keep one row per membership.
 func (s *MemoryStore) PutIndexIdentityKey(did string, _ string, publicKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

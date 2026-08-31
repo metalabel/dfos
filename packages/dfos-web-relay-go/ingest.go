@@ -196,9 +196,85 @@ func classify(jwsToken string) classifiedOp {
 // key resolution
 // ---------------------------------------------------------------------------
 
-// CreateKeyResolver returns a KeyResolver that searches all keys ever in an
-// identity chain log — including rotated-out keys. Used for protocol
-// verification during ingestion.
+// THE THREE KEY STATES, AND WHICH SURFACE TAKES WHICH.
+//
+// dfos.IdentityState now carries three readings of an identity's keys, and every
+// surface in this package must pick one deliberately:
+//
+//   - EFFECTIVE (State.AuthKeys / AssertKeys / ControllerKeys) — "what is true
+//     NOW". The memberships a possession proof admitted, at the head. Live auth,
+//     current-state admission, and the DID document's verification methods.
+//   - HAS-EVER-PROVED (State.ProvedKeys) — "what was EVER true". The monotonic
+//     union of every effective state the chain has held: a key proved in and
+//     later rotated out stays forever, a key only ever declared never enters.
+//     Historical key resolution and the `key=` / `signerKey=` reverse indexes.
+//   - DECLARED (State.Declared) — "what the chain SAYS", void memberships
+//     included. Exactly one surface needs it, SIGNER ADMISSION, and that surface
+//     lives in the protocol library's chain walk, not here. Nothing in this
+//     package reads it.
+
+// effectiveKeyState flattens the head EFFECTIVE arrays into a key state, so the
+// current-state and has-ever-proved lookups can share one search.
+func effectiveKeyState(state dfos.IdentityState) dfos.DeclaredKeyState {
+	return dfos.DeclaredKeyState{
+		AuthKeys:       state.AuthKeys,
+		AssertKeys:     state.AssertKeys,
+		ControllerKeys: state.ControllerKeys,
+	}
+}
+
+// provedKeyState is an identity's HAS-EVER-PROVED key state.
+//
+// An absent has-ever-proved history reads as "what is effective now was proved"
+// — the same reading dfos.VerifyIdentityExtension applies, exactly true for any
+// chain that never voided a membership, and the only reading available for a
+// state persisted before the member existed. A relay holding such rows resolves
+// and indexes a narrower set than the chain walk would (rotated-out keys are
+// lost until the row is rewritten), which is the safe direction: it under-claims
+// rather than admitting a key nothing proved.
+func provedKeyState(state dfos.IdentityState) dfos.DeclaredKeyState {
+	if state.ProvedKeys.IsZero() {
+		return effectiveKeyState(state)
+	}
+	return state.ProvedKeys
+}
+
+// keysInKeyState flattens a key state's three roles into one list. Duplicates
+// across roles are kept: every caller here is either searching by key ID or
+// writing into an idempotent index.
+func keysInKeyState(state dfos.DeclaredKeyState) []dfos.MultikeyPublicKey {
+	keys := make([]dfos.MultikeyPublicKey, 0, len(state.AuthKeys)+len(state.AssertKeys)+len(state.ControllerKeys))
+	keys = append(keys, state.AuthKeys...)
+	keys = append(keys, state.AssertKeys...)
+	keys = append(keys, state.ControllerKeys...)
+	return keys
+}
+
+// findKeyInKeyState searches all three roles of a key state for a key ID.
+func findKeyInKeyState(state dfos.DeclaredKeyState, keyID string) (dfos.MultikeyPublicKey, bool) {
+	for _, k := range keysInKeyState(state) {
+		if k.ID == keyID {
+			return k, true
+		}
+	}
+	return dfos.MultikeyPublicKey{}, false
+}
+
+// CreateKeyResolver returns a KeyResolver that resolves every key an identity
+// chain has EVER PROVED — rotated-out keys included. Used for protocol
+// verification during ingestion, where a long-lived artifact signed by a key
+// that has since rotated away must still verify.
+//
+// HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. A declared-but-unproved membership is
+// VOID: no possession proof ever admitted it, so nothing it signed was ever
+// authorized, and resolving it would let a chain that merely LISTS a stranger's
+// key speak with it. The chain walk already folds this union onto
+// State.ProvedKeys, so there is no log re-scan here — a hand-rolled scan would
+// have to restate the possession rule and would quietly disagree with the walk
+// that produced the effective arrays beside it.
+//
+// No fast/slow split remains either: has-ever-proved is a superset of effective,
+// so one search over ProvedKeys answers both.
 func CreateKeyResolver(store Store) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -220,48 +296,8 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 			return nil, fmt.Errorf("unknown identity: %s", did)
 		}
 
-		// fast path: check current state
-		allKeys := make([]dfos.MultikeyPublicKey, 0, len(identity.State.AuthKeys)+len(identity.State.AssertKeys)+len(identity.State.ControllerKeys))
-		allKeys = append(allKeys, identity.State.AuthKeys...)
-		allKeys = append(allKeys, identity.State.AssertKeys...)
-		allKeys = append(allKeys, identity.State.ControllerKeys...)
-		for _, k := range allKeys {
-			if k.ID == keyID {
-				return dfos.DecodeMultikey(k.PublicKeyMultibase)
-			}
-		}
-
-		// slow path: search historical keys from the identity chain log
-		for _, token := range identity.Log {
-			_, payload, err := dfos.DecodeJWSUnsafe(token)
-			if err != nil {
-				continue
-			}
-			opType, _ := payload["type"].(string)
-			if opType != "create" && opType != "update" {
-				continue
-			}
-			for _, arrayName := range []string{"authKeys", "assertKeys", "controllerKeys"} {
-				keys, ok := payload[arrayName].([]any)
-				if !ok {
-					continue
-				}
-				for _, k := range keys {
-					km, ok := k.(map[string]any)
-					if !ok {
-						continue
-					}
-					id, _ := km["id"].(string)
-					if id != keyID {
-						continue
-					}
-					multibase, _ := km["publicKeyMultibase"].(string)
-					if multibase == "" {
-						continue
-					}
-					return dfos.DecodeMultikey(multibase)
-				}
-			}
+		if k, ok := findKeyInKeyState(provedKeyState(identity.State), keyID); ok {
+			return dfos.DecodeMultikey(k.PublicKeyMultibase)
 		}
 
 		return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
@@ -271,6 +307,11 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 // CreateCurrentKeyResolver returns a KeyResolver that only resolves
 // current-state keys. Used for live auth and first admission — rotated-out keys
 // are rejected but remain resolvable for committed history.
+//
+// EFFECTIVE state, which is what the head arrays now mean: a declared-but-void
+// key is absent from them, so it never authenticates. No change was needed here
+// beyond saying so — the possession fold made the arrays correct for this
+// surface for free.
 func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -295,14 +336,8 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 			return nil, fmt.Errorf("signing identity is deleted")
 		}
 
-		allKeys := make([]dfos.MultikeyPublicKey, 0, len(identity.State.AuthKeys)+len(identity.State.AssertKeys)+len(identity.State.ControllerKeys))
-		allKeys = append(allKeys, identity.State.AuthKeys...)
-		allKeys = append(allKeys, identity.State.AssertKeys...)
-		allKeys = append(allKeys, identity.State.ControllerKeys...)
-		for _, k := range allKeys {
-			if k.ID == keyID {
-				return dfos.DecodeMultikey(k.PublicKeyMultibase)
-			}
+		if k, ok := findKeyInKeyState(effectiveKeyState(identity.State), keyID); ok {
+			return dfos.DecodeMultikey(k.PublicKeyMultibase)
 		}
 
 		return nil, fmt.Errorf("%s", noncurrentSigningKeyError)

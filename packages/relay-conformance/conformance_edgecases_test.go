@@ -139,29 +139,26 @@ func TestBatchMixedValidInvalid(t *testing.T) {
 func TestBatchMultiChain(t *testing.T) {
 	base := relayURL(t)
 
-	ctrl1 := newKeypair()
-	auth1 := newKeypair()
+	key1 := newKeypair()
 	tok1, did1, _, _ := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl1.mk},
-		[]dfos.MultikeyPublicKey{auth1.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl1.keyID, ctrl1.priv,
+		[]dfos.MultikeyPublicKey{key1.mk},
+		[]dfos.MultikeyPublicKey{key1.mk},
+		[]dfos.MultikeyPublicKey{key1.mk},
+		key1.keyID, key1.priv,
 	)
 
-	ctrl2 := newKeypair()
-	auth2 := newKeypair()
+	key2 := newKeypair()
 	tok2, did2, _, _ := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl2.mk},
-		[]dfos.MultikeyPublicKey{auth2.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl2.keyID, ctrl2.priv,
+		[]dfos.MultikeyPublicKey{key2.mk},
+		[]dfos.MultikeyPublicKey{key2.mk},
+		[]dfos.MultikeyPublicKey{key2.mk},
+		key2.keyID, key2.priv,
 	)
-	_ = auth2
 
 	doc := map[string]any{"type": "post", "title": "multi-chain batch"}
 	docCID, _, _ := dfos.DocumentCID(doc)
-	kid1 := did1 + "#" + auth1.keyID
-	contentTok, _, _, _ := dfos.SignContentCreate(did1, docCID, kid1, auth1.priv)
+	kid1 := did1 + "#" + key1.keyID
+	contentTok, _, _, _ := dfos.SignContentCreate(did1, docCID, kid1, key1.priv)
 
 	// all three in one batch
 	res := postOperations(t, base, []string{tok1, tok2, contentTok})
@@ -598,19 +595,16 @@ func TestIdentityConflictingExtensionAndRestore(t *testing.T) {
 		t.Fatal("identity should be deleted before restore")
 	}
 
-	// A second child of genesis conflicts permanently, whatever its timestamp.
-	newAuth := newKeypair()
-	conflictToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A second child of genesis conflicts permanently, whatever its timestamp. The
+	// operation is otherwise flawless — envelope included — so linearity is the
+	// only thing left to refuse it for.
+	rotated := newKeypair()
+	conflictToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		ctrlKid, id.controller.priv)
 
 	assertConflict := func() {
 		res := postOperations(t, base, []string{conflictToken})
@@ -672,19 +666,17 @@ func TestIdentityRestoreInvalidPositions(t *testing.T) {
 		t.Fatalf("restore after create should be rejected, got %q", st)
 	}
 
+	// Rotate the CONTROLLER role only, carrying an envelope whose roleSet names
+	// exactly that role. The proof is what makes the incoming key effective, and
+	// the delete below — which it signs — is the assertion that depends on it.
 	rotated := newKeypair()
 	time.Sleep(2 * time.Millisecond)
-	update, updateCID, err := dfos.SignIdentityUpdate(
-		id.genCID,
+	update, updateCID := signIdentityUpdateWithProofs(t, id.genCID,
 		[]dfos.MultikeyPublicKey{rotated.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		[]dfos.MultikeyPublicKey{},
-		oldKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID, "controller")},
+		oldKid, id.controller.priv)
 	if st, e := postStatus(t, base, update); st != "new" {
 		t.Fatalf("rotation should be accepted, got %q (%s)", st, e)
 	}

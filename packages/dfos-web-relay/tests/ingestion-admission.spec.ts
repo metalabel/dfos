@@ -39,28 +39,30 @@ import type { AdmissionPolicy, RelayOptions } from '../src';
 const AUTHORITY = 'localhost';
 const OPERATIONS_PATH = '/proof/v1/operations';
 
+// A genesis declares exactly ONE key, the same key in all three roles, and
+// proves it by signing itself with it — so the key that authenticates the
+// submission proof is the key that signed the genesis.
 const createIdentity = async () => {
   const authKeypair = createNewEd25519Keypair();
   const authKeyId = generateId('key');
-  const controllerKeypair = createNewEd25519Keypair();
-  const controllerKeyId = generateId('key');
   const key = (id: string, publicKey: Uint8Array) => ({
     id,
     type: 'Multikey' as const,
     publicKeyMultibase: encodeEd25519Multikey(publicKey),
   });
+  const genesisKey = key(authKeyId, authKeypair.publicKey);
   const operation: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [key(authKeyId, authKeypair.publicKey)],
-    assertKeys: [],
-    controllerKeys: [key(controllerKeyId, controllerKeypair.publicKey)],
+    authKeys: [genesisKey],
+    assertKeys: [genesisKey],
+    controllerKeys: [genesisKey],
     createdAt: '2026-01-01T00:00:00.000Z',
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation,
-    signer: async (msg: Uint8Array) => signPayloadEd25519(msg, controllerKeypair.privateKey),
-    keyId: controllerKeyId,
+    signer: async (msg: Uint8Array) => signPayloadEd25519(msg, authKeypair.privateKey),
+    keyId: authKeyId,
   });
   // The DID is derived from the genesis operation's CID — self-certifying, no
   // registry, and computable before the relay has ever seen the operation.

@@ -458,6 +458,15 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 404, "not found")
 		return
 	}
+	// The whole verified state, verbatim — byte-twin of the TS relay's
+	// `state: chain.state`. The key arrays are EFFECTIVE state, which is what a
+	// consumer needs them to mean: a void key must not resolve. `voidKeys` rides
+	// alongside on purpose — a controller who introduced a key without a
+	// possession proof has a chain that verifies and a key that does not work,
+	// and this route is the only place they can discover that. `declared` and
+	// `provedKeys` travel with them so the shape stays the protocol library's
+	// IdentityState rather than a relay-local projection of it, which is also how
+	// the two relays stay identical without either restating the member list.
 	writeJSON(w, 200, map[string]any{
 		"did":     chain.DID,
 		"headCID": chain.HeadCID,

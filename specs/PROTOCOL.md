@@ -107,9 +107,28 @@ This is deterministic: any implementation with the same operations computes the 
 
 ### Identity Chain Signer Validity
 
-An identity chain operation is valid only if the signing key was a **controller key in the immediately prior state**. For genesis operations, the signing key MUST be one of the controller keys declared in that same operation — this is the bootstrap: the genesis operation introduces and simultaneously authorizes its own keys.
+An identity chain operation is valid only if the signing key was a **controller key in the immediately prior declared state** ([Key Possession](#key-possession) defines declared vs effective state; signer validity is deliberately checked against the declared set — see the three-door rule there for why). A genesis operation declares exactly **one key** — the same key in all three role arrays — and is signed by it: the genesis operation introduces and simultaneously authorizes its own key, and the signature is the key's own [possession proof](#key-possession). A genesis declaring more than one distinct key across its role arrays is invalid. Identities with several controllers bootstrap the ordinary way: genesis with one key, then `update` operations introducing the rest under the possession rule.
 
-This is a self-sovereign invariant: the identity chain defines its own valid signers via `controllerKeys`, and the protocol enforces this. No external authority is consulted.
+This is a self-sovereign invariant: the identity chain defines its own valid signers via `controllerKeys`, and the protocol enforces this. No external authority is consulted. The single-key genesis makes it verifiable in isolation, too: one key, declared and signing, with no prior state to consult and no key present that the signature does not vouch for — an identity is never born holding a key nobody demonstrated.
+
+### Key Possession
+
+Every key an identity chain lists is backed by a demonstration that its holder holds it and consented to listing it. The rule is bimodal, with no third case:
+
+1. **The genesis key proves possession by signing genesis.** One key, declared across all three role arrays, signing the very operation that declares it — the signature is the proof, for all three roles at once.
+2. **Every other key proves possession by an embedded [key proof](https://protocol.dfos.com/key-proof).** A key's introduction to a role is accompanied by an envelope the key itself signed, binding `{chain DID, role set, chain position}` — the back-signature discipline, carried on the chain.
+
+**Introduction.** An operation **introduces** key K to role R when K appears in the operation's R array and K was not in the immediately prior _effective_ R state. For each key it introduces, an `update` operation carries exactly one envelope in its `keyProofs` member ([Identity Operations](#identity-operations)) whose `publicKeyMultibase` is K, whose `did` is the chain's DID, whose `prevCID` equals the operation's own `previousOperationCID`, and whose `roleSet` includes every role the operation introduces K to — verified per [KEY-PROOF.md → Chain-Walk Verification](https://protocol.dfos.com/key-proof#chain-walk-verification). An operation that merely replays a key already effective in a role carries no proof for it: proofs live at introduction, full-state replay carries keys, and verification walks back to the introducing operation. Because the envelope names one `previousOperationCID`, a proof is spent at the position it names: re-adding a removed key is a new introduction demanding a fresh envelope, and promotion into a role the key's envelope never covered is likewise a new introduction for that role. There is no standing consent and no proof revocation — removal is an ordinary `update`, and nothing signed yesterday re-adds a key tomorrow.
+
+**Declared vs effective state.** An identity chain yields two readings of its key arrays. The **declared** state is structural: the arrays as the operations wrote them. The **effective** state is the declared state minus every unproved membership. A key-role membership whose introduction carries no valid covering envelope is **void**: excluded from the effective state for that role, never resolved for signature verification by consumers, never indexed, never surfaced in recovery, and never a [one-key-one-DID](https://protocol.dfos.com/key-proof#holder-obligations) burn against the key's true holder. Void is not invalid — the operation and the chain stand — and tooling MUST surface void memberships loudly rather than silently dropping them: a void key is a claim somebody wrote and nobody proved, and a human looking at the chain gets to see that.
+
+**The three doors.** Possession is enforced at three distinct surfaces, and the separation is load-bearing:
+
+- **Writers hard-reject.** Software authoring an identity operation MUST refuse to produce an unproved introduction. The void path exists for reading hostile or defective chains, not as something conformant tooling emits.
+- **Relays sequence regardless.** A relay MUST admit and sequence every structurally valid identity operation — linearity, CIDs, timestamps, declared-state signer validity — whatever its proof status. Log membership never depends on semantic key validation: identity chains are linear with no branch to fall back to, so two relays disagreeing about one operation's proofs would fork the log itself — a split-brain identity — and a rejecting relay would additionally stall forever on the chain under union-of-CIDs sync. The relay's log answers _what was written_; proofs answer _what counts_.
+- **Verifiers compute void.** Every consumer of identity key state — signature resolution for content and API surfaces, key indexes, recovery oracles — reads the effective state.
+
+Signer validity for the chain's own operations is checked against the **declared** controller set, per the same door discipline: it is a structural admission rule that every relay must evaluate identically, so it cannot depend on proof status. What a void controller key can do is therefore exactly what any holder of the declared chain could do — extend the declared timeline; what it can never do is act _as_ the identity anywhere effective state is consulted, which is everywhere identity is consumed. A chain whose effective controller set becomes empty — every controller membership void — is extendable in declared form but dead in effect: no key it lists can authenticate, assert, or authorize as the identity. Conformant writers cannot produce this state; a chain that authored it against door one has done to itself what losing every key does.
 
 ### Content Chain Signer Model
 
@@ -164,6 +183,8 @@ The protocol bounds operations with **one aggregate size cap** plus a small set 
 Verifiers MUST reject an identity or content operation whose `dagCborCanonicalEncode(payload)` exceeds 65536 bytes, **measured with any embedded `authorization` credential excluded** (see below). The cap is measured over the canonical CBOR bytes the operation CID commits to, so every implementation computes it identically (no Unicode/length-counting ambiguity). It is generous by design — a legitimate proof-layer operation is far smaller — and bounds decode/verify cost as a DoS guard. Credentials are NOT subject to this cap; they carry their own larger 262144-byte (256 KiB) ceiling (a maximum-depth delegation chain embeds each parent token in `prf` and legitimately exceeds 64 KiB — see [CREDENTIALS.md](https://protocol.dfos.com/credentials)). Artifacts keep their own 16384-byte cap (below); the `services` array keeps its 32768-byte cap (above).
 
 A delegated content `update`/`delete` carries its authorizing credential in the operation's `authorization` field, and that credential — itself bounded by the 262144-byte credential cap — can legitimately approach 256 KiB at maximum delegation depth. Counting it against the 64 KiB operation cap would conflate two independent limits and reject a valid deep-delegation write, so the operation-size cap is measured over the payload **with the `authorization` field removed**; the `authorization` credential is bounded separately by the credential cap. Total operation bytes are therefore bounded by the sum (≤ 64 KiB + 256 KiB). The operation CID still commits to the complete payload including `authorization`.
+
+The `keyProofs` member of an identity `update` ([Key Possession](#key-possession)) gets no such exclusion: its envelopes are ordinary payload members, inside the bytes the CID commits to and inside the 64 KiB measurement. Each envelope is separately bounded by [KEY-PROOF.md](https://protocol.dfos.com/key-proof)'s own 4 KiB cap, and the aggregate operation cap is the real bound on how many keys one operation can introduce — the same posture as the key arrays themselves.
 
 **Cardinality caps (structure, not byte length):**
 
@@ -355,9 +376,9 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
 ```typescript
 // Genesis — starts the identity chain
 { version: 1, type: "create",
-  authKeys: MultikeyPublicKey[],
-  assertKeys: MultikeyPublicKey[],
-  controllerKeys: MultikeyPublicKey[],   // must have at least one
+  authKeys: MultikeyPublicKey[],         // exactly one entry —
+  assertKeys: MultikeyPublicKey[],       //   the same single key in all three
+  controllerKeys: MultikeyPublicKey[],   //   arrays, which also signs (see Key Possession)
   services?: ServiceEntry[],              // discovery vocabulary (optional)
   createdAt: string }                     // ISO 8601, ms precision, UTC
 
@@ -367,6 +388,8 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   authKeys: MultikeyPublicKey[],
   assertKeys: MultikeyPublicKey[],
   controllerKeys: MultikeyPublicKey[],   // must have at least one
+  keyProofs?: string[],                  // one KEY-PROOF envelope per key this
+                                         //   op introduces (see Key Possession)
   services?: ServiceEntry[],              // full-state — REPLACES the prior set
   createdAt: string }
 
@@ -385,6 +408,16 @@ The optional `services` array is full-state discovery vocabulary projected into
 verified identity state — see [Services](#services). Omitting it encodes
 identically to a service-less operation (CID-neutral); an `update` carrying it
 REPLACES the entire prior set; a `delete` carries the last set unchanged.
+
+The optional `keyProofs` array carries the [key-proof envelopes](https://protocol.dfos.com/key-proof)
+for the keys an `update` [introduces](#key-possession) — compact JWS strings,
+embedded verbatim as presented, one per introduced key. It is defined on
+`update` only: a `create`, `delete`, or `restore` carrying it is invalid
+(genesis proves its one key by signing; `delete` and `restore` change no keys).
+An operation that introduces no key carries none — full-state replay carries
+keys, never proofs — so the member appears exactly where a key first enters a
+role and nowhere else. Omitting it encodes identically to an empty
+introduction (CID-neutral), the same rule as `services`.
 
 **`restore` validity (normative).** `restore` is the one operation that may
 follow a `delete`, and the successor-of-delete position is the only position in
@@ -793,15 +826,19 @@ Every signature check below is performed under the [Signature Verification Profi
 
 1. Decode each JWS, parse payload as IdentityOperation
 2. First op MUST be `type: "create"` — this is the genesis bootstrap:
-   - The controller keys declared in the genesis payload are trusted because the identity does not exist before this operation. There is no prior state to verify against.
-   - The signing key (resolved from `kid`) MUST be one of the controller keys declared in this same operation. The genesis simultaneously introduces and authorizes its own keys.
+   - Verify the [single-key rule](#key-possession): each of the three role arrays holds exactly one entry, all three the same key with the same id. A genesis declaring more than one distinct key MUST be rejected. A genesis carrying `keyProofs` MUST be rejected.
+   - The one key declared in the genesis payload is trusted because the identity does not exist before this operation. There is no prior state to verify against.
+   - The signing key (resolved from `kid`) MUST be that declared key. The genesis simultaneously introduces, authorizes, and proves possession of its own key.
    - Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID. Derive the DID from the CID.
 3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID — the log is strictly linear, so each operation extends exactly the one before it; a log containing a conflicting extension (two operations sharing a parent) MUST be rejected. Verify `createdAt` is strictly greater than the parent operation's `createdAt` (MUST — see Chain Validity).
-4. If the state before this operation is deleted, the only valid operation is a `restore` whose `previousOperationCID` is the delete's CID; any other operation MUST be rejected. A `restore` whose parent is not a `delete` MUST be rejected wherever it appears.
+4. If the state before this operation is deleted, the only valid operation is a `restore` whose `previousOperationCID` is the delete's CID; any other operation MUST be rejected. A `restore` whose parent is not a `delete` MUST be rejected wherever it appears. A `delete` or `restore` carrying `keyProofs`, and any `keyProofs` member that is not an array of strings, MUST be rejected.
 5. Resolve `kid` — genesis uses bare key ID, non-genesis uses DID URL (extract DID, verify it matches the derived DID; extract key ID).
-6. Find controller key matching key ID **in the current state** (i.e., the state after all preceding operations — for a `restore`, this is the deleted head state produced by the `delete`, which carries the last key sets unchanged). Decode multikey → raw Ed25519 public key.
+6. Find controller key matching key ID **in the current declared state** (i.e., the declared state after all preceding operations — for a `restore`, this is the deleted head state produced by the `delete`, which carries the last key sets unchanged; see [Key Possession](#key-possession) for why signer validity reads the declared set). Decode multikey → raw Ed25519 public key.
 7. Verify EdDSA JWS signature over the signing input bytes.
-8. Apply state change: `create` initializes key state, `update` replaces key state (must have at least one controller key), `delete` marks the state deleted (key sets and services carried unchanged), `restore` clears the deleted state (keys and services as of the delete, verbatim).
+8. For an `update`, compute possession per [Key Possession](#key-possession): for each key-role membership the operation [introduces](#key-possession) (the key was not in the prior effective state for that role), find an envelope in `keyProofs` passing [chain-walk verification](https://protocol.dfos.com/key-proof#chain-walk-verification) for this operation, this key, and that role. A covered introduction is effective; an uncovered one is **void** — recorded, surfaced, excluded from effective state, and not a rejection.
+9. Apply state change: `create` initializes declared and effective key state to its one key in all three roles, `update` replaces declared state (must have at least one declared controller key) and folds effective state per step 8 (memberships already effective stay effective; introductions enter effective state only when covered), `delete` marks the state deleted (key sets and services carried unchanged), `restore` clears the deleted state (keys and services as of the delete, verbatim, effective state included).
+
+The verification result carries both readings — the declared state, the effective state, and the list of void memberships (key, role, operation CID) for tooling to surface. Consumers act on the effective state; the declared state exists for structural admission and for showing a human exactly what a chain claims versus what it proved.
 
 ### Content Chain
 
@@ -905,6 +942,51 @@ bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
 
 **Derived DID: `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`**
 
+### Reference Key Proof (Key 2's Introduction)
+
+The rotation below introduces key 2 to all three roles, so it carries key 2's [key-proof envelope](https://protocol.dfos.com/key-proof) in `keyProofs` ([Key Possession](#key-possession)). The envelope is signed by **key 2** — the key being introduced — while the operation carrying it is signed by **key 1**. Its deterministic inputs: `nonce` is the literal `dfos-protocol-reference-nonce-1`, `audience` is `keys.dfos.com`, `timestamp` is `2026-03-07T00:00:30.000Z`; the rest is derived — `did` is the reference DID, `roleSet` is `auth,assert,controller`, `prevCID` is the genesis CID, `publicKeyMultibase` is key 2's multikey.
+
+Decoded payload:
+
+```json
+{
+  "nonce": "dfos-protocol-reference-nonce-1",
+  "audience": "keys.dfos.com",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "roleSet": "auth,assert,controller",
+  "prevCID": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne",
+  "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
+  "timestamp": "2026-03-07T00:00:30.000Z"
+}
+```
+
+Canonical signing input (the exact payload octets):
+
+```
+{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}
+```
+
+JWS protected header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:key-add"
+}
+```
+
+JWS Signature (hex):
+
+```
+f27835d076dbb360450ac6284983474b54f4d36d3e1d79b8683d7442b1e5a72b0ed6caa6cb553f763f72133d0225230260dc214d931b4e26a7849f021f52ed03
+```
+
+Compact JWS token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ImRmb3MtcHJvdG9jb2wtcmVmZXJlbmNlLW5vbmNlLTEiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJkaWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwicm9sZVNldCI6ImF1dGgsYXNzZXJ0LGNvbnRyb2xsZXIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZlVkNjVKckFoZmRnRnVNQ2NjVTlUaFF2akIyZkpBTVVIa3V1YWpGOTkyZ0siLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjMwLjAwMFoifQ.8ng10Hbbs2BFCsYoSYNHS1T0020-HXm4aD10QrHlpysO1sqmy1U_dj9yEz0CJSMCYNwhTZMbTianhJ8CH1LtAw
+```
+
 ### Identity Chain: Update (Key Rotation)
 
 JWS Header:
@@ -914,7 +996,7 @@ JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
-  "cid": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei"
+  "cid": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy"
 }
 ```
 
@@ -946,29 +1028,32 @@ Operation:
       "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
     }
   ],
-  "createdAt": "2026-03-07T00:01:00.000Z"
+  "createdAt": "2026-03-07T00:01:00.000Z",
+  "keyProofs": [
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ImRmb3MtcHJvdG9jb2wtcmVmZXJlbmNlLW5vbmNlLTEiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJkaWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwicm9sZVNldCI6ImF1dGgsYXNzZXJ0LGNvbnRyb2xsZXIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZlVkNjVKckFoZmRnRnVNQ2NjVTlUaFF2akIyZkpBTVVIa3V1YWpGOTkyZ0siLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjMwLjAwMFoifQ.8ng10Hbbs2BFCsYoSYNHS1T0020-HXm4aD10QrHlpysO1sqmy1U_dj9yEz0CJSMCYNwhTZMbTianhJ8CH1LtAw"
+  ]
 }
 ```
 
 JWS Signature (hex):
 
 ```
-edfaaf586115616f5ab40d6eaa9a7b94850e5a9e1d0132e92e33a6156cc937ef204cbf909d70c27b219c06ee405e11f33b9d9f6aec146af8752ab07ac0162e0b
+d77a2bfd7ef30ce7b391214775604bc0f70dc88686dd794701bf661e9806f3354395dcf4c063f45fc5a25481cf2d0fb6d19b023afb21f18e816e0c5d6c8bcc04
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWliZnVoNjN1djMzaTJpNWVvb2UzYm9pdDJydXlqZWh1YnNyeWVtdXV6Nm1ydGxlajI2cmVpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.7fqvWGEVYW9atA1uqpp7lIUOWp4dATLpLjOmFWzJN-8gTL-QnXDCeyGcBu5AXhHzO52fauwUavh1KrB6wBYuCw
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA
 ```
 
 Operation CID:
 
 ```
-bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei
+bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy
 ```
 
-Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`.
+Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`, key 2 proved for all three roles by the embedded envelope.
 
 ### Identity Chain: Delete + Restore
 
@@ -978,7 +1063,7 @@ Delete Operation:
 {
   "version": 1,
   "type": "delete",
-  "previousOperationCID": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei",
+  "previousOperationCID": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy",
   "createdAt": "2026-03-07T00:02:00.000Z"
 }
 ```
@@ -990,26 +1075,26 @@ Delete JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi"
+  "cid": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm"
 }
 ```
 
 Delete JWS Signature (hex):
 
 ```
-d340f2eea78aec8d210b73f5caf1112c920d04b362115f4b846f015dd50c20618b4ecc6e31cba19f762abaaf7a4906bc9b397e073b730f92ccc41a21619c5002
+40887e1d10fe60457ce328355f72f0cfeb5724418f08baee4ecb160ba2206f98ff406d1a18f8c9eac02a144d5533c29445896616468b818655e8edbcdf560108
 ```
 
 Delete JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA
 ```
 
 Delete Operation CID:
 
 ```
-bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi
+bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm
 ```
 
 Restore Operation:
@@ -1018,7 +1103,7 @@ Restore Operation:
 {
   "version": 1,
   "type": "restore",
-  "previousOperationCID": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi",
+  "previousOperationCID": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm",
   "createdAt": "2026-03-07T00:03:00.000Z"
 }
 ```
@@ -1030,26 +1115,26 @@ Restore JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba"
+  "cid": "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq"
 }
 ```
 
 Restore JWS Signature (hex):
 
 ```
-9552998f7e081a6c9ffb4527ed310b48f3f78b9ee058c7bc8f9778774ea016787caf88697f9ff5547314af0c24b7b0859d671de148b809d7973ca4bc8e921e02
+2622005ca66a2199c3a5952b6dde12ec5eed1280448c478829c1a0dd645e6170052628bdeb4c2964b15fcab737c8028e36c330f614f9685462be8b3892d86e04
 ```
 
 Restore JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA
 ```
 
 Restore Operation CID:
 
 ```
-bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba
+bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq
 ```
 
 ### Content Chain: Document + Create
@@ -1198,6 +1283,8 @@ Given the artifacts above, verify:
 4. **CID header**: Verify each operation JWS header contains `cid` matching the derived operation CID
 
 5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 31 bytes → `byte % 19` → alphabet lookup → should be `cnnnft9f8a2rn938d6nkz38r847v2kr` → DID = `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`
+
+5b. **Rotation key proof**: base64url-decode the single entry of the rotation operation's `keyProofs`; its payload octets MUST byte-equal the canonical signing input shown in [Reference Key Proof](#reference-key-proof-key-2s-introduction); verify its EdDSA signature with **key 2's** public key (the payload's own `publicKeyMultibase`); check `did` equals the derived DID, `prevCID` equals the genesis CID (the rotation's `previousOperationCID`), and `roleSet` is `auth,assert,controller` — covering all three roles the rotation introduces key 2 to.
 
 6. **Rotation JWS**: signed by OLD controller key (key 1). Verify with key 1's public key. kid:
 

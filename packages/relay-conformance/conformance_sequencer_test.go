@@ -197,18 +197,17 @@ type contentTokens struct {
 
 func createIdentityTokens(t *testing.T) idTokens {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	token, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID, ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID, key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return idTokens{did: did, token: token, auth: auth}
+	return idTokens{did: did, token: token, auth: key}
 }
 
 func createContentTokens(t *testing.T, id idTokens) contentTokens {

@@ -246,13 +246,13 @@ export const useIndexTitleSearch = (): boolean | null =>
 
 // -----------------------------------------------------------------------------
 // BODY-PROBED FILTER DETECTION — the two OPAQUE key filters: `key=` on the
-// identity index (has-ever-declared) and `signerKey=` on the operations index
+// identity index (has-ever-proved) and `signerKey=` on the operations index
 // (what this key signed).
 //
 // Same failure shape as `order=` and `titleContains=`, and these two are the
 // worst of the family: a relay predating either filter IGNORES the param and
 // answers with an UNFILTERED page — every identity on the relay presented as one
-// that declared this key, or every operation on the relay presented as one this
+// that proved this key, or every operation on the relay presented as one this
 // key signed. Both are fabricated claims about key custody, on the surface where
 // that claim matters most.
 //
@@ -291,9 +291,11 @@ export const useIndexTitleSearch = (): boolean | null =>
  * well-formed key rather than something it might one day reject, and one whose 32
  * bytes are a published hash rather than a generated public key.
  *
- * That construction answers both questions at once. No chain has ever declared
- * it, and — having no private half anyone could hold — nothing has ever signed
- * with it either, so it matches nothing on `key=` and nothing on `signerKey=`.
+ * That construction answers both questions at once. Having no private half
+ * anyone could hold, no chain can ever have PROVED it and nothing can ever have
+ * signed with it — so it matches nothing on `key=` and nothing on `signerKey=`.
+ * The unclaimability is the whole point: a chain could DECLARE this key, and
+ * under has-ever-proved that would still index nothing.
  * One sentinel, because it is the same unclaimable value in both places.
  */
 export const KEY_PROBE_MULTIBASE = 'z6MkoR9B2ETntZELcPzFTTMnbfhz3pHumPyJi5oEzQvC2WbE';
@@ -364,7 +366,7 @@ const probeBodyFilterRelays = (
 
 /**
  * The relays that honour `key=` on the identity index — the ONLY relays the
- * has-ever-declared lookup may be sent to. `null` while the probe is in flight
+ * has-ever-proved lookup may be sent to. `null` while the probe is in flight
  * (the key page says it is checking rather than running a query whose rows it
  * could not stand behind), then a stable set; `[]` is "no relay here answers this
  * question". Same module-cached, once-per-session idiom as the gates above.

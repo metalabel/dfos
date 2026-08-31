@@ -1,13 +1,30 @@
 /*
 
-  KEY PROOF — THE CHALLENGE-BOUND, SINGLE-SHOT PROOF THAT A KEY IS HELD.
+  KEY PROOF — THE CHALLENGE-BOUND, POSITION-BOUND, SINGLE-SHOT PROOF THAT A KEY
+  IS HELD.
 
-  A KEY PROOF is a compact JWS over exactly four members — `{nonce, audience,
-  publicKeyMultibase, timestamp}` — signed by the candidate key ITSELF, scoped by
-  a registered `typ` to exactly one ceremony purpose. It proves one fact: the
-  named key was held, and consented to this ceremony at this verifier, inside
-  this window. It never conveys intent, content, or authority. See
-  specs/KEY-PROOF.md.
+  A KEY PROOF is a compact JWS over exactly seven members — `{nonce, audience,
+  did, roleSet, prevCID, publicKeyMultibase, timestamp}` — signed by the
+  candidate key ITSELF, scoped by a registered `typ` to exactly one ceremony
+  purpose. It proves one fact: the named key was held, and consented to THIS
+  POSITION — this chain, these roles, this head — at this verifier, inside this
+  window. It never conveys intent, content, or authority. See specs/KEY-PROOF.md.
+
+  WHAT THE THREE POSITIONAL MEMBERS BUY. `nonce`, `audience` and `timestamp` bind
+  a proof to one ceremony at one verifier in one window; they say nothing about
+  WHERE the key was going. `did`, `roleSet` and `prevCID` say exactly that, and
+  each closes a distinct standing-consent hole:
+
+    - `did` — the chain the key is introduced to. Without it, a proof collected
+      for one identity is spendable against another.
+    - `roleSet` — the roles consented to, from the closed set {auth, assert,
+      controller} in one canonical spelling (see role-set.ts). Without it,
+      consent to sign as an author is consent to become a controller.
+    - `prevCID` — the head the introduction builds on. This is the one that kills
+      STANDING CONSENT: an envelope is bound to a chain state that has already
+      moved on by the time a second introduction could reuse it, so re-adding a
+      removed key, or promoting a key to a new role, needs a FRESH envelope every
+      time. There is no such thing as an envelope held in reserve.
 
   WHY THIS IS ITS OWN SUBPATH AND NOT A MEMBER OF `credentials`. KEY-PROOF is an
   optional capability on its own `0.x` clock, independent of the Protocol v1
@@ -39,6 +56,20 @@
   proof for the length of its freshness window; nothing in this file can
   substitute for it.
 
+  TWO VERIFICATION MODES OVER ONE ENVELOPE. The same bytes are read twice in a
+  key's life, by parties in different positions:
+
+    - PRESENTATION-TIME (`verifyKeyProof`) — a ceremony operator completing a
+      live ceremony. It holds a clock, a configured audience, and a nonce store,
+      so it checks freshness and audience, and its caller runs step 6.
+    - CHAIN-WALK (`verifyChainKeyProof`) — anyone replaying the chain later. The
+      ceremony is long over; the operator's authority, clock and nonce store are
+      not the walker's, and a proof embedded in a signed operation is FIXED
+      TRANSPORT, not a live presentation. So the walk checks NEITHER freshness
+      NOR audience: those two members are bytes the signature covers and the
+      walk carries. What the walk does check is the position — the chain, the
+      head, the roles, the key — which is the part that must still hold.
+
   There is one canonical-bytes implementation per language: this file, and its
   byte-twin `key_proof.go` in dfos-protocol-go.
 
@@ -52,6 +83,7 @@ import {
   isValidEd25519Signature,
   signPayloadEd25519,
 } from '../crypto';
+import { isCanonicalRoleSet, roleSetCovers, type KeyRole } from './role-set';
 
 // -----------------------------------------------------------------------------
 // the byte contract
@@ -79,15 +111,31 @@ export const MAX_KEY_PROOF_SIZE = 4096;
 export const DEFAULT_KEY_PROOF_SKEW_SECONDS = 300;
 
 /**
- * The closed payload. Exactly these four members, each a string, in exactly this
+ * The closed payload. Exactly these seven members, each a string, in exactly this
  * order — the member set is EXHAUSTIVE and no amendment may introduce a member
  * that carries intent or content.
  */
 export interface KeyProofPayload {
   /** The verifier-minted, single-use challenge, exactly as the carriage delivered it. */
   nonce: string;
-  /** The completion endpoint's lowercase authority — `host`, or `host:port` off 443. */
+  /**
+   * The completing authority's lowercase authority — `host`, or `host:port` off
+   * 443. Held here as an opaque string: a leg whose completing authority IS a
+   * chain rather than a host audiences to that chain's DID, byte-equal to `did`,
+   * and this module does not special-case the two spellings. The VERIFIER
+   * supplies the expectation; the envelope only carries what it was signed for.
+   */
   audience: string;
+  /** The chain this key is introduced to. */
+  did: string;
+  /** The canonical role set (see role-set.ts) this envelope consents to. */
+  roleSet: string;
+  /**
+   * The chain head the introduction builds on — equal to the introducing
+   * operation's `previousOperationCID`. The member that forecloses standing
+   * consent.
+   */
+  prevCID: string;
   /** The candidate key's Multikey — and the key that signs this envelope. */
   publicKeyMultibase: string;
   /** ISO 8601 creation time, floor-normalized to whole seconds (`.000Z`). */
@@ -100,6 +148,10 @@ export type KeyProofFailureReason =
   | 'header'
   | 'schema'
   | 'audience'
+  | 'did'
+  | 'roleSet'
+  | 'prevCID'
+  | 'key'
   | 'freshness'
   | 'signature';
 
@@ -120,7 +172,15 @@ const invalid = (reason: KeyProofFailureReason, message: string): KeyProofVerify
 const encoder = new TextEncoder();
 
 /** The canonical member order — the ONLY order these bytes are ever emitted in. */
-const KEY_PROOF_MEMBERS = ['nonce', 'audience', 'publicKeyMultibase', 'timestamp'] as const;
+const KEY_PROOF_MEMBERS = [
+  'nonce',
+  'audience',
+  'did',
+  'roleSet',
+  'prevCID',
+  'publicKeyMultibase',
+  'timestamp',
+] as const;
 
 // A lone surrogate has no convergent serialization: `JSON.stringify` round-trips
 // it to a `\uXXXX` escape that the Go byte-twin's UTF-8 strings cannot hold, so
@@ -138,15 +198,24 @@ const PROTOCOL_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /**
  * KEY-PROOF.md step 3, and the producer-side member rules, in ONE place: exactly
- * the four members, each a non-empty string. Any absent, any EXTRA, or any
+ * the seven members, each a non-empty string. Any absent, any EXTRA, or any
  * non-string member rejects — this envelope is CLOSED, so unlike API-AUTH's
  * MUST-ignore-unknown payload there is no forward-compatible slack here by
  * design. Anything that wants to say more is a different artifact.
  *
  * The grammar checks past "is a string" are the ones a mismatch would otherwise
  * surface later and less usefully: an `audience` that is not an authority could
- * never byte-equal a verifier's configured authority, and a `timestamp` outside
- * the canonical spelling could never be compared to a clock.
+ * never byte-equal a verifier's configured authority, a `timestamp` outside the
+ * canonical spelling could never be compared to a clock, and a `roleSet` outside
+ * its one canonical spelling would give the same set of roles more than one
+ * payload — which is the malleability the canonical-bytes rule exists to refuse,
+ * one level down.
+ *
+ * `did` and `prevCID` carry NO grammar past non-empty. They are compared by byte
+ * equality against values the verifier already holds — the chain's DID, the
+ * carrying operation's `previousOperationCID` — so a malformed one cannot match
+ * anything, and a shape rule here would only be a second place for the two
+ * language twins to disagree.
  */
 const validateKeyProofPayload = (value: unknown): KeyProofPayload => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -170,12 +239,26 @@ const validateKeyProofPayload = (value: unknown): KeyProofPayload => {
 
   const nonce = raw['nonce'] as string;
   const audience = raw['audience'] as string;
+  const did = raw['did'] as string;
+  const roleSet = raw['roleSet'] as string;
+  const prevCID = raw['prevCID'] as string;
   const publicKeyMultibase = raw['publicKeyMultibase'] as string;
   const timestamp = raw['timestamp'] as string;
 
-  // The API-AUTH authority grammar, verbatim: lowercase, no scheme, no path.
+  // The API-AUTH authority grammar, verbatim: lowercase, no scheme, no path. A
+  // `did:dfos:…` identifier satisfies it as written — lowercase, no separators —
+  // which is why the DID-audienced leg needs no second grammar here.
   if (audience !== audience.toLowerCase() || /[\s/\\?#]/.test(audience)) {
     throw invalid('schema', 'audience must be a lowercase authority, without a scheme or path');
+  }
+
+  // The role set has ONE spelling. `assert,auth`, `auth, assert`, `auth,auth`,
+  // `auth,owner` and `` all name nothing this envelope can be signed for.
+  if (!isCanonicalRoleSet(roleSet)) {
+    throw invalid(
+      'schema',
+      'roleSet must be a canonical, non-empty subset of auth,assert,controller in that order',
+    );
   }
 
   // THE ROUND-TRIP IS THE CALENDAR CHECK, and it is not optional. The regex fixes
@@ -194,13 +277,14 @@ const validateKeyProofPayload = (value: unknown): KeyProofPayload => {
     throw invalid('schema', 'timestamp must be ISO-8601 UTC whole-second .000Z');
   }
 
-  return { nonce, audience, publicKeyMultibase, timestamp };
+  return { nonce, audience, did, roleSet, prevCID, publicKeyMultibase, timestamp };
 };
 
 /**
  * THE BYTE CONTRACT. Serializes a payload to the canonical bytes that ARE the
  * JWS payload segment: minimal UTF-8 JSON, no insignificant whitespace, members
- * in exactly the order `nonce, audience, publicKeyMultibase, timestamp`.
+ * in exactly the order `nonce, audience, did, roleSet, prevCID,
+ * publicKeyMultibase, timestamp`.
  *
  * PURE and clientless: import it in a holder's signing tool and in a ceremony
  * operator's verifier alike. Byte-for-byte identical to Go's
@@ -218,6 +302,9 @@ export const keyProofSigningInput = (payload: KeyProofPayload): Uint8Array =>
 const keyProofPayloadObject = (payload: KeyProofPayload): Record<string, string> => ({
   nonce: payload.nonce,
   audience: payload.audience,
+  did: payload.did,
+  roleSet: payload.roleSet,
+  prevCID: payload.prevCID,
   publicKeyMultibase: payload.publicKeyMultibase,
   timestamp: payload.timestamp,
 });
@@ -243,8 +330,17 @@ export interface SignKeyProofInput {
   typ: string;
   /** The verifier-minted nonce, exactly as the carriage delivered it. */
   nonce: string;
-  /** The completion endpoint's lowercase authority — the one the human confirmed. */
+  /** The completing authority — the one the human confirmed. */
   audience: string;
+  /** The chain this key is being introduced to. */
+  did: string;
+  /**
+   * The canonical role set — build it with `serializeRoleSet` rather than by
+   * hand; a non-canonical spelling is refused here, not silently normalized.
+   */
+  roleSet: string;
+  /** The chain head the introduction builds on. */
+  prevCID: string;
   /**
    * The candidate key's raw 32-byte Ed25519 private key. `publicKeyMultibase` is
    * DERIVED from it rather than accepted as an input: this envelope is
@@ -268,12 +364,20 @@ export interface SignKeyProofInput {
  * carry.
  *
  * HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (KEY-PROOF.md, Holder
- * Obligations). A holder MUST show its human the audience and the purpose before
- * calling this, and SHOULD refuse to sign for a key any identity's chain has
- * ever declared — the `key=` reverse index is has-ever-declared, and one key in
- * two chains publishes an irreversible public link between them. Both are
- * decisions about a human and a network, made before there is a signature to
- * make; neither belongs to a pure signer.
+ * Obligations). A holder MUST show its human — before calling this — the
+ * audience, the purpose, the adopting identity, and the roles. A proof is
+ * consent, and consent that was never displayed was never given.
+ *
+ * It SHOULD also refuse to sign for a key some identity's chain has already
+ * PROVED, its own included: the `key=` reverse index is has-ever-proved across
+ * all three key sets, its rows survive rotation and deletion, and proving one
+ * key into two chains publishes an irreversible public link between them. An
+ * unproved DECLARATION of the key elsewhere is neither a link nor a burn — it is
+ * void, it never indexes, and it never obligates the true holder, which is
+ * precisely why the index counts proofs and not claims.
+ *
+ * Every one of those is a decision about a human and a network, made before
+ * there is a signature to make; none belongs to a pure signer.
  */
 export const signKeyProof = async (
   input: SignKeyProofInput,
@@ -303,6 +407,9 @@ export const signKeyProof = async (
   const payload = validateKeyProofPayload({
     nonce: input.nonce,
     audience: input.audience,
+    did: input.did,
+    roleSet: input.roleSet,
+    prevCID: input.prevCID,
     publicKeyMultibase: encodeEd25519Multikey(publicKey),
     timestamp,
   });
@@ -320,82 +427,25 @@ export const signKeyProof = async (
 };
 
 // -----------------------------------------------------------------------------
-// verify
+// decode — the steps BOTH verification modes share
 // -----------------------------------------------------------------------------
 
-export interface VerifyKeyProofOptions {
-  /**
-   * The registered `typ` THIS ceremony requires. The gate is absolute: it is what
-   * keeps a proof signed for one ceremony from ever being presented for another.
-   */
-  expectedTyp: string;
-  /**
-   * THE VERIFIER'S OWN CONFIGURED AUTHORITY — a value the deployment holds, NEVER
-   * one read from the request. `Host`, `X-Forwarded-Host`, and the request URL's
-   * authority are all attacker-supplied; a verifier that compared against one of
-   * them would have no audience binding at all, and audience binding is the whole
-   * defense against challenge relay.
-   */
-  expectedAudience: string;
-  /** Acceptance window, seconds, EITHER SIDE. Default `DEFAULT_KEY_PROOF_SKEW_SECONDS`. */
-  maxSkewSeconds?: number;
-  /** Clock injection (unix ms). Default `Date.now()`. */
-  now?: () => number;
-}
-
-/** What a verified key proof hands back. */
-export interface VerifiedKeyProof {
-  /**
-   * The validated payload. THE CALLER MUST NOW RUN STEP 6 against `payload.nonce`:
-   * check that it is a nonce this verifier minted, for this ceremony, not yet
-   * consumed, and consume it ATOMICALLY (check-and-delete) so two racing
-   * completions cannot both pass.
-   */
+/** The envelope, split and validated as far as the two modes agree. */
+interface DecodedKeyProof {
   payload: KeyProofPayload;
-  /** The header `typ` — equal to `expectedTyp`, since anything else rejected. */
+  headerB64: string;
+  payloadB64: string;
+  signatureB64: string;
   typ: string;
-  /** The integer unix seconds the freshness check used. */
-  now: number;
 }
 
 /**
- * Verify a key proof — KEY-PROOF.md's verification algorithm steps 1–5 and 7:
- * size cap, header gates, the closed payload schema over CANONICAL bytes,
- * audience byte-equality, freshness, and the signature against the payload's OWN
- * `publicKeyMultibase`.
- *
- * STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
- * nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
- * checked and consumed ATOMICALLY — a check-and-delete against the verifier's
- * own store, which is state this pure function does not hold. It is returned on
- * `payload.nonce` precisely so the caller can run that step next. Without it a
- * proof is replayable for the length of the freshness window.
- *
- * What the seven steps together establish is exactly one fact: THE NAMED KEY WAS
- * HELD, AND CONSENTED TO THIS CEREMONY AT THIS VERIFIER, INSIDE THIS WINDOW.
- * Everything after — appending the key to a chain, custody policy, notification
- * — is the ceremony operator's.
+ * KEY-PROOF.md verification steps 1–3: size cap, header gates, and the closed
+ * payload schema over CANONICAL bytes. Everything both modes do identically,
+ * because these three steps are about the ARTIFACT and not about the position
+ * the reader occupies.
  */
-export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): VerifiedKeyProof => {
-  // THE TYP GATE IS ONLY A GATE WHEN THE EXPECTATION NAMES A PURPOSE. An empty
-  // `expectedTyp` byte-equals an artifact carrying `"typ":""`, so a verifier
-  // configured with one admits an envelope scoped to no ceremony at all — the
-  // gate reads as satisfied while gating nothing. That is a MISCONFIGURATION, not
-  // a verdict about a proof: it throws a plain Error like the skew guard below
-  // and never a `KeyProofVerifyError`, so a caller branching on `reason` cannot
-  // mistake a broken deployment for a bad envelope. Non-empty is the whole rule —
-  // the purpose registry is KEY-PROOF.md's, and hardcoding its rows here would
-  // make registering a new purpose a library release. `signKeyProof` refuses an
-  // empty `typ` on the producer side for the same reason.
-  if (options.expectedTyp === '') {
-    throw new Error('invalid key proof verifier: expectedTyp must be a registered purpose value');
-  }
-
-  const maxSkew = options.maxSkewSeconds ?? DEFAULT_KEY_PROOF_SKEW_SECONDS;
-  if (!Number.isSafeInteger(maxSkew) || maxSkew < 0) {
-    throw new Error('invalid key proof verifier: maxSkewSeconds must be a non-negative integer');
-  }
-
+const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
   // 1. Size cap — before any decode. A DoS guard at the header layer.
   if (jws.length > MAX_KEY_PROOF_SIZE) {
     throw invalid('size', `envelope exceeds max size: ${jws.length} > ${MAX_KEY_PROOF_SIZE}`);
@@ -403,7 +453,7 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
 
   const parts = jws.split('.');
   if (parts.length !== 3) throw invalid('header', 'failed to decode JWS');
-  const [headerB64, payloadB64] = parts as [string, string, string];
+  const [headerB64, payloadB64, signatureB64] = parts as [string, string, string];
 
   // 2. Header gates — the Signature Verification Profile, plus the two this
   // envelope adds. Applied to the RAW header object so a member present with any
@@ -437,27 +487,33 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
   // A PRESENT kid REJECTS. The candidate key is in no chain, so there is no DID
   // URL to name; an envelope carrying one is claiming something this artifact
   // does not say, and admitting it would create a second place a verifier might
-  // look for a key.
+  // look for a key. It stays absent in the chain-walk mode too: by the time the
+  // walk reads the envelope the key IS in a chain, but the envelope is the same
+  // bytes it always was, and re-reading them under a looser rule would mean an
+  // artifact that verifies at replay and not at presentation.
   if ('kid' in header) {
     throw invalid('header', 'kid must be absent — the candidate key is in no chain');
   }
   // THE TYP GATE, ABSOLUTE. A proof signed for one ceremony is dead bytes at
   // every other.
   const typ = header['typ'];
-  if (typeof typ !== 'string' || typ !== options.expectedTyp) {
-    throw invalid('header', `invalid typ: expected ${options.expectedTyp}, got ${String(typ)}`);
+  if (typeof typ !== 'string' || typ !== expectedTyp) {
+    throw invalid('header', `invalid typ: expected ${expectedTyp}, got ${String(typ)}`);
   }
 
-  // 3. Payload schema — closed, exactly four string members — AND the canonical
+  // 3. Payload schema — closed, exactly seven string members — AND the canonical
   // bytes. The parse runs against the ORIGINAL payload octets, because those are
   // the bytes the signature covers; the canonical serialization is then
   // RECOMPUTED from the parsed members and byte-compared against them.
   //
   // THE CANONICAL RULE BINDS THE VERIFIER, NOT ONLY THE PRODUCER. A signature
   // covers whatever octets arrived, so without this comparison a payload whose
-  // four members are REORDERED — or re-spelled with insignificant whitespace —
+  // seven members are REORDERED — or re-spelled with insignificant whitespace —
   // and signed over that serialization verifies exactly like the canonical one,
-  // and the payload stops being a function of its members.
+  // and the payload stops being a function of its members. The same argument one
+  // level down is why `roleSet` has a single spelling: `assert,auth` names the
+  // set `auth,assert` names, so admitting both would restore the malleability
+  // this comparison removes.
   //
   // WHAT THIS PINS IS THE PAYLOAD'S OCTETS, AND NOTHING PAST THEM. The compact
   // envelope around them is not canonicalized: `base64urlDecode` is
@@ -480,33 +536,22 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
     throw invalid('schema', err instanceof Error ? err.message : 'payload is not valid UTF-8 JSON');
   }
 
-  // 4. Audience — BYTE EQUALITY against the verifier's own configured authority.
-  // This is what defeats challenge relay: a proof audienced to the host the
-  // victim confirmed is unusable at every other host.
-  if (payload.audience !== options.expectedAudience) {
-    throw invalid('audience', 'audience does not match this verifier authority');
-  }
+  return { payload, headerB64, payloadB64, signatureB64, typ };
+};
 
-  // 5. Freshness — integer unix seconds on both sides, symmetric, because a
-  // ceremony's window is its own lifetime in both directions.
-  const now = Math.floor((options.now ? options.now() : Date.now()) / 1000);
-  const issued = Math.floor(Date.parse(payload.timestamp) / 1000);
-  if (Math.abs(now - issued) > maxSkew) {
-    throw invalid('freshness', 'timestamp is outside the acceptance window');
-  }
-
-  // 6. NONCE — THE CALLER'S. See the doc comment: check-and-delete, atomically.
-
-  // 7. Signature, against the payload's OWN publicKeyMultibase. The circularity
-  // is the point: a valid envelope is possession demonstrated over fresh
-  // verifier-minted bytes.
+/**
+ * KEY-PROOF.md verification step 7: the signature, against the payload's OWN
+ * `publicKeyMultibase`. The circularity is the point — a valid envelope is
+ * possession demonstrated over bytes the signer did not choose alone.
+ */
+const verifyKeyProofSignature = (decoded: DecodedKeyProof): void => {
   let keyBytes: Uint8Array;
   try {
-    const decoded = decodeMultikey(payload.publicKeyMultibase);
-    if (decoded.codec !== ED25519_PUB_MULTICODEC) {
+    const key = decodeMultikey(decoded.payload.publicKeyMultibase);
+    if (key.codec !== ED25519_PUB_MULTICODEC) {
       throw new Error('publicKeyMultibase is not an Ed25519 public key');
     }
-    keyBytes = decoded.keyBytes;
+    keyBytes = key.keyBytes;
   } catch (err) {
     throw invalid(
       'signature',
@@ -519,14 +564,288 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
   let verified = false;
   try {
     verified = isValidEd25519Signature(
-      encoder.encode(`${headerB64}.${payloadB64}`),
-      base64urlDecode(parts[2] as string),
+      encoder.encode(`${decoded.headerB64}.${decoded.payloadB64}`),
+      base64urlDecode(decoded.signatureB64),
       keyBytes,
     );
   } catch {
     verified = false;
   }
   if (!verified) throw invalid('signature', 'signature does not verify against publicKeyMultibase');
+};
 
-  return { payload, typ, now };
+// -----------------------------------------------------------------------------
+// verify — presentation time
+// -----------------------------------------------------------------------------
+
+export interface VerifyKeyProofOptions {
+  /**
+   * The registered `typ` THIS ceremony requires. The gate is absolute: it is what
+   * keeps a proof signed for one ceremony from ever being presented for another.
+   */
+  expectedTyp: string;
+  /**
+   * THE VERIFIER'S OWN CONFIGURED AUTHORITY — a value the deployment holds, NEVER
+   * one read from the request. `Host`, `X-Forwarded-Host`, and the request URL's
+   * authority are all attacker-supplied; a verifier that compared against one of
+   * them would have no audience binding at all, and audience binding is the whole
+   * defense against challenge relay.
+   */
+  expectedAudience: string;
+  /**
+   * THE CHAIN THIS CEREMONY IS COMPLETING FOR. Like the audience, it is the
+   * completing authority's own value — the identity whose ceremony this is — and
+   * never a DID read back out of the envelope being checked.
+   */
+  expectedDid: string;
+  /**
+   * THE ROLES THIS CEREMONY GRANTS, in canonical spelling (`serializeRoleSet`).
+   * Byte-equality, not coverage: a ceremony that will write `auth,assert` MUST
+   * NOT accept an envelope consenting to `auth` alone, and MUST NOT accept one
+   * consenting to `auth,assert,controller` either — the second is the holder
+   * conceding more than was asked, which a completing authority has no business
+   * banking. A non-canonical expectation is a MISCONFIGURATION and throws.
+   */
+  expectedRoleSet: string;
+  /**
+   * THE HEAD THE INTRODUCTION WILL BUILD ON — the `previousOperationCID` the
+   * completing authority is about to write. A chain that moved between minting
+   * the challenge and completing it invalidates the proof here rather than
+   * writing an operation whose embedded envelope no walker will accept.
+   */
+  expectedPrevCID: string;
+  /** Acceptance window, seconds, EITHER SIDE. Default `DEFAULT_KEY_PROOF_SKEW_SECONDS`. */
+  maxSkewSeconds?: number;
+  /** Clock injection (unix ms). Default `Date.now()`. */
+  now?: () => number;
+}
+
+/** What a verified key proof hands back. */
+export interface VerifiedKeyProof {
+  /**
+   * The validated payload. THE CALLER MUST NOW RUN STEP 6 against `payload.nonce`:
+   * check that it is a nonce this verifier minted, for this ceremony, not yet
+   * consumed, and consume it ATOMICALLY (check-and-delete) so two racing
+   * completions cannot both pass.
+   */
+  payload: KeyProofPayload;
+  /** The header `typ` — equal to `expectedTyp`, since anything else rejected. */
+  typ: string;
+  /** The integer unix seconds the freshness check used. */
+  now: number;
+}
+
+/**
+ * Verify a key proof AT PRESENTATION TIME — KEY-PROOF.md's verification algorithm
+ * steps 1–5 and 7: size cap, header gates, the closed payload schema over
+ * CANONICAL bytes, the four expectation arms (audience, did, roleSet, prevCID),
+ * freshness, and the signature against the payload's OWN `publicKeyMultibase`.
+ *
+ * EVERY EXPECTATION IS THE DEPLOYMENT'S OWN VALUE. There is no arm here that
+ * compares the envelope to itself. `expectedDid`, `expectedRoleSet` and
+ * `expectedPrevCID` are the position the completing authority is about to WRITE;
+ * if the envelope names a different one, the holder consented to something else.
+ *
+ * STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
+ * nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
+ * checked and consumed ATOMICALLY — a check-and-delete against the verifier's
+ * own store, which is state this pure function does not hold. It is returned on
+ * `payload.nonce` precisely so the caller can run that step next. Without it a
+ * proof is replayable for the length of the freshness window.
+ *
+ * What the steps together establish is exactly one fact: THE NAMED KEY WAS HELD,
+ * AND CONSENTED TO THIS POSITION IN THIS CHAIN AT THIS VERIFIER, INSIDE THIS
+ * WINDOW. Everything after — appending the key to a chain, custody policy,
+ * notification — is the ceremony operator's.
+ */
+export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): VerifiedKeyProof => {
+  // THE TYP GATE IS ONLY A GATE WHEN THE EXPECTATION NAMES A PURPOSE. An empty
+  // `expectedTyp` byte-equals an artifact carrying `"typ":""`, so a verifier
+  // configured with one admits an envelope scoped to no ceremony at all — the
+  // gate reads as satisfied while gating nothing. That is a MISCONFIGURATION, not
+  // a verdict about a proof: it throws a plain Error like the guards below and
+  // never a `KeyProofVerifyError`, so a caller branching on `reason` cannot
+  // mistake a broken deployment for a bad envelope. Non-empty is the whole rule —
+  // the purpose registry is KEY-PROOF.md's, and hardcoding its rows here would
+  // make registering a new purpose a library release. `signKeyProof` refuses an
+  // empty `typ` on the producer side for the same reason.
+  //
+  // The same argument covers the other four expectations, and it is why none of
+  // them is optional: an omitted or empty positional expectation is an arm that
+  // reads as satisfied while binding nothing, which is precisely the standing
+  // consent this envelope revision exists to foreclose.
+  if (options.expectedTyp === '') {
+    throw new Error('invalid key proof verifier: expectedTyp must be a registered purpose value');
+  }
+  if (options.expectedAudience === '') {
+    throw new Error('invalid key proof verifier: expectedAudience must name this authority');
+  }
+  if (options.expectedDid === '') {
+    throw new Error('invalid key proof verifier: expectedDid must name the chain');
+  }
+  if (options.expectedPrevCID === '') {
+    throw new Error('invalid key proof verifier: expectedPrevCID must name the chain head');
+  }
+  if (!isCanonicalRoleSet(options.expectedRoleSet)) {
+    throw new Error(
+      'invalid key proof verifier: expectedRoleSet must be a canonical role set — ' +
+        'build it with serializeRoleSet',
+    );
+  }
+
+  const maxSkew = options.maxSkewSeconds ?? DEFAULT_KEY_PROOF_SKEW_SECONDS;
+  if (!Number.isSafeInteger(maxSkew) || maxSkew < 0) {
+    throw new Error('invalid key proof verifier: maxSkewSeconds must be a non-negative integer');
+  }
+
+  // 1–3. Size, header gates, closed schema over canonical bytes.
+  const decoded = decodeKeyProof(jws, options.expectedTyp);
+  const payload = decoded.payload;
+
+  // 4. Audience — BYTE EQUALITY against the verifier's own configured authority.
+  // This is what defeats challenge relay: a proof audienced to the host the
+  // victim confirmed is unusable at every other host.
+  if (payload.audience !== options.expectedAudience) {
+    throw invalid('audience', 'audience does not match this verifier authority');
+  }
+
+  // 4b. The three POSITIONAL arms, each byte equality against a value the
+  // completing authority already holds. Audience binding says WHERE the proof may
+  // be spent; these say WHAT it may be spent on.
+  if (payload.did !== options.expectedDid) {
+    throw invalid('did', 'did does not match the chain this ceremony completes for');
+  }
+  if (payload.roleSet !== options.expectedRoleSet) {
+    throw invalid('roleSet', 'roleSet does not match the roles this ceremony grants');
+  }
+  if (payload.prevCID !== options.expectedPrevCID) {
+    throw invalid('prevCID', 'prevCID does not match the chain head this introduction builds on');
+  }
+
+  // 5. Freshness — integer unix seconds on both sides, symmetric, because a
+  // ceremony's window is its own lifetime in both directions.
+  const now = Math.floor((options.now ? options.now() : Date.now()) / 1000);
+  const issued = Math.floor(Date.parse(payload.timestamp) / 1000);
+  if (Math.abs(now - issued) > maxSkew) {
+    throw invalid('freshness', 'timestamp is outside the acceptance window');
+  }
+
+  // 6. NONCE — THE CALLER'S. See the doc comment: check-and-delete, atomically.
+
+  // 7. Signature, against the payload's OWN publicKeyMultibase.
+  verifyKeyProofSignature(decoded);
+
+  return { payload, typ: decoded.typ, now };
+};
+
+// -----------------------------------------------------------------------------
+// verify — chain walk
+// -----------------------------------------------------------------------------
+
+export interface VerifyChainKeyProofOptions {
+  /** The registered `typ` the introduction requires — `KEY_ADD_JWS_TYP`. */
+  expectedTyp: string;
+  /** The DID of the chain being walked. */
+  did: string;
+  /** The carrying operation's `previousOperationCID`. */
+  prevCID: string;
+  /** The Multikey of the key this envelope is being read as the proof FOR. */
+  publicKeyMultibase: string;
+  /** The role the introduction needs covered. Coverage, not equality — see below. */
+  role: KeyRole;
+}
+
+/**
+ * Verify a key proof AT CHAIN-WALK TIME — the mode a replayer uses on an envelope
+ * embedded in a signed identity operation.
+ *
+ * WHAT IT CHECKS: the signature, the `typ`, the closed schema over canonical
+ * bytes, and the four position arms — `publicKeyMultibase` is the key being
+ * introduced, `did` is this chain, `prevCID` is the carrying operation's
+ * `previousOperationCID`, and `roleSet` COVERS the role in question.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CHECK, AND WHY. Neither FRESHNESS nor AUDIENCE.
+ * Both are properties of a live ceremony, and the walk is not one: the envelope
+ * was fresh when it was presented, against a clock and an authority that belonged
+ * to the completing operator and not to whoever replays the chain a year later.
+ * Checking freshness at walk time would make every chain expire; checking
+ * audience would make a chain verifiable only by the relay that wrote it. The two
+ * members still travel, still sign, and are still returned — they are FIXED
+ * TRANSPORT the signature covers, evidence of which ceremony this was, not gates
+ * a walker is positioned to run.
+ *
+ * COVERAGE, NOT EQUALITY, ON THE ROLE. Presentation-time takes byte equality
+ * because the completing authority knows exactly which roles it is about to
+ * write. The walk asks a narrower question, once per (key, role) introduction:
+ * did the holder consent to THIS role? One envelope consenting to
+ * `auth,assert,controller` therefore proves three introductions in one operation,
+ * which is the ordinary rotation case.
+ *
+ * Returns the validated payload. Throws `KeyProofVerifyError` — a chain walker
+ * treats every throw as "this introduction is not proved", never as "this chain
+ * is invalid": an unproved introduction voids a key-role membership and nothing
+ * more.
+ */
+/**
+ * The `publicKeyMultibase` an envelope NAMES, read WITHOUT verifying anything —
+ * no signature, no schema, no gates. `null` when the bytes do not decode to an
+ * object carrying a string there.
+ *
+ * UNSAFE IS IN THE NAME BECAUSE THE ANSWER PROVES NOTHING. The only sound use is
+ * as an INDEX HINT. An operation carrying several envelopes and introducing
+ * several keys would otherwise be a quadratic scan — every envelope gated
+ * against every candidate — so the chain walk uses this to pick WHICH candidate
+ * an envelope is about, then runs the full `verifyChainKeyProof` against that
+ * candidate's real, DECLARED Multikey. The gate's own `publicKeyMultibase` arm
+ * is what makes the pairing sound: a wrong or forged hint routes the envelope to
+ * a candidate it then fails against, which is exactly the verdict the exhaustive
+ * scan would have reached. Never read this value as an assertion about a key.
+ */
+export const unsafeKeyProofSubject = (jws: string): string | null => {
+  const parts = jws.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const decoded: unknown = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(parts[1] as string)),
+    );
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return null;
+    const subject = (decoded as Record<string, unknown>)['publicKeyMultibase'];
+    return typeof subject === 'string' ? subject : null;
+  } catch {
+    return null;
+  }
+};
+
+export const verifyChainKeyProof = (
+  jws: string,
+  options: VerifyChainKeyProofOptions,
+): KeyProofPayload => {
+  if (options.expectedTyp === '') {
+    throw new Error('invalid key proof verifier: expectedTyp must be a registered purpose value');
+  }
+
+  // 1–3. Size, header gates, closed schema over canonical bytes.
+  const decoded = decodeKeyProof(jws, options.expectedTyp);
+  const payload = decoded.payload;
+
+  // The key arm FIRST: an envelope for some other key is not evidence about this
+  // one, whatever else it says.
+  if (payload.publicKeyMultibase !== options.publicKeyMultibase) {
+    throw invalid('key', 'publicKeyMultibase is not the key being introduced');
+  }
+  if (payload.did !== options.did) {
+    throw invalid('did', 'did is not this chain');
+  }
+  if (payload.prevCID !== options.prevCID) {
+    throw invalid('prevCID', 'prevCID is not the carrying operation previousOperationCID');
+  }
+  if (!roleSetCovers(payload.roleSet, options.role)) {
+    throw invalid('roleSet', `roleSet does not cover the ${options.role} role`);
+  }
+
+  // Freshness and audience are NOT checked here. See the doc comment.
+
+  verifyKeyProofSignature(decoded);
+
+  return payload;
 };

@@ -362,6 +362,242 @@ func ordinalSuffix(n int) string {
 	}
 }
 
+// --- possession proofs for the keys an update introduces ---
+//
+// A key's appearance in an identity chain is accompanied by that key's own
+// signature over the appearance (specs/KEY-PROOF.md, PROTOCOL.md → Key
+// Possession). Genesis is the one exception, and it proves itself: one key in all
+// three roles, signing the operation that declares it. Every other introduction
+// carries an embedded envelope, and a membership no envelope covers is VOID —
+// excluded from effective state, never indexed, never resolving.
+//
+// So every write path in this file has to answer one question before it signs:
+// what does this operation INTRODUCE, and can this machine prove it?
+
+// declaredKeyState is the base an identity update builds its full-state key
+// arrays from.
+//
+// DECLARED, NOT EFFECTIVE, and the difference is a chain's contents. The
+// IdentityState key arrays are EFFECTIVE state — the memberships a possession
+// proof admitted — so seeding an update from them would DROP every
+// declared-but-unproved key on the next operation, silently, as a side effect of
+// whatever unrelated command happened to run. A controller who wrote a key into
+// their chain decides when it leaves; an `identity bind` does not decide that for
+// them.
+//
+// THE IsZero FALLBACK IS NOT DEFENSIVE CLUTTER. A state deserialized from a store
+// written before declared state existed records no declared arrays at all, and
+// reading those absent arrays literally would author an update declaring NOTHING
+// — every key in the chain gone in one operation. IsZero's contract covers
+// exactly this case, and "the effective arrays are also the declared arrays" is
+// true for any chain with no void memberships.
+func declaredKeyState(chain *relay.StoredIdentityChain) protocol.DeclaredKeyState {
+	if chain.State.Declared.IsZero() {
+		return protocol.DeclaredKeyState{
+			AuthKeys:       chain.State.AuthKeys,
+			AssertKeys:     chain.State.AssertKeys,
+			ControllerKeys: chain.State.ControllerKeys,
+		}
+	}
+	return chain.State.Declared
+}
+
+// keyIntroduction is one key an operation introduces, and the roles it gains.
+type keyIntroduction struct {
+	Key   protocol.MultikeyPublicKey
+	Roles []protocol.KeyRole
+}
+
+// keyIntroductions computes what an operation INTRODUCES: every (key, role) in
+// the arrays about to be authored that prior EFFECTIVE state did not already
+// carry.
+//
+// EFFECTIVE is the comparison, because effective is the comparison the chain walk
+// makes — so it is the one that decides what needs an envelope. One consequence
+// is worth stating plainly, because it surprises people: a membership that went
+// void is introduced AGAIN by every subsequent operation that re-declares it. It
+// keeps demanding a proof until one arrives or the key is dropped from the
+// arrays, and that is the designed behavior rather than an edge case — a chain
+// does not get to carry a key nobody proved and have the fact quietly stop
+// mattering.
+//
+// Keys are grouped by MATERIAL rather than by id: one envelope proves one key,
+// however many ids or roles name it.
+func keyIntroductions(prior protocol.IdentityState, controller, auth, assert []protocol.MultikeyPublicKey) []keyIntroduction {
+	effective := map[protocol.KeyRole]map[string]bool{
+		"auth": {}, "assert": {}, "controller": {},
+	}
+	for _, k := range prior.AuthKeys {
+		effective["auth"][k.ID] = true
+	}
+	for _, k := range prior.AssertKeys {
+		effective["assert"][k.ID] = true
+	}
+	for _, k := range prior.ControllerKeys {
+		effective["controller"][k.ID] = true
+	}
+
+	index := map[string]int{}
+	var out []keyIntroduction
+	add := func(set []protocol.MultikeyPublicKey, role protocol.KeyRole) {
+		for _, k := range set {
+			if effective[role][k.ID] {
+				continue
+			}
+			i, seen := index[k.PublicKeyMultibase]
+			if !seen {
+				index[k.PublicKeyMultibase] = len(out)
+				out = append(out, keyIntroduction{Key: k})
+				i = len(out) - 1
+			}
+			out[i].Roles = append(out[i].Roles, role)
+		}
+	}
+	add(auth, "auth")
+	add(assert, "assert")
+	add(controller, "controller")
+	return out
+}
+
+// proveIntroductions self-signs a possession proof for every introduction whose
+// private key this machine holds, and reports the ones it cannot prove.
+//
+// THIS IS KEY-PROOF'S CONTROLLER-VERIFIED LEG, in the degenerate form where the
+// tool minting the challenge and the device holding the key are one process. The
+// audience is the chain's OWN DID rather than a host authority — no host mediates
+// this leg — and it byte-equals the payload's `did`, which is what makes an
+// envelope signed here structurally unusable at a hosted ceremony and vice versa:
+// a host authority is never a DID, so the two value domains cannot collide.
+//
+// What it cannot prove, it does not pretend to. A key generated on another device
+// is exactly the case this returns rather than fabricates — a controller cannot
+// vouch for material it does not hold, which is the entire point of the artifact.
+func proveIntroductions(did, prevCID string, intros []keyIntroduction) (proofs []string, unprovable []keyIntroduction, err error) {
+	for _, intro := range intros {
+		account, held := heldKeyAccount(did, intro.Key.ID, intro.Key.PublicKeyMultibase)
+		if !held {
+			unprovable = append(unprovable, intro)
+			continue
+		}
+		priv, err := keys.GetPrivateKey(account)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read %s from %s: %w", account, keys.Backend(), err)
+		}
+		roleSet, err := protocol.SerializeRoleSet(intro.Roles)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the roles introduced for %s are not a role set: %w", intro.Key.ID, err)
+		}
+		nonce, err := mintProofNonce()
+		if err != nil {
+			return nil, nil, err
+		}
+		envelope, _, err := protocol.SignKeyProof(protocol.SignKeyProofInput{
+			Typ:        protocol.KeyAddJWSTyp,
+			Nonce:      nonce,
+			Audience:   did,
+			DID:        did,
+			RoleSet:    roleSet,
+			PrevCID:    prevCID,
+			PrivateKey: priv,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("prove possession of %s: %w", intro.Key.ID, err)
+		}
+		proofs = append(proofs, envelope)
+	}
+	return proofs, unprovable, nil
+}
+
+// mintProofNonce mints the challenge for the controller-verified leg.
+//
+// On this leg the verifier and the signer are the same process, so the nonce is
+// not defending against a challenge relayed by a third party — position binding
+// already spends the envelope at one head of one chain. What it does is keep two
+// envelopes for the same key at the same position from being byte-identical.
+// 128 bits, per KEY-PROOF's minimum entropy SHOULD.
+func mintProofNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("mint a proof nonce: %w", err)
+	}
+	return fmt.Sprintf("%x", b), nil
+}
+
+// errUnprovedIntroductions is the refusal for an operation that would introduce a
+// key this machine cannot prove.
+//
+// It names every offending key and role at once, and offers the two ways forward
+// that actually exist. There is deliberately no override flag: a --force here
+// would author a chain whose new key resolves nowhere, which is not a power a
+// human should be given by a flag they can pass in a hurry.
+func errUnprovedIntroductions(did string, unprovable []keyIntroduction) error {
+	lines := make([]string, 0, len(unprovable))
+	for _, intro := range unprovable {
+		roles := make([]string, 0, len(intro.Roles))
+		for _, role := range intro.Roles {
+			roles = append(roles, string(role))
+		}
+		lines = append(lines, fmt.Sprintf("  %s  (%s)\n    %s",
+			intro.Key.ID, strings.Join(roles, ", "), intro.Key.PublicKeyMultibase))
+	}
+	return fmt.Errorf("nothing was signed: this operation would introduce %d key(s) into %s that this machine cannot prove.\n\n%s\n\n"+
+		"A key enters a chain carrying its OWN signature over the introduction. A controller cannot vouch for a key it\n"+
+		"does not hold, and a membership nobody proved is VOID — it never resolves, never indexes, and obligates nobody,\n"+
+		"so authoring one would leave a chain that verifies and a key that does not work.\n\n"+
+		"Two ways forward:\n"+
+		"  REMOVE   — author this operation without those keys, and it signs exactly as it always did.\n"+
+		"  RE-PROVE — have the device that holds each key present its own proof ('dfos keys prove'), then run this again.",
+		len(unprovable), did, strings.Join(lines, "\n"))
+}
+
+// authoredUpdate is one identity update this CLI is about to sign.
+type authoredUpdate struct {
+	// Prior is the verified state the update extends. The kit's writer needs it to
+	// compute introductions the same way the chain walk will.
+	Prior       protocol.IdentityState
+	PreviousCID string
+	// The full-state arrays being authored, seeded from DECLARED state.
+	ControllerKeys, AuthKeys, AssertKeys []protocol.MultikeyPublicKey
+	Services                             []protocol.ServiceEntry
+	KeyProofs                            []string
+	Kid                                  string
+	PrivateKey                           ed25519.PrivateKey
+}
+
+// signAuthoredUpdate is the ONE place this CLI hands an identity update to the
+// kit's writer. Every write site goes through it, so introductions are proved and
+// carried one way rather than three ways that can drift.
+//
+// The kit runs its OWN writer door over what it is handed: it recomputes the
+// introductions from Prior and refuses any the KeyProofs do not cover, through
+// the same fold the chain walk uses. So this seam is checked twice, by two
+// independent computations — proveAuthoredUpdate's above and the kit's — and they
+// have to agree before an operation exists at all. The CLI's half is not the
+// safety; it is what produces a useful refusal instead of a library error.
+func signAuthoredUpdate(u authoredUpdate) (jwsToken string, operationCID string, err error) {
+	return protocol.SignIdentityUpdateWithServices(
+		u.Prior, u.PreviousCID, u.ControllerKeys, u.AuthKeys, u.AssertKeys, u.Services, u.KeyProofs,
+		u.Kid, u.PrivateKey)
+}
+
+// proveAuthoredUpdate computes what an update introduces, proves what it can, and
+// refuses what it cannot. The result is the KeyProofs the operation carries.
+func proveAuthoredUpdate(did string, u *authoredUpdate) error {
+	intros := keyIntroductions(u.Prior, u.ControllerKeys, u.AuthKeys, u.AssertKeys)
+	if len(intros) == 0 {
+		return nil
+	}
+	proofs, unprovable, err := proveIntroductions(did, u.PreviousCID, intros)
+	if err != nil {
+		return err
+	}
+	if len(unprovable) > 0 {
+		return errUnprovedIntroductions(did, unprovable)
+	}
+	u.KeyProofs = proofs
+	return nil
+}
+
 func newIdentityUpdateCmd() *cobra.Command {
 	var peerName string
 	var rotateAuth bool
@@ -434,9 +670,13 @@ func newIdentityUpdateCmd() *cobra.Command {
 			}
 			previousCID := h.CID
 
-			newAuthKeys := chain.State.AuthKeys
-			newControllerKeys := chain.State.ControllerKeys
-			newAssertKeys := chain.State.AssertKeys
+			// Seeded from DECLARED state: an update carries a chain's contents
+			// forward, and dropping a key the controller wrote — because no proof
+			// admitted it — would be this command deciding that for them.
+			declared := declaredKeyState(chain)
+			newAuthKeys := declared.AuthKeys
+			newControllerKeys := declared.ControllerKeys
+			newAssertKeys := declared.AssertKeys
 			var rotatedKeys []string
 			var retainedRoles []retainedKeyRole
 
@@ -524,12 +764,18 @@ func newIdentityUpdateCmd() *cobra.Command {
 				retainedRoles = retainedRolesAfterRotation(chain, newControllerKeys, newAuthKeys, newAssertKeys)
 			}
 
-			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
-				previousCID,
-				newControllerKeys, newAuthKeys, newAssertKeys,
-				services,
-				signer.KID, controllerPriv,
-			)
+			// A rotation introduces the key it just minted, and this machine holds
+			// it — so the introduction proves itself, on the controller-verified
+			// leg, before the operation is signed.
+			update := authoredUpdate{
+				Prior: chain.State, PreviousCID: previousCID,
+				ControllerKeys: newControllerKeys, AuthKeys: newAuthKeys, AssertKeys: newAssertKeys,
+				Services: services, Kid: signer.KID, PrivateKey: controllerPriv,
+			}
+			if err := proveAuthoredUpdate(chain.DID, &update); err != nil {
+				return err
+			}
+			jwsToken, opCID, err := signAuthoredUpdate(update)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
 			}
@@ -905,14 +1151,23 @@ func newIdentityBindDomainCmd() *cobra.Command {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 
-			// Key sets carried forward untouched: this operation only moves the
-			// services set.
-			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
-				h.CID,
-				chain.State.ControllerKeys, chain.State.AuthKeys, chain.State.AssertKeys,
-				plan.Services,
-				signer.KID, controllerPriv,
-			)
+			// Key sets carried forward untouched — from DECLARED state, so this
+			// operation moves the services set and nothing else. That does mean a
+			// chain already carrying a void membership re-declares it here, and
+			// re-declaring is re-introducing: a services-only change refuses until
+			// that key is proved or dropped. It is the designed behavior, not an
+			// accident of this command — a chain does not get to carry a key nobody
+			// proved and have the fact quietly stop mattering.
+			declared := declaredKeyState(chain)
+			update := authoredUpdate{
+				Prior: chain.State, PreviousCID: h.CID,
+				ControllerKeys: declared.ControllerKeys, AuthKeys: declared.AuthKeys, AssertKeys: declared.AssertKeys,
+				Services: plan.Services, Kid: signer.KID, PrivateKey: controllerPriv,
+			}
+			if err := proveAuthoredUpdate(chain.DID, &update); err != nil {
+				return err
+			}
+			jwsToken, opCID, err := signAuthoredUpdate(update)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
 			}
@@ -1127,14 +1382,23 @@ func verifyBindingFromDomain(lr *localrelay.LocalRelay, domain string) error {
 	}.emit()
 }
 
-// newIdentityAddKeyCmd is the A-side of the multi-device handoff. It appends an
-// externally-supplied PUBLIC key (generated on another device via
-// `dfos identity device-pubkey`) to a role set and signs the identity update
-// with a controller key THIS device holds. It generates and stores no private
-// key — the structural difference from `update`, which rotates by generating
-// fresh local keys. The protocol layer is unchanged: SignIdentityUpdate already
-// accepts N-key role slices, so "append" is expressed here by passing
-// currentSet + newKey.
+// newIdentityAddKeyCmd appends an externally-supplied PUBLIC key to a role set
+// and signs the identity update with a controller key THIS device holds. It
+// generates and stores no private key — the structural difference from `update`,
+// which rotates by generating fresh local keys.
+//
+// IT REFUSES, AND THE REFUSAL IS THE POINT. A key enters a chain carrying its own
+// signature over the introduction, and the whole shape of this command is a
+// controller speaking for a key that lives somewhere else. There is no signature
+// it can supply and none it may invent, so `proveAuthoredUpdate` refuses every
+// invocation whose key this machine does not hold — which is every ordinary one.
+// Publishing anyway would append a membership no proof admits: void, resolving
+// nowhere, indexed nowhere, and indistinguishable on the chain from a hostile
+// listing of somebody else's key.
+//
+// What remains reachable is the case where the key is genuinely held here, which
+// this command still serves without ceremony. Everything else goes through the
+// device that holds the key proving it: `dfos keys prove`.
 func newIdentityAddKeyCmd() *cobra.Command {
 	var peerName string
 	var authKey bool
@@ -1144,11 +1408,16 @@ func newIdentityAddKeyCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add-key",
-		Short: "Add a device's public key to a role set (multi-device 1-of-N availability)",
-		Long: "Append a public key generated on another device (via 'dfos identity device-pubkey') to this " +
-			"identity's auth or controller key set, signed with a controller key this device holds. The added " +
-			"device can then publish independently once it fetches the update. This grants availability (any one " +
-			"held key can act), not recovery.",
+		Short: "Add a public key this machine holds to a role set",
+		Long: "Append a public key to this identity's auth or controller key set, signed with a controller key " +
+			"this device holds.\n\n" +
+			"A key enters a chain carrying its OWN signature over the introduction, so this command signs only " +
+			"for a key whose private half is in this machine's keystore. A key generated on another device is " +
+			"refused: a controller cannot vouch for material it does not hold, and appending it would publish a " +
+			"membership no proof admits — void, resolving nowhere, indexed nowhere. The refusal names the key and " +
+			"the two ways forward.\n\n" +
+			"The route for another device's key is that device proving it: the ceremony operator displays a code, " +
+			"and 'dfos keys prove' presents the key from the machine that holds it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !authKey && !controllerKey {
 				return fmt.Errorf("specify --auth-key and/or --controller-key")
@@ -1208,32 +1477,41 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			}
 			previousCID := h.CID
 
-			// seed all three sets from current state, then append into targets
-			newAuthKeys := chain.State.AuthKeys
-			newControllerKeys := chain.State.ControllerKeys
-			newAssertKeys := chain.State.AssertKeys
+			// Seed all three sets from DECLARED state, then append into targets.
+			declared := declaredKeyState(chain)
+			newAuthKeys := declared.AuthKeys
+			newControllerKeys := declared.ControllerKeys
+			newAssertKeys := declared.AssertKeys
 			var addedKeys []string
 
 			if authKey {
-				newAuthKeys, err = appendKeyGuarded(chain.State.AuthKeys, newKey)
+				newAuthKeys, err = appendKeyGuarded(declared.AuthKeys, newKey)
 				if err != nil {
 					return fmt.Errorf("auth key set: %w", err)
 				}
 				addedKeys = append(addedKeys, "auth:"+newKey.ID)
 			}
 			if controllerKey {
-				newControllerKeys, err = appendKeyGuarded(chain.State.ControllerKeys, newKey)
+				newControllerKeys, err = appendKeyGuarded(declared.ControllerKeys, newKey)
 				if err != nil {
 					return fmt.Errorf("controller key set: %w", err)
 				}
 				addedKeys = append(addedKeys, "controller:"+newKey.ID)
 			}
 
-			jwsToken, opCID, err := protocol.SignIdentityUpdate(
-				previousCID,
-				newControllerKeys, newAuthKeys, newAssertKeys,
-				signer.KID, controllerPriv,
-			)
+			// The key this command publishes lives on ANOTHER device, so this one
+			// cannot prove it and does not pretend to. The refusal names the two
+			// real ways forward, and the one that works here is the other device
+			// presenting its own proof.
+			update := authoredUpdate{
+				Prior: chain.State, PreviousCID: previousCID,
+				ControllerKeys: newControllerKeys, AuthKeys: newAuthKeys, AssertKeys: newAssertKeys,
+				Kid: signer.KID, PrivateKey: controllerPriv,
+			}
+			if err := proveAuthoredUpdate(chain.DID, &update); err != nil {
+				return err
+			}
+			jwsToken, opCID, err := signAuthoredUpdate(update)
 			if err != nil {
 				return fmt.Errorf("sign update: %w", err)
 			}
@@ -1778,10 +2056,13 @@ func newIdentityKeysCmd() *cobra.Command {
 					// field named for one backend would report true from another.
 					// The human table's column says HELD for the same reason.
 					Held bool `json:"held"`
+					// Void: every role this chain names the key in is declared and
+					// never proved, so the key resolves nowhere.
+					Void bool `json:"void,omitempty"`
 				}
 				items := make([]keyInfo, 0, len(rows))
 				for _, r := range rows {
-					items = append(items, keyInfo{r.Key.ID, r.Roles, r.Key.PublicKeyMultibase, r.Held})
+					items = append(items, keyInfo{r.Key.ID, r.Roles, r.Key.PublicKeyMultibase, r.Held, r.Void})
 				}
 				outputJSON(items)
 				return nil
@@ -1793,13 +2074,26 @@ func newIdentityKeysCmd() *cobra.Command {
 				label = chain.DID + " (" + name + ")"
 			}
 			fmt.Printf("Identity: %s\n\n", label)
-			fmt.Printf("%-36s %-26s %s\n", "KEY ID", "ROLES", "HELD")
+			fmt.Printf("%-36s %-34s %s\n", "KEY ID", "ROLES", "HELD")
+			voids := 0
 			for _, r := range rows {
 				has := "-"
 				if r.Held {
 					has = "present"
 				}
-				fmt.Printf("%-36s %-26s %s\n", r.Key.ID, joinComma(r.Roles), has)
+				if r.Void {
+					voids++
+				}
+				fmt.Printf("%-36s %-34s %s\n", r.Key.ID, joinComma(r.Roles), has)
+			}
+			// A void membership is the one row whose meaning is not readable off
+			// the table: it looks like a key, and it is a key the chain names, but
+			// it resolves nowhere. Saying so once under the table beats a marker
+			// nobody knows how to read.
+			if voids > 0 {
+				fmt.Printf("\n%d key(s) marked (void) are declared by this chain and never proved: they are not in\n", voids)
+				fmt.Printf("effective state, they never resolve, and they never enter the key index. A key becomes\n")
+				fmt.Printf("real by being introduced with its own possession proof.\n")
 			}
 			return nil
 		},

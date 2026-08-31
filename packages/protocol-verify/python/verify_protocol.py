@@ -25,10 +25,10 @@ ID_LENGTH = 31
 
 GENESIS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
 
-ROTATION_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWliZnVoNjN1djMzaTJpNWVvb2UzYm9pdDJydXlqZWh1YnNyeWVtdXV6Nm1ydGxlajI2cmVpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.7fqvWGEVYW9atA1uqpp7lIUOWp4dATLpLjOmFWzJN-8gTL-QnXDCeyGcBu5AXhHzO52fauwUavh1KrB6wBYuCw"
+ROTATION_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA"
 
-DELETE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg"
-RESTORE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg"
+DELETE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA"
+RESTORE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA"
 
 CONTENT_CREATE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.BpUjMx3_zq5q-bxOQN0pl4tfgf_uZIt97r7fM_dukJr--zB0g7sxG9IcBsy0RR3P_DtIK4GB17ikwDUDDHnuAw"
 
@@ -41,6 +41,16 @@ READ_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJka
 EXPECTED_GENESIS_CID = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
 EXPECTED_DID = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
 EXPECTED_MULTIKEY1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+EXPECTED_MULTIKEY2 = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+
+# The possession proof the rotation carries. Its payload is CLOSED: exactly these
+# seven members, in exactly this order — and the octets below are the only
+# serialization those members are ever signed as. The envelope is signed by key 2
+# (the key being introduced) while the operation carrying it is signed by key 1.
+KEY_PROOF_MEMBERS = ["nonce", "audience", "did", "roleSet", "prevCID", "publicKeyMultibase", "timestamp"]
+KEY_PROOF_ROLE_SET = "auth,assert,controller"
+KEY_PROOF_CANONICAL_PAYLOAD = '{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}'
+
 EXPECTED_CBOR_HEX = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
 EXPECTED_CID_HEX = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
 
@@ -222,7 +232,7 @@ print("\n7. JWS Verification: Rotation (key 1 signs rotation to key 2)")
 result = verify_jws(ROTATION_JWS, pub1)
 check("Rotation signature valid", True)
 check("Rotation kid is DID URL", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe")
-check("Rotation header cid", result["header"]["cid"] == "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei")
+check("Rotation header cid", result["header"]["cid"] == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
 check("Rotation payload type", result["payload"]["type"] == "update")
 check("Rotation previousOperationCID", result["payload"]["previousOperationCID"] == EXPECTED_GENESIS_CID)
 
@@ -230,14 +240,71 @@ check("Rotation previousOperationCID", result["payload"]["previousOperationCID"]
 print("\n7b. JWS Verification: Delete + Restore (key 2)")
 result = verify_jws(DELETE_JWS, pub2)
 check("Delete payload type", result["payload"]["type"] == "delete")
-check("Delete header cid", result["header"]["cid"] == "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi")
-check("Delete parent is rotation", result["payload"]["previousOperationCID"] == "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei")
+check("Delete header cid", result["header"]["cid"] == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
+check("Delete parent is rotation", result["payload"]["previousOperationCID"] == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
 check("Delete CID re-derived", cid_to_base32(make_cid_bytes(dag_cbor.encode(result["payload"]))) == result["header"]["cid"])
 result = verify_jws(RESTORE_JWS, pub2)
 check("Restore payload type", result["payload"]["type"] == "restore")
-check("Restore header cid", result["header"]["cid"] == "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba")
-check("Restore parent is delete", result["payload"]["previousOperationCID"] == "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi")
+check("Restore header cid", result["header"]["cid"] == "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq")
+check("Restore parent is delete", result["payload"]["previousOperationCID"] == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
 check("Restore CID re-derived", cid_to_base32(make_cid_bytes(dag_cbor.encode(result["payload"]))) == result["header"]["cid"])
+
+# --- 7c. Possession proof: the key proof the rotation carries ---
+# The rotation OPERATION is signed by key 1; the envelope embedded in it is
+# signed by key 2 — the key being introduced — against the key named in the
+# envelope's own payload. That circularity is the possession proof. The payload
+# is closed: exactly seven members, one order, one serialization.
+print("\n7c. Key Proof carried by the Rotation (envelope signed by key 2)")
+rotation_result = verify_jws(ROTATION_JWS, pub1)
+key_proofs = rotation_result["payload"].get("keyProofs")
+check("Rotation carries exactly one key proof", isinstance(key_proofs, list) and len(key_proofs) == 1)
+
+kp_parts = key_proofs[0].split(".")
+check("Key proof is a compact JWS", len(kp_parts) == 3)
+kp_header_text = b64url_decode(kp_parts[0]).decode("utf-8")
+kp_payload_text = b64url_decode(kp_parts[1]).decode("utf-8")
+kp_header = json.loads(kp_header_text)
+kp_payload = json.loads(kp_payload_text)
+
+check("Key proof header alg", kp_header.get("alg") == "EdDSA", f"got {kp_header.get('alg')}")
+check("Key proof header typ", kp_header.get("typ") == "did:dfos:key-add", f"got {kp_header.get('typ')}")
+check("Key proof header is exactly {alg, typ}", len(kp_header) == 2)
+
+# The load-bearing check: the presented octets ARE the canonical serialization.
+check("Key proof payload octets are canonical", kp_payload_text == KEY_PROOF_CANONICAL_PAYLOAD,
+      f"got {kp_payload_text}")
+check("Key proof payload has exactly 7 members", len(kp_payload) == 7)
+
+kp_cursor = -1
+kp_ordered = True
+for member in KEY_PROOF_MEMBERS:
+    at = kp_payload_text.find(f'"{member}":')
+    if at <= kp_cursor:
+        kp_ordered = False
+    kp_cursor = at
+check("Key proof members are in canonical order", kp_ordered)
+
+check("Key proof binds the reference DID", kp_payload["did"] == EXPECTED_DID, f"got {kp_payload['did']}")
+check("Key proof prevCID is the genesis CID", kp_payload["prevCID"] == EXPECTED_GENESIS_CID,
+      f"got {kp_payload['prevCID']}")
+check("Key proof roleSet", kp_payload["roleSet"] == KEY_PROOF_ROLE_SET, f"got {kp_payload['roleSet']}")
+check("Key proof names key 2", kp_payload["publicKeyMultibase"] == EXPECTED_MULTIKEY2,
+      f"got {kp_payload['publicKeyMultibase']}")
+
+# The signature verifies against the key the payload itself names — there is no
+# resolver seam here.
+kp_pub = decode_multikey(kp_payload["publicKeyMultibase"])
+check("Key proof key decodes to key 2", kp_pub == pub2)
+kp_sig = b64url_decode(kp_parts[2])
+check("Key proof signature is 64 bytes", len(kp_sig) == 64, f"got {len(kp_sig)}")
+check("Key proof signature scalar is canonical", scalar_is_canonical(kp_sig[32:64]))
+kp_signing_input = f"{kp_parts[0]}.{kp_parts[1]}".encode("ascii")
+kp_valid = True
+try:
+    nacl.signing.VerifyKey(kp_pub).verify(kp_signing_input, kp_sig)
+except Exception:
+    kp_valid = False
+check("Key proof signature valid under its own named key", kp_valid)
 
 # --- 8. JWS verification: content create (signed by key 2) ---
 print("\n8. JWS Verification: Content Create (key 2)")

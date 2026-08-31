@@ -81,20 +81,11 @@ func buildAsOfFixtureAt(t *testing.T, depth int, genesisOffset, opOffset time.Du
 	updateTime := now.Add(opOffset).Format(protocolTimeFormat)
 
 	creatorPriv, creatorPub, _, creatorKeyID := testKeys(t)
-	_, creatorDID, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(creatorKeyID, creatorPub)}, nil, nil,
-		creatorKeyID, creatorPriv, genesisTime,
-	)
+	_, creatorDID, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(creatorKeyID, creatorPub), creatorKeyID, creatorPriv, genesisTime)
 	middlePriv, middlePub, _, middleKeyID := testKeys(t)
-	_, middleDID, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(middleKeyID, middlePub)}, nil, nil,
-		middleKeyID, middlePriv, genesisTime,
-	)
+	_, middleDID, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(middleKeyID, middlePub), middleKeyID, middlePriv, genesisTime)
 	delegatePriv, delegatePub, _, delegateKeyID := testKeys(t)
-	_, delegateDID, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(delegateKeyID, delegatePub)}, nil, nil,
-		delegateKeyID, delegatePriv, genesisTime,
-	)
+	_, delegateDID, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(delegateKeyID, delegatePub), delegateKeyID, delegatePriv, genesisTime)
 
 	creatorKid := creatorDID + "#" + creatorKeyID
 	middleKid := middleDID + "#" + middleKeyID

@@ -72,8 +72,11 @@ func TestServicesProjection(t *testing.T) {
 		t.Errorf("AnchorsByLabel(profile) = %v", got)
 	}
 
-	// update REPLACES the full set (drop the card)
-	updateJWS, _, err := SignIdentityUpdateWithServices(genCID, ctrl, ctrl, ctrl, []ServiceEntry{relayEntry("relay-0"), profile}, did+"#"+keyID, priv)
+	// update REPLACES the full set (drop the card). The key arrays carry forward
+	// unchanged, so this operation introduces nothing and needs no possession
+	// proof.
+	updateJWS, _, err := SignIdentityUpdateWithServices(res.State, genCID, ctrl, ctrl, ctrl,
+		[]ServiceEntry{relayEntry("relay-0"), profile}, nil, did+"#"+keyID, priv)
 	if err != nil {
 		t.Fatalf("sign update: %v", err)
 	}
@@ -182,10 +185,7 @@ func TestServicesUnknownTypePreserved(t *testing.T) {
 
 func TestCountersignRelation(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
-	_, did, _ := testSignIdentityGenesis(t,
-		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
-		keyID, priv, "2026-03-07T00:00:00.000Z",
-	)
+	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 	kid := did + "#" + keyID
 	target := "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y"
 	resolver := func(k string) (ed25519.PublicKey, error) { return pub, nil }

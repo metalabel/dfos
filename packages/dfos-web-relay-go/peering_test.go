@@ -187,6 +187,15 @@ func (m *mockPeerClient) drainSubmits(timeout time.Duration) []submitCall {
 // test helpers
 // ===================================================================
 
+// testIdentity is a minted genesis and the key it declares.
+//
+// controller and auth are THE SAME KEYPAIR, and must be: genesis declares
+// exactly one key, in all three roles, because its own signature is that key's
+// possession proof and one signature demonstrates possession of exactly one key.
+// The two field names survive because call sites read better for naming the role
+// they exercise, not because the keys differ. A second key joins the ordinary
+// way — an update carrying a possession envelope; see
+// signIdentityUpdateWithKeyProofs.
 type testIdentity struct {
 	token      string
 	did        string
@@ -210,19 +219,31 @@ func newTestKeypair() testKeypair {
 
 func createTestIdentity(t *testing.T) testIdentity {
 	t.Helper()
-	controller := newTestKeypair()
-	auth := newTestKeypair()
+	key := newTestKeypair()
 	token, did, opCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{controller.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		controller.keyID,
-		controller.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testIdentity{token: token, did: did, opCID: opCID, controller: controller, auth: auth}
+	return testIdentity{token: token, did: did, opCID: opCID, controller: key, auth: key}
+}
+
+// genesisState is the effective state of a chain whose genesis declared one key
+// in all three roles and proved it by signing itself — the shape every fixture in
+// this package creates. An update signer needs it as prior state to work out what
+// the next operation introduces.
+func genesisState(did string, key testKeypair) dfos.IdentityState {
+	return dfos.IdentityState{
+		DID:            did,
+		AuthKeys:       []dfos.MultikeyPublicKey{key.mk},
+		AssertKeys:     []dfos.MultikeyPublicKey{key.mk},
+		ControllerKeys: []dfos.MultikeyPublicKey{key.mk},
+	}
 }
 
 func createTestContent(t *testing.T, id testIdentity) (token, contentID, opCID string) {
@@ -486,10 +507,12 @@ func TestReadThroughIdentityMultiPage(t *testing.T) {
 
 	// create identity update so chain has 2 ops
 	updateToken, _, err := dfos.SignIdentityUpdate(
+		genesisState(id.did, id.controller),
 		id.opCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		[]dfos.MultikeyPublicKey{},
+		nil, // carries the genesis key forward; introduces nothing
 		id.did+"#"+id.controller.keyID,
 		id.controller.priv,
 	)

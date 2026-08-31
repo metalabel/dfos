@@ -200,10 +200,10 @@ and [SIWD.md → Finding the authorize endpoint](https://protocol.dfos.com/siwd#
 
 Creating a `did:dfos` identifier means constructing and signing a genesis identity chain operation.
 
-1. Generate one or more Ed25519 key pairs.
-2. Construct the genesis operation payload with `type: "create"`, populating `authKeys`, `assertKeys`, and `controllerKeys`. At least one `controllerKeys` entry is REQUIRED.
+1. Generate one Ed25519 key pair.
+2. Construct the genesis operation payload with `type: "create"`, declaring that one key as the sole entry of each of `authKeys`, `assertKeys`, and `controllerKeys` — genesis declares exactly one key, and its signature is the key's own possession proof ([PROTOCOL.md → Key Possession](https://protocol.dfos.com/spec#key-possession)). Further keys join via subsequent `update` operations under the possession rule.
 3. Canonical-encode the payload as dag-cbor, derive the CID, and include it in the JWS protected header as `cid`.
-4. Sign the operation as a JWS Compact Serialization token using one of the controller keys. The `kid` in the protected header is the bare key ID (not a DID URL, since the DID does not yet exist).
+4. Sign the operation as a JWS Compact Serialization token using that key. The `kid` in the protected header is the bare key ID (not a DID URL, since the DID does not yet exist).
 5. The DID is derived from the genesis CID as described in [Section 3.2](#32-derivation).
 
 The identity chain now exists as a single-operation chain. It can be stored in any system that serves identity chains.
@@ -222,10 +222,11 @@ Given a DID `did:dfos:<id>`:
    b. The first operation MUST be `type: "create"`.
    c. Derive the genesis operation CID via dag-cbor canonical encoding.
    d. Verify that `SHA-256(genesis CID bytes)` encoded with the ID alphabet produces `<id>`. If it does not match, the chain does not belong to this DID — reject it.
-   e. For each operation, verify the JWS EdDSA signature against the appropriate key (controller key from current chain state).
+   e. For each operation, verify the JWS EdDSA signature against the appropriate key (controller key from current declared chain state).
    f. Verify `previousOperationCID` linkage, `createdAt` ordering, and `header.cid` consistency.
-   g. See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for complete verification rules.
-3. **Construct** the DID Document from the current chain state using the mapping in [Section 4.2](#42-verification-method-mapping).
+   g. Compute key possession: the genesis key by its genesis signature, every other key-role membership by its introducing operation's embedded key-proof envelope; unproved memberships are void ([PROTOCOL.md → Key Possession](https://protocol.dfos.com/spec#key-possession)).
+   h. See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for complete verification rules.
+3. **Construct** the DID Document from the current **effective** chain state — the declared state minus void memberships — using the mapping in [Section 4.2](#42-verification-method-mapping). A void key is never a `verificationMethod`: the DID Document presents the keys the chain proved, not the keys it merely listed.
 
 #### 5.2.2 Resolution Metadata
 

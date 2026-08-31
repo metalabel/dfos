@@ -34,6 +34,7 @@ import {
   MemoryRelayStore,
 } from '../src';
 import type { PeerClient, PeerLogEntry, RelayIdentity } from '../src';
+import { chainKeyProof } from './key-proofs';
 
 // =============================================================================
 // helpers
@@ -55,16 +56,24 @@ const ts = (offset = 0) =>
 let RELAY_DID: string;
 let RELAY_IDENTITY: RelayIdentity;
 
-/** Create a complete identity chain (genesis) and return the DID and signing info */
+/**
+ * Create a complete identity chain (genesis) and return the DID and signing info.
+ *
+ * A genesis declares exactly ONE key, the same key in all three roles, and
+ * proves it by signing itself with it — one signature demonstrates possession of
+ * exactly one key. `authKey` is that key under the name the content, artifact
+ * and countersign fixtures read it by; a chain that wants a second key arrives
+ * there by an update carrying a key proof.
+ */
 const createIdentity = async () => {
   const controller = makeKey();
-  const authKey = makeKey();
+  const authKey = controller;
 
   const createOp: IdentityOperation = {
     version: 1,
     type: 'create',
-    authKeys: [authKey.key],
-    assertKeys: [],
+    authKeys: [controller.key],
+    assertKeys: [controller.key],
     controllerKeys: [controller.key],
     createdAt: ts(),
   };
@@ -639,12 +648,12 @@ describe('web relay', () => {
     // mirror createIdentity() but carry a services set on the genesis op
     const createIdentityWithServices = async (services: ServiceEntry[] | undefined) => {
       const controller = makeKey();
-      const authKey = makeKey();
+      const authKey = controller;
       const createOp: IdentityOperation = {
         version: 1,
         type: 'create',
-        authKeys: [authKey.key],
-        assertKeys: [],
+        authKeys: [controller.key],
+        assertKeys: [controller.key],
         controllerKeys: [controller.key],
         createdAt: ts(),
         services,
@@ -776,12 +785,12 @@ describe('web relay', () => {
     // genesis carrying an explicit services set (mirrors createIdentity)
     const createIdentityWithServices = async (services: ServiceEntry[] | undefined) => {
       const controller = makeKey();
-      const authKey = makeKey();
+      const authKey = controller;
       const createOp: IdentityOperation = {
         version: 1,
         type: 'create',
-        authKeys: [authKey.key],
-        assertKeys: [],
+        authKeys: [controller.key],
+        assertKeys: [controller.key],
         controllerKeys: [controller.key],
         createdAt: ts(),
         services,
@@ -816,16 +825,18 @@ describe('web relay', () => {
       expect(doc.id).toBe(id.did);
       expect(doc.controller).toBe(id.did);
 
+      // a genesis declares ONE key in all three roles, so the document carries
+      // one verification method, referenced from all three relationships — the
+      // dedup by DID-URL id is what keeps it a single entry
       const authVm = `${id.did}#${id.authKey.keyId}`;
-      const ctrlVm = `${id.did}#${id.controller.keyId}`;
-      expect(doc.verificationMethod).toHaveLength(2);
+      expect(doc.verificationMethod).toHaveLength(1);
       const authEntry = doc.verificationMethod.find((v: { id: string }) => v.id === authVm);
       expect(authEntry.type).toBe('Multikey');
       expect(authEntry.controller).toBe(id.did);
       expect(authEntry.publicKeyMultibase).toBe(id.authKey.key.publicKeyMultibase);
       expect(doc.authentication).toEqual([authVm]);
-      expect(doc.capabilityInvocation).toEqual([ctrlVm]);
-      expect(doc.assertionMethod).toEqual([]);
+      expect(doc.capabilityInvocation).toEqual([authVm]);
+      expect(doc.assertionMethod).toEqual([authVm]);
 
       expect(body.didDocumentMetadata.operationCount).toBe(1);
       expect(body.didDocumentMetadata.deactivated).toBe(false);
@@ -1486,16 +1497,25 @@ describe('web relay', () => {
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
 
-      // rotate the auth key
+      // Rotate the genesis key out of EVERY role and a freshly proved one in.
+      // The old key signs the very operation that removes it: signer validity
+      // reads the prior DECLARED controller set, which still holds it.
       const newAuthKey = makeKey();
       const updateOp: IdentityOperation = {
         version: 1,
         type: 'update',
         previousOperationCID: identity.operationCID,
         authKeys: [newAuthKey.key], // old auth key removed
-        assertKeys: [],
-        controllerKeys: [identity.controller.key],
+        assertKeys: [newAuthKey.key],
+        controllerKeys: [newAuthKey.key],
         createdAt: ts(2),
+        keyProofs: [
+          await chainKeyProof({
+            privateKey: newAuthKey.keypair.privateKey,
+            did: identity.did,
+            prevCID: identity.operationCID,
+          }),
+        ],
       };
 
       const { jwsToken: updateToken } = await signIdentityOperation({
@@ -2035,14 +2055,13 @@ describe('web relay', () => {
   describe('future timestamp guard', () => {
     it('should reject identity operation with createdAt more than 24h in the future', async () => {
       const controller = makeKey();
-      const authKey = makeKey();
 
       const farFuture = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
       const createOp: IdentityOperation = {
         version: 1,
         type: 'create',
-        authKeys: [authKey.key],
-        assertKeys: [],
+        authKeys: [controller.key],
+        assertKeys: [controller.key],
         controllerKeys: [controller.key],
         createdAt: farFuture,
       };
@@ -2061,14 +2080,13 @@ describe('web relay', () => {
 
     it('should accept identity operation with createdAt 23h in the future', async () => {
       const controller = makeKey();
-      const authKey = makeKey();
 
       const nearFuture = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
       const createOp: IdentityOperation = {
         version: 1,
         type: 'create',
-        authKeys: [authKey.key],
-        assertKeys: [],
+        authKeys: [controller.key],
+        assertKeys: [controller.key],
         controllerKeys: [controller.key],
         createdAt: nearFuture,
       };

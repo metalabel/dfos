@@ -15,6 +15,8 @@ export const PAYLOAD_NOTES: Record<string, string> = {
   authKeys: 'full replacement of this role set, not a delta',
   assertKeys: 'full replacement of this role set, not a delta',
   controllerKeys: 'full replacement of this role set, not a delta',
+  keyProofs:
+    'possession proofs for the keys this op introduces — each signed by the key it speaks for, bound to this op’s parent. A key introduced without one is void: declared, but it resolves nowhere',
   services: 'discovery vocabulary — full replacement (omit = clear)',
   createdAt: 'self-asserted signing time; chain order comes from prev-links, not this clock',
   targetCID: 'the operation this statement witnesses',

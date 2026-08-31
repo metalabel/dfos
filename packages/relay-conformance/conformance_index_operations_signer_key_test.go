@@ -7,6 +7,22 @@
 // one filter pastes straight into the other. These tests assert that
 // interoperability directly rather than trusting either side alone.
 //
+// THE POPULATION IS HAS-EVER-PROVED, the same rule as its sibling `key=`, so the
+// two columns agree on which keys exist at all. A key that was proved into a
+// chain and later rotated out keeps answering for every row it signed; a key no
+// chain ever proved is in neither filter.
+//
+// That has ONE consequence worth naming, because it looks like a bug and is not:
+// SIGNER VALIDITY IS STILL DECLARED-STATE-BASED. An operation's signer must be a
+// controller key of the prior DECLARED state, deliberately — gating signature
+// admission on proof status would make chain VALIDITY depend on the possession
+// fold, and two relays weighing possession differently would then disagree about
+// whether an operation exists. So an identity operation CAN legitimately be
+// signed by a key its chain declared and never proved: the operation is valid,
+// accepted and sequenced, and both reference relays record NO signer key for that
+// row, so it matches no `signerKey=` value at all. See
+// TestIndexOperationsSignerKeyOmitsUnprovedSigner.
+//
 // Gating is two-layered. The index family is capability-gated the usual way
 // (capabilities.index / a 501 on a probed route). The PARAMETER is gated
 // behaviorally: a relay that predates it does not 400 on an unknown query
@@ -62,21 +78,32 @@ func requireSignerKeyFilter(t *testing.T, base string) {
 // signing key of each named, so a per-kind assertion can say which CID it
 // expects the filter to return rather than merely counting rows.
 //
-// Two keys of ONE identity sign different ops — the author's CONTROLLER key
-// signs the genesis, its AUTH key signs everything else. That is the
-// discriminating shape for a key-addressed filter: a DID-addressed signer
-// filter could not tell those two row sets apart.
+// Two keys of ONE identity sign different ops — the author's GENESIS key signs
+// the genesis and the introduction, and the AUTH key it introduces signs
+// everything else. That is the discriminating shape for a key-addressed filter:
+// a DID-addressed signer filter could not tell those two row sets apart.
+//
+// GETTING TO TWO KEYS TAKES TWO OPERATIONS, and that is the protocol rather than
+// a fixture detail. A genesis declares exactly one key in all three roles,
+// because its own signature is that key's possession proof and one signature
+// proves one key. A second key joins by an update that introduces it carrying its
+// own envelope — and the envelope is load-bearing here, not decoration: an
+// unproved introduction would be void, the auth key would never become effective,
+// and every op below that it signs would be refused.
 type signerKeyCorpus struct {
 	author  identity
 	witness identity
 	content contentChain
 
-	genesisCID     string // identity-op, signed by author.controller — a BARE kid
+	genesisCID     string // identity-op, signed by author's genesis key — a BARE kid
+	introduceCID   string // identity-op, signed by the same genesis key, DID-URL kid
 	contentCreate  string // content-op, signed by author.auth
 	artifactCID    string // artifact, signed by author.auth
 	credentialCID  string // credential, issued by author.auth
 	revocationCID  string // revocation, signed by author.auth
 	countersignCID string // countersign, signed by WITNESS.auth over contentCreate
+
+	witnessIntroduceCID string // identity-op, signed by the witness's genesis key
 }
 
 func (c signerKeyCorpus) authorAuthKey() string {
@@ -95,6 +122,18 @@ func buildSignerKeyCorpus(t *testing.T, base string) signerKeyCorpus {
 	t.Helper()
 	author := createIdentity(t, base)
 	witness := createIdentity(t, base)
+
+	// Introduce a SECOND key to each chain, proved, and hand it the auth role. It
+	// is the key every non-identity op below signs with, which is what separates
+	// its row set from the genesis key's.
+	authorAuth := newKeypair()
+	introduceCID := introduceKey(t, base, &author, authorAuth, "auth", "assert")
+	author.auth = authorAuth
+
+	witnessAuth := newKeypair()
+	witnessIntroduceCID := introduceKey(t, base, &witness, witnessAuth, "auth", "assert")
+	witness.auth = witnessAuth
+
 	content := createContent(t, base, author)
 
 	authorKid := author.did + "#" + author.auth.keyID
@@ -138,15 +177,17 @@ func buildSignerKeyCorpus(t *testing.T, base string) signerKeyCorpus {
 	postOperationsAccepted(t, base, []string{artifactToken, credential, revocationToken, countersignToken})
 
 	return signerKeyCorpus{
-		author:         author,
-		witness:        witness,
-		content:        content,
-		genesisCID:     author.genCID,
-		contentCreate:  content.genCID,
-		artifactCID:    artifactCID,
-		credentialCID:  credHeader.CID,
-		revocationCID:  revocationCID,
-		countersignCID: countersignCID,
+		author:              author,
+		witness:             witness,
+		content:             content,
+		genesisCID:          author.genCID,
+		introduceCID:        introduceCID,
+		contentCreate:       content.genCID,
+		artifactCID:         artifactCID,
+		credentialCID:       credHeader.CID,
+		revocationCID:       revocationCID,
+		countersignCID:      countersignCID,
+		witnessIntroduceCID: witnessIntroduceCID,
 	}
 }
 
@@ -200,10 +241,13 @@ func TestIndexOperationsSignerKeyPerRowKind(t *testing.T) {
 	c := buildSignerKeyCorpus(t, base)
 	requireSignerKeyFilter(t, base)
 
-	// The CONTROLLER key signed exactly one thing: the genesis, with a bare kid.
+	// The GENESIS/controller key signed exactly two things: the genesis, with a
+	// BARE kid, and the update that introduced the auth key, with a DID URL. Both
+	// must be present — the bare-kid row is the one a #-splitting resolver drops.
 	byController := operationsMatching(t, base, signerKeyParam(c.authorControllerKey()))
-	if !equalSorted(byController, sortedCIDs(c.genesisCID)) {
-		t.Fatalf("signerKey=<controller> = %v, want exactly the genesis [%s] (a bare-kid row a #-splitting resolver drops)", byController, c.genesisCID)
+	wantController := sortedCIDs(c.genesisCID, c.introduceCID)
+	if !equalSorted(byController, wantController) {
+		t.Fatalf("signerKey=<genesis key> = %v, want %v — the genesis (a bare-kid row) plus the introduction it signed", byController, wantController)
 	}
 
 	// The AUTH key signed the content-op, the artifact, the credential, and the
@@ -220,6 +264,7 @@ func TestIndexOperationsSignerKeyPerRowKind(t *testing.T) {
 	if !equalSorted(byWitness, sortedCIDs(c.countersignCID)) {
 		t.Fatalf("signerKey=<witness auth> = %v, want exactly the countersign [%s]", byWitness, c.countersignCID)
 	}
+	_ = c.witnessIntroduceCID // signed by the witness's genesis key, not its auth key
 
 	// Two keys of ONE identity partition its rows. A DID-addressed signer filter
 	// would return the union for both values; this filter must not.
@@ -412,23 +457,19 @@ func TestIndexOperationsSignerKeySurvivesRotation(t *testing.T) {
 		t.Fatal("author auth key matched nothing before the rotation")
 	}
 
+	// The rotation carries the replacement's envelope. Without one the replacement
+	// would be VOID — never effective, never proved — and the content update it
+	// signs below would be refused, so the test would be measuring possession
+	// rather than the ingest-time freeze it is about.
 	replacement := newKeypair()
 	controllerKid := c.author.did + "#" + c.author.controller.keyID
-	rotateToken, rotateCID, err := dfos.SignIdentityUpdate(
-		c.author.genCID,
-		[]dfos.MultikeyPublicKey{c.author.controller.mk},
+	rotateToken, rotateCID := signIdentityUpdateWithProofs(t, c.author.headCID,
 		[]dfos.MultikeyPublicKey{replacement.mk},
-		[]dfos.MultikeyPublicKey{},
-		controllerKid, c.author.controller.priv,
-	)
-	if err != nil {
-		t.Fatalf("SignIdentityUpdate: %v", err)
-	}
-	res := postOperations(t, base, []string{rotateToken})
-	if res.StatusCode != 200 {
-		t.Fatalf("rotate: status %d, body: %s", res.StatusCode, readBody(t, res))
-	}
-	res.Body.Close()
+		[]dfos.MultikeyPublicKey{replacement.mk},
+		[]dfos.MultikeyPublicKey{replacement.mk},
+		[]string{keyProof(t, replacement.priv, c.author.did, c.author.headCID)},
+		controllerKid, c.author.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
 	// The rotated-out key keeps every row it signed, unchanged.
 	after := operationsMatching(t, base, signerKeyParam(c.authorAuthKey()))
@@ -436,15 +477,17 @@ func TestIndexOperationsSignerKeySurvivesRotation(t *testing.T) {
 		t.Fatalf("rotated-out key matched %v after the rotation, want the unchanged set %v", after, before)
 	}
 
-	// The controller key picks up the update it signed, alongside the genesis.
+	// The genesis key picks up the rotation it signed, alongside the genesis and
+	// the earlier introduction.
 	byController := operationsMatching(t, base, signerKeyParam(c.authorControllerKey()))
-	if !equalSorted(byController, sortedCIDs(c.genesisCID, rotateCID)) {
-		t.Fatalf("signerKey=<controller> = %v, want the genesis + the update it signed %v", byController, sortedCIDs(c.genesisCID, rotateCID))
+	wantController := sortedCIDs(c.genesisCID, c.introduceCID, rotateCID)
+	if !equalSorted(byController, wantController) {
+		t.Fatalf("signerKey=<genesis key> = %v, want the genesis + the two updates it signed %v", byController, wantController)
 	}
 
 	// The REPLACEMENT key has signed nothing yet: declared is not signed.
 	if got := operationsMatching(t, base, signerKeyParam(replacement.mk.PublicKeyMultibase)); len(got) != 0 {
-		t.Fatalf("signerKey=<replacement> = %v, want an empty page — the key is declared, not yet used", got)
+		t.Fatalf("signerKey=<replacement> = %v, want an empty page — the key is proved, not yet used, and this filter indexes signatures rather than memberships", got)
 	}
 
 	// ...until it signs. Then it matches exactly what it signed, and the
@@ -461,16 +504,79 @@ func TestIndexOperationsSignerKeySurvivesRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignContentUpdate: %v", err)
 	}
-	res = postOperations(t, base, []string{updateToken})
-	if res.StatusCode != 200 {
-		t.Fatalf("content update: status %d, body: %s", res.StatusCode, readBody(t, res))
-	}
-	res.Body.Close()
+	postOperationsAccepted(t, base, []string{updateToken})
 
 	if got := operationsMatching(t, base, signerKeyParam(replacement.mk.PublicKeyMultibase)); !equalSorted(got, sortedCIDs(updateCID)) {
 		t.Fatalf("signerKey=<replacement> = %v, want exactly the op it signed [%s]", got, updateCID)
 	}
 	if got := operationsMatching(t, base, signerKeyParam(c.authorAuthKey())); !equalSorted(got, before) {
 		t.Fatalf("rotated-out key's set drifted to %v after the replacement signed, want %v", got, before)
+	}
+}
+
+// TestIndexOperationsSignerKeyOmitsUnprovedSigner pins the one place where signer
+// validity and the signer-key column deliberately disagree.
+//
+// Signer validity is DECLARED-state-based: an operation's signer must be a
+// controller key of the prior declared state, whether or not any envelope ever
+// proved that key. That is on purpose — making signature admission depend on the
+// possession fold would make chain validity depend on it, and a relay that
+// weighed possession differently could then disagree with another about whether
+// an operation exists.
+//
+// So this operation is real: a chain declares a second controller key with no
+// envelope (void — declared, never effective), and that key then signs a
+// perfectly valid update, which both reference relays accept and sequence.
+//
+// But the has-ever-proved population does not contain the signing key, so there
+// is no value to record: both reference relays store NO signer key for that row,
+// and it matches no `signerKey=` value — not the unproved key's own multibase,
+// not anything. The honest answer for a key no chain proved is no rows, rather
+// than a row keyed by evidence that never existed.
+func TestIndexOperationsSignerKeyOmitsUnprovedSigner(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	id := createIdentity(t, base)
+	requireSignerKeyFilter(t, base)
+
+	// 1. Declare a second controller key with NO envelope. Void, and accepted.
+	unproved := newKeypair()
+	declareToken, declareCID := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk, unproved.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		nil,
+		id.did+"#"+id.controller.keyID, id.controller.priv)
+	postOperationsAccepted(t, base, []string{declareToken})
+
+	// 2. The void key signs an update, and the relay ACCEPTS it — declared-state
+	//    signer validity, exactly as specified.
+	signedByVoid, signedByVoidCID := signIdentityUpdateWithProofs(t, declareCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk, unproved.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		nil,
+		id.did+"#"+unproved.keyID, unproved.priv)
+	postOperationsAccepted(t, base, []string{signedByVoid})
+
+	// 3. The row exists — it is in the operation index, reachable by its chain.
+	onChain := operationsMatching(t, base, "chainId="+url.QueryEscape(id.did))
+	if !contains(onChain, signedByVoidCID) {
+		t.Fatalf("the operation signed by the unproved key is missing from the index (%v) — void is a resolution verdict, never an ingest one", onChain)
+	}
+
+	// 4. ...and it is reachable by NO signerKey value. Not the unproved key's own.
+	if got := operationsMatching(t, base, signerKeyParam(unproved.mk.PublicKeyMultibase)); len(got) != 0 {
+		t.Fatalf("signerKey=<declared-but-never-proved> = %v, want an empty page — the key is not in the has-ever-proved population, so the row records no signer key", got)
+	}
+	// Nor is it filed under the chain's proved key, which did not sign it.
+	if got := operationsMatching(t, base, signerKeyParam(id.controller.mk.PublicKeyMultibase)); contains(got, signedByVoidCID) {
+		t.Fatalf("the row signed by the unproved key was filed under the chain's proved key (%v) — an unresolvable signer must be absent, never reattributed", got)
+	}
+
+	// The sibling filter agrees: a declaration is not a match there either.
+	requireIdentityKeyFilter(t, base)
+	if got := identitiesMatching(t, base, keyParam(unproved.mk.PublicKeyMultibase)); len(got) != 0 {
+		t.Fatalf("key=<declared-but-never-proved> = %v, want an empty page — the two key-addressed filters must not disagree about which keys exist", got)
 	}
 }

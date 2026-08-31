@@ -157,13 +157,13 @@ export const specs: SpecEntry[] = [
   {
     slug: '/key-proof',
     title: 'Key Proof',
-    tile: 'Challenge-bound key possession proofs &mdash; closed payload, audience-bound, single-shot',
-    llms: 'Single-shot key possession-and-consent proofs for ceremonies — the closed four-member envelope, audience binding, and the ceremony purpose registry',
+    tile: 'Position-bound key possession proofs &mdash; closed payload, audience-bound, carried by the chain',
+    llms: 'Key possession-and-consent proofs binding key, chain, roles, and position — the closed seven-member envelope, presentation and chain-walk verification, and the ceremony purpose registry',
     metaDescription:
-      'DFOS Key Proof — challenge-bound, audience-bound key possession proofs with a closed payload and a registered typ per ceremony purpose.',
+      'DFOS Key Proof — challenge-bound, position-bound key possession proofs with a closed payload, presented to ceremonies and embedded in identity chains.',
     source: '../../specs/KEY-PROOF.md',
     grid: 'auth',
-    chip: '0.x',
+    chip: 'v1',
     llmsSection: 'specifications',
     nav: { label: 'Key Proof', tier: 'secondary' },
   },

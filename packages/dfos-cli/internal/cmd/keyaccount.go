@@ -104,28 +104,52 @@ type chainKeyRole struct {
 	Key   protocol.MultikeyPublicKey
 	Roles []string
 	Held  bool
+	// Void is true when every role this chain names the key in is void — declared
+	// and never proved, so the key resolves nowhere.
+	Void bool
 }
 
 // chainKeyRoles folds a chain's three role sets into one row per key, in
 // controller→auth→assert order of first appearance. This is the shape every
 // display wants: a key is a thing, and its roles are an attribute of it.
+//
+// VOID MEMBERSHIPS ARE ROWS TOO, marked `<role> (void)`. The role arrays are
+// EFFECTIVE state — the memberships a possession proof admitted — so folding only
+// those would make `identity keys` silently omit a key the chain visibly
+// declares, and a controller who introduced a key without a proof would have a
+// chain that verifies, a key that resolves nowhere, and no display anywhere
+// saying why. Void is surfaced loudly or it is not surfaced at all.
 func chainKeyRoles(chain *relay.StoredIdentityChain) []chainKeyRole {
 	index := map[string]int{}
 	var out []chainKeyRole
+	place := func(k protocol.MultikeyPublicKey) int {
+		i, seen := index[k.ID]
+		if !seen {
+			index[k.ID] = len(out)
+			out = append(out, chainKeyRole{Key: k, Held: holdsDeclaredKey(chain.DID, k)})
+			i = len(out) - 1
+		}
+		return i
+	}
 	add := func(set []protocol.MultikeyPublicKey, role string) {
 		for _, k := range set {
-			i, seen := index[k.ID]
-			if !seen {
-				index[k.ID] = len(out)
-				out = append(out, chainKeyRole{Key: k, Held: holdsDeclaredKey(chain.DID, k)})
-				i = len(out) - 1
-			}
+			i := place(k)
 			out[i].Roles = append(out[i].Roles, role)
 		}
 	}
 	add(chain.State.ControllerKeys, "controller")
 	add(chain.State.AuthKeys, "auth")
 	add(chain.State.AssertKeys, "assert")
+	// A key with an effective role somewhere is not void, however many of its
+	// other memberships are — Void marks a key that resolves NOWHERE, which is the
+	// state worth a warning.
+	for _, void := range chain.State.VoidKeys {
+		i := place(void.Key)
+		if len(out[i].Roles) == 0 {
+			out[i].Void = true
+		}
+		out[i].Roles = append(out[i].Roles, string(void.Role)+" (void)")
+	}
 	return out
 }
 

@@ -23,8 +23,10 @@
   `/index/v0/identities?key=` is wrapped here for BOTH reasons: the client seam's
   `indexIdentities` predates the `key=` filter and so cannot express the query at
   all, and it would resolve an all-declined set to an empty page — a false "no
-  identity ever declared this key", which is the exact claim the key page must
-  never make from an outage.
+  identity ever proved this key", which is the exact claim the key page must
+  never make from an outage. It is also the claim a holder's tool reads as "this
+  key is free to add", so an outage that says it is worse than one that says
+  nothing.
 
   THE TWO OPAQUE KEY FILTERS TAKE THEIR RELAY SET AS A PARAMETER, and it is not
   `getRelays()`. Every other route here fails over across the whole configured set
@@ -521,22 +523,26 @@ export const fetchCountersignaturesPage = async (params: {
 };
 
 /**
- * One page of the has-ever-declared key reverse lookup —
+ * One page of the has-ever-PROVED key reverse lookup —
  * `/index/v0/identities?key=`. Throws when every relay declines, which matters
  * more here than anywhere else in this module: an empty page from this route is
- * read as "no identity ever declared this key", and an outage must never be able
+ * read as "no identity ever proved this key", and an outage must never be able
  * to say that.
  *
+ * PROVED, not merely declared: a chain that names a key it cannot sign for
+ * indexes nothing. That is what stops a stranger burning someone else's key by
+ * writing it into their own chain.
+ *
  * The value is passed VERBATIM. The relay matches it byte-for-byte against the
- * multibase strings in accepted operations' key arrays, so normalizing it here
- * would silently ask a different question than the one pasted.
+ * multibase strings in each chain's proved key set, so normalizing it here would
+ * silently ask a different question than the one pasted.
  *
  * `relays` IS REQUIRED, and it is not the configured set — same reason as
  * {@link fetchSignerKeyOperationsPage}. `key=` is an opaque match a relay
  * predating it IGNORES, so only relays whose own body probe cleared them
  * (`useIndexKeyFilterRelays` in ./index-light) may be asked; the failover would
  * otherwise take an unvetted relay's unfiltered identity page and this surface
- * would print every identity on it as a declarer of the key.
+ * would print every identity on it as one this key was proved into.
  */
 export const fetchIdentitiesByKeyPage = async (params: {
   key: string;
@@ -557,7 +563,7 @@ export const fetchIdentitiesByKeyPage = async (params: {
 };
 
 /**
- * Page the identities that have ever declared one public key.
+ * Page the identities one public key has ever been proved into.
  *
  * `enabled` carries TWO gates, not one: a relay index must exist, and `relays`
  * must be non-empty — the subset whose own probe said they honour `key=`

@@ -46,7 +46,17 @@ const (
 	// Unlike every other bump this one does not clear and re-derive a projection
 	// table — the operation log is authoritative — it fills the new column in
 	// place on the rows that lack it.
-	IndexProjectionVersion = 8
+	//
+	// v9: `key=` becomes has-ever-PROVED rather than has-ever-declared, and
+	// `signerKey=` follows the same rule (KEY-PROOF.md, Holder Obligations). A
+	// pre-v9 relay indexed every DECLARATION, which let a chain listing a
+	// stranger's key burn it in the one-key-one-DID oracle — so the identity-key
+	// table must be cleared and re-derived, not merely extended. The rebuild reads
+	// each chain's folded dfos.IdentityState.ProvedKeys; a chain row persisted
+	// before that member existed re-derives to its head effective keys, which
+	// under-claims (rotated-out keys are lost) rather than admitting a key nothing
+	// proved — the safe direction for an oracle whose hit means "refuse".
+	IndexProjectionVersion = 9
 )
 
 var (

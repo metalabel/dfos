@@ -723,14 +723,14 @@ func TestNormalizeJSONNumbers(t *testing.T) {
 
 func TestSignIdentityUpdate(t *testing.T) {
 	priv1, pub1 := refKey1()
-	_, pub2 := refKey2()
+	priv2, pub2 := refKey2()
 	kid1 := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 
 	mk1 := NewMultikeyPublicKey(kid1, pub1)
 
 	// first create an identity
 	_, did, genCID, err := SignIdentityCreate(
-		[]MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, nil, kid1, priv1,
+		[]MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, kid1, priv1,
 	)
 	if err != nil {
 		t.Fatalf("SignIdentityCreate: %v", err)
@@ -741,11 +741,38 @@ func TestSignIdentityUpdate(t *testing.T) {
 	mk2 := NewMultikeyPublicKey(kid2, pub2)
 	didKid := did + "#" + kid1
 
+	// Rotating key2 into auth INTRODUCES it, so the operation carries key2's own
+	// possession proof — the controller-verified leg, where the tool minting the
+	// challenge and the key signing it are one process, and the audience is the
+	// chain's own DID.
+	proof, _, err := SignKeyProof(SignKeyProofInput{
+		Typ:        KeyAddJWSTyp,
+		Nonce:      "test-nonce-for-the-controller-verified-leg",
+		Audience:   did,
+		DID:        did,
+		RoleSet:    "auth",
+		PrevCID:    genCID,
+		PrivateKey: priv2,
+	})
+	if err != nil {
+		t.Fatalf("SignKeyProof: %v", err)
+	}
+
+	// Genesis proved mk1 in all three roles by signing itself.
+	prior := IdentityState{
+		DID:            did,
+		AuthKeys:       []MultikeyPublicKey{mk1},
+		AssertKeys:     []MultikeyPublicKey{mk1},
+		ControllerKeys: []MultikeyPublicKey{mk1},
+	}
+
 	token, opCID, err := SignIdentityUpdate(
+		prior,
 		genCID,
 		[]MultikeyPublicKey{mk1}, // keep controller
 		[]MultikeyPublicKey{mk2}, // rotate auth to key2
 		nil,
+		[]string{proof},
 		didKid, priv1,
 	)
 	if err != nil {
@@ -793,7 +820,7 @@ func TestSignIdentityDelete(t *testing.T) {
 	mk := NewMultikeyPublicKey(kid, pub1)
 
 	_, did, genCID, err := SignIdentityCreate(
-		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, nil, kid, priv1,
+		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, kid, priv1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -832,7 +859,7 @@ func TestSignIdentityRestore(t *testing.T) {
 	priv1, pub1 := refKey1()
 	kid := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 	mk := NewMultikeyPublicKey(kid, pub1)
-	_, did, genCID, err := SignIdentityCreate([]MultikeyPublicKey{mk}, nil, nil, kid, priv1)
+	_, did, genCID, err := SignIdentityCreate([]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, kid, priv1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1333,7 +1360,7 @@ func TestPayloadFromJWSRoundTrip(t *testing.T) {
 	mk := NewMultikeyPublicKey(kid, priv1.Public().(ed25519.PublicKey))
 
 	token, _, _, err := SignIdentityCreate(
-		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, nil, kid, priv1,
+		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, kid, priv1,
 	)
 	if err != nil {
 		t.Fatal(err)

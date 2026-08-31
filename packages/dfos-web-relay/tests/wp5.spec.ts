@@ -100,13 +100,14 @@ describe('head code-point tiebreak (Go twin parity)', () => {
     const store = new MemoryRelayStore();
 
     // identity + content genesis
+    // genesis declares exactly ONE key, the same key in all three roles
     const controller = makeKey();
-    const authKey = makeKey();
+    const authKey = controller;
     const createOp: IdentityOperation = {
       version: 1,
       type: 'create',
-      authKeys: [authKey.key],
-      assertKeys: [],
+      authKeys: [controller.key],
+      assertKeys: [controller.key],
       controllerKeys: [controller.key],
       createdAt: ts(),
     };

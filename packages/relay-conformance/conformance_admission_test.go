@@ -37,22 +37,31 @@ func postAdmissionOperation(t *testing.T, base, token string) admissionResult {
 	return decoded.Results[0]
 }
 
+// rotateAdmissionIdentity rotates a genesis-head identity onto a fresh key and
+// returns the key that took over.
+//
+// A WHOLE rotation — the new key replaces the genesis key in all three roles —
+// because a genesis declares one key in all three, so anything narrower would
+// leave the old key current in the roles it did not touch and the "rotated-out"
+// half of every assertion below would be false.
+//
+// It CARRIES a possession envelope, because introducing a key is exactly the
+// transition possession gates: without one the incoming key would be void, and
+// every operation this helper's callers sign with it would be refused for the
+// wrong reason.
 func rotateAdmissionIdentity(t *testing.T, base string, id identity) keypair {
 	t.Helper()
 	// Identity timestamps must strictly increase.
 	time.Sleep(2 * time.Millisecond)
 	current := newKeypair()
-	token, headCID, err := dfos.SignIdentityUpdate(
-		id.headCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
+	token, headCID := signIdentityUpdateWithProofs(t, id.headCID,
 		[]dfos.MultikeyPublicKey{current.mk},
-		nil,
+		[]dfos.MultikeyPublicKey{current.mk},
+		[]dfos.MultikeyPublicKey{current.mk},
+		[]string{keyProof(t, current.priv, id.did, id.headCID)},
 		id.did+"#"+id.controller.keyID,
 		id.controller.priv,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	result := postAdmissionOperation(t, base, token)
 	if result.Status != "new" {
 		t.Fatalf("rotate identity: %s (%s)", result.Status, result.Error)

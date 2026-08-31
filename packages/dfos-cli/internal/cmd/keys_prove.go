@@ -3,37 +3,58 @@ package cmd
 // `dfos keys prove` — the holder's half of a key-add ceremony (specs/KEY-PROOF.md).
 //
 // A ceremony operator displays a code on one screen; this command is what the
-// human runs on the machine that actually holds a key. It resolves the carriage,
-// picks the candidate key, shows the human what is about to be signed, signs the
-// four-member KEY-PROOF envelope with the candidate key ITSELF, and posts it to
-// the completion endpoint. What the operator then does with the proven key —
-// which identity it lands on, under which role — is the operator's machinery,
-// outside this command and outside the envelope.
+// human runs on the machine that actually holds a key. It resolves the code,
+// picks the candidate key, shows the human the identity and the roles they are
+// about to consent to, signs the seven-member KEY-PROOF envelope with the
+// candidate key ITSELF, and presents it. Adoption — the operator appending the
+// key to its chain — happens afterwards on the operator's own authenticated
+// surface, outside this command and outside the envelope.
+//
+// THE CARRIAGE IS TWO VALUES, AND RESOLUTION IS MANDATORY. A carriage conveys an
+// authority and a code, and nothing else; the code IS the ceremony identifier.
+// Everything the envelope binds — the nonce, the audience, the identity, the
+// roles, the chain head — arrives from resolving that code at that authority,
+// over one GET. There is no self-contained carriage that skips the resolution,
+// and a URL carrying the signing context in its query is refused rather than
+// read: a context nobody resolved is a context somebody else chose.
+//
+// WHAT THE CARRIAGE DISCLOSES, AND WHAT RESOLVING IT DOES. The carriage names no
+// identity. A shoulder-surfed code or an intercepted QR is an authority and a
+// short-lived token, and neither says whom the ceremony is for. RESOLVING it
+// names everything: the DID, the operator's handle and display name for it, the
+// roles, the head. That disclosure is deliberate and it is the only shape that
+// works — a human who cannot see whom they are joining cannot consent to joining
+// them — and what it discloses are public identity facts, reached through a
+// single-shot code over TLS. What an interceptor gains is the knowledge that one
+// public identity is mid-ceremony, plus the ability to attempt a presentation
+// with a key they do not hold.
 //
 // FOUR RULES CARRY THIS COMMAND, and every branch below serves one of them:
 //
-//  1. THE AUDIENCE IS SHOWN BEFORE ANYTHING IS SIGNED. Audience binding is what
-//     defeats challenge relay — a phished code re-displayed on an attacker's
-//     surface still yields a proof naming the authority the victim confirmed —
-//     and it only defends a human who SAW the authority. So the display is not
-//     suppressible by --quiet, and a TTY is asked; --yes is how a script says
-//     the human already saw it.
+//  1. THE AUDIENCE AND THE POSITION ARE SHOWN BEFORE ANYTHING IS SIGNED. Audience
+//     binding is what defeats challenge relay — a phished code re-displayed on an
+//     attacker's surface still yields a proof naming the authority the victim
+//     confirmed. Position binding is what keeps consent to sign as an author from
+//     being consent to become a controller. Neither defends anyone who did not SEE
+//     it, so the display carries the audience, the adopting identity, and the
+//     roles; it is not suppressible by --quiet, and a TTY is asked. --yes is how a
+//     script says the human already saw it.
 //  2. ONE KEY, ONE DID — REFUSED BY DEFAULT. The relay index's `key=` filter is
-//     has-ever-declared and its rows survive rotation and deletion, so declaring
-//     one key in two chains publishes an irreversible public link between them.
-//     The check runs against a NAMED oracle before there is a signature to make,
-//     and a check that could not run is never silently skipped.
-//  3. A COMPLETION IS NEVER RETRIED. A verifier consumes the nonce before it
-//     verifies the envelope (check-and-delete, atomically), so a ceremony that
-//     fails server-side verification is BURNED. Retrying would present a dead
-//     nonce and teach the operator's rate limiter a lesson about this CLI. The
-//     fix is always a fresh code.
-//  4. THE PRIVATE KEY NEVER LEAVES. What goes on the wire is a JWS over four
+//     has-ever-PROVED and its rows survive rotation and deletion, so proving one
+//     key into two chains publishes an irreversible public link between them. The
+//     check runs against a NAMED oracle before there is a signature to make, and a
+//     check that could not run is never silently skipped.
+//  3. A PRESENTATION IS NEVER RETRIED. A presentation refused at the signature arm
+//     burns its ceremony, and nothing in an HTTP status tells this command which
+//     arm refused it. So there is one attempt, ever: a retry would risk spending a
+//     live ceremony's rate limit on a nonce that is already dead. The fix is
+//     always a fresh code.
+//  4. THE PRIVATE KEY NEVER LEAVES. What goes on the wire is a JWS over seven
 //     members, one of which is the PUBLIC key. Nothing prints a seed.
 //
-// The short-code route is asked EXACTLY ONCE per invocation. It is IP rate
-// limited at the operator, a ceremony lives ten minutes, and a code that did not
-// resolve on the first ask is not going to resolve on the second.
+// The resolution is asked EXACTLY ONCE per invocation. It is IP rate limited at
+// the operator, a ceremony lives ten minutes, and a code that did not resolve on
+// the first ask is not going to resolve on the second.
 
 import (
 	"bufio"
@@ -76,7 +97,7 @@ const keyProofWellKnownPath = "/.well-known/dfos-key-proof"
 // a slow success worth waiting out.
 const ceremonyHTTPTimeout = 20 * time.Second
 
-// keyIDShape is what a completion answer's `keyId` may look like before it is
+// keyIDShape is what a presentation answer's `keyId` may look like before it is
 // allowed to name a keystore account. An account is `<did>#<keyId>`, so a key id
 // carrying '#' or a path separator would be a key filed under a name that means
 // something else.
@@ -84,31 +105,67 @@ var keyIDShape = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
 
 // --- the carriage ---
 
-// carriage is the resolved triple KEY-PROOF.md's Carriage section defines —
-// completion endpoint, ceremony identifier, nonce — plus the audience derived
-// from the endpoint and a note of how it was resolved.
+// parsedCarriage is the two values a carriage conveys — an authority and a code
+// — split out of whichever form the human pasted.
 //
-// It names no identity, by construction: a shoulder-surfed code or an
-// intercepted QR learns where a ceremony completes and nothing about whom it is
-// for.
-type carriage struct {
-	// Endpoint is the completion URL: the carriage URI with the `ceremony` and
-	// `nonce` members removed, and nothing else removed. Other query members are
-	// the operator's and are carried through.
-	Endpoint string
-	Ceremony string
-	Nonce    string
-	// Audience is the completion endpoint's lowercase authority — bare host on
-	// the scheme's default port, host:port otherwise. It is the member the
-	// verifier byte-compares against its own configured authority.
-	Audience string
+// IT IS NOT A SIGNING CONTEXT AND NEVER BECOMES ONE. What it names is where to
+// ASK; every value the envelope binds comes back from resolveCode. That is the
+// whole reason the authority is the single thing a human has to get right.
+type parsedCarriage struct {
+	Scheme string
+	Host   string
+	// Code is the operator's ceremony identifier. It selects the ceremony at
+	// resolution and travels beside the envelope at presentation.
+	Code string
 	// Via says which carriage form produced this, for the disclosure block.
 	Via string
-	// Relay is the oracle the SHORT CODE's resolution named, when it named one
-	// and it was usable. It is a courtesy for a machine that has no relay of its
-	// own: it reaches exactly one linkage check and configures nothing. A
-	// carriage URI carries no such member — a QR code is three values and this
-	// is not one of them.
+}
+
+// Authority is the lowercase authority the code was typed at — bare host on the
+// scheme's default port, host:port otherwise. Both the resolution's own audience
+// and its presentation endpoint must byte-equal this.
+func (c parsedCarriage) Authority() string {
+	return apispec.NormalizeAuthority(c.Scheme, c.Host)
+}
+
+// ceremony is the RESOLVED signing context: everything the envelope binds, and
+// everything render-before-sign shows the human.
+//
+// EVERY MEMBER CAME FROM ONE RESOLUTION, over TLS, at the authority the human
+// named. None of it rode in on the carriage, because a carriage carries none of
+// it.
+type ceremony struct {
+	// Present is the presentation endpoint, absolute, its authority checked equal
+	// to the resolving authority.
+	Present string
+	// Code is the ceremony identifier, echoed back in the presentation body.
+	Code string
+	// Nonce is the verifier-minted challenge the payload carries.
+	Nonce string
+	// Audience is the authority the envelope names — byte-equal to the authority
+	// the human typed, checked at resolution.
+	Audience string
+	// DID, Handle and DisplayName are the identity the introduction targets. All
+	// three are REQUIRED: they are what render-before-sign displays, and a
+	// resolution omitting any of them is one no proof can honestly be signed
+	// against.
+	DID         string
+	Handle      string
+	DisplayName string
+	// RoleSet is the canonical role set the ceremony introduces the key to.
+	RoleSet string
+	// PrevCID is the chain head the introduction builds on.
+	PrevCID string
+	// ExpiresAt is when the operator says the ceremony lapses. It is DISPLAYED
+	// and never gated on: the operator's clock is the one that decides, and a
+	// holder refusing on its own reading of the member would be refusing a
+	// ceremony the operator would still have honored.
+	ExpiresAt string
+	// Via says which carriage form produced this, for the disclosure block.
+	Via string
+	// Relay is the oracle the resolution named, when it named one and it was
+	// usable. It is a courtesy for a machine that has no relay of its own: it
+	// reaches exactly one linkage check and configures nothing.
 	Relay string
 }
 
@@ -152,8 +209,9 @@ func normalizeDeviceCode(raw string) (string, bool) {
 
 func errBadCeremonyInput(raw string) error {
 	return fmt.Errorf("'%s' is neither carriage form. Pass what the ceremony operator displayed:\n"+
-		"  <authority>/<CODE>   the short code, %d characters of %s\n"+
-		"  https://…?ceremony=…&nonce=…   the full carriage URI (a QR code's contents verbatim)",
+		"  <authority>/<CODE>       the short code, %d characters of %s\n"+
+		"  https://…?code=…         the carriage URI (a QR code's contents verbatim)\n"+
+		"Either way it is an authority and a code: everything else comes from resolving the code at that authority.",
 		raw, deviceCodeLength, deviceCodeAlphabet)
 }
 
@@ -185,61 +243,22 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// carriageFromURI validates one carriage URI and splits it into the triple.
-func carriageFromURI(u *url.URL, via string) (*carriage, error) {
-	if err := checkCeremonyScheme(u); err != nil {
-		return nil, err
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("the carriage URI names no host")
-	}
-	if u.User != nil {
-		return nil, fmt.Errorf("refusing a carriage URI carrying userinfo — the triple is an endpoint, a ceremony, and a nonce, and nothing else")
-	}
-	q := u.Query()
-	for _, member := range []string{"ceremony", "nonce"} {
-		switch len(q[member]) {
-		case 1:
-			if strings.TrimSpace(q[member][0]) == "" {
-				return nil, fmt.Errorf("the carriage URI's '%s' member is empty", member)
-			}
-		case 0:
-			return nil, fmt.Errorf("the carriage URI carries no '%s' member — a carriage is the completion endpoint plus 'ceremony' and 'nonce'", member)
-		default:
-			return nil, fmt.Errorf("the carriage URI carries '%s' %d times — which one is the ceremony is not a guess this makes", member, len(q[member]))
-		}
-	}
+// uriCarriageCode bounds the code a URI carriage carries.
+//
+// The DISPLAY alphabet deliberately does not apply here. That one exists so
+// eight characters survive being read off one screen and typed on another, and a
+// code arriving inside a URL was never retyped — the operator chose it and a
+// machine carried it. What is required is only that it is one bounded token that
+// rides a query member unambiguously.
+var uriCarriageCode = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,64}$`)
 
-	// The completion endpoint is the URL with those two members removed — and
-	// only those two. Any other member is the operator's own routing, and
-	// dropping it would post to a different endpoint than the one carried.
-	endpoint := *u
-	endpoint.Fragment = ""
-	rest := url.Values{}
-	for member, values := range q {
-		if member == "ceremony" || member == "nonce" {
-			continue
-		}
-		rest[member] = values
-	}
-	endpoint.RawQuery = rest.Encode()
-
-	return &carriage{
-		Endpoint: endpoint.String(),
-		Ceremony: q.Get("ceremony"),
-		Nonce:    q.Get("nonce"),
-		Audience: apispec.NormalizeAuthority(u.Scheme, u.Host),
-		Via:      via,
-	}, nil
-}
-
-// resolveCeremony turns the one argument into a carriage.
+// parseCarriage splits the one argument into the authority and the code.
 //
 // Which form it is, is read off the QUERY, not off the spelling: a URL carrying
-// `ceremony` and `nonce` is a carriage URI, and a bare `<authority>/<CODE>` is a
-// short code. A scheme is optional on the short form because an operator's UI
-// displays it without one and a person pasting it may bring the `https://` back.
-func resolveCeremony(raw string) (*carriage, error) {
+// `code` is a URI carriage, and a bare `<authority>/<CODE>` is a short code. A
+// scheme is optional on the short form because an operator's UI displays it
+// without one and a person pasting it may bring the `https://` back.
+func parseCarriage(raw string) (*parsedCarriage, error) {
 	// Every space goes, not just the ones at the ends. A URL cannot carry a raw
 	// space, and a short code is displayed grouped for reading — so whitespace
 	// anywhere in this argument is something a human's eye or a copy put there,
@@ -256,9 +275,42 @@ func resolveCeremony(raw string) (*carriage, error) {
 	if err != nil || u.Host == "" {
 		return nil, errBadCeremonyInput(raw)
 	}
-	if q := u.Query(); len(q["ceremony"]) > 0 || len(q["nonce"]) > 0 {
-		return carriageFromURI(u, "carriage URI")
+	if u.User != nil {
+		return nil, fmt.Errorf("refusing a carriage carrying userinfo — a carriage is an authority and a code, and nothing else")
 	}
+	q := u.Query()
+
+	// The URI form.
+	if values := q["code"]; len(values) > 0 {
+		if len(values) > 1 {
+			return nil, fmt.Errorf("the carriage URI carries 'code' %d times — which one is the ceremony is not a guess this makes",
+				len(values))
+		}
+		code := strings.TrimSpace(values[0])
+		if code == "" {
+			return nil, fmt.Errorf("the carriage URI's 'code' member is empty")
+		}
+		if !uriCarriageCode.MatchString(code) {
+			return nil, fmt.Errorf("the carriage URI's 'code' member is not a ceremony code")
+		}
+		if err := checkCeremonyScheme(u); err != nil {
+			return nil, err
+		}
+		return &parsedCarriage{Scheme: u.Scheme, Host: u.Host, Code: code, Via: "carriage URI"}, nil
+	}
+
+	// A URL carrying a signing context instead of a code. Naming it is worth its
+	// own branch: it is the one wrong input a person is likely to arrive with,
+	// and "neither carriage form" would send them hunting for a typo that is not
+	// there. What is wrong with it is not its spelling — it is that a context
+	// nobody resolved is a context somebody else chose.
+	if len(q["ceremony"]) > 0 || len(q["nonce"]) > 0 {
+		return nil, fmt.Errorf("that URL carries a ceremony and a nonce rather than a code, so it is not a carriage.\n" +
+			"A carriage is an authority and a code; the nonce, the identity, the roles and the chain head all come from\n" +
+			"resolving that code at that authority. Ask for the code, or scan the QR the operator displays now")
+	}
+
+	// The short form.
 	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(segments) != 1 || segments[0] == "" || u.RawQuery != "" {
 		return nil, errBadCeremonyInput(raw)
@@ -272,23 +324,48 @@ func resolveCeremony(raw string) (*carriage, error) {
 	if err := checkCeremonyScheme(u); err != nil {
 		return nil, err
 	}
-	return resolveShortCode(u.Scheme, u.Host, code)
+	return &parsedCarriage{
+		Scheme: u.Scheme, Host: u.Host, Code: code,
+		Via: "short code at " + apispec.NormalizeAuthority(u.Scheme, u.Host),
+	}, nil
 }
 
-// resolveShortCode asks the authority the human typed what carriage its code
-// stands for — ONE request, no retry, no polling.
+// resolveCeremony turns the one argument into a resolved ceremony: parse the
+// carriage, then ask its authority what the code stands for.
+func resolveCeremony(raw string) (*ceremony, error) {
+	car, err := parseCarriage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return resolveCode(car)
+}
+
+// resolveCode asks the authority the human typed what its code stands for — ONE
+// request, no retry, no polling.
 //
-// The resolved URI's authority MUST byte-equal the resolving authority. That
-// rule is the whole security of the short form: without it, an operator (or
-// anyone who can answer for it) could resolve a code the human typed at one host
-// into a ceremony completing at another, and the audience the human confirmed
-// would name a host they never saw.
-func resolveShortCode(scheme, host, code string) (*carriage, error) {
-	endpoint := scheme + "://" + host + keyProofWellKnownPath + "?code=" + url.QueryEscape(code)
+// EVERY BINDING IN THE ENVELOPE COMES OUT OF THIS ANSWER, which is why the rules
+// that make the carriage safe all live here:
+//
+//   - THE AUTHORITY MAY NOT MOVE. The resolved audience MUST byte-equal the
+//     resolving authority, and so must the presentation endpoint's. Without both,
+//     an operator — or anyone who can answer for it — could resolve a code typed
+//     at one host into a ceremony completing at another, and the audience the
+//     human confirmed would name a host they never saw.
+//   - THE POSITION MUST BE WHOLE. The identity (DID, handle, display name), the
+//     roles, and the head are all REQUIRED. They are what render-before-sign
+//     displays and what the payload binds, so a resolution missing any of them is
+//     refused rather than signed against: a partial position is consent to
+//     something nobody was shown.
+//   - THE ROLE SET MUST BE CANONICAL. A non-canonical spelling names a set no
+//     envelope can carry. Catching it here means the refusal lands before a key is
+//     minted, rather than coming back out of the signer.
+func resolveCode(car *parsedCarriage) (*ceremony, error) {
+	asked := car.Authority()
+	endpoint := car.Scheme + "://" + car.Host + keyProofWellKnownPath + "?code=" + url.QueryEscape(car.Code)
 	resp, err := ceremonyHTTPClient().Get(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("could not reach %s to resolve the code %s: %w\n"+
-			"Nothing was signed and nothing was sent. Check the host and try again", host, code, err)
+			"Nothing was signed and nothing was sent. Check the host and try again", car.Host, car.Code, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
@@ -298,37 +375,113 @@ func resolveShortCode(scheme, host, code string) (*carriage, error) {
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%s does not know the code %s: %s\n"+
 			"A ceremony code is single-shot and lives ten minutes. Mint a fresh one where it was displayed and run this again",
-			host, code, ceremonyMessage(body))
+			car.Host, car.Code, ceremonyMessage(body))
 	default:
-		return nil, fmt.Errorf("HTTP %d from %s%s: %s", resp.StatusCode, host, keyProofWellKnownPath, ceremonyMessage(body))
+		return nil, fmt.Errorf("HTTP %d from %s%s: %s", resp.StatusCode, car.Host, keyProofWellKnownPath, ceremonyMessage(body))
 	}
 
 	var answer struct {
-		URI string `json:"uri"`
+		Present  string `json:"present"`
+		Nonce    string `json:"nonce"`
+		Audience string `json:"audience"`
+		Purpose  string `json:"purpose"`
+		Adopts   struct {
+			DID         string `json:"did"`
+			Handle      string `json:"handle"`
+			DisplayName string `json:"displayName"`
+		} `json:"adopts"`
+		RoleSet   string `json:"roleSet"`
+		PrevCID   string `json:"prevCID"`
+		ExpiresAt string `json:"expiresAt"`
 		// Relay is optional and advisory — see usableCeremonyRelay.
 		Relay string `json:"relay"`
 	}
-	if err := json.Unmarshal(body, &answer); err != nil || strings.TrimSpace(answer.URI) == "" {
-		return nil, fmt.Errorf("%s answered 200 with no carriage URI: %s", host, ceremonyMessage(body))
-	}
-	resolved, err := url.Parse(strings.TrimSpace(answer.URI))
-	if err != nil || resolved.Host == "" {
-		return nil, fmt.Errorf("%s answered with something that is not a carriage URI: %s", host, ceremonyMessage(body))
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return nil, fmt.Errorf("%s answered 200 with something that is not a resolution: %s", car.Host, oneLineBody(body, 200))
 	}
 
-	asked := apispec.NormalizeAuthority(scheme, host)
-	got := apispec.NormalizeAuthority(resolved.Scheme, resolved.Host)
-	if !strings.EqualFold(resolved.Scheme, scheme) || got != asked {
-		return nil, fmt.Errorf("REFUSING: the code you typed at %s resolved to a ceremony at %s.\n"+
-			"A code's resolution may never redirect a ceremony off the host the human typed, so this one is not completed.\n"+
-			"Nothing was signed. Report this to whoever displayed the code", asked, resolved.Scheme+"://"+got)
+	// The required members, named all at once. A resolution missing three of them
+	// is one broken answer, and reporting them one refusal at a time would make a
+	// person re-run a ceremony to discover the next.
+	var missing []string
+	for _, member := range [][2]string{
+		{"present", answer.Present},
+		{"nonce", answer.Nonce},
+		{"audience", answer.Audience},
+		{"adopts.did", answer.Adopts.DID},
+		{"adopts.handle", answer.Adopts.Handle},
+		{"adopts.displayName", answer.Adopts.DisplayName},
+		{"roleSet", answer.RoleSet},
+		{"prevCID", answer.PrevCID},
+	} {
+		if strings.TrimSpace(member[1]) == "" {
+			missing = append(missing, member[0])
+		}
 	}
-	car, err := carriageFromURI(resolved, "short code at "+asked)
-	if err != nil {
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%s answered a resolution missing %s — nothing was signed.\n"+
+			"A holder signs the identity, the roles and the chain head it was shown, so a resolution that names\n"+
+			"less than all of them is one no proof can honestly be signed against. Report this to whoever displayed the code",
+			asked, strings.Join(missing, ", "))
+	}
+
+	// A purpose this command is not the one to run. Absence is tolerated — it is
+	// not a claim about another ceremony — but a purpose naming a DIFFERENT one
+	// is, and signing through it would be answering a question nobody asked.
+	if purpose := strings.TrimSpace(answer.Purpose); purpose != "" && purpose != protocol.KeyAddJWSTyp {
+		return nil, fmt.Errorf("%s is running a '%s' ceremony, and this command completes '%s' ceremonies.\n"+
+			"Nothing was signed", asked, purpose, protocol.KeyAddJWSTyp)
+	}
+
+	// NOTHING BELOW IS TRIMMED, and that is deliberate. Every member from here on
+	// either gets SIGNED or gets byte-compared, and both are byte contracts: a
+	// verifier compares the envelope's audience against its own configured
+	// authority octet for octet, the role-set grammar forbids whitespace outright,
+	// and did and prevCID are matched against values the operator already holds.
+	// Trimming would let this command sign bytes the operator did not send and
+	// silently repair spellings the grammar exists to refuse. The emptiness test
+	// above trims only to decide whether a member is ABSENT, which is a different
+	// question from what its value is.
+	if answer.Audience != asked {
+		return nil, fmt.Errorf("REFUSING: the code you typed at %s resolved to a ceremony audienced to %s.\n"+
+			"A code's resolution may never move a ceremony off the host the human typed, so this one is not presented.\n"+
+			"Nothing was signed. Report this to whoever displayed the code", asked, answer.Audience)
+	}
+
+	present, err := url.Parse(strings.TrimSpace(answer.Present))
+	if err != nil || present.Host == "" {
+		return nil, fmt.Errorf("%s answered with something that is not a presentation endpoint: %s",
+			asked, oneLineBody([]byte(answer.Present), 120))
+	}
+	if err := checkCeremonyScheme(present); err != nil {
 		return nil, err
 	}
-	car.Relay = usableCeremonyRelay(answer.Relay)
-	return car, nil
+	if got := apispec.NormalizeAuthority(present.Scheme, present.Host); got != asked {
+		return nil, fmt.Errorf("REFUSING: the code you typed at %s resolved to a ceremony presenting at %s.\n"+
+			"A code's resolution may never move a ceremony off the host the human typed, so this one is not presented.\n"+
+			"Nothing was signed. Report this to whoever displayed the code", asked, got)
+	}
+
+	if !protocol.IsCanonicalRoleSet(answer.RoleSet) {
+		return nil, fmt.Errorf("%s answered a role set this envelope cannot carry: '%s'.\n"+
+			"A role set is a non-empty selection from auth, assert and controller, in that order, comma-joined,\n"+
+			"with no spaces and no repeats. Nothing was signed", asked, answer.RoleSet)
+	}
+
+	return &ceremony{
+		Present:     present.String(),
+		Code:        car.Code,
+		Nonce:       answer.Nonce,
+		Audience:    answer.Audience,
+		DID:         answer.Adopts.DID,
+		Handle:      answer.Adopts.Handle,
+		DisplayName: answer.Adopts.DisplayName,
+		RoleSet:     answer.RoleSet,
+		PrevCID:     answer.PrevCID,
+		ExpiresAt:   answer.ExpiresAt,
+		Via:         car.Via,
+		Relay:       usableCeremonyRelay(answer.Relay),
+	}, nil
 }
 
 // usableCeremonyRelay reads the resolution's optional `relay` member: an oracle
@@ -533,13 +686,22 @@ func heldCandidate(selector string) (*candidateKey, error) {
 }
 
 // entryLinkageLocally reports the one-key-one-DID violation this machine can see
-// for itself. The oracle is the general answer; a local chain that already names
+// for itself. The oracle is the general answer; a local chain that already PROVED
 // the key is a certainty, and certainty deserves the earlier refusal.
+//
+// A VOID MEMBERSHIP IS NOT A LINK, so it is not this refusal. A chain that
+// declared the key without a covering proof never proved it: the membership is
+// excluded from effective state, it never enters the index, and it never
+// obligates the true holder (specs/KEY-PROOF.md, Holder Obligations). Refusing on
+// it would let anyone freeze a key out of its own ceremony by declaring it and
+// proving nothing — the hostile-listing move the possession rule exists to
+// defang. The ledger reads effective state, so a key held under a void
+// declaration arrives here with no DID and passes, which is the right answer.
 func entryLinkageLocally(entry *keyLedgerEntry) error {
-	if entry.DID == "" {
+	if entry.DID == "" || entry.Void {
 		return nil
 	}
-	return fmt.Errorf("%s is already declared by %s in this machine's own local relay.\n%s",
+	return fmt.Errorf("%s is already proved into %s in this machine's own local relay.\n%s",
 		orDash(entry.KeyID), entry.DID, linkageExplanation())
 }
 
@@ -560,7 +722,9 @@ type linkageReport struct {
 	Checked bool `json:"checked"`
 	// Limit is why it could not be asked, when it could not.
 	Limit string `json:"limit,omitempty"`
-	// Declaring names the identities that have EVER declared this key.
+	// Declaring names the identities that have EVER PROVED this key. The member
+	// keeps its wire name: it is the shape a script already reads, and renaming
+	// it would break those readers to restate what this comment says.
 	Declaring []string `json:"declaringIdentities,omitempty"`
 	// noOracleAnywhere records the one shape of unanswerability where NEITHER
 	// side offered an oracle: this machine named no relay and the resolution
@@ -596,7 +760,7 @@ func errLinkageUncheckable(report linkageReport) error {
 			"check, and this ceremony offered none.\n"
 	}
 	return fmt.Errorf("the one-key-one-DID check could not run, so no proof was signed.\n"+
-		"  Needed: a relay serving GET /index/v0/identities?key= — the has-ever-declared lookup\n"+
+		"  Needed: a relay serving GET /index/v0/identities?key= — the has-ever-proved lookup\n"+
 		"  Got:    %s\n"+
 		"%sThis is NOT 'no identity declares this key'. Point --relay at a relay that serves the identity\n"+
 		"index, or pass --force-linked to sign without the check having run.", report.Limit, nothingToFallBackTo)
@@ -604,9 +768,11 @@ func errLinkageUncheckable(report linkageReport) error {
 
 // linkageExplanation is the one paragraph every linkage refusal ends with.
 func linkageExplanation() string {
-	return "The relay index's key lookup is HAS-EVER-DECLARED: its rows survive rotation and deletion, so a key\n" +
-		"declared by two identities publishes an irreversible public link between them. Mint a fresh key instead —\n" +
-		"'dfos keys prove <code>' with no --key does exactly that. Pass --force-linked to publish the link anyway."
+	return "The relay index's key lookup is HAS-EVER-PROVED: its rows survive rotation and deletion, so a key\n" +
+		"proved into two identities publishes an irreversible public link between them. A declaration nobody\n" +
+		"proved is not a link — it is void, it never indexes, and it never obligates you. Mint a fresh key\n" +
+		"instead — 'dfos keys prove <code>' with no --key does exactly that. Pass --force-linked to publish\n" +
+		"the link anyway."
 }
 
 // The two provenances an oracle can have. They are words a script branches on,
@@ -619,7 +785,7 @@ const (
 	oracleViaResolution = "ceremony resolution"
 )
 
-// checkKeyLinkage asks a named oracle whether any identity has ever declared the
+// checkKeyLinkage asks a named oracle whether any identity has ever PROVED the
 // candidate key.
 //
 // It is the same oracle discipline `dfos recover` uses, for the same reason: a
@@ -645,18 +811,18 @@ const (
 // Treating every requirePeer failure as "no oracle here" would let the operator
 // who supplies the ceremony also supply the oracle that vets it, exactly when
 // this machine had just found something wrong with the one it was told to use.
-func checkKeyLinkage(publicKey string, car *carriage) linkageReport {
+func checkKeyLinkage(publicKey string, cer *ceremony) linkageReport {
 	report := linkageReport{}
 	ctx, c, err := requirePeer("")
 	switch {
 	case err == nil:
 		report.Oracle, report.OracleURL, report.OracleVia = ctx.RelayName, ctx.RelayURL, oracleViaPeer
-	case errors.Is(err, errNoPeerConfigured) && car.Relay != "":
-		c = client.New(car.Relay)
-		report.Oracle, report.OracleURL, report.OracleVia = ceremonyRelayLabel(car.Relay), car.Relay, oracleViaResolution
+	case errors.Is(err, errNoPeerConfigured) && cer.Relay != "":
+		c = client.New(cer.Relay)
+		report.Oracle, report.OracleURL, report.OracleVia = ceremonyRelayLabel(cer.Relay), cer.Relay, oracleViaResolution
 	default:
 		report.Limit = err.Error()
-		report.noOracleAnywhere = errors.Is(err, errNoPeerConfigured) && car.Relay == ""
+		report.noOracleAnywhere = errors.Is(err, errNoPeerConfigured) && cer.Relay == ""
 		return report
 	}
 	if err := proveOracle(c, report.Oracle, report.OracleURL); err != nil {
@@ -675,16 +841,18 @@ func checkKeyLinkage(publicKey string, car *carriage) linkageReport {
 	return report
 }
 
-// --- the completion ---
+// --- the presentation ---
 
-// completionAnswer is what the operator says came of the proof.
+// presentationAnswer is what the operator says came of the proof.
 //
-// `did` is OPTIONAL and tolerated rather than required: KEY-PROOF.md leaves
-// everything after verification to the ceremony operator, and an operator that
-// names the identity its ceremony added the key to lets this command file the
-// key under the account that identity's chain will name it by. An operator that
-// does not is not an error — the key stays a candidate.
-type completionAnswer struct {
+// PRESENTATION IS NOT ADOPTION. A verified proof is stored and the ceremony is
+// stamped `presented`; appending the key to the chain happens afterwards, when a
+// human approves it on the operator's own authenticated surface. So `keyId` and
+// `did` are OPTIONAL here and ordinarily absent — there is no chain row yet to
+// name. An operator that answers them anyway lets this command file the key
+// under the account that identity's chain will name it by; one that does not is
+// not an error, and the key stays a candidate, which is the truthful state.
+type presentationAnswer struct {
 	Status string `json:"status"`
 	KeyID  string `json:"keyId"`
 	DID    string `json:"did"`
@@ -695,19 +863,19 @@ type completionAnswer struct {
 // refusal is something the operator said and a partition is not.
 var errCeremonyUnreachable = errors.New("could not reach the ceremony operator")
 
-// completeCeremony posts the envelope beside its ceremony id, and beside the
-// description when there is one.
+// presentEnvelope posts the envelope beside its CODE, and beside the description
+// when there is one.
 //
-// The ceremony id travels BESIDE the envelope, never inside it: the nonce is the
-// binding, minted by the verifier for exactly one ceremony, so envelope→ceremony
-// linkage is the verifier's own bookkeeping and the payload stays four members
-// forever. The description rides beside it for the same reason and one more —
-// it is a label for the operator's own list of keys, it is UNSIGNED, and the
-// payload has no member for it because the payload has no member for anything
-// but the proof. An operator is free to ignore it, rename it, or refuse an
-// oversized one; nothing here depends on what it does with it.
-func completeCeremony(c *carriage, envelope, description string) (*completionAnswer, error) {
-	payload := map[string]string{"ceremony": c.Ceremony, "envelope": envelope}
+// The code travels BESIDE the envelope, never inside it. The nonce is the
+// binding — minted by the verifier for exactly one ceremony — so envelope→
+// ceremony linkage is the verifier's own bookkeeping and the payload stays seven
+// members forever. The description rides beside it for the same reason and one
+// more: it is a label for the operator's own list of keys, it is UNSIGNED, and
+// the payload has no member for it because the payload has no member for
+// anything but the proof. An operator is free to ignore it, rename it, or refuse
+// an oversized one; nothing here depends on what it does with it.
+func presentEnvelope(cer *ceremony, envelope, description string) (*presentationAnswer, error) {
+	payload := map[string]string{"code": cer.Code, "envelope": envelope}
 	if description != "" {
 		payload["description"] = description
 	}
@@ -715,7 +883,7 @@ func completeCeremony(c *carriage, envelope, description string) (*completionAns
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.Endpoint, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, cer.Present, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errCeremonyUnreachable, err)
 	}
@@ -724,33 +892,37 @@ func completeCeremony(c *carriage, envelope, description string) (*completionAns
 
 	resp, err := ceremonyHTTPClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w %s: %v", errCeremonyUnreachable, c.Audience, err)
+		return nil, fmt.Errorf("%w %s: %v", errCeremonyUnreachable, cer.Audience, err)
 	}
 	defer resp.Body.Close()
 	answer, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("%s refused the proof (HTTP %d): %s", c.Audience, resp.StatusCode, ceremonyMessage(answer))
+		return nil, fmt.Errorf("%s refused the proof (HTTP %d): %s", cer.Audience, resp.StatusCode, ceremonyMessage(answer))
 	}
-	var parsed completionAnswer
+	var parsed presentationAnswer
 	if err := json.Unmarshal(answer, &parsed); err != nil {
-		return nil, fmt.Errorf("%s answered HTTP %d with something that is not a completion: %s",
-			c.Audience, resp.StatusCode, oneLineBody(answer, 200))
+		return nil, fmt.Errorf("%s answered HTTP %d with something that is not a presentation: %s",
+			cer.Audience, resp.StatusCode, oneLineBody(answer, 200))
 	}
-	if parsed.Status != "completed" {
-		return nil, fmt.Errorf("%s answered HTTP %d without completing the ceremony: %s",
-			c.Audience, resp.StatusCode, ceremonyMessage(answer))
+	if parsed.Status != "presented" {
+		return nil, fmt.Errorf("%s answered HTTP %d without accepting the proof: %s",
+			cer.Audience, resp.StatusCode, ceremonyMessage(answer))
 	}
 	return &parsed, nil
 }
 
-// burnedCeremonyAdvice is the tail every completion failure carries. A verifier
-// consumes a nonce before it verifies the envelope, so a failed completion has
-// still spent the ceremony — which is why nothing here retries, and why the
-// advice is always "a fresh code", never "run it again".
+// burnedCeremonyAdvice is the tail every presentation failure carries.
+//
+// A presentation refused at the SIGNATURE arm burns its ceremony; one refused
+// before that arm — a stale head, a position that does not match, a label too
+// long — does not. Nothing in the answer tells this command which happened, and
+// guessing the harmless case would mean retrying against a nonce that may
+// already be dead. So the advice is always the one that is safe under both: a
+// fresh code, and the same key re-presented rather than a new one minted.
 func burnedCeremonyAdvice(cand *candidateKey) string {
-	return fmt.Sprintf("\nThis ceremony is spent: a completion consumes its nonce before it verifies the proof, so it is not retried.\n"+
-		"Mint a fresh code where the last one was displayed, then:\n"+
+	return fmt.Sprintf("\nTreat this ceremony as spent: a refusal at the signature arm burns it, and nothing here can tell\n"+
+		"which arm refused, so it is not retried. Mint a fresh code where the last one was displayed, then:\n"+
 		"  dfos keys prove <code> --key %s\n"+
 		"The key is still held here — that re-presents this same key rather than minting another.", cand.PublicKey)
 }
@@ -759,10 +931,19 @@ func burnedCeremonyAdvice(cand *candidateKey) string {
 
 type proveResult struct {
 	Audience string `json:"audience"`
-	Ceremony string `json:"ceremony"`
-	Endpoint string `json:"endpoint"`
+	Code     string `json:"code"`
+	Present  string `json:"present"`
 	Carriage string `json:"carriage"`
 	Purpose  string `json:"purpose"`
+
+	// The position the envelope binds — the three members that make this proof
+	// consent to ONE introduction rather than to a key in general.
+	Adopts      string `json:"adopts"`
+	Handle      string `json:"handle,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	RoleSet     string `json:"roleSet"`
+	PrevCID     string `json:"prevCID"`
+	ExpiresAt   string `json:"expiresAt,omitempty"`
 
 	PublicKey string `json:"publicKey"`
 	Account   string `json:"account"`
@@ -778,9 +959,13 @@ type proveResult struct {
 
 	Status string `json:"status"`
 	KeyID  string `json:"keyId,omitempty"`
-	DID    string `json:"did,omitempty"`
+	// AdoptedDID is the identity an operator said ADOPTED the key, when it said
+	// so. It is distinct from Adopts, which is the identity the ceremony targets:
+	// the first is a chain row that exists, the second is the position consented
+	// to. Ordinarily only the second is known when this command stops.
+	AdoptedDID string `json:"adoptedDID,omitempty"`
 	// ExplorerURL is where this key can be looked up in public. It is written
-	// only on a completed ceremony, because until then there is nothing to look
+	// only on a presented ceremony, because until then there is nothing to look
 	// up.
 	ExplorerURL string `json:"explorerURL,omitempty"`
 }
@@ -850,20 +1035,24 @@ func newKeysProveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prove <code-or-uri>",
 		Short: "Prove a key to a key-add ceremony (KEY-PROOF)",
-		Long: "Complete a key-add ceremony an operator started: resolve the carriage it displayed, sign a " +
-			"KEY-PROOF envelope with the candidate key itself, and post it to the ceremony's completion " +
+		Long: "Present a key to a key-add ceremony an operator started: resolve the code it displayed, sign a " +
+			"KEY-PROOF envelope with the candidate key itself, and post it to the ceremony's presentation " +
 			"endpoint. The argument is either the short code an operator shows — '<authority>/<CODE>', where " +
-			"spaces and dashes between the characters are ignored — or the full carriage URI a QR code carries.\n\n" +
+			"spaces and dashes between the characters are ignored — or the carriage URI a QR code carries. Both " +
+			"are an authority and a code; the identity, the roles, the chain head and the nonce all come from " +
+			"resolving that code at that authority.\n\n" +
 			"By default it MINTS the key it proves, from the default vault or --vault: the candidate is a new " +
 			"self-held key being added to an identity someone else custodies the chain for. --key proves a key " +
 			"this machine already holds. --name labels the key in the operator's own list; the label rides " +
 			"beside the proof, unsigned, and defaults to <user>@<hostname>.\n\n" +
-			"Before signing it shows the audience and the purpose and asks — audience binding only defends a " +
-			"human who saw the authority — and it refuses a key any identity has ever declared, because the " +
-			"relay index's key lookup is has-ever-declared and one key in two chains is a permanent public " +
-			"link between them. That check runs against this machine's peer; a machine with none uses the " +
-			"relay the resolution named, for this ceremony only and never as a registered peer. A completion " +
-			"is never retried: a ceremony that fails verification is spent.",
+			"Before signing it shows the audience, the identity being joined and the roles being consented to, " +
+			"and asks — that binding only defends a human who saw it — and it refuses a key any identity has " +
+			"ever proved, because the relay index's key lookup is has-ever-proved and one key proved into two " +
+			"chains is a permanent public link between them. That check runs against this machine's peer; a " +
+			"machine with none uses the relay the resolution named, for this ceremony only and never as a " +
+			"registered peer. A presentation is never retried.\n\n" +
+			"Presenting is not adoption. A verified proof leaves the ceremony awaiting a human's approval on the " +
+			"operator's own surface; the key is held here as a candidate until a chain declares it.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// The default is computed here rather than registered as the flag's
@@ -890,7 +1079,7 @@ func newKeysProveCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Mint the new key straight into the keystore, from no seed")
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation — the audience has already been checked by a human")
 	cmd.Flags().BoolVar(&forceLinked, "force-linked", false,
-		"Sign even when an identity already declares this key, or when the check could not run")
+		"Sign even when an identity has already proved this key, or when the check could not run")
 	return cmd
 }
 
@@ -908,8 +1097,10 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 		return fmt.Errorf("--key names a key this machine already holds; --vault and --no-vault choose where a NEW one is minted from")
 	}
 
-	// 1. The carriage, first: an unresolvable code costs no key material.
-	car, err := resolveCeremony(input)
+	// 1. The carriage and its resolution, first: an unresolvable code costs no key
+	//    material, and the position has to be known before there is anything to
+	//    show a human or to sign.
+	cer, err := resolveCeremony(input)
 	if err != nil {
 		return err
 	}
@@ -933,10 +1124,10 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 
 	// 3. One key, one DID. Asked before there is a signature to make, because
 	//    the linkage a proof creates is public and permanent.
-	linkage := checkKeyLinkage(cand.PublicKey, car)
+	linkage := checkKeyLinkage(cand.PublicKey, cer)
 	switch {
 	case len(linkage.Declaring) > 0 && !opts.forceLinked:
-		return fmt.Errorf("REFUSING: %s already declares %s (%s said so%s, and the key is held here as %s).\n%s",
+		return fmt.Errorf("REFUSING: %s has already proved %s (%s said so%s, and the key is held here as %s).\n%s",
 			strings.Join(linkage.Declaring, ", "), cand.PublicKey, linkage.Oracle, oracleProvenance(linkage),
 			cand.Account, linkageExplanation())
 	case !linkage.Checked && !opts.forceLinked:
@@ -944,8 +1135,11 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	}
 
 	result := &proveResult{
-		Audience: car.Audience, Ceremony: car.Ceremony, Endpoint: car.Endpoint, Carriage: car.Via,
-		Purpose: protocol.KeyAddJWSTyp, PublicKey: cand.PublicKey, Account: cand.Account,
+		Audience: cer.Audience, Code: cer.Code, Present: cer.Present, Carriage: cer.Via,
+		Purpose: protocol.KeyAddJWSTyp,
+		Adopts:  cer.DID, Handle: cer.Handle, DisplayName: cer.DisplayName,
+		RoleSet: cer.RoleSet, PrevCID: cer.PrevCID, ExpiresAt: cer.ExpiresAt,
+		PublicKey: cand.PublicKey, Account: cand.Account,
 		KeyOrigin: cand.Origin, Vault: cand.Vault, Backend: keys.Backend(),
 		Description: opts.description, Linkage: linkage, Forced: opts.forceLinked,
 	}
@@ -958,43 +1152,62 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 		}
 	}
 
-	// 5. The envelope. The kit derives publicKeyMultibase from the private key
-	//    itself — a signer that could name a key it does not hold is the one
-	//    construction this artifact exists to foreclose.
-	envelope, _, err := protocol.SignKeyProof(protocol.KeyAddJWSTyp, car.Nonce, car.Audience,
-		cand.Private, protocol.KeyProofOptions{})
+	// 5. The envelope, over the position the human just confirmed. The kit derives
+	//    publicKeyMultibase from the private key itself — a signer that could name
+	//    a key it does not hold is the one construction this artifact exists to
+	//    foreclose.
+	envelope, _, err := protocol.SignKeyProof(protocol.SignKeyProofInput{
+		Typ:        protocol.KeyAddJWSTyp,
+		Nonce:      cer.Nonce,
+		Audience:   cer.Audience,
+		DID:        cer.DID,
+		RoleSet:    cer.RoleSet,
+		PrevCID:    cer.PrevCID,
+		PrivateKey: cand.Private,
+	})
 	if err != nil {
 		return fmt.Errorf("sign the key proof: %w", err)
 	}
 
-	// 6. Completion. One attempt, ever.
-	answer, err := completeCeremony(car, envelope, opts.description)
+	// 6. Presentation. One attempt, ever.
+	answer, err := presentEnvelope(cer, envelope, opts.description)
 	if err != nil {
 		if errors.Is(err, errCeremonyUnreachable) {
-			return fmt.Errorf("%v.\nIf the request arrived, the ceremony is spent even though no answer came back.%s",
+			return fmt.Errorf("%v.\nIf the request arrived, the proof was presented even though no answer came back.%s",
 				err, burnedCeremonyAdvice(cand))
 		}
 		return fmt.Errorf("%v.%s", err, burnedCeremonyAdvice(cand))
 	}
-	result.Status, result.KeyID, result.DID = answer.Status, answer.KeyID, answer.DID
+	result.Status, result.KeyID, result.AdoptedDID = answer.Status, answer.KeyID, answer.DID
 	result.ExplorerURL = explorerKeyURL(cand.PublicKey)
 
-	// 7. File the key where the identity that adopted it will name it, when the
-	//    operator said which identity that is.
+	// 7. File the key where the identity that adopted it will name it — only if
+	//    the operator said the adoption already happened.
+	//
+	//    Ordinarily it has not: presentation stores the proof and stops, and the
+	//    chain row appears when a human approves it elsewhere. So this branch is
+	//    the exception, not the path, and the candidate account is the normal
+	//    resting place.
 	//
 	//    Only a CANDIDATE account is renamed. A key already filed under some
 	//    other account is filed there because something else named it, and
 	//    moving it on an operator's say-so would take that key away from whatever
 	//    was using it.
-	if ok := adoptionNamesAnIdentity(answer); ok && strings.HasPrefix(cand.Account, candidateAccountPrefix) {
+	if ok := adoptionNamesAnIdentity(answer, cer); ok && strings.HasPrefix(cand.Account, candidateAccountPrefix) {
 		account := keyAccount(cand.PublicKey)
 		if !keys.HasKey(account) {
 			if err := keys.RenameKey(cand.Account, account); err == nil {
 				result.Account = account
 				if cand.Minted && cand.Vault != "" {
+					roles := []string{}
+					if parsed, ok := protocol.ParseRoleSet(cer.RoleSet); ok {
+						for _, role := range parsed {
+							roles = append(roles, string(role))
+						}
+					}
 					_ = getVaults().Record(cand.Vault, vault.MintedKey{
 						Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
-						Roles: []string{"auth"}, PublicKey: cand.PublicKey,
+						Roles: roles, PublicKey: cand.PublicKey,
 					})
 				}
 			}
@@ -1009,28 +1222,81 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 	return nil
 }
 
-// adoptionNamesAnIdentity reports whether a completion actually said which
-// identity adopted the key, in a shape this CLI will act on.
+// adoptionNamesAnIdentity reports whether a presentation actually said the key
+// was adopted, in a shape this CLI will act on.
 //
 // The account the key moves to is its own content address and needs neither
-// member — but the vault provenance record does, and a completion that names
-// nothing readable is a completion this machine does not file anything against.
-// The key id is shape-checked because a '#' in it would make the provenance
-// record read as a different key.
-func adoptionNamesAnIdentity(answer *completionAnswer) bool {
-	return strings.HasPrefix(answer.DID, "did:dfos:") && keyIDShape.MatchString(answer.KeyID)
+// member — but the vault provenance record does, and an answer that names
+// nothing readable is one this machine does not file anything against. The key
+// id is shape-checked because a '#' in it would make the provenance record read
+// as a different key.
+//
+// AND THE DID MUST BE THE ONE THE HUMAN CONSENTED TO. An answer naming some
+// other identity is either a confused operator or one trying to file this key
+// against a chain nobody was shown; either way the provenance record it would
+// write is a claim the human never saw. Filing nothing is the honest response —
+// the key stays a candidate, which is what it is.
+func adoptionNamesAnIdentity(answer *presentationAnswer, cer *ceremony) bool {
+	return strings.HasPrefix(answer.DID, "did:dfos:") &&
+		answer.DID == cer.DID &&
+		keyIDShape.MatchString(answer.KeyID)
+}
+
+// roleDisclosure spells one role as the power it actually confers.
+//
+// The canonical token is kept beside the sentence rather than replaced by it: the
+// token is what the operator's own screen shows and what the envelope carries, so
+// a human comparing the two needs to see it — but a human deciding whether to
+// consent needs to know that `controller` is not a synonym for `auth` with a
+// longer name. Consenting to sign as an author is not consenting to hand over the
+// identity, and only the sentence says so.
+func roleDisclosure(role protocol.KeyRole) string {
+	switch role {
+	case "auth":
+		return "auth — sign in and act as this identity"
+	case "assert":
+		return "assert — publish and attest as this identity"
+	case "controller":
+		return "controller — CONTROL this identity: add and remove its keys, including yours"
+	}
+	return string(role)
 }
 
 // printCeremonyDisclosure is KEY-PROOF.md's Holder Obligation made visible: the
-// audience and the purpose, before anything is signed. It goes to stderr, so
-// --json emits one document on stdout and the human still sees what they are
-// consenting to.
+// audience, the purpose, the identity being joined, and the roles being consented
+// to, before anything is signed. It goes to stderr, so --json emits one document
+// on stdout and the human still sees what they are consenting to.
 func printCeremonyDisclosure(r *proveResult, localLinkage error) {
 	out := os.Stderr
 	fmt.Fprintf(out, "Ceremony:\n")
+	// The identity first. It is the thing being joined, and every other line is a
+	// detail about joining it.
+	fmt.Fprintf(out, "  Adds to:   %s (@%s)\n", r.DisplayName, r.Handle)
+	fmt.Fprintf(out, "             %s\n", r.Adopts)
+	// Roles, one per line, each spelled out. A set rendered as one comma-joined
+	// token is a token a person's eye skips; a list of sentences is not.
+	if roles, ok := protocol.ParseRoleSet(r.RoleSet); ok {
+		for i, role := range roles {
+			label := "  Roles:     "
+			if i > 0 {
+				label = "             "
+			}
+			fmt.Fprintf(out, "%s%s\n", label, roleDisclosure(role))
+		}
+	} else {
+		fmt.Fprintf(out, "  Roles:     %s\n", r.RoleSet)
+	}
 	fmt.Fprintf(out, "  Audience:  %s\n", r.Audience)
-	fmt.Fprintf(out, "  Purpose:   add this key to an identity at %s (%s)\n", r.Audience, r.Purpose)
+	fmt.Fprintf(out, "  Purpose:   add this key to %s at %s (%s)\n", r.Adopts, r.Audience, r.Purpose)
 	fmt.Fprintf(out, "  Carriage:  %s\n", r.Carriage)
+	// The head the consent is spent at. A person is not expected to verify it —
+	// they hold nothing to check it against — but it is what makes this proof
+	// unusable at any other position, and a disclosure that hid it would be
+	// hiding the member that does the most work.
+	fmt.Fprintf(out, "  Builds on: %s\n", r.PrevCID)
+	if r.ExpiresAt != "" {
+		fmt.Fprintf(out, "  Expires:   %s\n", r.ExpiresAt)
+	}
 	fmt.Fprintf(out, "  Key:       %s\n", r.PublicKey)
 	fmt.Fprintf(out, "  Origin:    %s\n", r.KeyOrigin)
 	if r.Description != "" {
@@ -1042,10 +1308,10 @@ func printCeremonyDisclosure(r *proveResult, localLinkage error) {
 	fmt.Fprintf(out, "  Keystore:  %s\n", r.Backend)
 	switch {
 	case len(r.Linkage.Declaring) > 0:
-		fmt.Fprintf(out, "  Linkage:   ! %s already declares this key — %s said so%s\n",
+		fmt.Fprintf(out, "  Linkage:   ! %s has already proved this key — %s said so%s\n",
 			strings.Join(r.Linkage.Declaring, ", "), r.Linkage.Oracle, oracleProvenance(r.Linkage))
 	case r.Linkage.Checked:
-		fmt.Fprintf(out, "  Linkage:   no identity has ever declared this key — %s answered%s\n",
+		fmt.Fprintf(out, "  Linkage:   no identity has ever proved this key — %s answered%s\n",
 			r.Linkage.Oracle, oracleProvenance(r.Linkage))
 	default:
 		fmt.Fprintf(out, "  Linkage:   ! NOT CHECKED — %s\n", firstLine(r.Linkage.Limit))
@@ -1053,7 +1319,8 @@ func printCeremonyDisclosure(r *proveResult, localLinkage error) {
 	if localLinkage != nil {
 		fmt.Fprintf(out, "  Local:     ! %s\n", firstLine(localLinkage.Error()))
 	}
-	fmt.Fprintf(out, "\nThis signs a proof that you hold this key and consent to THIS ceremony at THIS host.\n")
+	fmt.Fprintf(out, "\nThis signs a proof that you hold this key and consent to joining THIS identity in THESE roles,\n")
+	fmt.Fprintf(out, "at THIS host, on THIS chain head. It is spent at that position and is dead bytes at every other.\n")
 	fmt.Fprintf(out, "It carries no authority, no content, and no instruction, and the private key stays here.\n")
 }
 
@@ -1069,10 +1336,11 @@ func firstLine(s string) string {
 // human already checked the audience, rather than a prompt nobody read.
 func confirmCeremony(in io.Reader, cand *candidateKey) error {
 	if !stdinIsInteractive() {
-		return fmt.Errorf("nothing was signed: a ceremony is confirmed by a human who has seen the audience above.\n"+
-			"Re-run with --yes once it is the host you meant. The candidate key is held as %s", cand.Account)
+		return fmt.Errorf("nothing was signed: a ceremony is confirmed by a human who has seen the identity, the roles\n"+
+			"and the audience above. Re-run with --yes once they are the ones you meant. The candidate key is held as %s",
+			cand.Account)
 	}
-	fmt.Fprintf(os.Stderr, "\nComplete this ceremony? [y/N]: ")
+	fmt.Fprintf(os.Stderr, "\nPresent this proof? [y/N]: ")
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && err != io.EOF {
 		return fmt.Errorf("read confirmation: %w", err)
@@ -1085,10 +1353,20 @@ func confirmCeremony(in io.Reader, cand *candidateKey) error {
 		cand.Account, cand.PublicKey)
 }
 
+// printProveResult is the receipt. It reports what happened — the proof was
+// PRESENTED — and never more than that.
+//
+// THE CEREMONY IS NOT OVER WHEN THIS COMMAND STOPS, and the receipt's job is to
+// say so plainly. A presented proof waits for a human to approve it on the
+// operator's own surface; until that happens no chain declares the key, the key
+// is a candidate here, and telling someone their key was "added" would be telling
+// them a step they still have to take is already done.
 func printProveResult(r *proveResult) {
-	fmt.Printf("\nCompleted:\n")
+	fmt.Printf("\nPresented:\n")
+	fmt.Printf("  Adds to:   %s (@%s)\n", r.DisplayName, r.Handle)
+	fmt.Printf("             %s\n", r.Adopts)
+	fmt.Printf("  Roles:     %s\n", r.RoleSet)
 	fmt.Printf("  Audience:  %s\n", r.Audience)
-	fmt.Printf("  Ceremony:  %s\n", r.Ceremony)
 	fmt.Printf("  Key:       %s\n", r.PublicKey)
 	if r.KeyID != "" {
 		// The operator's name for the key, and beside it the shortened key —
@@ -1096,25 +1374,31 @@ func printProveResult(r *proveResult) {
 		// where a key id means nothing.
 		fmt.Printf("  Key id:    %s (%s)\n", r.KeyID, truncateKey(r.PublicKey))
 	}
-	if r.DID != "" {
-		fmt.Printf("  Identity:  %s\n", r.DID)
-	}
 	fmt.Printf("  Account:   %s (%s)\n", r.Account, r.Backend)
 	if r.ExplorerURL != "" {
 		fmt.Printf("  Explorer:  %s\n", r.ExplorerURL)
 	}
 	fmt.Println()
-	if r.DID == "" {
-		fmt.Printf("%s did not name the identity that adopted the key, so it is held here as a candidate.\n", r.Audience)
-		fmt.Printf("'dfos keys list' shows it; 'dfos keys prune' never removes it. Once a chain declares it,\n")
+
+	// The fingerprint, and what to do with it. This is the human's half of the
+	// wrong-ceremony defense: the operator's dialog shows the key it received, and
+	// comparing the two is what catches a proof that landed in someone else's
+	// ceremony before it is approved.
+	fmt.Printf("Approve it at %s — it shows the key it received, and %s\n", r.Audience, truncateKey(r.PublicKey))
+	fmt.Printf("is what should be on that screen. Nothing is added to the chain until you approve it there.\n\n")
+
+	if r.AdoptedDID == "" {
+		fmt.Printf("Until then the key is held here as a candidate: 'dfos keys list' shows it, 'dfos keys prune'\n")
+		fmt.Printf("never removes it, and 'dfos keys remove %s' is how it leaves if the ceremony goes nowhere.\n",
+			truncateKey(r.PublicKey))
 		if r.Vault != "" {
-			fmt.Printf("'dfos recover --vault %s' files it under that identity.\n", r.Vault)
+			fmt.Printf("Once %s declares it, 'dfos recover --vault %s' files it under that identity.\n", r.Adopts, r.Vault)
 		} else {
-			fmt.Printf("'dfos identity fetch <did>' brings that chain here.\n")
+			fmt.Printf("Once %s declares it, 'dfos identity fetch %s' brings that chain here.\n", r.Adopts, r.Adopts)
 		}
 		return
 	}
-	fmt.Printf("The key is filed under %s. Signing resolves the identity and uses the key this device holds.\n", r.DID)
+	fmt.Printf("The key is filed under %s. Signing resolves the identity and uses the key this device holds.\n", r.AdoptedDID)
 	// The label is the operator's to keep, so the place to change it is the
 	// operator's too — not this command, which has no ceremony left to run.
 	fmt.Printf("Rename it any time in Settings → Signing keys.\n")

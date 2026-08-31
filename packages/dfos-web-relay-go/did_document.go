@@ -178,6 +178,16 @@ func projectService(did string, entry dfos.ServiceEntry) any {
 // terminal state (DID-METHOD.md §4). A deactivated identity resolves to a minimal
 // document with an empty verification-method set and no verification relationships
 // or services (§5.4).
+//
+// EFFECTIVE STATE ONLY, and nothing else would be defensible: a verification
+// method is a standing claim that this key speaks for this DID, so a
+// declared-but-unproved key appearing in `authentication`, `assertionMethod` or
+// `capabilityInvocation` would publish exactly the claim possession proofs exist
+// to withhold. It reads the three head arrays, which the chain walk now fills
+// with effective memberships — so this is correct by construction rather than by
+// a filter here, and no void key can reach the document. Neither `declared` nor
+// `provedKeys` belongs in a DID document: one is what the chain said, the other
+// is history, and a DID document states what is true now.
 func identityToDidDocument(state dfos.IdentityState) any {
 	did := state.DID
 

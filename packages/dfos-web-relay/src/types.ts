@@ -6,7 +6,11 @@
 
 */
 
-import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
+import type {
+  DeclaredKeyState,
+  VerifiedContentChain,
+  VerifiedIdentity,
+} from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
 import type { JtiReplayCache } from './auth';
@@ -32,6 +36,40 @@ import type {
  * routes (/content/{id}/blob*) and .well-known stay at root on their own clock.
  */
 export const PROOF_BASE_PATH = '/proof/v1';
+
+// -----------------------------------------------------------------------------
+// key state
+// -----------------------------------------------------------------------------
+
+/**
+ * THE HAS-EVER-PROVED KEY STATE of a verified identity — the ONE reading of
+ * `provedKeys` shared by every relay surface that asks "was this key ever true?"
+ *
+ * Three key states now travel on a VerifiedIdentity and each answers a different
+ * question, so the relay picks deliberately rather than by habit:
+ *
+ *  - The ordinary `authKeys`/`assertKeys`/`controllerKeys` arrays are EFFECTIVE
+ *    state — what is true NOW. Live authentication, first admission, and the DID
+ *    document's verification methods read these and nothing else.
+ *  - `provedKeys` is HAS-EVER-PROVED — what was EVER true. Historical key
+ *    resolution (long-lived artifacts across a rotation) and the `key=` reverse
+ *    index read this.
+ *  - `declared` is what the chain SAYS, void memberships included. Exactly one
+ *    surface wants it — signer admission — and that surface lives in the
+ *    protocol library's chain walk, never here.
+ *
+ * `provedKeys` is optional on VerifiedIdentity because a caller may hand the
+ * extension verifier a hand-built state. An absent member reads as "what is
+ * effective now is what was proved", which is exactly correct for any chain with
+ * no void memberships and is the only reading available for a state that never
+ * recorded the difference — the same fallback the protocol library takes.
+ */
+export const provedKeyState = (state: VerifiedIdentity): DeclaredKeyState =>
+  state.provedKeys ?? {
+    authKeys: state.authKeys,
+    assertKeys: state.assertKeys,
+    controllerKeys: state.controllerKeys,
+  };
 
 // -----------------------------------------------------------------------------
 // relay options
@@ -698,12 +736,14 @@ export interface RelayStore {
    * `nameContains` filters by case-insensitive substring over projected
    * `profile.name`.
    *
-   * `key` is the HAS-EVER-DECLARED reverse lookup: keep rows whose chain ever
-   * declared this public key in ANY key array (`authKeys` / `assertKeys` /
-   * `controllerKeys`) of ANY accepted operation — genesis or update, current or
-   * long since rotated out. Matched byte-for-byte as an opaque multibase string
-   * (a value no operation ever declared simply matches nothing; no format
-   * validation, no 400), and it never excludes deleted rows.
+   * `key` is the HAS-EVER-PROVED reverse lookup: keep rows whose chain ever
+   * PROVED this public key into any role (`auth` / `assert` / `controller`) at
+   * any point in its history — current or long since rotated out. A key some
+   * chain merely DECLARED never matches: no possession proof admitted it, the
+   * membership is void, and indexing it would let a stranger burn a key they do
+   * not hold. Matched byte-for-byte as an opaque multibase string (a value no
+   * chain ever proved simply matches nothing; no format validation, no 400), and
+   * it never excludes deleted rows.
    */
   queryIndexIdentities(q: {
     did?: string;
@@ -820,16 +860,22 @@ export interface RelayStore {
   /** Add one accepted content-operation signer to a chain's signer set. */
   putIndexContentSigner(contentId: string, did: string): Promise<void>;
   /**
-   * Record one public key an accepted identity operation DECLARED — the
+   * Record one public key an accepted identity operation left PROVED — the
    * `(publicKeyMultibase, did, keyId)` reverse row backing `key=` on
    * /index/v0/identities.
    *
-   * Called once per entry of every key array of every accepted identity
-   * operation, so the table accumulates the chain's whole declaration history
-   * rather than its head state — an `update` REPLACES the arrays, so diffing
-   * head state would lose exactly the rotated-out keys the filter exists to
-   * find. Rows are UPSERTS and are NEVER DELETED: a rotation removes nothing, a
-   * deleted identity keeps its rows. `publicKeyMultibase` is stored verbatim.
+   * Called once per entry of the chain's `provedKeys` after every accepted
+   * identity operation, so the table accumulates has-ever-proved rather than
+   * head state — a rotated-out key stays findable, which is the case the filter
+   * exists for. A key an operation merely DECLARED is NOT recorded: no
+   * possession proof admitted it, so it publishes no link between chains, and
+   * recording it would let a stranger burn a key they do not hold.
+   *
+   * Rows are UPSERTS and are NEVER DELETED: a rotation removes nothing, a
+   * deleted identity keeps its rows. Append-only plus a monotonic `provedKeys`
+   * is what makes the accumulated table equal the head state's `provedKeys`, so
+   * incremental maintenance and a full rebuild agree. `publicKeyMultibase` is
+   * stored verbatim.
    */
   putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void>;
   /**

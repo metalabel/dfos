@@ -17,10 +17,12 @@ func TestIdentityConflictingExtensionPermanentDirectAndPeer(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	kid := id.did + "#" + id.controller.keyID
 	first, _, err := dfos.SignIdentityUpdate(
+		genesisState(id.did, id.controller),
 		id.opCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		[]dfos.MultikeyPublicKey{},
+		nil, // carries the genesis key forward; introduces nothing
 		kid,
 		id.controller.priv,
 	)
@@ -34,10 +36,12 @@ func TestIdentityConflictingExtensionPermanentDirectAndPeer(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	otherAuth := newTestKeypair()
 	conflict, conflictCID, err := dfos.SignIdentityUpdate(
+		genesisState(id.did, id.controller),
 		id.opCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{otherAuth.mk},
 		[]dfos.MultikeyPublicKey{},
+		[]string{testKeyProof(t, otherAuth.priv, id.did, id.opCID, "auth")},
 		kid,
 		id.controller.priv,
 	)

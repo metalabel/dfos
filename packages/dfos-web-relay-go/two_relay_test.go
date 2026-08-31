@@ -147,10 +147,12 @@ func TestTwoRelayRevocationAfterRotationConvergesUnderHistorical(t *testing.T) {
 	// is now rotated OUT of current state). Signed by the controller key.
 	newAuth := newTestKeypair()
 	rotationToken, _, err := dfos.SignIdentityUpdate(
+		genesisState(creator.did, creator.controller),
 		creator.opCID,
 		[]dfos.MultikeyPublicKey{creator.controller.mk},
 		[]dfos.MultikeyPublicKey{newAuth.mk}, // A0 rotated out
 		[]dfos.MultikeyPublicKey{},
+		[]string{testKeyProof(t, newAuth.priv, creator.did, creator.opCID, "auth")},
 		creator.did+"#"+creator.controller.keyID,
 		creator.controller.priv,
 	)

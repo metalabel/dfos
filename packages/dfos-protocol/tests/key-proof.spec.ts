@@ -28,10 +28,14 @@ import {
 import {
   DEFAULT_KEY_PROOF_SKEW_SECONDS,
   KEY_ADD_JWS_TYP,
+  KEY_ROLES,
   keyProofSigningInput,
   KeyProofVerifyError,
   MAX_KEY_PROOF_SIZE,
+  parseRoleSet,
+  serializeRoleSet,
   signKeyProof,
+  verifyChainKeyProof,
   verifyKeyProof,
   type KeyProofPayload,
 } from '../src/key-proof';
@@ -50,6 +54,14 @@ const OTHER_SEED = Uint8Array.from({ length: 32 }, (_, index) => 0x40 + index);
 
 const VECTOR_NONCE = 'nonce-key-proof-vector-0001';
 const VECTOR_AUDIENCE = 'keys.dfos.com';
+const VECTOR_DID = 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae';
+/**
+ * A PROPER SUBSET on purpose. The full set would make the walk's coverage rule
+ * and presentation-time's equality rule indistinguishable, and coverage-not-
+ * equality is the one place the two modes deliberately differ.
+ */
+const VECTOR_ROLE_SET = 'auth,assert';
+const VECTOR_PREV_CID = 'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne';
 const VECTOR_TIMESTAMP = '2026-03-07T00:00:00.000Z';
 /** Unix seconds of VECTOR_TIMESTAMP — the instant a verifier's clock is pinned to. */
 const VECTOR_UNIX = 1772841600;
@@ -57,17 +69,17 @@ const VECTOR_MULTIBASE = 'z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2';
 const OTHER_MULTIBASE = 'z6Mkgxj2R3HLtQRpPnvfvpuKEceSqf3tZHBjdmZ3fFz3JHGG';
 
 const VECTOR_CANONICAL =
-  '{"nonce":"nonce-key-proof-vector-0001","audience":"keys.dfos.com","publicKeyMultibase":"z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2","timestamp":"2026-03-07T00:00:00.000Z"}';
+  '{"nonce":"nonce-key-proof-vector-0001","audience":"keys.dfos.com","did":"did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae","roleSet":"auth,assert","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2","timestamp":"2026-03-07T00:00:00.000Z"}';
 const VECTOR_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.r7fDOdNq04g6BDaQpeuVbQ0mvcJ3OV2fBkNqd7kNKkZLRFnoa5ktLZDs-Ef-qqFRqwpK0bbUT827Fv7A5ZPICA';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsImRpZCI6ImRpZDpkZm9zOm56a2Y4MzhlZnI0MjQ0MzNybjJyemtkdjhoN3Q5YWUiLCJyb2xlU2V0IjoiYXV0aCxhc3NlcnQiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.KepNMLYBmZbnB4l4rNcLOhZS-NOgQHr_a9_So0REHwzoT_jXtVF9XEEeiUNzxxSh965ZfZdNQJteK8Tf6OcuAg';
 
 /** The SAME fixture under a second purpose — the proof that `typ` is a parameter. */
 const VECTOR_OTHER_TYP = 'did:dfos:key-proof-vector-other';
 const VECTOR_OTHER_TYP_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1wcm9vZi12ZWN0b3Itb3RoZXIifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.NMNjktabEWgXRhP28Jh2hLl7s6ATWD4liXvS_nw85HwvnLu14HEl6NINtuTSO2O2dBW7tPOcnJrvFSrnrzPRDA';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1wcm9vZi12ZWN0b3Itb3RoZXIifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsImRpZCI6ImRpZDpkZm9zOm56a2Y4MzhlZnI0MjQ0MzNybjJyemtkdjhoN3Q5YWUiLCJyb2xlU2V0IjoiYXV0aCxhc3NlcnQiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.KYh81pniAUn0n-ss4Z9_PJCpJkCtryCt8U3ZQhTt3zzjGRzE0v1qyarYjmMUin9eN6bJ1cMXCx6cupyUMDMcDA';
 
 /**
- * THE MALLEABILITY NEGATIVES. Both carry the vector's exact four members, both
+ * THE MALLEABILITY NEGATIVES. Both carry the vector's exact seven members, both
  * are REALLY signed by the vector key over the octets they present, and both are
  * refused: the first serializes the members in reverse order, the second inserts
  * insignificant whitespace. A signature covers whatever octets arrived, so the
@@ -77,18 +89,41 @@ const VECTOR_OTHER_TYP_JWS =
  * a twin that accepted either would be accepting bytes production refuses.
  */
 const VECTOR_REORDERED_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSJ9.Xnigl9DVx4IMKoFypxcfJqZig9M7KSQUrfk-7Is46ZEOF4jML0tf_hePFrv596FPWmFn02q7hMhSQhtxpdDpCA';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1raEZ3WE5GV29zTGV1Z3ZTZjR3Y0w5dDN1dVJYdWVHU0ZUUmdTdkhoV2o1RzIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJyb2xlU2V0IjoiYXV0aCxhc3NlcnQiLCJkaWQiOiJkaWQ6ZGZvczpuemtmODM4ZWZyNDI0NDMzcm4ycnprZHY4aDd0OWFlIiwiYXVkaWVuY2UiOiJrZXlzLmRmb3MuY29tIiwibm9uY2UiOiJub25jZS1rZXktcHJvb2YtdmVjdG9yLTAwMDEifQ.4qHdOCS5yAq10_XpdfBFoglwm2ZDLNooUntOyWDjcNul9M2_GbShh8JIOd5vimen0ZKUpObmFFVPlzVcmT0XDw';
 const VECTOR_SPACED_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ICJub25jZS1rZXktcHJvb2YtdmVjdG9yLTAwMDEiLCAiYXVkaWVuY2UiOiAia2V5cy5kZm9zLmNvbSIsICJwdWJsaWNLZXlNdWx0aWJhc2UiOiAiejZNa2hGd1hORldvc0xldWd2U2Y0d2NMOXQzdXVSWHVlR1NGVFJnU3ZIaFdqNUcyIiwgInRpbWVzdGFtcCI6ICIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.PwFg4KJcHQ6dsj0zEeeuHJTn-KKSfZXXciCI8PGE8OL9DZHMCROWaYB0pBhHMyUuQsvh3iUM3U9_JvrmpzzBDg';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ICJub25jZS1rZXktcHJvb2YtdmVjdG9yLTAwMDEiLCAiYXVkaWVuY2UiOiAia2V5cy5kZm9zLmNvbSIsICJkaWQiOiAiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSIsICJyb2xlU2V0IjogImF1dGgsYXNzZXJ0IiwgInByZXZDSUQiOiAiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCAicHVibGljS2V5TXVsdGliYXNlIjogIno2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsICJ0aW1lc3RhbXAiOiAiMjAyNi0wMy0wN1QwMDowMDowMC4wMDBaIn0.XVCcwA2t1jpxbbotBVsOa96dQecpm0ZpymM53MrCA_r88suegEmMLxva6nVSelNipVmeBuWS7lcTFSb2dNeeDw';
 
 /** The same members signed by the OTHER key, naming the OTHER key. */
 const VECTOR_OTHER_KEY_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtneGoyUjNITHRRUnBQbnZmdnB1S0VjZVNxZjN0WkhCamRtWjNmRnozSkhHRyIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.p1pM7ycrLvynxbrHSCAJZiWIw5RufHWnnQa-ewpj8SbOI55o01IfV2-SO4rs28SqTa40WeLQovyE4TqI1_PQDQ';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsImRpZCI6ImRpZDpkZm9zOm56a2Y4MzhlZnI0MjQ0MzNybjJyemtkdjhoN3Q5YWUiLCJyb2xlU2V0IjoiYXV0aCxhc3NlcnQiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZ3hqMlIzSEx0UVJwUG52ZnZwdUtFY2VTcWYzdFpIQmpkbVozZkZ6M0pIR0ciLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.Y2Wd-a7PPXpt6-hLJBRg2V9vLZwMfXa_qxv7ZxtB48OB6l9EotoKYkJhwdOLjv2Ydy-MEnkOkt4_CWEhAgJKCg';
+
+/**
+ * The same fixture consenting to ALL THREE roles. Presentation-time refuses it
+ * where `auth,assert` was asked (equality); the chain walk accepts it for any one
+ * of the three (coverage). One envelope, two different right answers.
+ */
+const VECTOR_FULL_ROLE_SET_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6Im5vbmNlLWtleS1wcm9vZi12ZWN0b3ItMDAwMSIsImF1ZGllbmNlIjoia2V5cy5kZm9zLmNvbSIsImRpZCI6ImRpZDpkZm9zOm56a2Y4MzhlZnI0MjQ0MzNybjJyemtkdjhoN3Q5YWUiLCJyb2xlU2V0IjoiYXV0aCxhc3NlcnQsY29udHJvbGxlciIsInByZXZDSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtoRndYTkZXb3NMZXVndlNmNHdjTDl0M3V1Ulh1ZUdTRlRSZ1N2SGhXajVHMiIsInRpbWVzdGFtcCI6IjIwMjYtMDMtMDdUMDA6MDA6MDAuMDAwWiJ9.mK04MC77zaK0oUUS68dsWbdw8IV0ES9wS9xXoxG48sk1uxvE3Tabu6kQFWsvzhgdLxvxX6VPYBiuDJHbz8M2Cg';
 
 const vectorPayload = (): KeyProofPayload => ({
   nonce: VECTOR_NONCE,
   audience: VECTOR_AUDIENCE,
+  did: VECTOR_DID,
+  roleSet: VECTOR_ROLE_SET,
+  prevCID: VECTOR_PREV_CID,
   publicKeyMultibase: VECTOR_MULTIBASE,
+  timestamp: VECTOR_TIMESTAMP,
+});
+
+/** The producer-side inputs the vector envelope is signed from. */
+const vectorSignInput = () => ({
+  typ: KEY_ADD_JWS_TYP,
+  nonce: VECTOR_NONCE,
+  audience: VECTOR_AUDIENCE,
+  did: VECTOR_DID,
+  roleSet: VECTOR_ROLE_SET,
+  prevCID: VECTOR_PREV_CID,
+  privateKey: VECTOR_SEED,
   timestamp: VECTOR_TIMESTAMP,
 });
 
@@ -97,7 +132,19 @@ const at = (unixSeconds: number) => () => unixSeconds * 1000;
 const expectAt = (overrides: Partial<Parameters<typeof verifyKeyProof>[1]> = {}) => ({
   expectedTyp: KEY_ADD_JWS_TYP,
   expectedAudience: VECTOR_AUDIENCE,
+  expectedDid: VECTOR_DID,
+  expectedRoleSet: VECTOR_ROLE_SET,
+  expectedPrevCID: VECTOR_PREV_CID,
   now: at(VECTOR_UNIX),
+  ...overrides,
+});
+
+const walkFor = (overrides: Partial<Parameters<typeof verifyChainKeyProof>[1]> = {}) => ({
+  expectedTyp: KEY_ADD_JWS_TYP,
+  did: VECTOR_DID,
+  prevCID: VECTOR_PREV_CID,
+  publicKeyMultibase: VECTOR_MULTIBASE,
+  role: 'auth' as const,
   ...overrides,
 });
 
@@ -140,6 +187,9 @@ describe('key-proof byte contract', () => {
     const b: KeyProofPayload = {
       timestamp: a.timestamp,
       publicKeyMultibase: a.publicKeyMultibase,
+      prevCID: a.prevCID,
+      roleSet: a.roleSet,
+      did: a.did,
       audience: a.audience,
       nonce: a.nonce,
     };
@@ -147,13 +197,7 @@ describe('key-proof byte contract', () => {
   });
 
   it('derives publicKeyMultibase from the private key and pins the signed vector', async () => {
-    const { proof, payload } = await signKeyProof({
-      typ: KEY_ADD_JWS_TYP,
-      nonce: VECTOR_NONCE,
-      audience: VECTOR_AUDIENCE,
-      privateKey: VECTOR_SEED,
-      timestamp: VECTOR_TIMESTAMP,
-    });
+    const { proof, payload } = await signKeyProof(vectorSignInput());
     expect(payload.publicKeyMultibase).toBe(VECTOR_MULTIBASE);
     expect(payload.publicKeyMultibase).toBe(
       encodeEd25519Multikey(importEd25519Keypair(VECTOR_SEED).publicKey),
@@ -172,13 +216,7 @@ describe('key-proof byte contract', () => {
   });
 
   it('serves every registered purpose from the same grammar — typ is a parameter', async () => {
-    const { proof } = await signKeyProof({
-      typ: VECTOR_OTHER_TYP,
-      nonce: VECTOR_NONCE,
-      audience: VECTOR_AUDIENCE,
-      privateKey: VECTOR_SEED,
-      timestamp: VECTOR_TIMESTAMP,
-    });
+    const { proof } = await signKeyProof({ ...vectorSignInput(), typ: VECTOR_OTHER_TYP });
     expect(proof).toBe(VECTOR_OTHER_TYP_JWS);
     // Same payload segment as the key-add vector: only the header differs.
     expect(proof.split('.')[1]).toBe(VECTOR_JWS.split('.')[1]);
@@ -186,20 +224,15 @@ describe('key-proof byte contract', () => {
 
   it('floor-normalizes a millisecond-bearing timestamp, and defaults to now', async () => {
     const floored = await signKeyProof({
-      typ: KEY_ADD_JWS_TYP,
-      nonce: VECTOR_NONCE,
-      audience: VECTOR_AUDIENCE,
-      privateKey: VECTOR_SEED,
+      ...vectorSignInput(),
       timestamp: '2026-03-07T00:00:00.987Z',
     });
     expect(floored.payload.timestamp).toBe(VECTOR_TIMESTAMP);
     expect(floored.proof).toBe(VECTOR_JWS);
 
+    const { timestamp: _omitted, ...withoutTimestamp } = vectorSignInput();
     const defaulted = await signKeyProof({
-      typ: KEY_ADD_JWS_TYP,
-      nonce: VECTOR_NONCE,
-      audience: VECTOR_AUDIENCE,
-      privateKey: VECTOR_SEED,
+      ...withoutTimestamp,
       now: () => VECTOR_UNIX * 1000 + 654,
     });
     expect(defaulted.payload.timestamp).toBe(VECTOR_TIMESTAMP);
@@ -215,15 +248,9 @@ describe('key-proof byte contract', () => {
       '2026-02-30T00:00:00.000Z', // not a calendar date
       'yesterday',
     ]) {
-      await expect(
-        signKeyProof({
-          typ: KEY_ADD_JWS_TYP,
-          nonce: VECTOR_NONCE,
-          audience: VECTOR_AUDIENCE,
-          privateKey: VECTOR_SEED,
-          timestamp,
-        }),
-      ).rejects.toThrow(/unparseable timestamp/);
+      await expect(signKeyProof({ ...vectorSignInput(), timestamp })).rejects.toThrow(
+        /unparseable timestamp/,
+      );
     }
   });
 
@@ -243,6 +270,83 @@ describe('key-proof byte contract', () => {
     expect(() =>
       keyProofSigningInput({ ...vectorPayload(), timestamp: '2026-03-07T00:00:00Z' }),
     ).toThrow(/whole-second/);
+    for (const member of ['did', 'roleSet', 'prevCID'] as const) {
+      expect(() => keyProofSigningInput({ ...vectorPayload(), [member]: '' })).toThrow(
+        /non-empty string/,
+      );
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the role set
+// -----------------------------------------------------------------------------
+
+describe('role set — one spelling per set', () => {
+  it('serializes any input order to the fixed auth,assert,controller order', () => {
+    expect(serializeRoleSet(['controller', 'auth'])).toBe('auth,controller');
+    expect(serializeRoleSet(['assert', 'auth'])).toBe('auth,assert');
+    expect(serializeRoleSet(['controller', 'assert', 'auth'])).toBe('auth,assert,controller');
+    // A set is a set: duplicates in the input collapse rather than reject.
+    expect(serializeRoleSet(['auth', 'auth'])).toBe('auth');
+    expect(serializeRoleSet(KEY_ROLES)).toBe('auth,assert,controller');
+  });
+
+  it('refuses an unknown role and an empty set on the producer side', () => {
+    expect(() => serializeRoleSet(['owner' as never])).toThrow(/unknown role/);
+    expect(() => serializeRoleSet([])).toThrow(/at least one role/);
+  });
+
+  it('parses exactly the seven canonical spellings and nothing else', () => {
+    const canonical = [
+      'auth',
+      'assert',
+      'controller',
+      'auth,assert',
+      'auth,controller',
+      'assert,controller',
+      'auth,assert,controller',
+    ];
+    for (const value of canonical) {
+      expect(parseRoleSet(value), value).not.toBeNull();
+      expect(serializeRoleSet(parseRoleSet(value) as never), value).toBe(value);
+    }
+    for (const value of [
+      '', // empty
+      'assert,auth', // out of order
+      'controller,auth', // out of order
+      'auth, assert', // whitespace
+      ' auth', // whitespace
+      'auth,', // empty segment
+      ',auth', // empty segment
+      'auth,auth', // duplicate
+      'auth,owner', // unknown role
+      'owner', // unknown role
+      'AUTH', // case
+      'auth;assert', // wrong separator
+    ]) {
+      expect(parseRoleSet(value), JSON.stringify(value)).toBeNull();
+    }
+  });
+
+  it('refuses a non-canonical roleSet inside the envelope — same class as member order', () => {
+    for (const roleSet of ['assert,auth', 'auth, assert', 'auth,auth', 'auth,owner', '']) {
+      const forged = forge(
+        { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+        {
+          ...vectorPayload(),
+          roleSet,
+        },
+      );
+      expect(
+        reasonOf(() => verifyKeyProof(forged, expectAt())),
+        roleSet,
+      ).toBe('schema');
+    }
+    // ...and the producer half refuses the same spellings before there are bytes.
+    expect(() => keyProofSigningInput({ ...vectorPayload(), roleSet: 'assert,auth' })).toThrow(
+      /canonical/,
+    );
   });
 });
 
@@ -276,13 +380,7 @@ describe('key-proof verification — steps 1–5 and 7', () => {
 
   it('refuses to SIGN an envelope over the cap', async () => {
     await expect(
-      signKeyProof({
-        typ: KEY_ADD_JWS_TYP,
-        nonce: 'n'.repeat(MAX_KEY_PROOF_SIZE),
-        audience: VECTOR_AUDIENCE,
-        privateKey: VECTOR_SEED,
-        timestamp: VECTOR_TIMESTAMP,
-      }),
+      signKeyProof({ ...vectorSignInput(), nonce: 'n'.repeat(MAX_KEY_PROOF_SIZE) }),
     ).rejects.toThrow(/exceeds max size/);
   });
 
@@ -352,7 +450,7 @@ describe('key-proof verification — steps 1–5 and 7', () => {
 
   it('rejects a REORDERED or RE-SPACED payload — the canonical bytes bind the verifier', () => {
     // Every other gate passes: real signature by the named key, right typ, right
-    // audience, fresh timestamp, exactly the four members. What fails is that the
+    // audience, fresh timestamp, exactly the seven members. What fails is that the
     // presented octets are not the canonical serialization of those members. Left
     // unchecked, one set of members would have unboundedly many payload spellings
     // — and this package would verify payloads the platform's verifier refuses.
@@ -378,7 +476,15 @@ describe('key-proof verification — steps 1–5 and 7', () => {
   });
 
   it('rejects a MISSING member', () => {
-    for (const member of ['nonce', 'audience', 'publicKeyMultibase', 'timestamp'] as const) {
+    for (const member of [
+      'nonce',
+      'audience',
+      'did',
+      'roleSet',
+      'prevCID',
+      'publicKeyMultibase',
+      'timestamp',
+    ] as const) {
       const partial: Record<string, unknown> = { ...vectorPayload() };
       delete partial[member];
       expect(
@@ -471,6 +577,75 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     }
   });
 
+  // --- 4b. the three positional arms ---------------------------------------
+
+  it('rejects a did, roleSet or prevCID that is not the one this ceremony is writing', () => {
+    // Each arm alone. Every other gate passes, so the reason names the arm — a
+    // proof collected for one chain, one role set, or one head is not spendable
+    // at another, and each refusal is separately observable.
+    expect(
+      reasonOf(() =>
+        verifyKeyProof(
+          VECTOR_JWS,
+          expectAt({ expectedDid: 'did:dfos:someotherchain00000000000000' }),
+        ),
+      ),
+    ).toBe('did');
+    expect(reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedRoleSet: 'auth' })))).toBe(
+      'roleSet',
+    );
+    expect(
+      reasonOf(() =>
+        verifyKeyProof(
+          VECTOR_JWS,
+          expectAt({
+            expectedPrevCID: 'bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei',
+          }),
+        ),
+      ),
+    ).toBe('prevCID');
+  });
+
+  it('takes the roleSet by EQUALITY, so a wider consent is not bankable', () => {
+    // The holder consented to all three roles; the ceremony is writing two. That
+    // is the holder conceding more than was asked, and a completing authority has
+    // no business banking the difference — presentation-time refuses it.
+    expect(reasonOf(() => verifyKeyProof(VECTOR_FULL_ROLE_SET_JWS, expectAt()))).toBe('roleSet');
+    // Under the matching expectation the very same envelope verifies.
+    expect(() =>
+      verifyKeyProof(
+        VECTOR_FULL_ROLE_SET_JWS,
+        expectAt({ expectedRoleSet: 'auth,assert,controller' }),
+      ),
+    ).not.toThrow();
+    // ...and the chain walk reads it the OTHER way: coverage, one role at a time.
+    for (const role of KEY_ROLES) {
+      expect(() => verifyChainKeyProof(VECTOR_FULL_ROLE_SET_JWS, walkFor({ role }))).not.toThrow();
+    }
+  });
+
+  it('refuses an EMPTY or non-canonical positional expectation as a MISCONFIGURATION', () => {
+    // An arm compared against an empty string binds nothing while reading as
+    // present, which is exactly the standing consent the members exist to close.
+    // A plain Error, never a KeyProofVerifyError — a broken deployment must not
+    // be mistakable for a bad envelope.
+    expect(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedAudience: '' }))).toThrow(
+      /expectedAudience/,
+    );
+    expect(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedDid: '' }))).toThrow(/expectedDid/);
+    expect(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedPrevCID: '' }))).toThrow(
+      /expectedPrevCID/,
+    );
+    for (const roleSet of ['', 'assert,auth', 'auth, assert', 'owner']) {
+      expect(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedRoleSet: roleSet }))).toThrow(
+        /expectedRoleSet/,
+      );
+    }
+    expect(reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ expectedDid: '' })))).toMatch(
+      /^not-a-KeyProofVerifyError/,
+    );
+  });
+
   // --- 5. freshness --------------------------------------------------------
 
   it('accepts inside the window on BOTH sides and rejects outside it', () => {
@@ -523,15 +698,9 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     // the verifier side. A MISCONFIGURATION, never a verdict — a plain Error, not
     // a KeyProofVerifyError, so a caller branching on `reason` cannot read a
     // broken deployment as a bad envelope. The Go twin pins the same pair.
-    await expect(
-      signKeyProof({
-        typ: '',
-        nonce: VECTOR_NONCE,
-        audience: VECTOR_AUDIENCE,
-        privateKey: VECTOR_SEED,
-        timestamp: VECTOR_TIMESTAMP,
-      }),
-    ).rejects.toThrow(/registered purpose value/);
+    await expect(signKeyProof({ ...vectorSignInput(), typ: '' })).rejects.toThrow(
+      /registered purpose value/,
+    );
 
     // A REAL signature over a header whose typ is the empty string — the artifact
     // an empty expectation would otherwise wave through.
@@ -587,6 +756,96 @@ describe('key-proof verification — steps 1–5 and 7', () => {
     );
     expect(reasonOf(() => verifyKeyProof(`${parts[0]}.${parts[1]}.`, expectAt()))).toBe(
       'signature',
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// chain-walk verification — the same envelope, read from a different position
+// -----------------------------------------------------------------------------
+
+describe('key-proof verification — chain walk', () => {
+  it('verifies the pinned vector against a position rather than a ceremony', () => {
+    const payload = verifyChainKeyProof(VECTOR_JWS, walkFor());
+    expect(payload).toEqual(vectorPayload());
+    // The two transport members ride along, verbatim and unchecked.
+    expect(payload.nonce).toBe(VECTOR_NONCE);
+    expect(payload.audience).toBe(VECTOR_AUDIENCE);
+  });
+
+  it('checks NEITHER freshness NOR audience — a chain does not expire, and is not one relay for', () => {
+    // A DECADE past the timestamp. Presentation-time refuses this on freshness;
+    // the walk does not, because a chain that expired would be a chain no one
+    // could replay. There is no clock parameter here at all — the absence is the
+    // contract.
+    expect(() => verifyChainKeyProof(VECTOR_JWS, walkFor())).not.toThrow();
+    expect(
+      reasonOf(() => verifyKeyProof(VECTOR_JWS, expectAt({ now: at(VECTOR_UNIX + 315_360_000) }))),
+    ).toBe('freshness');
+    // ...and no audience parameter either: the envelope is audienced to
+    // keys.dfos.com, and a walker on any other host still reads it.
+    expect(Object.keys(walkFor())).not.toContain('expectedAudience');
+  });
+
+  it('refuses an envelope for a DIFFERENT key, chain, head, or role', () => {
+    // The key arm: an honest, fully valid envelope — for the other key.
+    expect(reasonOf(() => verifyChainKeyProof(VECTOR_OTHER_KEY_JWS, walkFor()))).toBe('key');
+    expect(
+      reasonOf(() =>
+        verifyChainKeyProof(VECTOR_JWS, walkFor({ did: 'did:dfos:someotherchain00000000000000' })),
+      ),
+    ).toBe('did');
+    // THE STANDING-CONSENT ARM. Same key, same chain, same roles — a head that
+    // has moved on. This is what makes a re-add or a promotion need a FRESH
+    // envelope: an old one is bound to a head that is no longer the parent.
+    expect(
+      reasonOf(() =>
+        verifyChainKeyProof(
+          VECTOR_JWS,
+          walkFor({ prevCID: 'bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei' }),
+        ),
+      ),
+    ).toBe('prevCID');
+    // Coverage: the vector consents to auth and assert, so controller is uncovered.
+    expect(reasonOf(() => verifyChainKeyProof(VECTOR_JWS, walkFor({ role: 'controller' })))).toBe(
+      'roleSet',
+    );
+    for (const role of ['auth', 'assert'] as const) {
+      expect(() => verifyChainKeyProof(VECTOR_JWS, walkFor({ role }))).not.toThrow();
+    }
+  });
+
+  it('applies the SAME artifact gates as presentation time', () => {
+    // Size, header, closed schema and canonical bytes are properties of the
+    // artifact, not of the reader's position, so both modes refuse identically.
+    expect(reasonOf(() => verifyChainKeyProof('a'.repeat(MAX_KEY_PROOF_SIZE + 1), walkFor()))).toBe(
+      'size',
+    );
+    expect(reasonOf(() => verifyChainKeyProof(VECTOR_OTHER_TYP_JWS, walkFor()))).toBe('header');
+    for (const malleable of [VECTOR_REORDERED_JWS, VECTOR_SPACED_JWS]) {
+      expect(reasonOf(() => verifyChainKeyProof(malleable, walkFor()))).toBe('schema');
+    }
+    const withKid = forge(
+      { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP, kid: `${VECTOR_DID}#key_0` },
+      vectorPayload(),
+    );
+    expect(reasonOf(() => verifyChainKeyProof(withKid, walkFor()))).toBe('header');
+    const extra = forge(
+      { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+      {
+        ...vectorPayload(),
+        intent: 'send all my money',
+      },
+    );
+    expect(reasonOf(() => verifyChainKeyProof(extra, walkFor()))).toBe('schema');
+    // ...and the signature, against the key the payload names.
+    const mismatched = forge({ alg: 'EdDSA', typ: KEY_ADD_JWS_TYP }, vectorPayload(), OTHER_SEED);
+    expect(reasonOf(() => verifyChainKeyProof(mismatched, walkFor()))).toBe('signature');
+  });
+
+  it('refuses an EMPTY expectedTyp as a MISCONFIGURATION, like the presentation mode', () => {
+    expect(() => verifyChainKeyProof(VECTOR_JWS, walkFor({ expectedTyp: '' }))).toThrow(
+      /registered purpose value/,
     );
   });
 });

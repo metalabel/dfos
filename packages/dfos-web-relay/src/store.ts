@@ -168,11 +168,18 @@ export class MemoryRelayStore implements RelayStore {
   /** Accepted content-operation signer sets keyed by contentId. */
   private indexContentSigners = new Map<string, Set<string>>();
   /**
-   * HAS-EVER-DECLARED key reverse index: multibase public key → the DIDs whose
-   * accepted operations ever declared it. Rows accumulate (a rotation removes
+   * HAS-EVER-PROVED key reverse index: multibase public key → the DIDs whose
+   * chains ever PROVED it into a role. Rows accumulate (a rotation removes
    * nothing) and are never deleted (a deleted identity keeps its rows), which is
    * exactly what makes the `key=` filter answer "what has this key ever
    * controlled" rather than "what does it control now".
+   *
+   * Append-only is load-bearing twice over. It is what makes has-ever-proved
+   * accumulate at all, and — because the maintenance writer hands over the
+   * chain's monotonic `provedKeys` after every accepted op — it is why the
+   * index converges on the same rows whether it was maintained incrementally or
+   * rebuilt from scratch. A key nothing ever proved never enters, which is what
+   * stops a stranger from burning a key by declaring it.
    */
   private indexIdentityKeys = new Map<string, Set<string>>();
   /** Countersignature projection rows keyed by cid (carry witnessDID column). */
@@ -415,9 +422,9 @@ export class MemoryRelayStore implements RelayStore {
   }): Promise<IndexIdentityRow[]> {
     const rows = [...this.indexIdentityRows.values()].filter((row) => {
       if (q.did !== undefined && row.did !== q.did) return false;
-      // opaque byte match against the has-ever-declared reverse index — an
-      // unknown key matches nothing rather than erroring, and deleted rows are
-      // never excluded here (compose the other filters for that)
+      // opaque byte match against the has-ever-proved reverse index — a key no
+      // chain ever proved matches nothing rather than erroring, and deleted rows
+      // are never excluded here (compose the other filters for that)
       if (q.key !== undefined && !this.indexIdentityKeys.get(q.key)?.has(row.did)) return false;
       if (q.hasPublicProfile !== undefined) {
         const isPublic = row.profile !== null && row.profile.publicRead;

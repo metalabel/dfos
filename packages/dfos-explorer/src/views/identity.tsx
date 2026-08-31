@@ -71,7 +71,7 @@ import {
   useIndexCredits,
   type IndexCreditRow,
 } from '../lib/index-raw';
-import { declaredKeys, keyDirectoryOf } from '../lib/key-identity';
+import { keyDirectoryOf, roleKeys } from '../lib/key-identity';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import {
@@ -148,6 +148,14 @@ interface IdentityClaimState {
   authKeys?: { id: string; publicKeyMultibase: string }[];
   assertKeys?: { id: string; publicKeyMultibase: string }[];
   controllerKeys?: { id: string; publicKeyMultibase: string }[];
+  /** Memberships the chain declares that no key proof admitted. Served beside
+   *  the effective arrays by the identity route; absent from a relay that
+   *  predates the member, which reads as "none" rather than as unknown. */
+  voidKeys?: {
+    key: { id: string; publicKeyMultibase: string };
+    role: string;
+    operationCID: string;
+  }[];
   services?: ServiceEntry[];
 }
 
@@ -536,11 +544,20 @@ export const Identity = (props: { did: string }) => {
 
   // The key set this page resolves op signers against — the VERIFIED document
   // ONLY. A relay-asserted key list is a claim, and a signer column reading a
-  // claim would print a public key nobody proved this identity ever declared.
-  // Until the fold lands the history shows each op's kid as it stands, which is
-  // the same two-beat honesty every other panel here runs.
+  // claim would print a public key this tab never folded. Until the fold lands
+  // the history shows each op's kid as it stands, which is the same two-beat
+  // honesty every other panel here runs.
+  //
+  // DECLARED state, not effective, and only here. Signer validity is
+  // declared-state-based on purpose (identity-chain.ts): an operation is validly
+  // signed by a controller key of the prior DECLARED state, whether or not a key
+  // proof ever admitted that key. So a chain can carry a valid operation signed
+  // by a key that is absent from effective state, and resolving this column
+  // against effective state alone would render that signer as a bare kid. This
+  // is display of WHO SIGNED, never a claim that the key holds a role — role
+  // membership is the keys panel below, which reads effective state.
   const keyDir = verified
-    ? keyDirectoryOf(props.did, declaredKeys(verified.value))
+    ? keyDirectoryOf(props.did, roleKeys(verified.value.declared ?? verified.value))
     : keyDirectoryOf('', []);
 
   // the chain half of an origin binding (ORIGIN-BINDING.md). The claim is only
@@ -1663,13 +1680,83 @@ const OriginBindingPanel = (props: {
 };
 
 /**
- * The identity's declared keys — LED BY THE KEY, not by the name this document
- * gave it. `key_1` is a slot on this one document: it is not the key, it does
- * not travel to any other chain, and a reader comparing this panel against
- * another identity's is comparing public keys or nothing. So the multibase leads
- * and the `key_xxx` id is metadata in the last column. Both link to the key's own
- * page — the reverse lookup "which identities has this key ever been declared
- * by", which is how a rotated-out key on another chain becomes findable at all.
+ * ONE VOID MEMBERSHIP, flattened out of whichever state shape the panel holds.
+ * `role` widens to `string` on purpose: the verified fold types it as the
+ * protocol's `KeyRole` and a relay's JSON is untrusted text, and this cell prints
+ * it either way rather than switching on a closed set it does not police.
+ */
+interface VoidRow {
+  key: string;
+  role: string;
+  cid: string;
+}
+
+/**
+ * DECLARED, NOT PROVED — the memberships this chain writes that no key proof
+ * admitted, and the one surface a controller can find them on.
+ *
+ * A key joins an identity in two steps: an operation names the key in a role, and
+ * the key itself signs a proof consenting to that exact introduction. Miss the
+ * second and the membership is VOID — the operation is still valid, the chain is
+ * still valid, and relays still serve both, but the membership is absent from
+ * effective key state. It resolves nowhere, it reaches no DID document, and it
+ * never enters the relay's key index.
+ *
+ * That failure is otherwise SILENT. A controller who added a key without its
+ * proof sees a chain that verifies everywhere and a key that works nowhere, with
+ * nothing anywhere telling them which. So this block is loud about existing and
+ * quiet about everything else: what is named, in which role, in which operation.
+ * No advice, no severity, no verdict — the facts are enough to act on.
+ */
+const VoidKeysNote = (props: { voids: readonly VoidRow[] }) => (
+  <div class="ck-note" style={{ marginTop: 12 }}>
+    <b>declared, not proved</b> — this chain names these key roles and carries no{' '}
+    <Term word="key proof" def={GLOSSARY['keyProved'] ?? ''} /> for them, so they are not part of
+    this identity's keys: they do not resolve, they do not appear in its DID document, and they sign
+    nothing for it. The operations that name them are valid and so is the chain — only the
+    memberships are absent. An operation that names the key again and carries its key proof puts the
+    membership into effect.
+    <table style={{ marginTop: 8 }}>
+      <thead>
+        <tr>
+          <th>public key</th>
+          <th>role</th>
+          <th>named in</th>
+        </tr>
+      </thead>
+      <tbody>
+        {props.voids.map((v) => (
+          <tr key={`${v.key}:${v.role}`}>
+            <td>
+              <KeyLink multibase={v.key} />
+            </td>
+            <td>
+              <span class="k-role">{v.role}</span>
+            </td>
+            <td>
+              <OpLink cid={v.cid} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+/**
+ * The identity's keys — LED BY THE KEY, not by the name this document gave it.
+ * `key_1` is a slot on this one document: it is not the key, it does not travel
+ * to any other chain, and a reader comparing this panel against another
+ * identity's is comparing public keys or nothing. So the multibase leads and the
+ * `key_xxx` id is metadata in the last column. Both link to the key's own page —
+ * the reverse lookup "which identities has this key ever been proved into",
+ * which is how a rotated-out key on another chain becomes findable at all.
+ *
+ * THE TABLE IS EFFECTIVE STATE. The three role arrays hold the memberships a key
+ * proof admitted, which is what every consumer of this identity acts on. What the
+ * chain additionally DECLARES without a proof is void, and lands in the block
+ * below rather than in this table — mixing the two would put a key that works
+ * beside a key that does not under one heading.
  */
 const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verified: boolean }) => {
   const byId = new Map<string, { publicKeyMultibase: string; roles: string[] }>();
@@ -1688,6 +1775,20 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
   add(props.state.controllerKeys, 'controller');
   const rows = [...byId.entries()];
   const page = useClientPager(rows);
+  // The void half. Widened to a plain shape so the verified fold's
+  // VoidKeyMembership[] and a relay's JSON reach the same renderer; an absent
+  // member (an older relay, a cached state predating it) flattens to none, which
+  // under-reports and never invents a void membership.
+  const declaredNotProved: readonly {
+    key: { publicKeyMultibase: string };
+    role: string;
+    operationCID: string;
+  }[] = ('voidKeys' in props.state ? props.state.voidKeys : undefined) ?? [];
+  const voids: VoidRow[] = declaredNotProved.map((v) => ({
+    key: v.key.publicKeyMultibase,
+    role: v.role,
+    cid: v.operationCID,
+  }));
   return (
     <Panel
       title="keys"
@@ -1734,6 +1835,7 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
           <ClientPager page={page} noun="keys" />
         </>
       )}
+      {voids.length > 0 ? <VoidKeysNote voids={voids} /> : null}
     </Panel>
   );
 };

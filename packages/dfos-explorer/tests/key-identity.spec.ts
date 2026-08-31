@@ -15,10 +15,10 @@
 import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
 import { describe, expect, it } from 'vitest';
 import {
-  declaredKeys,
   EMPTY_KEY_DIRECTORY,
   keyDirectoryOf,
   resolveKidPubkey,
+  roleKeys,
   shortPubkey,
   splitKid,
   type KeyDeclaration,
@@ -64,9 +64,9 @@ describe('shortPubkey', () => {
 // the declaration list
 // -----------------------------------------------------------------------------
 
-describe('declaredKeys', () => {
+describe('roleKeys', () => {
   it('flattens the three arrays in panel order', () => {
-    const keys = declaredKeys({
+    const keys = roleKeys({
       authKeys: [{ id: 'key_1', publicKeyMultibase: A }],
       assertKeys: [{ id: 'key_2', publicKeyMultibase: B }],
       controllerKeys: [{ id: 'key_3', publicKeyMultibase: mk(3) }],
@@ -75,7 +75,7 @@ describe('declaredKeys', () => {
   });
 
   it('is total over a document declaring nothing', () => {
-    expect(declaredKeys({})).toEqual([]);
+    expect(roleKeys({})).toEqual([]);
   });
 });
 

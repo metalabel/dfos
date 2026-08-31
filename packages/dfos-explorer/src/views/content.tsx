@@ -42,9 +42,9 @@ import { isIndexDocument } from '../lib/index-fold';
 import { indexCredSource, useIndexCapable } from '../lib/index-light';
 import { projectedTitle, useIndexContentRow } from '../lib/index-point';
 import {
-  declaredKeys,
   EMPTY_KEY_DIRECTORY,
   keyDirectoryOf,
+  roleKeys,
   type KeyDirectory,
 } from '../lib/key-identity';
 import { parseMediaObject } from '../lib/media';
@@ -97,8 +97,8 @@ export const Content = (props: { id: string }) => {
   const [resolved, setResolved] = useState<Resolved<ResolvedContent> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [doc, setDoc] = useState<DocState | null>(null);
-  // the CREATOR's declared keys — the one identity document this page ever holds,
-  // and therefore the only kid it can resolve to a public key. An op signed by a
+  // the CREATOR's key set — the one identity document this page ever holds, and
+  // therefore the only kid it can resolve to a public key. An op signed by a
   // delegated key from some other chain keeps its kid in the history table, which
   // is the true statement about what was read (lib/key-identity.ts).
   const [creatorKeys, setCreatorKeys] = useState<KeyDirectory>(EMPTY_KEY_DIRECTORY);
@@ -186,13 +186,16 @@ export const Content = (props: { id: string }) => {
             .catch(() => {
               // best-effort prefetch — the creator link still resolves on click
             });
-          // …and fold the creator's chain for its DECLARED KEYS, so the operation
-          // history can name the key that signed each op. The key set comes from
-          // the VERIFIED identity, never a relay's assertion of one.
+          // …and fold the creator's chain for its EFFECTIVE KEY SET, so the
+          // operation history can name the key that signed each op. The key set
+          // comes from the VERIFIED identity, never a relay's assertion of one.
+          // Effective, not declared: a content op is signed by an assert key of
+          // another chain, and a key that chain named without a key proof holds
+          // no role and speaks for nobody — such a kid stays a kid.
           void client
             .identity(creator)
             .then((idRes) => {
-              if (!dead) setCreatorKeys(keyDirectoryOf(creator, declaredKeys(idRes.value)));
+              if (!dead) setCreatorKeys(keyDirectoryOf(creator, roleKeys(idRes.value)));
             })
             .catch(() => {
               // the creator's chain did not resolve here — every op keeps its kid

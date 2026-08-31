@@ -158,7 +158,7 @@ export const useIndexLog = (
  * verified signature resolved to this key at ingest. That is a PROOF-TIER axis
  * over every op kind — an identity-chain update, a content-chain op, a
  * countersignature, a credential — so it answers the question a key page is for,
- * which the identity index's has-ever-declared lookup cannot.
+ * which the identity index's has-ever-proved lookup cannot.
  *
  * Ordered `createdAt.desc`, not the route's `ingestedAt.desc` default: the table's
  * one timestamp column is the op's own author-claimed clock, and a column that

@@ -110,27 +110,25 @@ func TestContentUpdateAfterKeyRotation(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	// rotate auth key
-	newAuth := newKeypair()
+	// Rotate onto a fresh key in all three roles, carrying its possession
+	// envelope. The envelope is what makes the new key EFFECTIVE — without one it
+	// would be void, and the content update below would be signed by a key the
+	// chain declares and does not admit.
+	rotated := newKeypair()
 	ctrlKid := id.did + "#" + id.controller.keyID
-	rotateToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID,
-		[]dfos.MultikeyPublicKey{id.controller.mk},
-		[]dfos.MultikeyPublicKey{newAuth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{rotateToken}).Body.Close()
+	rotateToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]string{keyProof(t, rotated.priv, id.did, id.genCID)},
+		ctrlKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
-	// update content with new auth key — should succeed
+	// update content with the rotated-in auth key — should succeed
 	doc2 := map[string]any{"type": "post", "title": "after rotation"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	newKid := id.did + "#" + newAuth.keyID
-	updateToken, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, newKid, newAuth.priv)
+	newKid := id.did + "#" + rotated.keyID
+	updateToken, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, newKid, rotated.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,35 +157,31 @@ func TestControllerKeyRotation(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	// rotate controller key
+	// Rotate the CONTROLLER role only: the genesis key keeps auth, so the single
+	// introduction is newCtrl into controllerKeys — proved by an envelope whose
+	// roleSet names exactly that role, which is what roleSet is for.
 	newCtrl := newKeypair()
 	oldCtrlKid := id.did + "#" + id.controller.keyID
-	rotateToken, rotateCID, err := dfos.SignIdentityUpdate(
-		id.genCID,
+	rotateToken, rotateCID := signIdentityUpdateWithProofs(t, id.genCID,
 		[]dfos.MultikeyPublicKey{newCtrl.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		[]dfos.MultikeyPublicKey{},
-		oldCtrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{rotateToken}).Body.Close()
+		[]string{keyProof(t, newCtrl.priv, id.did, id.genCID, "controller")},
+		oldCtrlKid, id.controller.priv)
+	postOperationsAccepted(t, base, []string{rotateToken})
 
-	// try to update with old controller — should fail
+	// Try to update with the old controller — should fail. The operation is
+	// otherwise impeccable, envelope included, so signer validity is the only
+	// thing left to reject it for. The SAME envelope serves both attempts: it
+	// binds a did, a role set and a position, none of which differ between them.
 	newerAuth := newKeypair()
-	badToken, _, err := dfos.SignIdentityUpdate(
-		rotateCID,
+	newerAuthProof := keyProof(t, newerAuth.priv, id.did, rotateCID, "auth")
+	badToken, _ := signIdentityUpdateWithProofs(t, rotateCID,
 		[]dfos.MultikeyPublicKey{newCtrl.mk},
 		[]dfos.MultikeyPublicKey{newerAuth.mk},
 		[]dfos.MultikeyPublicKey{},
-		oldCtrlKid,
-		id.controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+		[]string{newerAuthProof},
+		oldCtrlKid, id.controller.priv)
 
 	res := postOperations(t, base, []string{badToken})
 	body := readBody(t, res)
@@ -203,17 +197,12 @@ func TestControllerKeyRotation(t *testing.T) {
 
 	// update with new controller — should succeed
 	newCtrlKid := id.did + "#" + newCtrl.keyID
-	goodToken, _, err := dfos.SignIdentityUpdate(
-		rotateCID,
+	goodToken, _ := signIdentityUpdateWithProofs(t, rotateCID,
 		[]dfos.MultikeyPublicKey{newCtrl.mk},
 		[]dfos.MultikeyPublicKey{newerAuth.mk},
 		[]dfos.MultikeyPublicKey{},
-		newCtrlKid,
-		newCtrl.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+		[]string{newerAuthProof},
+		newCtrlKid, newCtrl.priv)
 
 	res = postOperations(t, base, []string{goodToken})
 	if res.StatusCode != 200 {
@@ -436,51 +425,41 @@ func TestBlobMultiVersion(t *testing.T) {
 func TestBatchThreeStepIdentity(t *testing.T) {
 	base := relayURL(t)
 
-	ctrl := newKeypair()
-	auth1 := newKeypair()
+	key := newKeypair()
 
-	// genesis
+	// genesis — one key, all three roles
 	createToken, did, genCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth1.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// update1 chains off genesis
+	// update1 chains off genesis, adding a second auth key with its envelope. The
+	// genesis key keeps every role, so it signs update2 as well.
 	time.Sleep(2 * time.Millisecond)
 	auth2 := newKeypair()
-	kid := did + "#" + ctrl.keyID
-	update1Token, update1CID, err := dfos.SignIdentityUpdate(
-		genCID,
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth2.mk},
-		[]dfos.MultikeyPublicKey{},
-		kid,
-		ctrl.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	kid := did + "#" + key.keyID
+	update1Token, update1CID := signIdentityUpdateWithProofs(t, genCID,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk, auth2.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]string{keyProof(t, auth2.priv, did, genCID, "auth")},
+		kid, key.priv)
 
 	// update2 chains off update1
 	time.Sleep(2 * time.Millisecond)
 	auth3 := newKeypair()
-	update2Token, _, err := dfos.SignIdentityUpdate(
-		update1CID,
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth3.mk},
-		[]dfos.MultikeyPublicKey{},
-		kid,
-		ctrl.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	update2Token, _ := signIdentityUpdateWithProofs(t, update1CID,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk, auth3.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]string{keyProof(t, auth3.priv, did, update1CID, "auth")},
+		kid, key.priv)
 
 	// submit in REVERSE order — relay must sort by dependency
 	res := postOperations(t, base, []string{update2Token, update1Token, createToken})
@@ -515,14 +494,13 @@ func TestBatchContentIdentitySort(t *testing.T) {
 	base := relayURL(t)
 
 	// prepare identity (don't submit yet)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	idToken, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -531,8 +509,8 @@ func TestBatchContentIdentitySort(t *testing.T) {
 	// sign content for this identity
 	doc := map[string]any{"type": "post", "title": "batch test"}
 	docCID, _, _ := dfos.DocumentCID(doc)
-	kid := did + "#" + auth.keyID
-	contentToken, _, _, err := dfos.SignContentCreate(did, docCID, kid, auth.priv)
+	kid := did + "#" + key.keyID
+	contentToken, _, _, err := dfos.SignContentCreate(did, docCID, kid, key.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,14 +554,13 @@ func TestBatchLarge(t *testing.T) {
 	var tokens []string
 	var dids []string
 	for i := 0; i < 10; i++ {
-		ctrl := newKeypair()
-		auth := newKeypair()
+		key := newKeypair()
 		token, did, _, err := dfos.SignIdentityCreate(
-			[]dfos.MultikeyPublicKey{ctrl.mk},
-			[]dfos.MultikeyPublicKey{auth.mk},
-			[]dfos.MultikeyPublicKey{},
-			ctrl.keyID,
-			ctrl.priv,
+			[]dfos.MultikeyPublicKey{key.mk},
+			[]dfos.MultikeyPublicKey{key.mk},
+			[]dfos.MultikeyPublicKey{key.mk},
+			key.keyID,
+			key.priv,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -626,14 +603,13 @@ func TestBatchLarge(t *testing.T) {
 func TestBatchDuplicateOperations(t *testing.T) {
 	base := relayURL(t)
 
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	token, did, _, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatal(err)

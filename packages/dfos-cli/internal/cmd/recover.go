@@ -9,7 +9,7 @@ package cmd
 //	  i = 0, 1, 2, … . This is pure local arithmetic and it can go on forever, so
 //	  something has to say when to stop.
 //	Stage 2 — ASK. For each derived PUBLIC key, ask a relay's identity index
-//	  which identities have ever declared it. That answer is what makes an index
+//	  which identities have ever PROVED it. That answer is what makes an index
 //	  "used" or "unused", and a run of unused indices is what stops the scan.
 //
 // The predicate "index i is unused" is NOT locally decidable. A key exists the
@@ -74,8 +74,8 @@ const indexKeyProbeSeed = "dfos-cli:index-key-filter-probe:v1"
 // something it might one day reject, and nobody holds the private key because
 // there is none — the bytes are a published hash.
 //
-// It exists for one query, made once per run before the scan: ask for a key
-// nothing ever declared and see whether rows come back. Rows mean the relay
+// It exists for one query, made once per run before the scan: ask for a key no
+// chain has ever proved and see whether rows come back. Rows mean the relay
 // ignored `key=` entirely, which is the failure mode with no status code to
 // catch (WEB-RELAY.md specifies `key=` as an opaque match with no format
 // validation, so there is no invalid value to provoke a 400 with).
@@ -104,7 +104,8 @@ type recoveredKey struct {
 	Reason  string `json:"reason,omitempty"`
 	// Superseded records that the chain no longer names this key in any current
 	// role. It is still real and still recovered: the index answers
-	// has-ever-declared precisely so a rotated-out key is findable.
+	// has-ever-proved precisely so a rotated-out key is findable — it was proved
+	// when it was introduced, and rotating it out does not unprove it.
 	Superseded bool `json:"superseded,omitempty"`
 	// BeyondScan marks a key the derivation scan never reached. The oracle was
 	// never asked about this index; a chain this run FETCHED named the public
@@ -191,7 +192,7 @@ func newRecoverCmd() *cobra.Command {
 		Short:   "Rebuild the identities and keys a vault's recovery phrase controls",
 		GroupID: "identity",
 		Long: "Rederive a vault's keys from its seed and ask a relay's identity index which of them any " +
-			"identity has ever declared, then pull those identities' chains into the local relay and put " +
+			"identity has ever proved, then pull those identities' chains into the local relay and put " +
 			"the matching private keys back in the keystore.\n\n" +
 			"The scan walks m/1684434803'/<index>' from 0 and stops after --scan-depth consecutive " +
 			"UNUSED indices. Used and unused are one relay's answers, and that relay is named in the " +
@@ -326,7 +327,7 @@ func errNoVaultToRecover() error {
 // --- the oracle ---
 
 // proveOracle establishes, before any scan, that this relay can actually answer
-// "has any identity ever declared this key". Three ways it cannot, all loud:
+// "has any identity ever proved this key". Three ways it cannot, all loud:
 //
 //	501            — it does not serve the index family at all.
 //	any other error — it is unreachable, or answered something unreadable.
@@ -970,7 +971,7 @@ type chainFacts struct {
 	deleted bool
 	// keyIDByPublic maps a public multikey to the key id an accepted operation
 	// declared it under. Built from the whole log, not just current state,
-	// because the index's `key=` is has-ever-declared and the keys most worth
+	// because the index's `key=` is has-ever-proved and the keys most worth
 	// recovering are exactly the ones a rotation left behind.
 	keyIDByPublic map[string]string
 	currentRoles  map[string][]string
@@ -1020,8 +1021,10 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 		currentRoles:  map[string][]string{},
 	}
 	// Every accepted operation, not just the head. The index answers
-	// has-ever-declared, and a key a rotation left behind is exactly the one an
-	// operator recovering from a phrase is most likely to hold.
+	// has-ever-proved, and a key a rotation left behind is exactly the one an
+	// operator recovering from a phrase is most likely to hold — a rotation
+	// removes a key from current state, it does not retract the proof that
+	// admitted it, so the index still holds the row.
 	for _, token := range chain.Log {
 		payload, err := protocol.PayloadFromJWS(token)
 		if err != nil {
@@ -1215,7 +1218,8 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 	fmt.Printf("\nWhat this scan cannot see:\n")
 	if r.Scanned {
 		fmt.Printf("  - One relay answered. '%s' not knowing a key is that relay's answer, not the world's.\n", r.Oracle)
-		fmt.Printf("  - A derived key no identity operation ever declared is invisible to any index. It is\n")
+		fmt.Printf("  - A derived key no identity operation ever PROVED is invisible to any index — including one\n")
+		fmt.Printf("    some chain declared without a possession proof, which is void and indexes nowhere. It is\n")
 		fmt.Printf("    still derivable from the phrase; nothing can find it for you.\n")
 		// The gap limit is the only thing that ends the walk, so the lever that
 		// moves it belongs in the same breath as the limitation it causes.

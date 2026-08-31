@@ -16,15 +16,16 @@ const svcAnchor = "cv7n8vkvr64cctf3294h9k4eanhff8z" // 31-char content id
 func svcEntry(fields map[string]any) dfos.ServiceEntry { return fields }
 
 // ingestIdentityWithServices signs + ingests a genesis carrying services and
-// returns the controller/auth keys + did for follow-up updates.
+// returns the genesis key + did for follow-up updates. ctrl and auth are the
+// same key: a genesis declares exactly one, in all three roles.
 func ingestIdentityWithServices(t *testing.T, relay *Relay, services []dfos.ServiceEntry) (did, headCID string, ctrl, auth testKeypair) {
 	t.Helper()
 	ctrl = newTestKeypair()
-	auth = newTestKeypair()
+	auth = ctrl
 	token, did, opCID, err := dfos.SignIdentityCreateWithServices(
 		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		nil,
+		[]dfos.MultikeyPublicKey{ctrl.mk},
+		[]dfos.MultikeyPublicKey{ctrl.mk},
 		services,
 		ctrl.keyID,
 		ctrl.priv,
@@ -76,11 +77,13 @@ func TestRelayProjectsServices(t *testing.T) {
 
 	// full-state replace: an update with a new set drops the old entries.
 	updToken, updCID, err := dfos.SignIdentityUpdateWithServices(
+		genesisState(did, ctrl),
 		headCID,
 		[]dfos.MultikeyPublicKey{ctrl.mk},
 		[]dfos.MultikeyPublicKey{auth.mk},
 		nil,
 		[]dfos.ServiceEntry{svcEntry(map[string]any{"id": "relay2", "type": "DfosRelay", "endpoint": "https://r2.example.com"})},
+		nil, // only the services set moves; introduces nothing
 		did+"#"+ctrl.keyID,
 		ctrl.priv,
 	)
@@ -97,11 +100,13 @@ func TestRelayProjectsServices(t *testing.T) {
 
 	// service-less update clears the set entirely.
 	clrToken, _, err := dfos.SignIdentityUpdateWithServices(
+		genesisState(did, ctrl),
 		updCID,
 		[]dfos.MultikeyPublicKey{ctrl.mk},
 		[]dfos.MultikeyPublicKey{auth.mk},
 		nil,
 		nil,
+		nil, // only the services set moves; introduces nothing
 		did+"#"+ctrl.keyID,
 		ctrl.priv,
 	)
@@ -124,12 +129,11 @@ func TestRelayRejectsInvalidServiceEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctrl := newTestKeypair()
-	auth := newTestKeypair()
 	// ContentAnchor missing the required non-empty label.
 	token, _, _, err := dfos.SignIdentityCreateWithServices(
 		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		nil,
+		[]dfos.MultikeyPublicKey{ctrl.mk},
+		[]dfos.MultikeyPublicKey{ctrl.mk},
 		[]dfos.ServiceEntry{svcEntry(map[string]any{"id": "x", "type": "ContentAnchor", "anchor": svcAnchor})},
 		ctrl.keyID,
 		ctrl.priv,

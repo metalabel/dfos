@@ -614,7 +614,7 @@ type Store interface {
 	// QueryIndexIdentities pages identity projection rows ascending by DID,
 	// did > After, length <= Limit. HasPublicProfile (≡ profile != nil &&
 	// profile.publicRead) filters to identities exposing a public profile; DID is
-	// an exact point lookup; Key keeps identities that have EVER declared that
+	// an exact point lookup; Key keeps identities that have EVER PROVED that
 	// public key (see PutIndexIdentityKey).
 	QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error)
 	// QueryIndexContent pages content projection rows ascending by contentId,
@@ -645,12 +645,15 @@ type Store interface {
 	// PutIndexContentSigner adds one accepted content-operation signer to a
 	// chain's signer set. The set is branch-inclusive and includes genesis.
 	PutIndexContentSigner(contentID string, did string) error
-	// PutIndexIdentityKey adds one public key an accepted identity operation
-	// DECLARED to the identity's has-ever-declared key set — the reverse index
-	// behind `key=`. Rows are (publicKey, did, keyID) and are never removed: an
-	// update replaces the chain's key arrays, so has-ever-declared can only be
-	// captured at each op, never diffed from head state. publicKey is the
-	// multibase string verbatim, matched as opaque bytes.
+	// PutIndexIdentityKey adds one public key a POSSESSION PROOF admitted into an
+	// identity chain to that identity's has-ever-proved key set — the reverse
+	// index behind `key=`, and the one-key-one-DID oracle a holder consults before
+	// signing a key proof. Rows are (publicKey, did, keyID) and are never removed:
+	// an update replaces the chain's key arrays, so has-ever-proved has to be
+	// captured per op rather than diffed from head state. A key a chain merely
+	// DECLARED never lands here — see putIndexIdentityProvedKeys for why indexing
+	// declarations would let a stranger burn a key they do not hold. publicKey is
+	// the multibase string verbatim, matched as opaque bytes.
 	PutIndexIdentityKey(did string, keyID string, publicKey string) error
 	// PutIndexCountersignatureRow upserts a countersignature projection row by
 	// cid. The WitnessDID column is stored (never echoed in the wire row) so
@@ -674,7 +677,7 @@ type Store interface {
 // IndexIdentityQuery is the keyset-paged filter for identity projection rows.
 type IndexIdentityQuery struct {
 	DID              string // "" = no filter
-	Key              string // "" = no filter; opaque multibase public key, has-ever-declared
+	Key              string // "" = no filter; opaque multibase public key, has-ever-proved
 	HasPublicProfile *bool  // nil = no filter
 	NameContains     string // "" = no filter
 	After            string

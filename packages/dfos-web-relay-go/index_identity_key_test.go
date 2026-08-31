@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -33,21 +34,42 @@ func keyQuery(publicKey string) string {
 	return "key=" + url.QueryEscape(publicKey)
 }
 
-// createTestIdentityWithKeys mints an identity declaring the exact key set given,
-// signed by the first controller key.
-func createTestIdentityWithKeys(t *testing.T, controller testKeypair, auth, assert []dfos.MultikeyPublicKey) (token string, did string, opCID string) {
+// ingestProvedIdentityWithKeys mints a single-key genesis and then PROVES the
+// given keys into their roles with one update, returning the identity.
+//
+// Two operations, not one, and that is the protocol rather than an inconvenience
+// of the fixture: a genesis declares exactly one key — its own signature is the
+// only possession proof available to it — and every further key-role membership
+// is admitted by an embedded envelope and by nothing else. A chain whose extra
+// keys arrive any other way holds VOID memberships, which is a different fixture
+// meaning a different thing.
+func ingestProvedIdentityWithKeys(t *testing.T, r *Relay, auth, assert []testKeypair) testIdentity {
 	t.Helper()
-	token, did, opCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{controller.mk},
-		auth,
-		assert,
-		controller.keyID,
-		controller.priv,
-	)
-	if err != nil {
-		t.Fatal(err)
+	id := createTestIdentity(t)
+	if res := r.Ingest([]string{id.token}); res[0].Status != "new" {
+		t.Fatalf("ingest genesis: %+v", res[0])
 	}
-	return token, did, opCID
+
+	authKeys := []dfos.MultikeyPublicKey{id.auth.mk}
+	assertKeys := []dfos.MultikeyPublicKey{id.auth.mk}
+	proofs := []string{}
+	for _, k := range auth {
+		authKeys = append(authKeys, k.mk)
+		proofs = append(proofs, testKeyProof(t, k.priv, id.did, id.opCID, "auth"))
+	}
+	for _, k := range assert {
+		assertKeys = append(assertKeys, k.mk)
+		proofs = append(proofs, testKeyProof(t, k.priv, id.did, id.opCID, "assert"))
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	token, _ := signIdentityUpdateWithKeyProofs(t, id.opCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk}, authKeys, assertKeys,
+		proofs, id.did+"#"+id.controller.keyID, id.controller.priv)
+	if res := r.Ingest([]string{token}); res[0].Status != "new" {
+		t.Fatalf("ingest proved key introduction: %+v", res[0])
+	}
+	return id
 }
 
 // All three key classes land in the reverse index. There is no key-class column
@@ -55,30 +77,46 @@ func createTestIdentityWithKeys(t *testing.T, controller testKeypair, auth, asse
 // controller, auth, or assert key each matches its identity the same way.
 func TestIndexIdentityKeyMatchesEveryKeyClass(t *testing.T) {
 	r, _ := indexRelay(t)
-	controller := newTestKeypair()
 	auth := newTestKeypair()
 	assert := newTestKeypair()
-	token, did, _ := createTestIdentityWithKeys(t, controller,
-		[]dfos.MultikeyPublicKey{auth.mk}, []dfos.MultikeyPublicKey{assert.mk})
-	if res := r.Ingest([]string{token}); res[0].Status != "new" {
-		t.Fatalf("ingest genesis: %+v", res[0])
-	}
+	id := ingestProvedIdentityWithKeys(t, r, []testKeypair{auth}, []testKeypair{assert})
 
 	for label, key := range map[string]dfos.MultikeyPublicKey{
-		"controllerKeys": controller.mk,
+		"controllerKeys": id.controller.mk,
 		"authKeys":       auth.mk,
 		"assertKeys":     assert.mk,
 	} {
 		got := identityDIDsMatching(t, r, keyQuery(key.PublicKeyMultibase))
-		if len(got) != 1 || got[0] != did {
-			t.Fatalf("key= on %s matched %v, want [%s]", label, got, did)
+		if len(got) != 1 || got[0] != id.did {
+			t.Fatalf("key= on %s matched %v, want [%s]", label, got, id.did)
 		}
 	}
 }
 
-// The filter is has-ever-declared, not current-state: a key a later update
-// rotated out still matches. This is the case the filter exists for — a holder
-// recovering from a restored key holds exactly the keys that were rotated away.
+// A key some chain merely DECLARED never enters the index. This is the burn the
+// index must not permit: anyone can write anyone's public key into their own
+// chain, so if `key=` indexed declarations a stranger could poison the
+// one-key-one-DID oracle against a key they do not hold, and every future
+// ceremony for the true holder would refuse.
+func TestIndexIdentityKeyIgnoresAnUnprovedDeclaration(t *testing.T) {
+	r, _ := indexRelay(t)
+	id := ingestIdentity(t, r)
+	stranger := newTestKeypair()
+	introduceKeyWithoutProof(t, r, id, stranger.mk)
+
+	if got := identityDIDsMatching(t, r, keyQuery(stranger.mk.PublicKeyMultibase)); len(got) != 0 {
+		t.Fatalf("an unproved declaration indexed: key= matched %v, want none", got)
+	}
+	// The chain's own proved key is indexed, so the empty result above is the
+	// possession rule and not a broken fixture.
+	if got := identityDIDsMatching(t, r, keyQuery(id.auth.mk.PublicKeyMultibase)); len(got) != 1 || got[0] != id.did {
+		t.Fatalf("key= on the proved genesis key matched %v, want [%s]", got, id.did)
+	}
+}
+
+// The filter is has-ever-PROVED, not current-state: a key a later update rotated
+// out still matches. This is the case the filter exists for — a holder recovering
+// from a restored key holds exactly the keys that were rotated away.
 func TestIndexIdentityKeyMatchesRotatedOutKey(t *testing.T) {
 	r, _ := indexRelay(t)
 	id := ingestIdentity(t, r)
@@ -104,24 +142,24 @@ func TestIndexIdentityKeyMatchesRotatedOutKey(t *testing.T) {
 	}
 }
 
-// One key may match many identities: the reverse index is (key → identities),
-// so a key declared by two chains pages back both rows.
+// One key may match many identities: the reverse index is (key → identities), so
+// a key PROVED into two chains pages back both rows.
+//
+// This is the linkage the one-key-one-DID holder rule exists to prevent, and the
+// index has to show it rather than hide it — the holder consults this oracle
+// precisely to avoid becoming this row pair, and a holder who signed twice
+// anyway is entitled to see that they did.
 func TestIndexIdentityKeyMatchesManyIdentities(t *testing.T) {
 	r, _ := indexRelay(t)
 	shared := newTestKeypair()
 
-	first, firstDID, _ := createTestIdentityWithKeys(t, newTestKeypair(), []dfos.MultikeyPublicKey{shared.mk}, nil)
-	second, secondDID, _ := createTestIdentityWithKeys(t, newTestKeypair(), []dfos.MultikeyPublicKey{shared.mk}, nil)
-	if firstDID == secondDID {
-		t.Fatal("expected two distinct identities declaring the same key")
-	}
-	for _, token := range []string{first, second} {
-		if res := r.Ingest([]string{token}); res[0].Status != "new" {
-			t.Fatalf("ingest: %+v", res[0])
-		}
+	first := ingestProvedIdentityWithKeys(t, r, []testKeypair{shared}, nil)
+	second := ingestProvedIdentityWithKeys(t, r, []testKeypair{shared}, nil)
+	if first.did == second.did {
+		t.Fatal("expected two distinct identities proving the same key")
 	}
 
-	want := []string{firstDID, secondDID}
+	want := []string{first.did, second.did}
 	sort.Strings(want)
 	got := identityDIDsMatching(t, r, keyQuery(shared.mk.PublicKeyMultibase))
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {

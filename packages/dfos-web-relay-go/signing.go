@@ -69,15 +69,13 @@ func verifySigningBundle(tokens []string) (map[string]bundledSigningIdentity, er
 	return verified, nil
 }
 
+// keyFromState resolves a key ID against an identity's CURRENT EFFECTIVE state —
+// the three head arrays, which now hold only memberships a possession proof
+// admitted. A declared-but-void key is absent from them and therefore never
+// authenticates, which is exactly what this function's callers want.
 func keyFromState(state dfos.IdentityState, keyID string) (ed25519.PublicKey, error) {
-	keys := make([]dfos.MultikeyPublicKey, 0, len(state.AuthKeys)+len(state.AssertKeys)+len(state.ControllerKeys))
-	keys = append(keys, state.AuthKeys...)
-	keys = append(keys, state.AssertKeys...)
-	keys = append(keys, state.ControllerKeys...)
-	for _, key := range keys {
-		if key.ID == keyID {
-			return dfos.DecodeMultikey(key.PublicKeyMultibase)
-		}
+	if key, ok := findKeyInKeyState(effectiveKeyState(state), keyID); ok {
+		return dfos.DecodeMultikey(key.PublicKeyMultibase)
 	}
 	return nil, fmt.Errorf("unknown key %s", keyID)
 }
@@ -91,22 +89,14 @@ func signingBundleKey(identity bundledSigningIdentity, kid string, historical bo
 	if key, err := keyFromState(identity.state, keyID); err == nil {
 		return key, nil
 	}
+	// Historical resolution is HAS-EVER-PROVED, matching CreateKeyResolver on the
+	// local path: a rotated-out key that possession once admitted still verifies
+	// what it signed, while a key the bundle's chain merely declared never does.
+	// The bundle's state came from dfos.VerifyIdentityChain, so ProvedKeys is the
+	// walk's own union and no log scan is needed.
 	if historical {
-		for _, token := range identity.log {
-			_, payload, err := dfos.DecodeJWSUnsafe(token)
-			if err != nil {
-				continue
-			}
-			for _, role := range []string{"authKeys", "assertKeys", "controllerKeys"} {
-				entries, _ := payload[role].([]any)
-				for _, raw := range entries {
-					entry, _ := raw.(map[string]any)
-					if id, _ := entry["id"].(string); id == keyID {
-						multibase, _ := entry["publicKeyMultibase"].(string)
-						return dfos.DecodeMultikey(multibase)
-					}
-				}
-			}
+		if key, ok := findKeyInKeyState(provedKeyState(identity.state), keyID); ok {
+			return dfos.DecodeMultikey(key.PublicKeyMultibase)
 		}
 	}
 	return nil, fmt.Errorf("unknown key %s", keyID)

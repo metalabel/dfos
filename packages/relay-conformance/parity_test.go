@@ -72,6 +72,12 @@ type parityFixture struct {
 	QueryRotationDID            string `json:"queryRotationDid"`
 	QueryRotatedOutKeyMultibase string `json:"queryRotatedOutKeyMultibase"`
 	QueryRotationKeyMultibase   string `json:"queryRotationKeyMultibase"`
+	// User F: one identity that DECLARES a second key with no possession
+	// envelope. Its identity state is the only one in the fixture with a
+	// non-empty voidKeys and a `declared` that differs from the effective arrays.
+	QueryVoidDID          string `json:"queryVoidDid"`
+	QueryVoidKeyMultibase string `json:"queryVoidKeyMultibase"`
+	QueryProvedDID        string `json:"queryProvedDid"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {
@@ -387,10 +393,24 @@ func TestDualRelayParity(t *testing.T) {
 	creditsDIDRoute := "/index/v0/credits?did=" + url.QueryEscape(fix.QueryRevocationIssuerDID) + "&limit=1000"
 	// `key=` on identities is the sibling of `signerKey=` on operations — the
 	// other key-addressed, byte-for-byte, opaque filter. The rotated-out variant
-	// is the has-ever-declared property: the key is gone from head state and the
-	// row must still come back, identically on both twins.
+	// is the has-ever-PROVED property: the key is gone from head state and the row
+	// must still come back, identically on both twins. The void variant is the
+	// other half — a key some chain merely DECLARED must come back on NEITHER, or
+	// the two twins disagree about the one-key-one-DID oracle that decides whether
+	// a holder may sign a key proof at all.
 	identityKeyRoute := "/index/v0/identities?key=" + url.QueryEscape(fix.QueryAuthKeyMultibase) + "&limit=1000"
 	identityRotatedKeyRoute := "/index/v0/identities?key=" + url.QueryEscape(fix.QueryRotatedOutKeyMultibase) + "&limit=1000"
+	identityVoidKeyRoute := "/index/v0/identities?key=" + url.QueryEscape(fix.QueryVoidKeyMultibase) + "&limit=1000"
+
+	// The identity route serves the protocol library's IdentityState verbatim on
+	// both twins, which since possession proofs means the three EFFECTIVE key
+	// arrays plus `declared`, `voidKeys` and `provedKeys`. Comparing the whole
+	// body is how those three members are held to parity without either twin
+	// restating the member list — and the void chain is what gives them something
+	// to disagree about.
+	provedIdentityRoute := "/proof/v1/identities/" + fix.QueryProvedDID
+	voidIdentityRoute := "/proof/v1/identities/" + fix.QueryVoidDID
+	rotatedIdentityRoute := "/proof/v1/identities/" + fix.QueryRotationDID
 
 	routes := []string{
 		"/proof/v1/log?limit=1000",
@@ -411,7 +431,11 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/credentials?resource=chain:*&limit=1000",
 		identityKeyRoute,
 		identityRotatedKeyRoute,
-		// OPAQUE: a value no operation ever declared matches nothing on both
+		identityVoidKeyRoute,
+		provedIdentityRoute,
+		voidIdentityRoute,
+		rotatedIdentityRoute,
+		// OPAQUE: a value no operation ever proved matches nothing on both
 		// twins — 200 with an empty page, never a 400.
 		"/index/v0/identities?key=" + url.QueryEscape("not-a-multibase-key !") + "&limit=1000",
 	}
@@ -453,10 +477,13 @@ func TestDualRelayParity(t *testing.T) {
 		publicReadRoute:     fix.QueryContentID,
 		creditsRoute:        fix.QueryRevocationIssuerDID,
 		creditsDIDRoute:     fix.QueryContentID,
-		// A's declared key resolves back to A; E's ROTATED-OUT key still resolves
-		// to E, which is the has-ever-declared contract rather than head state.
+		// A's proved key resolves back to A; E's ROTATED-OUT key still resolves to
+		// E, which is the has-ever-proved contract rather than head state.
 		identityKeyRoute:        fix.QueryDID,
 		identityRotatedKeyRoute: fix.QueryRotationDID,
+		// F's identity route must actually CARRY the void membership, or the
+		// byte-comparison above would be two twins agreeing on an empty list.
+		voidIdentityRoute: fix.QueryVoidKeyMultibase,
 	}
 
 	for routeIndex, route := range routes {
@@ -538,6 +565,149 @@ func TestDualRelayParity(t *testing.T) {
 	// operations (a relay-local receipt stamp can never byte-match) and strictly
 	// for identities.
 	// ---------------------------------------------------------------------
+	// ---------------------------------------------------------------------
+	// POSSESSION PARITY — the identity route's `voidKeys`, `declared` and
+	// `provedKeys`.
+	//
+	// The byte comparison in the route loop above already holds these three to
+	// parity, but only weakly: two twins that both dropped every one of them, or
+	// both served them empty, would compare equal and pass. This subtest reads the
+	// bodies and asserts the members are PRESENT and SAY THE RIGHT THING on each
+	// twin, so the parity gate cannot be satisfied by symmetric absence.
+	// ---------------------------------------------------------------------
+	t.Run("possession state", func(t *testing.T) {
+		if fix.QueryVoidDID == "" || fix.QueryVoidKeyMultibase == "" {
+			t.Fatal("fixture is missing the void-chain fields — regenerate it with parity/genfixture")
+		}
+		type keyEntry struct {
+			ID                 string `json:"id"`
+			PublicKeyMultibase string `json:"publicKeyMultibase"`
+		}
+		type roleArrays struct {
+			AuthKeys       []keyEntry `json:"authKeys"`
+			AssertKeys     []keyEntry `json:"assertKeys"`
+			ControllerKeys []keyEntry `json:"controllerKeys"`
+		}
+		type servedState struct {
+			State struct {
+				roleArrays
+				Declared roleArrays `json:"declared"`
+				VoidKeys []struct {
+					Key          keyEntry `json:"key"`
+					Role         string   `json:"role"`
+					OperationCID string   `json:"operationCID"`
+				} `json:"voidKeys"`
+				ProvedKeys roleArrays `json:"provedKeys"`
+			} `json:"state"`
+		}
+		read := func(t *testing.T, base, route string) servedState {
+			t.Helper()
+			status, body := getBody(t, base+route)
+			if status != 200 {
+				t.Fatalf("GET %s%s: status %d (%s)", base, route, status, body)
+			}
+			var out servedState
+			if err := json.Unmarshal(body, &out); err != nil {
+				t.Fatalf("parse %s%s: %v (body: %s)", base, route, err, body)
+			}
+			return out
+		}
+		hasKey := func(keys []keyEntry, multibase string) bool {
+			for _, k := range keys {
+				if k.PublicKeyMultibase == multibase {
+					return true
+				}
+			}
+			return false
+		}
+
+		for name, base := range map[string]string{"TS": tsURL, "Go": goURL} {
+			// THE VOID CHAIN. The declared key is in `declared` and in NONE of the
+			// effective arrays; every role it was declared into is on voidKeys; and
+			// provedKeys never saw it.
+			s := read(t, base, voidIdentityRoute).State
+			if !hasKey(s.Declared.AuthKeys, fix.QueryVoidKeyMultibase) {
+				t.Fatalf("%s: declared.authKeys does not carry the declared key — void is a resolution verdict, not a rewrite of the operation", name)
+			}
+			for member, keys := range map[string][]keyEntry{
+				"authKeys": s.AuthKeys, "assertKeys": s.AssertKeys, "controllerKeys": s.ControllerKeys,
+			} {
+				if hasKey(keys, fix.QueryVoidKeyMultibase) {
+					t.Fatalf("%s: %s carries the unproved key — the three key arrays are EFFECTIVE state", name, member)
+				}
+			}
+			roles := map[string]bool{}
+			for _, v := range s.VoidKeys {
+				if v.Key.PublicKeyMultibase == fix.QueryVoidKeyMultibase {
+					roles[v.Role] = true
+					if v.OperationCID == "" {
+						t.Fatalf("%s: voidKeys entry has no operationCID — a controller cannot find the operation to fix without it", name)
+					}
+				}
+			}
+			for _, role := range []string{"auth", "assert", "controller"} {
+				if !roles[role] {
+					t.Fatalf("%s: voidKeys does not name the %s membership (got %v) — void is computed PER ROLE", name, role, s.VoidKeys)
+				}
+			}
+			for member, keys := range map[string][]keyEntry{
+				"authKeys": s.ProvedKeys.AuthKeys, "assertKeys": s.ProvedKeys.AssertKeys, "controllerKeys": s.ProvedKeys.ControllerKeys,
+			} {
+				if hasKey(keys, fix.QueryVoidKeyMultibase) {
+					t.Fatalf("%s: provedKeys.%s carries a key no envelope ever admitted", name, member)
+				}
+			}
+
+			// A FULLY-PROVED CHAIN. voidKeys is present and EMPTY — serialized, never
+			// omitted, or the two twins would answer the same identity with different
+			// JSON — and declared, effective and proved all agree.
+			p := read(t, base, provedIdentityRoute).State
+			if len(p.VoidKeys) != 0 {
+				t.Fatalf("%s: a fully-proved chain reports voidKeys %v, want an empty list", name, p.VoidKeys)
+			}
+			if !hasKey(p.ProvedKeys.AuthKeys, fix.QueryAuthKeyMultibase) {
+				t.Fatalf("%s: provedKeys.authKeys is missing the genesis key, which its own signature proved", name)
+			}
+			if !hasKey(p.Declared.AuthKeys, fix.QueryAuthKeyMultibase) || !hasKey(p.AuthKeys, fix.QueryAuthKeyMultibase) {
+				t.Fatalf("%s: a fully-proved chain's declared and effective auth keys disagree", name)
+			}
+
+			// THE ROTATION CHAIN. provedKeys is HAS-EVER-PROVED: it keeps the
+			// rotated-out key that head state no longer carries.
+			r := read(t, base, rotatedIdentityRoute).State
+			if hasKey(r.AuthKeys, fix.QueryRotatedOutKeyMultibase) {
+				t.Fatalf("%s: the rotated-out key is still in effective authKeys", name)
+			}
+			if !hasKey(r.ProvedKeys.AuthKeys, fix.QueryRotatedOutKeyMultibase) {
+				t.Fatalf("%s: provedKeys dropped the rotated-out key — possession does not become untrue when a key is removed", name)
+			}
+			if !hasKey(r.ProvedKeys.AuthKeys, fix.QueryRotationKeyMultibase) {
+				t.Fatalf("%s: provedKeys is missing the rotated-IN key, whose envelope the update carried", name)
+			}
+		}
+
+		// The void key resolves through NEITHER twin's `key=` filter — the byte
+		// comparison in the route loop pins that they agree; this pins what they
+		// agree ON, which is the burn defense.
+		for name, base := range map[string]string{"TS": tsURL, "Go": goURL} {
+			status, body := getBody(t, base+identityVoidKeyRoute)
+			if status != 200 {
+				t.Fatalf("%s: GET %s: status %d", name, identityVoidKeyRoute, status)
+			}
+			var rows struct {
+				Identities []struct {
+					DID string `json:"did"`
+				} `json:"identities"`
+			}
+			if err := json.Unmarshal(body, &rows); err != nil {
+				t.Fatalf("%s: parse %s: %v", name, identityVoidKeyRoute, err)
+			}
+			if len(rows.Identities) != 0 {
+				t.Fatalf("%s: key=<declared-but-never-proved> returned %v, want an empty page — indexing a declaration would let a stranger burn a key by writing it down", name, rows.Identities)
+			}
+		}
+	})
+
 	t.Run("key-addressed filters", func(t *testing.T) {
 		authKey := fix.QueryAuthKeyMultibase
 		witnessKey := fix.QueryWitnessKeyMultibase

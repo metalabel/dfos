@@ -34,6 +34,7 @@ const HELP_KEYS = [
   'cid',
   'indexLight',
   'keyIdentity',
+  'keyProved',
   'keyRoles',
   'localDivergence',
   'localIndex',

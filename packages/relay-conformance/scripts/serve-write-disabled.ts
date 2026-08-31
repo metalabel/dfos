@@ -47,11 +47,15 @@ const key: MultikeyPublicKey = {
   publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey),
 };
 
+// A genesis declares exactly ONE key, in all three roles: the genesis signature
+// is that key's own possession proof, and one signature proves one key. Any other
+// shape is a structural reject, so a seed built the old way would leave this
+// relay serving nothing and the read-plane assertions testing an empty store.
 const createOp: IdentityOperation = {
   version: 1,
   type: 'create',
   authKeys: [key],
-  assertKeys: [],
+  assertKeys: [key],
   controllerKeys: [key],
   createdAt: new Date().toISOString(),
 };

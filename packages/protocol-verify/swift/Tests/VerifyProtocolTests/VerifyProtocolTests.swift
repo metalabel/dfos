@@ -15,10 +15,10 @@ import Testing
 
 let genesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
 
-let rotationJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWliZnVoNjN1djMzaTJpNWVvb2UzYm9pdDJydXlqZWh1YnNyeWVtdXV6Nm1ydGxlajI2cmVpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.7fqvWGEVYW9atA1uqpp7lIUOWp4dATLpLjOmFWzJN-8gTL-QnXDCeyGcBu5AXhHzO52fauwUavh1KrB6wBYuCw"
+let rotationJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA"
 
-let deleteJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg"
-let restoreJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg"
+let deleteJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA"
+let restoreJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA"
 
 let contentCreateJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA"
 
@@ -27,6 +27,17 @@ let jwtToken = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNr
 let expectedGenCID = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
 let expectedDID = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
 let expectedMultikey1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+let expectedMultikey2 = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+
+/// The possession proof the rotation carries. The envelope's payload is CLOSED:
+/// exactly these seven members, in exactly this order — and the octets below are
+/// the only serialization those members are ever signed as. The envelope is
+/// signed by key 2 (the key being introduced) while the operation carrying it is
+/// signed by key 1.
+let keyProofMembers = ["nonce", "audience", "did", "roleSet", "prevCID", "publicKeyMultibase", "timestamp"]
+let keyProofRoleSet = "auth,assert,controller"
+let keyProofCanonicalPayload = #"{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}"#
+
 let expectedCBORHex = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
 let expectedCIDHex = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
 
@@ -289,9 +300,74 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 
     let (header, payload) = verifyJWS(rotationJWS, pubKey: priv1.publicKey)
     #expect(header["kid"] as? String == "\(expectedDID)#key_r9ev34fvc23z999veaaft83nn29zvhe")
-    #expect(header["cid"] as? String == "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei")
+    #expect(header["cid"] as? String == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
     #expect(payload["type"] as? String == "update")
     #expect(payload["previousOperationCID"] as? String == expectedGenCID)
+}
+
+/// Verify the possession proof embedded in the rotation operation. The
+/// OPERATION is signed by key 1; the envelope inside it is signed by key 2 — the
+/// key being introduced — against the key named in the envelope's own payload.
+/// That circularity is the possession proof. The payload is closed: exactly
+/// seven members, one order, one serialization.
+@Test func keyProofCarriedByRotation() {
+    let seed1 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-1".utf8)))
+    let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
+    let seed2 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-2".utf8)))
+    let priv2 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed2)
+    let pub2 = Array(priv2.publicKey.rawRepresentation)
+
+    let (_, payload) = verifyJWS(rotationJWS, pubKey: priv1.publicKey)
+    let proofs = payload["keyProofs"] as? [String]
+    #expect(proofs?.count == 1, "rotation must carry exactly one key proof")
+    let envelope = proofs![0]
+
+    let parts = envelope.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+    #expect(parts.count == 3, "key proof must be a compact JWS")
+
+    let headerText = String(data: b64urlDecode(parts[0]), encoding: .utf8)!
+    let payloadText = String(data: b64urlDecode(parts[1]), encoding: .utf8)!
+    let header = try! JSONSerialization.jsonObject(with: Data(headerText.utf8)) as! [String: Any]
+    let proof = try! JSONSerialization.jsonObject(with: Data(payloadText.utf8)) as! [String: Any]
+
+    #expect(header["alg"] as? String == "EdDSA")
+    #expect(header["typ"] as? String == "did:dfos:key-add")
+    #expect(header.count == 2, "key proof header must be exactly {alg, typ}")
+
+    // The load-bearing check: the presented octets ARE the canonical
+    // serialization. The bytes bind the verifier, not only the signer.
+    #expect(payloadText == keyProofCanonicalPayload, "key proof payload is not the canonical serialization")
+    #expect(proof.count == 7, "key proof payload must have exactly seven members")
+
+    var cursor = -1
+    var ordered = true
+    for member in keyProofMembers {
+        let at = payloadText.range(of: "\"\(member)\":").map {
+            payloadText.distance(from: payloadText.startIndex, to: $0.lowerBound)
+        } ?? -1
+        if at <= cursor { ordered = false }
+        cursor = at
+    }
+    #expect(ordered, "key proof members are not in canonical order")
+
+    #expect(proof["did"] as? String == expectedDID)
+    #expect(proof["prevCID"] as? String == expectedGenCID)
+    #expect(proof["roleSet"] as? String == keyProofRoleSet)
+    #expect(proof["publicKeyMultibase"] as? String == expectedMultikey2)
+
+    // The signature verifies against the key the payload itself names — there is
+    // no resolver seam here.
+    let proofKey = decodeMultikey(proof["publicKeyMultibase"] as! String)
+    #expect(proofKey == pub2, "key proof key is not reference key 2")
+    let proofPub = try! Curve25519.Signing.PublicKey(rawRepresentation: Data(proofKey))
+
+    let sig = b64urlDecode(parts[2])
+    #expect(sig.count == 64, "key proof signature must be 64 bytes")
+    #expect(scalarIsCanonical(Array(sig[32..<64])), "non-canonical key proof signature scalar (S >= L)")
+    let signingInput = Data((parts[0] + "." + parts[1]).utf8)
+    #expect(
+        proofPub.isValidSignature(sig, for: signingInput),
+        "key proof signature verification failed under its own named key")
 }
 
 @Test func jwsDeleteRestoreVerification() {
@@ -300,17 +376,17 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 
     let (deleteHeader, deletePayload) = verifyJWS(deleteJWS, pubKey: priv2.publicKey)
     #expect(deletePayload["type"] as? String == "delete")
-    #expect(deletePayload["previousOperationCID"] as? String == "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei")
+    #expect(deletePayload["previousOperationCID"] as? String == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
     let deleteCID = cidToBase32(makeCIDBytes(encodeCBOR(deletePayload)))
     #expect(deleteCID == deleteHeader["cid"] as? String)
-    #expect(deleteCID == "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi")
+    #expect(deleteCID == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
 
     let (restoreHeader, restorePayload) = verifyJWS(restoreJWS, pubKey: priv2.publicKey)
     #expect(restorePayload["type"] as? String == "restore")
     #expect(restorePayload["previousOperationCID"] as? String == deleteCID)
     let restoreCID = cidToBase32(makeCIDBytes(encodeCBOR(restorePayload)))
     #expect(restoreCID == restoreHeader["cid"] as? String)
-    #expect(restoreCID == "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba")
+    #expect(restoreCID == "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq")
 }
 
 @Test func jwsContentCreateVerification() {

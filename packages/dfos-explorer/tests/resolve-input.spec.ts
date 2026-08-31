@@ -79,8 +79,8 @@ describe('dispatchInput', () => {
 
 // The key pattern is the one EXACT pattern in the dispatcher, and it is exact for
 // a reason: a key has no view that can render an honest not-found. The key page
-// asks a relay "which identities ever declared this", and a relay answers a
-// garbage string with an empty page — indistinguishable from a real key nobody
+// asks a relay "which identities has this been proved into", and a relay answers
+// a garbage string with an empty page — indistinguishable from a real key nobody
 // used. So a near-miss must fall through to the name search, not become a page
 // that quietly states a false absence.
 describe('key dispatch is strict', () => {

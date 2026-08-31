@@ -28,15 +28,14 @@ func anchorSvc(id, label, anchor string) dfos.ServiceEntry {
 // createIdentityWithServices creates a fresh identity carrying a services set.
 func createIdentityWithServices(t *testing.T, base string, services []dfos.ServiceEntry) identity {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	token, did, opCID, err := dfos.SignIdentityCreateWithServices(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
 		services,
-		ctrl.keyID,
-		ctrl.priv,
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("SignIdentityCreateWithServices: %v", err)
@@ -48,7 +47,7 @@ func createIdentityWithServices(t *testing.T, base string, services []dfos.Servi
 		t.Fatalf("create identity w/ services: status %d, body: %s", res.StatusCode, body)
 	}
 	res.Body.Close()
-	return identity{did: did, genCID: opCID, headCID: opCID, controller: ctrl, auth: auth}
+	return identity{did: did, genCID: opCID, headCID: opCID, controller: key, auth: key}
 }
 
 // fetchServices returns the projected services from the relay's served identity
@@ -72,12 +71,23 @@ func fetchServices(t *testing.T, base, did string) []map[string]any {
 func updateServices(t *testing.T, base string, id *identity, services []dfos.ServiceEntry) {
 	t.Helper()
 	kid := id.controller.keyID // controller signs identity ops; bare-kid form resolved by relay via did
+	// The key set is carried through UNCHANGED — an update replaces whole state, so
+	// re-declaring the same key in the same three roles introduces nothing and
+	// needs no possession envelope. Dropping a role here would be a silent
+	// rotation, not a services edit.
 	token, opCID, err := dfos.SignIdentityUpdateWithServices(
+		dfos.IdentityState{
+			DID:            id.did,
+			ControllerKeys: []dfos.MultikeyPublicKey{id.controller.mk},
+			AuthKeys:       []dfos.MultikeyPublicKey{id.auth.mk},
+			AssertKeys:     []dfos.MultikeyPublicKey{id.controller.mk},
+		},
 		id.headCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
 		services,
+		nil,
 		id.did+"#"+kid,
 		id.controller.priv,
 	)
@@ -178,17 +188,16 @@ func TestServicesClearOnUpdate(t *testing.T) {
 
 func TestServicesInvalidEntryRejected(t *testing.T) {
 	base := relayURL(t)
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	// ContentAnchor without the required non-empty `label` — structurally invalid.
 	bad := dfos.ServiceEntry{"id": "x", "type": "ContentAnchor", "anchor": "cv7n8vkvr64cctf3294h9k4eanhff8z"}
 	token, _, _, err := dfos.SignIdentityCreateWithServices(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
 		[]dfos.ServiceEntry{bad},
-		ctrl.keyID,
-		ctrl.priv,
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("SignIdentityCreateWithServices (bad entry): %v", err)
@@ -230,15 +239,14 @@ func repeatA(n int) string {
 // the malformed op reaches the wire and must come back `rejected`.
 func assertServicesRejected(t *testing.T, base, what string, services []dfos.ServiceEntry) {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	token, _, _, err := dfos.SignIdentityCreateWithServices(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
 		services,
-		ctrl.keyID,
-		ctrl.priv,
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("%s: SignIdentityCreateWithServices: %v", what, err)
@@ -268,15 +276,14 @@ func assertServicesRejected(t *testing.T, base, what string, services []dfos.Ser
 // acceptance with each rejection proves the boundary is where we claim it is.
 func assertServicesAccepted(t *testing.T, base, what string, services []dfos.ServiceEntry) {
 	t.Helper()
-	ctrl := newKeypair()
-	auth := newKeypair()
+	key := newKeypair()
 	token, _, _, err := dfos.SignIdentityCreateWithServices(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
-		[]dfos.MultikeyPublicKey{auth.mk},
-		[]dfos.MultikeyPublicKey{},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
+		[]dfos.MultikeyPublicKey{key.mk},
 		services,
-		ctrl.keyID,
-		ctrl.priv,
+		key.keyID,
+		key.priv,
 	)
 	if err != nil {
 		t.Fatalf("%s: SignIdentityCreateWithServices: %v", what, err)

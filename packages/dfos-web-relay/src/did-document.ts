@@ -157,6 +157,15 @@ export const identityToDidDocument = (state: VerifiedIdentity): DidDocument => {
     };
   }
 
+  // EFFECTIVE STATE ONLY, and it is the arrays that guarantee it: a
+  // VerifiedIdentity's key arrays are the memberships a possession proof
+  // admitted, so a key the chain declared and nothing proved is already absent
+  // here. A void key must never appear as a verification method — a DID document
+  // is a resolution surface, and listing a key nobody demonstrated possession of
+  // would publish exactly the unproved claim the possession fold exists to
+  // exclude. Never read `declared` here; `provedKeys` belongs to historical
+  // artifact verification, not to what the DID authenticates with NOW.
+  //
   // dedup verification methods by DID-URL id across roles (§4.2:136), preserving
   // deterministic first-seen order: auth → assert → controller
   const vmById = new Map<string, DidVerificationMethod>();

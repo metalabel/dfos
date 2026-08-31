@@ -62,9 +62,11 @@ describe('signerKey= probe — the body verdict', () => {
     ).toEqual([]);
   });
 
-  // one sentinel answers both filters: no chain has ever declared it (`key=`) and
-  // nothing has ever signed with it (`signerKey=`), because its 32 bytes are a
-  // published hash rather than a generated public key
+  // one sentinel answers both filters: no chain can ever have proved it (`key=`)
+  // and nothing has ever signed with it (`signerKey=`), because its 32 bytes are
+  // a published hash rather than a generated public key — the private half it
+  // would take to sign either envelope does not exist. A chain COULD declare it,
+  // and under has-ever-proved that still indexes nothing.
   it('sends a well-formed key, so a relay can never reject it on format', () => {
     expect(KEY_PROBE_MULTIBASE).toMatch(/^z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/);
   });
