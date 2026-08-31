@@ -113,24 +113,36 @@ forget, the boot self-check renders the exact string it needs to see. Update
 
 That gets you the identity scope. For the credential set, three more steps:
 
-1. **Give the app an identity and a delegate key.** The controller key stays in
-   your OS keychain; the server gets its own auth key, so a compromised
-   deployment is a revoke-and-re-add, never a new identity.
+1. **Give the app an identity and a delegate key.** The server gets its own
+   auth key beside the controller key, so a compromised deployment is a
+   revoke-and-re-add, never a new identity.
+
+   Every command runs under `DFOS_NO_KEYCHAIN=1`, and that is load-bearing: a
+   key enters a chain carrying its **own** signature over the introduction, so
+   `identity add-key` must reach the controller key and the candidate key in
+   one invocation's keystore. The file store is the backend that holds both —
+   and the one whose seed a deployment can be handed.
 
    ```sh
-   dfos identity create --name my-app
+   DFOS_NO_KEYCHAIN=1 dfos identity create --name my-app --no-vault
    DFOS_NO_KEYCHAIN=1 dfos identity device-pubkey --identity my-app --json
-   dfos identity add-key --auth-key --id key_<from above> --pubkey z6Mk<from above>
+   DFOS_NO_KEYCHAIN=1 dfos identity add-key --auth-key --id key_<from above> --pubkey z6Mk<from above> --as my-app
    ```
 
    The DID goes in `client_did`; `DFOS_APP_KID` is `did:dfos:<id>#key_<id>` for
-   the new key. Convert the seed file to the env var and store it:
+   the new key. The seed lives at `~/.dfos/keys/key%3A<publicKeyMultibase>` —
+   the URL-encoded `key:` account of the **delegate** key. Convert it to the
+   env var and store it:
 
    ```sh
    node -e "console.log(Buffer.from(require('fs').readFileSync(process.argv[1],'utf8').trim(),'hex').toString('base64url'))" \
-     ~/.dfos/keys/<did>__<key> \
+     ~/.dfos/keys/key%3Az6Mk<delegate public key> \
      | vercel env add DFOS_APP_PRIVATE_KEY production --sensitive
    ```
+
+   The controller seed file beside it **is** the identity — keep it. With
+   `--no-vault` no phrase covers these keys; losing the controller seed means
+   a new identity, which for a demo app is the honest trade.
 
    Then carry the chain in the well-known:
    `dfos identity well-known --patch public/.well-known/dfos-app.json`, and
