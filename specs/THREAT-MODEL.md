@@ -429,6 +429,19 @@ These are known and deliberately accepted for v1.
   is the deliberate trade for a non-auctionable authority record: identity writes are rare,
   reads replicate everywhere, and arbitration beats auction for key state.
 
+- **Home-relay order is trusted, not transparency-logged.** The order-authority rule makes the
+  home relay's committed log an identity chain's canonical order — and nothing in the corpus makes
+  that ordering _auditable_: there are no signed tree heads, no inclusion or consistency proofs, no
+  Merkle transparency structure anywhere in the specs. A home relay that equivocates about
+  identity-chain order — serving one committed order to one consumer and another to another — is
+  detectable only by out-of-band comparison between consumers, never from any single response.
+  Certificate Transparency ([RFC 9162](https://www.rfc-editor.org/rfc/rfc9162)) and the log designs
+  built on its construction (Trillian, sigstore's Rekor) are the known mitigation — making a log
+  server's ordering verifiable without trusting it — and it is deliberately not built: the corpus is
+  honest that choosing relays and peers is a trust decision (see _Authority currency_ above), and
+  this bullet names the standard construction that trust decision declines. (Content chains sit
+  outside the risk: their order converges by deterministic head selection over signed operations,
+  with no order authority to equivocate.)
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md
   "Philosophy", `specs/PROTOCOL.md`; WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`).

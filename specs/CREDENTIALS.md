@@ -1,6 +1,6 @@
 # DFOS Credentials
 
-UCAN-style authorization credentials for the DFOS protocol. Replaces VC-JWTs with a simpler, more powerful model: CID-addressable JWS tokens with embedded delegation chains, monotonic attenuation enforcement, and first-class public credential semantics.
+[UCAN](https://github.com/ucan-wg/spec)-style authorization credentials for the DFOS protocol. Replaces VC-JWTs with a simpler, more powerful model: CID-addressable JWS tokens with embedded delegation chains, monotonic attenuation enforcement, and first-class public credential semantics.
 
 > **Status — Protocol v1: feature-complete and frozen.** The credential model — the JWS envelope, linear delegation, monotonic attenuation, revocation, and the validity bounds — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is frozen but not yet final: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [DFOS](https://nce.dfos.com) space.
 
@@ -12,10 +12,16 @@ UCAN-style authorization credentials for the DFOS protocol. Replaces VC-JWTs wit
 
 DFOS credentials are signed authorization tokens. They answer the question: "does this DID have permission to do this thing?" A credential is a JWS-encoded payload where the issuer grants the audience specific permissions over specific resources, with an expiry.
 
-Two mechanisms from UCAN make credentials composable:
+Two mechanisms make credentials composable, and both are [UCAN](https://github.com/ucan-wg/spec)'s:
 
 1. **Delegation chains** — a credential can embed its parent credential in a `prf` (proof) field, forming a verifiable linear chain of authority from a root issuer down to the leaf holder.
 2. **Monotonic attenuation** — each hop in a delegation chain can only narrow scope, never widen it. Fewer resources, fewer actions, shorter expiry.
+
+The lineage is specific, and worth pinning because UCAN itself has two eras. DFOS credentials take the **UCAN 0.10** shape — a compact-JWS token whose payload carries `att` attenuations and a `prf` proof chain — not [UCAN 1.0](https://github.com/ucan-wg/spec)'s restructuring into separate invocation/delegation/revocation tokens over dag-cbor + [varsig](https://github.com/ChainAgnostic/varsig) envelopes with `sub`/`cmd`/`args` semantics: adopting that envelope for credentials alone would fork the JWS-compact discipline every DFOS envelope family shares. Past the envelope, the deltas from UCAN in either era are deliberate:
+
+- **`prf` is a single parent, never an array.** UCAN admits multi-proof delegation; DFOS delegation is linear by rule ([Delegation Chains](#delegation-chains)) — attenuating a child against the union of several parents while rooting the walk through one is an authority-escalation class removed by construction.
+- **No `nnc`, `fct`, or `nbf`.** There is no nonce member (a credential is a standing grant, not an invocation — request binding is [API-AUTH](https://protocol.dfos.com/api-auth)'s artifact), no facts member (a credential carries authority and nothing else), and no separate not-before (`iat` opens the validity window — [Expiry Basis](#expiry-basis-normative)).
+- **Revocation is a first-class signed artifact, gossiped on the proof plane** (`did:dfos:revocation` — [Revocation](#revocation)), where UCAN 1.0 leaves revocation to a RECOMMENDED sub-specification.
 
 Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-256 scheme as all protocol objects). The CID appears in the JWS header, making each credential a stable, revocable artifact.
 
