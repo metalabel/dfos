@@ -235,6 +235,17 @@ func keyProof(t *testing.T, priv ed25519.PrivateKey, did, prevCID string, roles 
 	return proof
 }
 
+// didFromKid returns the DID a DID-URL kid addresses. A kid with no fragment is
+// returned whole rather than treated as an error: the only caller wants a
+// non-empty chain name, and a bare-kid fixture is exercising the relay's
+// verdict on that shape, not this helper's.
+func didFromKid(kid string) string {
+	if hash := strings.Index(kid, "#"); hash >= 0 {
+		return kid[:hash]
+	}
+	return kid
+}
+
 // signIdentityUpdateWithProofs signs an identity update carrying possession
 // envelopes.
 //
@@ -269,12 +280,17 @@ func signIdentityUpdateWithProofs(
 	// earlier and be refused as non-monotonic.
 	// The throwaway's prior state mirrors its own arrays so the writer door sees
 	// no introduction — the call exists to read a timestamp back, and the
-	// operation is discarded.
-	throwaway, _, err := dfos.SignIdentityUpdate(dfos.IdentityState{
+	// operation is discarded. The door still insists the prior state NAME its
+	// chain, which the update's own kid already carries: an update signs under a
+	// DID URL, so its DID is the part before the fragment.
+	clockPrior := dfos.IdentityState{
+		DID:            didFromKid(kid),
 		ControllerKeys: controllerKeys,
 		AuthKeys:       authKeys,
 		AssertKeys:     assertKeys,
-	}, previousCID, controllerKeys, authKeys, assertKeys, nil, kid, privateKey)
+	}
+	throwaway, _, err := dfos.SignIdentityUpdate(
+		clockPrior, previousCID, controllerKeys, authKeys, assertKeys, nil, kid, privateKey)
 	if err != nil {
 		t.Fatalf("SignIdentityUpdate (clock): %v", err)
 	}
