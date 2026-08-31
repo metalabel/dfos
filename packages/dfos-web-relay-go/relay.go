@@ -206,6 +206,18 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	gossipProofSigned := opts.GossipIdentityProof != nil && *opts.GossipIdentityProof &&
 		identity.PrivateKey != nil && identity.KeyID != ""
 
+	// Identity state startup backfill: a row persisted before dfos.IdentityState
+	// carried ProvedKeys unmarshals with an absent has-ever-proved union, and
+	// every has-ever-proved reader then falls back to the narrower effective
+	// arrays — a proved-then-rotated-out key silently stops resolving. Re-walk
+	// those rows before serving. Runs UNCONDITIONALLY (the historical key
+	// resolver needs it whether or not the index is on) and BEFORE the projection
+	// rebuild below, so a rebuild triggered by the same upgrade materializes the
+	// `key=` index from repaired state rather than from the fallback.
+	if err := backfillProvedKeyState(opts.Store, logger); err != nil {
+		return nil, fmt.Errorf("backfill identity proved keys: %w", err)
+	}
+
 	// Index projection startup rebuild: when index is enabled and a durable store
 	// carries a stale (or unstamped) projection_version, rebuild all projection
 	// rows from the authoritative chain/countersign tables synchronously, before
