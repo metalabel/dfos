@@ -216,7 +216,7 @@ func TestMultiDevice_AddKeyRefusesAKeyItCannotProve(t *testing.T) {
 	// holding two devices has to be able to act on it without reading the spec.
 	for _, want := range []string{
 		"cannot prove", dev.ID, dev.PublicKeyMultibase, "(auth)",
-		"VOID", "REMOVE", "RE-PROVE", "dfos keys prove", "nothing was signed",
+		"VOID", "REMOVE", "RE-PROVE", "dfos keys add", "nothing was signed",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the refusal is missing %q:\n%v", want, err)

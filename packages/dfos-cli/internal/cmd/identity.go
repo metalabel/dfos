@@ -66,7 +66,7 @@ func newIdentityCreateCmd() *cobra.Command {
 			"generated standalone and exists only in the keystore. Nothing about the vault is published: " +
 			"the genesis carries a public key and nothing else.\n\n" +
 			"Custody splits at the first key-add, not at genesis. Two keys off one seed in one keychain " +
-			"share every fate that matters; 'dfos identity add-key' and 'dfos keys prove' are where a " +
+			"share every fate that matters; 'dfos identity add-key' and 'dfos keys add' are where a " +
 			"second custodian actually appears.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
@@ -546,7 +546,7 @@ func errUnprovedIntroductions(did string, unprovable []keyIntroduction) error {
 		"so authoring one would leave a chain that verifies and a key that does not work.\n\n"+
 		"Two ways forward:\n"+
 		"  REMOVE   — author this operation without those keys, and it signs exactly as it always did.\n"+
-		"  RE-PROVE — have the device that holds each key present its own proof ('dfos keys prove'), then run this again.",
+		"  RE-PROVE — have the device that holds each key present its own proof ('dfos keys add'), then run this again.",
 		len(unprovable), did, strings.Join(lines, "\n"))
 }
 
@@ -1417,7 +1417,7 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			"membership no proof admits — void, resolving nowhere, indexed nowhere. The refusal names the key and " +
 			"the two ways forward.\n\n" +
 			"The route for another device's key is that device proving it: the ceremony operator displays a code, " +
-			"and 'dfos keys prove' presents the key from the machine that holds it.",
+			"and 'dfos keys add' presents the key from the machine that holds it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !authKey && !controllerKey {
 				return fmt.Errorf("specify --auth-key and/or --controller-key")

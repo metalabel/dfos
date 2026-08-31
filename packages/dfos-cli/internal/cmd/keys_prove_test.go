@@ -1,6 +1,12 @@
 package cmd
 
-// `dfos keys prove` tests. Like the vault, keys, and recover tests these drive
+// `dfos keys add` (alias `keys prove`) tests, of the PRESENTATION leg: the
+// carriage, the resolution, the disclosure, the linkage check, the envelope, and
+// the one attempt that puts it on the wire. What happens after the presentation
+// — the status poll, the stale re-sign, and the six terminal states — is
+// keys_prove_wait_test.go's.
+//
+// Like the vault, keys, and recover tests these drive
 // RunE against the package globals setupDevices wires, so they MUST NOT run with
 // t.Parallel().
 //
@@ -62,11 +68,33 @@ type stubCeremony struct {
 	presentHangup bool   // drop the connection mid-request, so the POST gets no answer at all
 	answerDID     string // non-empty: the identity the operator says already adopted the key
 
+	// knobs — the status poll, which is the epilogue's operator half
+	// (keys_prove_wait_test.go drives all of these)
+	statusSequence  []map[string]any // answers handed out in order; the last one repeats
+	statusStatus    int              // non-zero: answer the status route with this status
+	statusBody      string           // the body that goes with statusStatus
+	statusHangup    bool             // drop the connection, so a poll gets no answer at all
+	statusFailFirst int              // answer this many polls with a 502 before behaving
+	// staleUntil answers `presented` with `stale: true` until this many
+	// presentations have arrived — the chain moving under a live ceremony, which
+	// is an invitation to replace the envelope rather than a refusal of anything.
+	staleUntil int
+	// freshPrevCID is the head a RE-resolution answers. A stale ceremony that
+	// re-resolved to the same head would be a stale ceremony forever.
+	freshPrevCID string
+	// freshDID and freshRoleSet move the POSITION on a re-resolution — the thing
+	// a re-sign must refuse, because the position is what the human consented to.
+	freshDID     string
+	freshRoleSet string
+
 	// observations
 	wellKnownHits int
 	presentHits   int
+	statusHits    int
 	lastCode      string
+	lastStatusFor string
 	lastPresented map[string]string
+	lastEnvelopes []string
 	lastQuery     url.Values
 }
 
@@ -100,6 +128,9 @@ func (s *stubCeremony) handle(w http.ResponseWriter, r *http.Request) {
 		s.lastQuery = r.URL.Query()
 		s.lastPresented = map[string]string{}
 		_ = json.NewDecoder(r.Body).Decode(&s.lastPresented)
+		if envelope := s.lastPresented["envelope"]; envelope != "" {
+			s.lastEnvelopes = append(s.lastEnvelopes, envelope)
+		}
 		// The partition case: the request arrived and the answer never did. It is
 		// the one presentation failure that is not a refusal, and the CLI has to
 		// say so differently.
@@ -124,10 +155,59 @@ func (s *stubCeremony) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, answer)
 
+	// The poll leg. Its URL is not answered anywhere: the CLI derives it from the
+	// presentation endpoint's origin, so this route only ever gets asked at this
+	// authority, with the ceremony's code and nothing else.
+	case r.URL.Path == keyProofStatusPath:
+		s.statusHits++
+		s.lastStatusFor = r.URL.Query().Get("code")
+		if s.statusHangup {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		// A surface that is restarting: unusable answers, then the ceremony. It is
+		// a knob rather than a test's own goroutine so the flip happens where every
+		// other answer is decided, in the handler.
+		if s.statusHits <= s.statusFailFirst {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"upstream restarting"}`))
+			return
+		}
+		if s.statusStatus != 0 {
+			w.WriteHeader(s.statusStatus)
+			_, _ = w.Write([]byte(s.statusBody))
+			return
+		}
+		// The chain moved under the ceremony and the stored envelope names a head
+		// that is no longer the head. It clears when a replacement arrives.
+		if s.presentHits < s.staleUntil {
+			writeJSON(w, map[string]any{"status": "presented", "stale": true})
+			return
+		}
+		writeJSON(w, s.nextStatus())
+
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"no route"}`))
 	}
+}
+
+// nextStatus hands out the arranged answers in order and repeats the last one,
+// which is how a real ceremony behaves: a status is a state, and a state that
+// has been reached is the answer to every later ask.
+func (s *stubCeremony) nextStatus() map[string]any {
+	switch {
+	case len(s.statusSequence) == 0:
+		return map[string]any{"status": "presented"}
+	case len(s.statusSequence) == 1:
+		return s.statusSequence[0]
+	}
+	next := s.statusSequence[0]
+	s.statusSequence = s.statusSequence[1:]
+	return next
 }
 
 // resolution is the full signing context a live code answers with: everything
@@ -158,6 +238,20 @@ func (s *stubCeremony) resolution() map[string]any {
 	}
 	if s.resolveRelay != "" {
 		answer["relay"] = s.resolveRelay
+	}
+	// A re-resolution — the stale-head recovery's first step — answers the same
+	// nonce against the CURRENT head. The position moves here only when a test is
+	// asserting that a re-sign refuses to follow it.
+	if s.wellKnownHits > 1 {
+		if s.freshPrevCID != "" {
+			answer["prevCID"] = s.freshPrevCID
+		}
+		if s.freshDID != "" {
+			adopts["did"] = s.freshDID
+		}
+		if s.freshRoleSet != "" {
+			answer["roleSet"] = s.freshRoleSet
+		}
 	}
 	for _, member := range s.resolveOmit {
 		if inner, ok := strings.CutPrefix(member, "adopts."); ok {
@@ -193,29 +287,38 @@ func (s *stubCeremony) authority() string {
 
 // --- helpers ---
 
-// proveFlags drives one `keys prove` invocation. Stdin is not a terminal under
+// runProve drives one `keys add` invocation. Stdin is not a terminal under
 // `go test`, so every run that expects to complete passes --yes; the run that
 // does not is asserting exactly that gate.
+//
+// IT PASSES --no-wait UNLESS THE CALLER SAYS OTHERWISE. Everything in this file
+// is about the presentation leg — the carriage, the disclosure, the linkage
+// check, the envelope, the one attempt — and the epilogue that follows a
+// presentation has its own operator, its own clock, and its own file
+// (keys_prove_wait_test.go). A test that wants the wait sets "no-wait" itself.
 func runProve(t *testing.T, input string, flags map[string]string, out any) (stdout, stderr string, err error) {
 	t.Helper()
-	cmd := newKeysProveCmd()
-	cmd.SetIn(strings.NewReader(""))
-	for name, value := range flags {
-		mustSetFlag(t, cmd, name, value)
-	}
-	return runCapturingJSON(t, cmd, []string{input}, out)
+	return runCapturingJSON(t, proveCmd(t, flags), []string{input}, out)
 }
 
 // runProveHuman is runProve without --json, for the assertions about what a
 // person reads off the terminal on the way out.
 func runProveHuman(t *testing.T, input string, flags map[string]string) (stdout, stderr string, err error) {
 	t.Helper()
+	return runCapturing(t, proveCmd(t, flags), []string{input})
+}
+
+func proveCmd(t *testing.T, flags map[string]string) *cobra.Command {
+	t.Helper()
 	cmd := newKeysProveCmd()
 	cmd.SetIn(strings.NewReader(""))
+	if _, waits := flags["no-wait"]; !waits {
+		mustSetFlag(t, cmd, "no-wait", "true")
+	}
 	for name, value := range flags {
 		mustSetFlag(t, cmd, name, value)
 	}
-	return runCapturing(t, cmd, []string{input})
+	return cmd
 }
 
 // plantCandidate puts a key in the store under a candidate account, which is

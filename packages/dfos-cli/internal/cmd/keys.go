@@ -739,7 +739,7 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 				// a person who is not told will read the row as a working key.
 				entry.Reason = "declared by " + entry.DID + " and never proved — the membership is VOID: it is not in " +
 					"effective state, it never resolves, and it obligates nobody. A key becomes real by presenting its " +
-					"own proof ('dfos keys prove')"
+					"own proof ('dfos keys add')"
 			case entry.Deleted:
 				entry.Reason = "declared by a DELETED identity's chain — deletion is not revocation, and 'identity restore' is real"
 			case len(in.voidRoles[account]) > 0:
