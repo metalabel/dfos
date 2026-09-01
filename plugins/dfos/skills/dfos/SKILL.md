@@ -247,6 +247,20 @@ with exit 1 when no relay could answer — silence is never agreement) · `keys`
   Rotation is sticky to the vault that minted the identity's current keys, so
   `default-vault` cannot quietly move an identity onto a different seed;
   `--vault` on `identity update` overrides that.
+- **A vault-backed mint asks the relay before it spends an index.** Two machines
+  holding one phrase keep two counters, so both can hand out index N — one
+  private key under two DIDs, invisible on either chain. Before `identity create`
+  or `identity update --rotate-*` stores a key or signs an operation, it asks the
+  resolved relay's identity index whether the key its reserved index derives
+  already proves somewhere (`GET /index/v0/identities?key=`, one query per
+  reserved key) and REFUSES the whole operation on a hit
+  (`reason: mint-index-already-proved`). The reserved index stays burned, which
+  is safe — the recovery scan's gap limit walks through burned indices by design.
+  The probe is best-effort and loud: no relay, a relay that cannot answer, and a
+  relay that stops answering each mint anyway behind a one-line note naming what
+  went unasked, while zero rows mints silently. `--no-mint-probe` skips it.
+  `recover` converges the counter over what a seed has already spent; the probe
+  refuses the forward collision that converged counter cannot see.
 - **Services are full-state.** On `identity update`, `--service` (repeatable)
   **replaces the entire services set**; services you don't pass are **carried
   forward** unchanged; `--clear-services` empties the set. `--service` and

@@ -364,21 +364,63 @@ func errNoVaultToRecover() error {
 // simply holds no identities, where the answer is empty either way and the
 // eventual report states a true absence rather than inventing rows.
 func proveOracle(c *client.Client, name, url string) error {
+	v := oracleCapability(c)
+	if v.reason == "" {
+		return nil
+	}
+	return oracleFailure(v.reason, name, url, v.why, v.needs)
+}
+
+// oracleVerdict is what the sentinel query established about a relay.
+type oracleVerdict struct {
+	// reason is one of the oracleReason* codes, empty when the relay can answer.
+	reason string
+	// why is the sentence naming what went wrong.
+	why string
+	// needs names the capability that was missing.
+	needs string
+	// err is the transport error behind an unreachable verdict, kept so a caller
+	// rendering the failure inside a sentence can unwrap it rather than paste a
+	// whole url.Error in. Nil for every other verdict.
+	err error
+}
+
+// oracleCapability makes the sentinel query and CLASSIFIES the answer, without
+// deciding what the caller does about it.
+//
+// The judgment is split out of proveOracle because two callers need exactly the
+// same one and different sentences around it. `recover` refuses to scan at all,
+// because a scan against an unproven oracle produces a report that means
+// nothing. The mint-collision probe (mint_probe.go) proceeds and says out loud
+// that it asked nothing, because a mint is a local-first act that a relay's
+// silence has no standing to stop. What must NOT fork between them is which
+// answers count as "cannot answer" — a relay predating `key=` has to look the
+// same to both — so that lives here once.
+func oracleCapability(c *client.Client) oracleVerdict {
 	rows, err := c.IdentitiesByKey(indexKeyProbeMultibase(), 1)
 	if errors.Is(err, client.ErrIndexUnavailable) {
-		return oracleFailure(oracleReasonNoIndex, name, url,
-			"it answered 501 Not Implemented — capabilities.index is off, or this relay predates the index family",
-			"GET /index/v0/identities?key=")
+		return oracleVerdict{
+			reason: oracleReasonNoIndex,
+			why:    "it answered 501 Not Implemented — capabilities.index is off, or this relay predates the index family",
+			needs:  "GET /index/v0/identities?key=",
+		}
 	}
 	if err != nil {
-		return oracleFailure(oracleReasonUnreachable, name, url, err.Error(), "GET /index/v0/identities?key=")
+		return oracleVerdict{
+			reason: oracleReasonUnreachable,
+			why:    err.Error(),
+			needs:  "GET /index/v0/identities?key=",
+			err:    err,
+		}
 	}
 	if len(rows) > 0 {
-		return oracleFailure(oracleReasonParamIgnored, name, url,
-			"it answered an UNFILTERED page to a key no chain can have declared, which means it ignored the 'key=' parameter entirely — this relay predates the key lookup (needs web-relay >= 0.39.0)",
-			"the 'key=' filter on GET /index/v0/identities")
+		return oracleVerdict{
+			reason: oracleReasonParamIgnored,
+			why:    "it answered an UNFILTERED page to a key no chain can have declared, which means it ignored the 'key=' parameter entirely — this relay predates the key lookup (needs web-relay >= 0.39.0)",
+			needs:  "the 'key=' filter on GET /index/v0/identities",
+		}
 	}
-	return nil
+	return oracleVerdict{}
 }
 
 // The three ways an oracle cannot answer, as codes a script can branch on. The

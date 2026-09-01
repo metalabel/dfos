@@ -57,6 +57,7 @@ func newIdentityCreateCmd() *cobra.Command {
 	var serviceSpecs []string
 	var vaultFlag string
 	var noVault bool
+	var noMintProbe bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -109,7 +110,7 @@ func newIdentityCreateCmd() *cobra.Command {
 			// controller key and says nothing about separation or cross-array
 			// uniqueness, and a key id is an opaque string. The same entry — same
 			// id, same publicKeyMultibase — appears in each array.
-			minter, err := newKeyMinter(vaultName, 1)
+			minter, err := newKeyMinter(vaultName, 1, mintProbeOptions{peer: peerName, skip: noMintProbe})
 			if err != nil {
 				return err
 			}
@@ -267,6 +268,7 @@ func newIdentityCreateCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable), e.g. id=relay,type=DfosRelay,endpoint=https://relay.dfos.com")
 	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the keys from this vault (default: config default-vault)")
 	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Generate standalone keys, from no vault")
+	cmd.Flags().BoolVar(&noMintProbe, "no-mint-probe", false, "Mint without asking the relay whether a derived key already proves somewhere")
 	return cmd
 }
 
@@ -299,7 +301,17 @@ type mintedKey struct {
 	PublicMultibase string
 }
 
-func newKeyMinter(vaultName string, count int) (*keyMinter, error) {
+// newKeyMinter reserves count indices against the vault's counter and, for a
+// vault-backed reservation, asks a relay whether any of them is already spent
+// before handing any material out.
+//
+// The probe sits HERE rather than in each command for the reason the type sits
+// here: this is the one place a vault-derived private key comes into existence,
+// so it is the one place that can promise the question was asked before a key
+// was stored or an operation signed. probe carries the calling command's --peer
+// and --no-mint-probe; the vault-less path returns before any of it, because a
+// key drawn from entropy has no index to collide on.
+func newKeyMinter(vaultName string, count int, probe mintProbeOptions) (*keyMinter, error) {
 	m := &keyMinter{vaultName: vaultName}
 	if vaultName == "" {
 		return m, nil
@@ -310,6 +322,12 @@ func newKeyMinter(vaultName string, count int) (*keyMinter, error) {
 	}
 	derived, err := getVaults().Mint(vaultName, count)
 	if err != nil {
+		return nil, err
+	}
+	// After the reservation and before anything is handed out. The counter has
+	// already moved, so a refusal here BURNS the indices — which is the safe
+	// direction, and the refusal says so.
+	if err := probeReservedIndices(vaultName, derived, probe); err != nil {
 		return nil, err
 	}
 	m.fingerprint = meta.Fingerprint
@@ -608,6 +626,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 	var clearServices bool
 	var vaultFlag string
 	var noVault bool
+	var noMintProbe bool
 
 	cmd := &cobra.Command{
 		Use:   "update [name|did]",
@@ -717,7 +736,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 				// rotated. Minting a key per role would put two fresh keys in one
 				// keychain under one seed and call that a separation, which is the
 				// arrangement `identity create` stopped making.
-				minter, err = newKeyMinter(rotationVault, 1)
+				minter, err = newKeyMinter(rotationVault, 1, mintProbeOptions{peer: peerName, skip: noMintProbe})
 				if err != nil {
 					return err
 				}
@@ -874,6 +893,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&clearServices, "clear-services", false, "Empty the discovery services set")
 	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the replacements from this vault for THIS rotation only; a later bare rotate returns to the vault behind the identity's current controller key")
 	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Rotate into standalone keys, from no vault")
+	cmd.Flags().BoolVar(&noMintProbe, "no-mint-probe", false, "Mint without asking the relay whether a derived key already proves somewhere")
 	return cmd
 }
 

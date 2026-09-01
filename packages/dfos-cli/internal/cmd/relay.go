@@ -66,7 +66,10 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 	switch method {
 	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 	default:
-		return fmt.Errorf("invalid HTTP method %q\nusage: %s <METHOD> <path> (e.g. %s GET /proof/v1/stats)", args[0], invocation, invocation)
+		// The example is a route that EXISTS on every relay and needs no
+		// argument: an operator correcting a typo pastes the hint, and a hint
+		// that 404s teaches them the command is broken rather than their method.
+		return fmt.Errorf("invalid HTTP method %q\nusage: %s <METHOD> <path> (e.g. %s GET /.well-known/dfos-relay)", args[0], invocation, invocation)
 	}
 
 	ctx, err := resolveCtx()

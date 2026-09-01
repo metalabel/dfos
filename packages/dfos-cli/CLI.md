@@ -300,6 +300,38 @@ The refusal is by fingerprint, so a re-cased or re-spaced form of the phrase doe
 
 The rule is a custody rule, not a bookkeeping one. The derivation counter belongs to the vault, so two vaults over one phrase each hand out indices from their own counter starting at 0 — mint an identity from each and the two identities hold the **byte-identical** private key, with nothing on the chain to say so. There is no `--force`: several accounts branching under one mnemonic is a shape that is refused by design, because a phrase whose holder cannot tell which identity it controls has stopped being a backup. A second identity gets a second phrase.
 
+### Minting asks before it spends an index
+
+One seed, one vault is a rule about one machine. A phrase is portable, so two machines holding one phrase keep two counters, neither can see what the other spent, and both hand out index N — one Ed25519 private key under two DIDs, with nothing on either chain to show it. `vault import` says so when a phrase is adopted, and `recover` raises the counter past every index a relay can prove the seed spent. The mint-collision probe is the check in between, at the mint itself.
+
+Every vault-backed mint — `identity create`, and `identity update --rotate-*` — reserves its index and then asks the resolved relay's identity index whether the key that index derives already proves anywhere. It is the same `GET /index/v0/identities?key=<multibase>` lookup recovery scans with, one query per reserved key, and only the public key goes on the wire. Rows back mean another holder of this phrase minted here first, and the whole operation is refused before a key is stored or an operation signed:
+
+```
+refusing to mint from vault 'restored': index 3 is already spent.
+prod (https://relay.dfos.com) reports the key this vault derives at index 3 already proves for did:dfos:abc123. Another holder of this phrase minted here first — signing with it would put one private key under two identities.
+'dfos recover --vault restored' converges this machine's counter past every spent index. The reserved index stays burned, which is safe: the recovery scan's gap limit walks through burned indices by design. --no-mint-probe mints anyway.
+```
+
+The reservation happened before the question was asked, so a refusal burns the index — the safe direction, because a burned index is a hole and a hole is what the gap limit walks through. Under `--json` the refusal carries `reason: mint-index-already-proved` beside the index, the public key, the relay, and the DIDs the rows named.
+
+The probe is **best-effort, and loud about it.** It is a pre-check on top of minting, not a gate in front of it: a relay's silence never stops a local-first mint, and it is never read as permission either. What the mint could not establish is said out loud.
+
+| What happened                                                         | What the mint does                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------- |
+| No relay resolves — the local-first mint                              | Mints, noting that nothing was asked                    |
+| The relay serves no index (501), ignores `key=`, or cannot be reached | Mints, naming the relay and the cause                   |
+| The relay stops answering after the capability check                  | Mints, naming the relay                                 |
+| Zero rows for every reserved key                                      | Mints, silently — an unspent index is the ordinary case |
+| Rows for any reserved key                                             | Refuses, above                                          |
+
+```
+Note: the mint-collision probe did not run — no relay to ask. If this phrase is held on another machine, index 3 may already be spent there; 'dfos recover --vault restored' converges the counter.
+```
+
+The relay is the one the ordinary peer stack names: the command's own `--peer`, then `--relay`, `DFOS_RELAY`, then `default-peer`. `--no-mint-probe` mints without asking and prints nothing — an operator who opted out is not told what the opt-out cost. A mint from no vault asks nothing at all, because a key drawn from entropy has no index to collide on.
+
+The probe and `recover` are two halves of one rule, in opposite directions. `recover` converges this machine's counter over what the seed has already spent; the probe refuses the forward collision a converged counter still cannot see — an index another holder spent after this machine last recovered.
+
 ### Seeing the phrase
 
 The mnemonic goes to **stderr**, always, from every command that prints it: `vault create` when it generates one, and `vault show --reveal-mnemonic` when it reveals one. It never goes to stdout and never into `--json` output, so a redirected or piped invocation does not write a seed into a file by accident — `dfos vault show personal --reveal-mnemonic > report.txt` writes a report, and the phrase stays on the terminal.
@@ -374,6 +406,8 @@ An imported vault starts with its derivation counter at 0, because this machine 
 The scan is not the only thing the run learns from. A chain pulled from the oracle declares public keys, and the seed in hand derives them, so `recover` matches every key its fetched chains name against forward derivations and feeds those indices to the counter too. This closes the case the scan structurally cannot reach: rotations move an identity's current auth key to a fresh index each time, and enough of them — or enough burned indices in between — put that index past where the gap limit ended the walk. The chain names the key regardless, so the index is known, the private key is derived and installed, and the counter clears it.
 
 A key a fetched chain names that this seed cannot derive was minted elsewhere. It moves nothing here.
+
+A converged counter is a statement about what the seed had spent when the scan ran. An index another holder of the phrase spends after that is invisible to it, which is the question [the mint-collision probe](#minting-asks-before-it-spends-an-index) asks at the next mint.
 
 ### When the scan stopped short
 
