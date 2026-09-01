@@ -85,6 +85,32 @@ const (
 // a create that was interrupted between minting and renaming.
 const pendingAccountPrefix = "pending:"
 
+// chainAsOf is the basis of a verdict derived from a chain in THIS machine's
+// local relay: the head that answered, and when that head was written.
+type chainAsOf struct {
+	HeadCID       string `json:"headCID"`
+	LastCreatedAt string `json:"lastCreatedAt"`
+}
+
+// chainBasis renders that basis as one clause, and every negative verdict a
+// local chain produces carries it.
+//
+// A chain in the local relay answers "this key is no longer named" with exactly
+// the confidence of a chain that is up to date, whether or not it is one. A
+// machine that forked its chain locally, or simply never synced, says the same
+// sentence about a key its identity's own relay still declares live — and
+// nothing in the sentence lets a reader tell the two apart. Naming the head and
+// its date converts the verdict from a claim about the world into a claim about
+// a specific, checkable piece of local state; saying no relay was asked is the
+// other half, because the reader's next question is always whether one was.
+func chainBasis(headCID, lastCreatedAt string) string {
+	head := truncateMiddle(orDash(headCID), 16)
+	if lastCreatedAt == "" {
+		return fmt.Sprintf("as of local head %s — the identity's relay was not consulted", head)
+	}
+	return fmt.Sprintf("as of local head %s (%s) — the identity's relay was not consulted", head, lastCreatedAt)
+}
+
 type keyVaultProvenance struct {
 	Name        string `json:"name"`
 	Fingerprint string `json:"fingerprint"`
@@ -127,6 +153,17 @@ type keyLedgerEntry struct {
 	Recoverable bool                `json:"recoverableFromVault"`
 	Prunable    bool                `json:"prunable"`
 	Reason      string              `json:"reason,omitempty"`
+	// AsOf is the basis of a NEGATIVE chain-derived verdict about this key: the
+	// local relay's head for the declaring identity, and when that head was
+	// written. It is set on `superseded` and on nothing else, because that is the
+	// verdict a stale local chain makes dangerous — a key the relay still names
+	// live, reported here as retired, with no hint that the chain behind the
+	// report is a fork or a month old.
+	//
+	// The prose reason carries the same two facts with the CID truncated for a
+	// terminal; this carries it whole, so a caller can compare it byte for byte
+	// against what a relay serves.
+	AsOf *chainAsOf `json:"asOf,omitempty"`
 }
 
 // keyLedger is the whole fold, plus an honest account of its own limits.
@@ -319,12 +356,18 @@ func buildKeyLedger() (*keyLedger, error) {
 	knownDID := map[string]bool{}
 	deletedDID := map[string]bool{}
 	chainByDID := map[string]*relay.StoredIdentityChain{}
+	// basisByDID is what every chain-derived verdict below is derived FROM: the
+	// head this fold read, and its date. It is carried beside knownDID because
+	// the two are read together — a verdict that leans on "the chain is here"
+	// has to be able to say which chain, at which head.
+	basisByDID := map[string]chainAsOf{}
 	resolved := map[string]bool{}
 
 	declareChain := func(chain *relay.StoredIdentityChain) {
 		knownDID[chain.DID] = true
 		deletedDID[chain.DID] = chain.State.IsDeleted
 		chainByDID[chain.DID] = chain
+		basisByDID[chain.DID] = chainAsOf{HeadCID: chain.HeadCID, LastCreatedAt: chain.LastCreatedAt}
 		place := func(account string, k protocol.MultikeyPublicKey) {
 			declaredPublic[account] = k.PublicKeyMultibase
 			accountDID[account] = chain.DID
@@ -507,6 +550,7 @@ func buildKeyLedger() (*keyLedger, error) {
 			mintedKeyID:     mintedKeyID,
 			knownDID:        knownDID,
 			deletedDID:      deletedDID,
+			basisByDID:      basisByDID,
 			loginAccount:    loginAccount,
 			loginDID:        loginDID,
 		}))
@@ -672,6 +716,9 @@ type classifyInputs struct {
 	mintedKeyID  map[string]string
 	knownDID     map[string]bool
 	deletedDID   map[string]bool
+	// basisByDID is the head each declaring chain was read at. Only the negative
+	// verdicts use it, and they use it to say so out loud.
+	basisByDID   map[string]chainAsOf
 	loginAccount string
 	loginDID     string
 }
@@ -748,10 +795,20 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		case entry.DID != "" && in.knownDID[entry.DID]:
 			entry.Status = statusSuperseded
 			entry.Roles = in.supersededRoles[account]
-			entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation left it behind"
+			// The verdict and its basis are written in one breath, because the
+			// verdict without the basis is the sentence that misled: "no longer
+			// names this key", stated at full confidence, off a chain that had been
+			// forked locally while the identity's own relay served a newer head
+			// naming the key live.
+			stamp := ""
+			if basis, ok := in.basisByDID[entry.DID]; ok {
+				entry.AsOf = &chainAsOf{HeadCID: basis.HeadCID, LastCreatedAt: basis.LastCreatedAt}
+				stamp = ", " + chainBasis(basis.HeadCID, basis.LastCreatedAt)
+			}
+			entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation left it behind" + stamp
 			if len(entry.Roles) > 0 {
 				entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation retired it from " +
-					strings.Join(entry.Roles, ", ")
+					strings.Join(entry.Roles, ", ") + stamp
 			}
 		case entry.DID != "":
 			entry.Status = statusOrphan
@@ -1329,10 +1386,19 @@ func keyRemovalRefusal(e keyLedgerEntry) error {
 			"no longer holds.", keyLabel(e), identityLabel(e), roles)
 
 	case statusSuperseded:
+		// The refusal already said the verdict is about this relay. The stamp
+		// says WHICH state of this relay, which is the difference between a
+		// caveat an operator reads past and a fact they can go check.
+		basis := ""
+		if e.AsOf != nil {
+			basis = " That verdict is " + chainBasis(e.AsOf.HeadCID, e.AsOf.LastCreatedAt) + "."
+		}
 		return fmt.Errorf("%s is superseded: the chain for %s is in this local relay and no longer names it.\n"+
 			"That is a statement about this relay, not about the world — this machine's view of a chain can be "+
 			"behind the network's, and a rotation seen here may not be the last word. It is the same reason "+
-			"'dfos keys prune' retains a superseded key.", keyLabel(e), identityLabel(e))
+			"'dfos keys prune' retains a superseded key.%s\n"+
+			"'dfos identity status %s' compares this machine's chain against the identity's relay.",
+			keyLabel(e), identityLabel(e), basis, firstNonEmpty(e.Identity, e.DID))
 
 	case statusLoginClient:
 		return fmt.Errorf("%s is this installation's sign-in client key: infrastructure, named by %s, and "+

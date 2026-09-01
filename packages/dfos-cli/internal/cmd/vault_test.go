@@ -325,6 +325,33 @@ func TestVaultImportRefusesAPhraseAVaultAlreadyHolds(t *testing.T) {
 	}
 }
 
+// An imported seed's counter starts at 0, and that zero reads exactly like a
+// fresh vault's while meaning the opposite: an imported phrase has by definition
+// existed somewhere else, and minting from index 0 against a seed another
+// machine has already spent indices on hands two unrelated identities the same
+// private key. So the import says what the zero costs, and names the command
+// that raises the counter past what the network can prove the seed spent.
+func TestVaultImportSaysTheCounterStartsUnknown(t *testing.T) {
+	setupDevices(t)
+
+	cmd := newVaultImportCmd()
+	cmd.SetIn(strings.NewReader(testMnemonic + "\n"))
+	stdout, _, err := runCapturing(t, cmd, []string{"recovered"})
+	if err != nil {
+		t.Fatalf("vault import: %v", err)
+	}
+	for _, want := range []string{
+		"Counter:         0 — this machine has no record of keys this seed minted elsewhere",
+		"Other holders of this phrase may have minted keys this machine cannot see",
+		"'dfos recover --vault recovered' before minting from it",
+		"counter can reuse an index another machine already spent",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("the import output is missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestVaultListMarksTheDefault(t *testing.T) {
 	setupDevices(t)
 	createVault(t, "personal")
