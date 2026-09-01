@@ -56,7 +56,6 @@ const (
 	// appDescriptionCap bounds the fallback read. App descriptions carry an
 	// identity chain (up to 100 operations), so the cap is generous.
 	appDescriptionCap = 512 * 1024
-	maxRedirectHops   = 5
 )
 
 // asciiWhitespace is the trim set for attestation values. ORIGIN-BINDING.md says
@@ -434,55 +433,36 @@ func planOriginBinding(services []protocol.ServiceEntry, domain, idOverride stri
 // probes (network)
 // ---------------------------------------------------------------------------
 
-// refusedRedirectError marks a redirect the attestation rules REFUSED, as
-// distinct from a domain that could not be reached. The two are different facts
-// about a deployment — one is "nothing answered", the other is "something
-// answered and it was not the named domain" — and reporting the second as the
-// first sends an operator to look at DNS and uptime for a redirect they
-// configured.
-type refusedRedirectError struct{ reason string }
-
-func (e *refusedRedirectError) Error() string { return e.reason }
-
-// refuseForeignRedirect is the HTTPS method's redirect rule: the attestation
-// must come from the named domain, so a redirect to a different host — or off
-// HTTPS — attests nothing and is refused. Same-host HTTPS redirects are
-// followed, up to a bounded hop count.
-func refuseForeignRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirectHops {
-		return &refusedRedirectError{fmt.Sprintf("stopped after %d redirects", maxRedirectHops)}
-	}
-	if req.URL.Scheme != "https" {
-		return &refusedRedirectError{fmt.Sprintf("refusing redirect off HTTPS to %s://%s", req.URL.Scheme, req.URL.Host)}
-	}
-	if !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
-		return &refusedRedirectError{fmt.Sprintf("refusing cross-origin redirect to %s", req.URL.Host)}
-	}
-	return nil
-}
-
+// attestationClient is the client both attestation fetches use. It follows NO
+// redirects: ORIGIN-BINDING.md requires verifiers to "fetch over HTTPS with
+// ordinary TLS validation, MUST NOT follow redirects", and rules that "a
+// redirect is a non-answer, never a contradiction" — whatever the redirect
+// points at, another origin or another path on the same one, the bytes would
+// arrive from somewhere the binding did not send the verifier.
+//
+// http.ErrUseLastResponse hands the 3xx back AS THE RESPONSE instead of as a
+// transport error, which is what lets the probe report a redirect for what it
+// is — the origin declining to answer at the registered path — rather than as
+// an unreachable domain that would send an operator looking at DNS and uptime.
 func attestationClient() *http.Client {
-	return &http.Client{Timeout: attestationTimeout, CheckRedirect: refuseForeignRedirect}
+	return &http.Client{
+		Timeout:       attestationTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
-// fetchResult is one attestation fetch. `final` is the URL the reply actually
-// came from, which is the URL asked for unless a redirect was followed — the
-// one fact that separates "this path serves the wrong thing" from "this path
-// serves nothing and something else answered for it".
+// fetchResult is one attestation fetch. No redirect is ever followed, so the
+// reply always came from the URL that was asked for.
 type fetchResult struct {
 	status int
 	body   []byte
 	over   bool // the body exceeded the cap; the read was abandoned, not truncated
-	final  string
 }
 
-// redirected reports whether the reply came from a URL other than the one asked
-// for. A same-host HTTPS redirect is legal and followed, so this is not itself a
-// failure — it is the explanation to reach for when what came back is not an
-// attestation.
-func (f fetchResult) redirected(requested string) bool {
-	return f.final != "" && f.final != requested
-}
+// isRedirect reports whether a status is a 3xx. The whole class is one outcome
+// — the spec draws no distinction by code, by hop count, or by where the
+// Location header points.
+func isRedirect(status int) bool { return status >= 300 && status < 400 }
 
 // fetchCapped GETs url and reads at most limit bytes.
 func fetchCapped(c *http.Client, url string, limit int64) (fetchResult, error) {
@@ -491,13 +471,10 @@ func fetchCapped(c *http.Client, url string, limit int64) (fetchResult, error) {
 		return fetchResult{}, err
 	}
 	defer resp.Body.Close()
-	out := fetchResult{status: resp.StatusCode, final: url}
-	if resp.Request != nil && resp.Request.URL != nil {
-		out.final = resp.Request.URL.String()
-	}
+	out := fetchResult{status: resp.StatusCode}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return fetchResult{status: resp.StatusCode, final: out.final}, err
+		return fetchResult{status: resp.StatusCode}, err
 	}
 	if int64(len(data)) > limit {
 		out.over = true
@@ -507,92 +484,124 @@ func fetchCapped(c *http.Client, url string, limit int64) (fetchResult, error) {
 	return out, nil
 }
 
+// wellKnownOutcome is what /.well-known/dfos-did established. Exactly one of
+// three things holds: it ANSWERED (DID set); it was a NON-ANSWER, so the
+// app-description fallback MUST run (Fallback); or the query failed and the
+// channel is simply silent with no fallback owed. Note is the phrase the ladder
+// prints for the last two.
+type wellKnownOutcome struct {
+	DID      string
+	Fallback bool
+	Note     string
+}
+
+// classifyWellKnown applies ORIGIN-BINDING.md's non-answer rule to a reply from
+// the well-known path, as a pure function.
+//
+// The non-answer class is uniform and the fallback trigger is the WHOLE class:
+// "If /.well-known/dfos-did yields a non-answer — a 404; a redirect, which is
+// absence in everything but status code; or a 200 whose trimmed body is not
+// exactly one DFOS DID, the shape a host serving its application shell for
+// every unknown path produces — a verifier MUST fall back". A body over the cap
+// is that same 200-that-is-not-a-DID: no conforming body reaches 1024 bytes.
+//
+// Contradiction is unreachable from here by construction — only a body that IS
+// exactly one DID answers at all — so garbage at the path silences the channel
+// and can never break a binding. Other statuses (a 5xx, a 403) are the spec's
+// query-failure class: silence, with no fallback owed.
+func classifyWellKnown(status int, body []byte, over bool) wellKnownOutcome {
+	switch {
+	case isRedirect(status):
+		return wellKnownOutcome{
+			Fallback: true,
+			Note:     fmt.Sprintf("HTTP %d redirect at %s — not followed", status, wellKnownDIDPath),
+		}
+	case status == http.StatusOK && over:
+		return wellKnownOutcome{
+			Fallback: true,
+			Note:     fmt.Sprintf("%s exceeds %d bytes — not a DFOS DID", wellKnownDIDPath, wellKnownDIDCap),
+		}
+	case status == http.StatusOK:
+		if did, ok := didFromWellKnownBody(body); ok {
+			return wellKnownOutcome{DID: did}
+		}
+		return wellKnownOutcome{
+			Fallback: true,
+			Note:     fmt.Sprintf("%s is present but not a DFOS DID", wellKnownDIDPath),
+		}
+	case status == http.StatusNotFound || status == http.StatusGone:
+		return wellKnownOutcome{Fallback: true, Note: fmt.Sprintf("%d on %s", status, wellKnownDIDPath)}
+	default:
+		return wellKnownOutcome{Note: fmt.Sprintf("HTTP %d from %s", status, wellKnownDIDPath)}
+	}
+}
+
 // probeHTTPS runs the HTTPS half: the well-known document, with the SIWD
-// app-description fallback on ABSENCE ONLY. A dfos-did file that is present but
-// malformed is not absence — it blocks the fallback, exactly as a file naming a
-// different DID would.
+// app-description fallback on every NON-ANSWER — an absence, a redirect, or a
+// present document that is not a DID. Only a body that IS exactly one DID
+// answers, and only an answer naming a different DID is a contradiction, so
+// nothing this leg falls through can turn a silent domain into a broken one.
 func probeHTTPS(domain string) methodResult {
 	res := methodResult{Name: "https", Source: wellKnownDIDPath}
 	client := attestationClient()
 
-	requested := "https://" + domain + wellKnownDIDPath
-	got, err := fetchCapped(client, requested, wellKnownDIDCap)
-	// A redirect is the explanation whenever the reply did not come from the
-	// path the attestation must be served at: a site that answers its SPA for
-	// every unknown path returns 200 and HTML, and calling that a size-cap
-	// overrun reports the symptom and hides the cause.
-	redirectNote := ""
-	if got.redirected(requested) {
-		redirectNote = fmt.Sprintf(" — redirected to %s; the attestation must be served at %s on %s itself", got.final, wellKnownDIDPath, domain)
-	}
-	switch {
-	case err != nil:
-		var refused *refusedRedirectError
-		if errors.As(err, &refused) {
-			res.Detail = fmt.Sprintf("silent (%s redirected off %s: %s — the attestation must come from the named domain)",
-				wellKnownDIDPath, domain, refused.reason)
-			return res
-		}
+	got, err := fetchCapped(client, "https://"+domain+wellKnownDIDPath, wellKnownDIDCap)
+	if err != nil {
 		res.Detail = fmt.Sprintf("silent (%s unreachable: %s)", wellKnownDIDPath, condenseFetchError(err))
 		return res
-	case got.status == http.StatusOK && got.over:
-		if redirectNote != "" {
-			res.Detail = fmt.Sprintf("silent (%s%s)", wellKnownDIDPath, redirectNote)
-			return res
-		}
-		res.Detail = fmt.Sprintf("silent (%s exceeds %d bytes)", wellKnownDIDPath, wellKnownDIDCap)
+	}
+	outcome := classifyWellKnown(got.status, got.body, got.over)
+	switch {
+	case outcome.DID != "":
+		res.DID = outcome.DID
+		res.Detail = fmt.Sprintf("attests %s (%s)", outcome.DID, wellKnownDIDPath)
 		return res
-	case got.status == http.StatusOK:
-		did, ok := didFromWellKnownBody(got.body)
-		if !ok {
-			if redirectNote != "" {
-				res.Detail = fmt.Sprintf("silent (%s%s)", wellKnownDIDPath, redirectNote)
-				return res
-			}
-			res.Detail = fmt.Sprintf("silent (%s present but not a DFOS DID — app fallback blocked)", wellKnownDIDPath)
-			return res
-		}
-		res.DID = did
-		res.Detail = fmt.Sprintf("attests %s (%s)", did, wellKnownDIDPath)
-		return res
-	case got.status == http.StatusNotFound || got.status == http.StatusGone:
-		return probeAppDescription(domain, client, got.status)
+	case outcome.Fallback:
+		return probeAppDescription(domain, client, outcome.Note)
 	default:
-		res.Detail = fmt.Sprintf("silent (HTTP %d from %s)", got.status, wellKnownDIDPath)
+		res.Detail = fmt.Sprintf("silent (%s)", outcome.Note)
 		return res
+	}
+}
+
+// classifyAppDescription reads the fallback leg's reply, as a pure function. A
+// redirect is a non-answer here for the same reason it is one on the well-known
+// path — the fallback runs "under the same no-redirects rule" — and a fallback
+// leg has nowhere further to fall, so every non-answer is plain silence.
+func classifyAppDescription(status int, body []byte, over bool) (did, note string) {
+	switch {
+	case isRedirect(status):
+		return "", fmt.Sprintf("HTTP %d redirect at %s — not followed", status, appDescriptionPath)
+	case status == http.StatusOK && !over:
+		if did, ok := didFromAppDescription(body); ok {
+			return did, ""
+		}
+		return "", fmt.Sprintf("%s is not a usable app description", appDescriptionPath)
+	default:
+		return "", "no app description"
 	}
 }
 
 // probeAppDescription is the HTTPS method's fallback leg. Its answer IS the
 // HTTPS method's answer — every existing SIWD application already publishes its
-// DID, and this reads it.
-func probeAppDescription(domain string, client *http.Client, wellKnownStatus int) methodResult {
+// DID, and this reads it. wellKnownNote is why the fallback ran, carried into
+// the detail line so the ladder names both paths' outcomes in one breath.
+func probeAppDescription(domain string, client *http.Client, wellKnownNote string) methodResult {
 	res := methodResult{Name: "https", Source: appDescriptionPath, Fallback: true}
 
 	got, err := fetchCapped(client, "https://"+domain+appDescriptionPath, appDescriptionCap)
-	status, body, over := got.status, got.body, got.over
-	switch {
-	case err != nil:
-		var refused *refusedRedirectError
-		if errors.As(err, &refused) {
-			res.Detail = fmt.Sprintf("silent (%d on %s, %s redirected off %s: %s — the attestation must come from the named domain)",
-				wellKnownStatus, wellKnownDIDPath, appDescriptionPath, domain, refused.reason)
-			return res
-		}
-		res.Detail = fmt.Sprintf("silent (%d on %s, %s unreachable: %s)", wellKnownStatus, wellKnownDIDPath, appDescriptionPath, condenseFetchError(err))
-		return res
-	case status == http.StatusOK && !over:
-		if did, ok := didFromAppDescription(body); ok {
-			res.DID = did
-			res.Detail = fmt.Sprintf("attests %s (%s, app-description fallback)", did, appDescriptionPath)
-			return res
-		}
-		res.Detail = fmt.Sprintf("silent (%d on %s, %s is not a usable app description)", wellKnownStatus, wellKnownDIDPath, appDescriptionPath)
-		return res
-	default:
-		res.Detail = fmt.Sprintf("silent (%d on %s, no app description)", wellKnownStatus, wellKnownDIDPath)
+	if err != nil {
+		res.Detail = fmt.Sprintf("silent (%s; %s unreachable: %s)", wellKnownNote, appDescriptionPath, condenseFetchError(err))
 		return res
 	}
+	did, note := classifyAppDescription(got.status, got.body, got.over)
+	if did != "" {
+		res.DID = did
+		res.Detail = fmt.Sprintf("attests %s (%s, app-description fallback)", did, appDescriptionPath)
+		return res
+	}
+	res.Detail = fmt.Sprintf("silent (%s; %s)", wellKnownNote, note)
+	return res
 }
 
 // probeDNS runs the DNS half: TXT records at _dfos.<domain>. A resolver failure

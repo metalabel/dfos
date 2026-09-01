@@ -1143,7 +1143,9 @@ The domain then serves **either** attestation — whichever its hosting allows:
 | HTTPS  | `https://<domain>/.well-known/dfos-did` containing exactly the DID, plain text |
 | DNS    | `_dfos.<domain>.  TXT  "did=did:dfos:<id>"`                                    |
 
-A SIWD app already serving `/.well-known/dfos-app.json` with a matching `client_did` attests too: `verify-binding` falls back to it when `dfos-did` is **absent** (404), so every existing SIWD application is attest-back-capable with no new file. The fallback applies to absence only — a `dfos-did` document that is present but malformed blocks it.
+A SIWD app already serving `/.well-known/dfos-app.json` with a matching `client_did` attests too: `verify-binding` falls back to it on any **non-answer** at `dfos-did` — a 404, a redirect, or a `200` whose trimmed body is not exactly one DFOS DID (the application shell a host returns for every unknown path) — so every existing SIWD application is attest-back-capable with no new file. Only a body that **is** exactly one DFOS DID answers, and only an answer naming a different DID is a contradiction, so garbage at the path silences the channel rather than breaking the binding.
+
+**Neither HTTPS fetch follows a redirect.** The attestation is the named origin speaking for itself at the registered path, and a `3xx` is that origin declining to answer there — whatever it points at, another origin or another path on the same one, the bytes would arrive from somewhere the binding did not send the verifier. `verify-binding` reads no body behind a redirect and reports it for what it is: a non-answer that attests nothing and contradicts nothing. A domain whose HTTP serving its operator does not control attests through the DNS record instead; either method alone suffices.
 
 `verify-binding` checks both methods and folds them into the spec's verdicts, which map to exit codes so scripts can branch without parsing output:
 
@@ -1151,7 +1153,7 @@ A SIWD app already serving `/.well-known/dfos-app.json` with a matching `client_
 | ---------- | ---- | ---------------------------------------------------------------------------------------------- |
 | `bound`    | 0    | At least one method attests this DID, and no method answers anything else                      |
 | `broken`   | 1    | A method answers a different DID, the methods disagree, or DNS carries multiple `did=` records |
-| `stale`    | 2    | A claim exists and every method is silent (network, TLS, timeout, 404, NXDOMAIN)               |
+| `stale`    | 2    | A claim exists and every method is silent (network, TLS, timeout, 404, a redirect, NXDOMAIN)   |
 | `no-claim` | 0    | The chain claims no domain, so there is nothing to verify                                      |
 
 Exit `1` is also the CLI's generic error status (unresolvable target, chain not held locally, malformed input); those print an error on stderr instead of a verdict. **Silence is never contradiction:** hosting and DNS fail and recover routinely, so `stale` means _could not check_ and `broken` means _checked and contradicted_ — the two must not be conflated. A verified binding proves control of the domain at verification time, never personhood or endorsement, which is why every output names the domain instead of collapsing into a checkmark.

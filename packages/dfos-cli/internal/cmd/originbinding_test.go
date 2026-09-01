@@ -3,13 +3,14 @@ package cmd
 // Origin-binding tests. Every rule in specs/ORIGIN-BINDING.md that the CLI
 // enforces is exercised here as a PURE fold — domain validation, claim reading,
 // record/body parsing, the bind plan, the verdict matrix — plus the two
-// command-level paths that touch nothing but the local relay. No test performs
-// DNS or HTTPS: the probes are thin wrappers over these folds by construction.
+// command-level paths that touch nothing but the local relay. No test resolves
+// DNS or leaves the machine: the probes are thin wrappers over these folds by
+// construction, and the one rule no fold can express — that the client follows
+// no redirect — is pinned against a loopback httptest server.
 
 import (
-	"errors"
 	"net/http"
-	"net/url"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -312,107 +313,144 @@ func TestVerdictExitCodes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// redirect policy
+// redirect policy — ORIGIN-BINDING.md: verifiers "MUST NOT follow redirects",
+// and "a redirect is a non-answer, never a contradiction"
 // ---------------------------------------------------------------------------
 
-func TestRefuseForeignRedirect(t *testing.T) {
-	origin := &http.Request{URL: mustURL(t, "https://example.com/.well-known/dfos-did")}
-
-	cases := map[string]struct {
-		target string
-		accept bool
-	}{
-		"same host":       {"https://example.com/did.txt", true},
-		"other host":      {"https://evil.example/did.txt", false},
-		"subdomain":       {"https://www.example.com/did.txt", false},
-		"different port":  {"https://example.com:8443/did.txt", false},
-		"downgrade":       {"http://example.com/did.txt", false},
-		"case-only shift": {"https://EXAMPLE.com/did.txt", true},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			req := &http.Request{URL: mustURL(t, tc.target)}
-			err := refuseForeignRedirect(req, []*http.Request{origin})
-			if tc.accept && err != nil {
-				t.Fatalf("redirect to %s refused: %v", tc.target, err)
-			}
-			if !tc.accept && err == nil {
-				t.Fatalf("redirect to %s accepted", tc.target)
-			}
-		})
-	}
-
-	// hop cap
-	via := make([]*http.Request, maxRedirectHops)
-	for i := range via {
-		via[i] = origin
-	}
-	if err := refuseForeignRedirect(&http.Request{URL: mustURL(t, "https://example.com/x")}, via); err == nil {
-		t.Fatal("redirect chain past the hop cap was followed")
-	}
-}
-
-// A refused redirect is a REFUSAL, not an unreachable domain: something
-// answered, and it was not the named domain. The two get different sentences,
-// so the typed error has to survive the http.Client's own wrapping.
-func TestRefusedRedirectIsTypedDistinctlyFromUnreachable(t *testing.T) {
-	origin := &http.Request{URL: mustURL(t, "https://example.com/.well-known/dfos-did")}
-
-	for _, target := range []string{"https://evil.example/did.txt", "http://example.com/did.txt"} {
-		err := refuseForeignRedirect(&http.Request{URL: mustURL(t, target)}, []*http.Request{origin})
-		var refused *refusedRedirectError
-		if !errors.As(err, &refused) {
-			t.Fatalf("redirect to %s produced %T, want a refusedRedirectError", target, err)
+// The one rule no fold can check: the client itself must not follow. A same-host
+// hop to a path serving a perfectly good DID is exactly what the CLI used to
+// follow and now refuses — what the probe reads is the 3xx, not the body behind
+// it, because a followed hop makes the effective serving path unauditable.
+func TestAttestationClientFollowsNoRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			_, _ = w.Write([]byte(testOriginDID))
+			return
 		}
-		if refused.reason == "" {
-			t.Fatalf("refusal for %s carries no reason", target)
-		}
-		// The client wraps CheckRedirect errors in *url.Error; the probe reads
-		// through that wrapper, so the test does too.
-		wrapped := &url.Error{Op: "Get", URL: target, Err: err}
-		if !errors.As(error(wrapped), &refused) {
-			t.Fatalf("refusal for %s did not survive url.Error wrapping", target)
-		}
-	}
+		http.Redirect(w, r, "/moved", http.StatusFound)
+	}))
+	defer srv.Close()
 
-	// A plain transport failure stays a plain transport failure.
-	if errors.As(error(&url.Error{Op: "Get", URL: "https://example.com", Err: errors.New("no such host")}),
-		new(*refusedRedirectError)) {
-		t.Fatal("an unreachable domain was classified as a refused redirect")
-	}
-}
-
-// A followed same-host redirect is legal, so it is not itself a failure — but
-// when what comes back is not an attestation, the redirect is the fact worth
-// reporting rather than the size of the HTML that arrived.
-func TestFetchResultRedirected(t *testing.T) {
-	requested := "https://example.com/.well-known/dfos-did"
-	cases := map[string]struct {
-		final string
-		want  bool
-	}{
-		"same url":       {requested, false},
-		"unset":          {"", false},
-		"redirected":     {"https://example.com/", true},
-		"other path":     {"https://example.com/index.html", true},
-		"query appended": {requested + "?x=1", true},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			if got := (fetchResult{final: tc.final}).redirected(requested); got != tc.want {
-				t.Fatalf("redirected(%q) = %v, want %v", tc.final, got, tc.want)
-			}
-		})
-	}
-}
-
-func mustURL(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
+	got, err := fetchCapped(attestationClient(), srv.URL+wellKnownDIDPath, wellKnownDIDCap)
 	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
+		t.Fatalf("fetch: %v", err)
 	}
-	return u
+	if got.status != http.StatusFound {
+		t.Fatalf("status = %d, want %d — the redirect was followed", got.status, http.StatusFound)
+	}
+	if did, ok := didFromWellKnownBody(got.body); ok {
+		t.Fatalf("the hop's body attested %s — the redirect was followed", did)
+	}
+}
+
+// The non-answer class, and the fallback trigger that rides it. The spec's
+// trigger is the WHOLE class — "a 404; a redirect, which is absence in
+// everything but status code; or a 200 whose trimmed body is not exactly one
+// DFOS DID" — so every one of those MUST reach the app description, and none of
+// them may answer.
+func TestClassifyWellKnown(t *testing.T) {
+	cases := map[string]struct {
+		status       int
+		body         string
+		over         bool
+		wantDID      string
+		wantFallback bool
+	}{
+		"attests":            {200, "  " + testOriginDID + "\n", false, testOriginDID, false},
+		"absent":             {404, "", false, "", true},
+		"gone":               {410, "", false, "", true},
+		"moved permanently":  {301, "", false, "", true},
+		"found":              {302, "", false, "", true},
+		"see other":          {303, "", false, "", true},
+		"temporary redirect": {307, "", false, "", true},
+		"permanent redirect": {308, "", false, "", true},
+		"app shell":          {200, "<!doctype html><html></html>", false, "", true},
+		"empty body":         {200, "\n", false, "", true},
+		"two dids":           {200, testOriginDID + "\n" + testOriginOtherDID, false, "", true},
+		"over the cap":       {200, "", true, "", true},
+		"server error":       {500, "", false, "", false},
+		"forbidden":          {403, "", false, "", false},
+		"unauthorized":       {401, "", false, "", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := classifyWellKnown(tc.status, []byte(tc.body), tc.over)
+			if got.DID != tc.wantDID {
+				t.Fatalf("DID = %q, want %q", got.DID, tc.wantDID)
+			}
+			if got.Fallback != tc.wantFallback {
+				t.Fatalf("Fallback = %v, want %v", got.Fallback, tc.wantFallback)
+			}
+			if got.DID == "" && got.Note == "" {
+				t.Fatal("a non-answer carries no note for the ladder to print")
+			}
+			if got.DID != "" && got.Fallback {
+				t.Fatal("an answer asked for the fallback")
+			}
+		})
+	}
+}
+
+// The well-known's redirect note says all three things the walk owes an
+// operator: the origin redirected, the redirect was not followed, and the
+// channel therefore said nothing.
+func TestClassifyWellKnownRedirectNoteNamesTheRule(t *testing.T) {
+	note := classifyWellKnown(http.StatusFound, nil, false).Note
+	for _, want := range []string{"302", "redirect", "not followed", wellKnownDIDPath} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("redirect note %q does not mention %q", note, want)
+		}
+	}
+}
+
+// The fallback leg runs "under the same no-redirects rule", and has nowhere
+// further to fall: every non-answer there is plain silence.
+func TestClassifyAppDescription(t *testing.T) {
+	good := `{"name":"Demo","redirect_uris":["https://example.com/cb"],"client_did":"` + testOriginDID + `"}`
+	cases := map[string]struct {
+		status  int
+		body    string
+		over    bool
+		wantDID string
+	}{
+		"attests":      {200, good, false, testOriginDID},
+		"redirect":     {302, "", false, ""},
+		"absent":       {404, "", false, ""},
+		"not an app":   {200, "<!doctype html>", false, ""},
+		"over the cap": {200, "", true, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			did, note := classifyAppDescription(tc.status, []byte(tc.body), tc.over)
+			if did != tc.wantDID {
+				t.Fatalf("did = %q, want %q", did, tc.wantDID)
+			}
+			if did == "" && note == "" {
+				t.Fatal("a silent fallback carries no note")
+			}
+			if did != "" && note != "" {
+				t.Fatalf("an answer carries a silence note: %q", note)
+			}
+		})
+	}
+	if _, note := classifyAppDescription(http.StatusFound, nil, false); !strings.Contains(note, "not followed") {
+		t.Fatalf("app-description redirect note %q does not say the redirect was not followed", note)
+	}
+}
+
+// The whole ruling in one assertion: a domain that redirects at the well-known
+// path and serves nothing else is STALE — could not check — never broken.
+// Nothing contradicted anything.
+func TestRedirectIsNeverBroken(t *testing.T) {
+	out := classifyWellKnown(http.StatusMovedPermanently, nil, false)
+	if out.DID != "" {
+		t.Fatalf("a redirect answered %q", out.DID)
+	}
+	silentHTTPS := methodResult{Name: "https", Source: appDescriptionPath, Fallback: true, Detail: "silent (" + out.Note + "; no app description)"}
+	silentDNS := methodResult{Name: "dns", Detail: "silent (no _dfos TXT record)"}
+	if got := foldVerdict(testOriginDID, []methodResult{silentHTTPS, silentDNS}); got != verdictStale {
+		t.Fatalf("verdict = %s, want %s", got, verdictStale)
+	}
 }
 
 // ---------------------------------------------------------------------------
