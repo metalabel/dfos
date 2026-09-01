@@ -915,6 +915,91 @@ func TestKeysRemoveOnAnUnknownSelectorRemovesNothing(t *testing.T) {
 	}
 }
 
+// A superseded verdict is only as current as the chain behind it, and the
+// incident this guards against is what happens when it does not say so: a LIVE
+// key reported as "the chain for this DID is in the local relay and no longer
+// names this key", at full confidence, off a chain that had been forked locally
+// while the identity's own relay served a newer head naming the key live.
+//
+// So the verdict names its basis wherever it appears — in the ledger's reason,
+// in `keys list --json` with the CID whole, and in the `keys remove` refusal,
+// which additionally names the command that asks the relay.
+func TestSupersededVerdictNamesTheChainHeadItWasReadFrom(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+
+	before, _ := localRelayInstance.Relay.GetIdentity(did)
+	genesis := keyAccount(before.State.AuthKeys[0].PublicKeyMultibase)
+
+	identityFlag = "alice"
+	update := newIdentityUpdateCmd()
+	mustSetFlag(t, update, "rotate-controller", "true")
+	mustSetFlag(t, update, "rotate-auth", "true")
+	mustSetFlag(t, update, "rotate-assert", "true")
+	if err := update.RunE(update, nil); err != nil {
+		t.Fatalf("identity update --rotate-*: %v", err)
+	}
+
+	after, _ := localRelayInstance.Relay.GetIdentity(did)
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("build ledger: %v", err)
+	}
+
+	retired := entryFor(t, ledger, genesis)
+	if retired.Status != statusSuperseded {
+		t.Fatalf("the rotated-out key is %s, want %s", retired.Status, statusSuperseded)
+	}
+	// The prose carries the head, its date, and the fact that no relay answered —
+	// bracketed, so the basis reads as the ground under the finding rather than
+	// as a second clause hanging off the finding's own em-dash.
+	for _, want := range []string{
+		"(as of local head " + truncateMiddle(after.HeadCID, 16) + ", " + after.LastCreatedAt +
+			"; the identity's relay was not consulted)",
+	} {
+		if !strings.Contains(retired.Reason, want) {
+			t.Fatalf("the superseded reason is missing %q:\n%s", want, retired.Reason)
+		}
+	}
+	// The document carries the CID whole, so a caller can compare it against
+	// what a relay serves rather than against a terminal-width abbreviation.
+	if retired.AsOf == nil || retired.AsOf.HeadCID != after.HeadCID || retired.AsOf.LastCreatedAt != after.LastCreatedAt {
+		t.Fatalf("asOf = %+v, want head %s at %s", retired.AsOf, after.HeadCID, after.LastCreatedAt)
+	}
+
+	// Only the negative verdict is stamped. A declared key's row is not a claim
+	// about what some other relay might say, so it carries no basis at all.
+	current := entryFor(t, ledger, keyAccount(after.State.AuthKeys[0].PublicKeyMultibase))
+	if current.Status != statusDeclared {
+		t.Fatalf("the rotated-in key is %s, want %s", current.Status, statusDeclared)
+	}
+	if current.AsOf != nil {
+		t.Fatalf("a declared key carries a basis stamp: %+v", current.AsOf)
+	}
+
+	// The same two facts survive the JSON path.
+	var listed keyLedger
+	runJSON(t, newKeysListCmd(), nil, &listed)
+	listedEntry := entryFor(t, &listed, genesis)
+	if listedEntry.AsOf == nil || listedEntry.AsOf.HeadCID != after.HeadCID {
+		t.Fatalf("'keys list --json' dropped the basis: %+v", listedEntry.AsOf)
+	}
+
+	// And the refusal, which is where an operator most needs to know that the
+	// verdict keeping their key is one relay's — and how to check it.
+	refusal := removeRefusal(t, genesis).Error()
+	for _, want := range []string{
+		"That verdict is as of local head " + truncateMiddle(after.HeadCID, 16) + ", " + after.LastCreatedAt +
+			"; the identity's relay was not consulted.",
+		"'dfos identity status alice' compares this machine's chain against the identity's relay",
+	} {
+		if !strings.Contains(refusal, want) {
+			t.Fatalf("the superseded refusal is missing %q:\n%s", want, refusal)
+		}
+	}
+}
+
 func writeLoginClientFile(t *testing.T, did, keyID string) {
 	t.Helper()
 	body, err := json.Marshal(loginClient{DID: did, KeyID: keyID, Chain: []string{}})

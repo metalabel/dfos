@@ -29,6 +29,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityCreateCmd())
 	cmd.AddCommand(newIdentityListCmd())
 	cmd.AddCommand(newIdentityShowCmd())
+	cmd.AddCommand(newIdentityStatusCmd())
 	cmd.AddCommand(newIdentityLogCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
 	cmd.AddCommand(newIdentityServicesCmd())
@@ -2185,6 +2186,389 @@ func newIdentityServicesCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// --- status: this machine's chain against the identity's own relay ---
+//
+// Every other local surface answers questions about the chain in this machine's
+// relay as though that chain were the chain. It is not: it is one copy, and a
+// copy can be behind the identity's own relay, ahead of it with operations that
+// were never published, or forked away from it entirely. Nothing in the CLI
+// could say which — so `keys list` reported a live key as superseded off a
+// locally forked chain, at full confidence, and there was no command an operator
+// could run to find out otherwise.
+//
+// This is that command. It fetches the log the identity's relay serves, verifies
+// it, and compares it token for token against the log this machine holds. The
+// comparison is byte equality over the ordered JWS tokens, which is the only
+// thing that can distinguish "behind" from "diverged": two chains with the same
+// operation count and different histories are a fork, and a head CID alone says
+// nothing about where they parted.
+//
+// The relay that answered is NAMED in every output, the same discipline
+// `recover` holds its oracle to. `in-sync` here means one relay's head is this
+// machine's head; it is not a claim about the network, and nothing about a
+// silent, unreachable, or unverifiable relay is ever reported as agreement.
+const (
+	// identityStatusInSync: same tokens, same order. One relay's answer.
+	identityStatusInSync = "in-sync"
+	// identityStatusBehind: this machine's log is a proper PREFIX of the relay's.
+	// The relay holds operations this machine has never seen.
+	identityStatusBehind = "behind"
+	// identityStatusAhead: the relay's log is a proper prefix of this machine's.
+	// Operations were signed here and never published.
+	identityStatusAhead = "ahead-unpublished"
+	// identityStatusDiverged: a common prefix, then two different histories. Both
+	// sides extended the same past; neither is wrong on its face, and choosing
+	// between them is an operator's decision, not this command's.
+	identityStatusDiverged = "diverged"
+	// identityStatusNoLocalChain: this machine holds no chain for the DID at all.
+	// A reportable state rather than a failure — the relay's side still answers.
+	identityStatusNoLocalChain = "no-local-chain"
+	// identityStatusUnknown: the comparison could not be made. No relay to ask, a
+	// relay that did not answer, or a chain that does not verify. NEVER in-sync.
+	identityStatusUnknown = "unknown"
+)
+
+// identityStatusSide is one side of the comparison: a head, how many operations
+// stand behind it, and when the last of them was written.
+type identityStatusSide struct {
+	HeadCID       string `json:"headCID"`
+	Operations    int    `json:"operations"`
+	LastCreatedAt string `json:"lastCreatedAt,omitempty"`
+}
+
+// identityStatusPeerRef is the relay that answered, and how it was chosen. Both
+// halves are reported: an answer from a relay the operator named and an answer
+// from the relay the identity advertises are different claims.
+type identityStatusPeerRef struct {
+	URL    string `json:"url"`
+	Source string `json:"source"`
+	Name   string `json:"name,omitempty"`
+}
+
+func (p *identityStatusPeerRef) label() string {
+	if p == nil {
+		return "no relay"
+	}
+	if p.Name != "" {
+		return fmt.Sprintf("%s (%s)", p.Name, p.URL)
+	}
+	return p.URL
+}
+
+type identityStatusResult struct {
+	DID     string `json:"did"`
+	Name    string `json:"name,omitempty"`
+	Verdict string `json:"verdict"`
+	// Local and Remote are null rather than zero-valued when that side has no
+	// chain: a head of "" and an operation count of 0 read as a fact about a
+	// chain, and the fact here is that there is no chain.
+	Local  *identityStatusSide    `json:"local"`
+	Relay  *identityStatusPeerRef `json:"relay"`
+	Remote *identityStatusSide    `json:"remote"`
+	// BehindBy and AheadBy count the operations the other side has and this one
+	// does not. Only the verdict's own count is set.
+	BehindBy int `json:"behindBy,omitempty"`
+	AheadBy  int `json:"aheadBy,omitempty"`
+	// ForkIndex is the length of the common prefix on a divergence: index of the
+	// first operation the two sides disagree about. A pointer because 0 is a real
+	// answer — two chains that share nothing but their DID fork at the genesis.
+	ForkIndex           *int   `json:"forkIndex,omitempty"`
+	LocalForkCreatedAt  string `json:"localForkCreatedAt,omitempty"`
+	RemoteForkCreatedAt string `json:"remoteForkCreatedAt,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+}
+
+func newIdentityStatusCmd() *cobra.Command {
+	var peerName string
+	cmd := &cobra.Command{
+		Use:   "status <name|did>",
+		Short: "Compare this machine's chain for an identity against the identity's relay",
+		Long: "Fetch the operation log a relay serves for an identity, verify it, and compare it against the " +
+			"chain this machine holds in its local relay. The relay asked is --peer when one is given, and " +
+			"otherwise the DfosRelay endpoint the identity's own chain advertises; it is named in the output " +
+			"either way.\n\n" +
+			"Verdicts:\n" +
+			"  in-sync            the relay's log and this machine's are the same operations in the same order\n" +
+			"  behind             this machine's log is a prefix of the relay's — the relay has operations this machine lacks\n" +
+			"  ahead-unpublished  the relay's log is a prefix of this machine's — operations signed here and never published\n" +
+			"  diverged           a shared history, then two different ones. Choosing between them is an operator's decision\n" +
+			"  no-local-chain     this machine holds no chain for the identity, so only the relay's side is reported\n" +
+			"  unknown            the comparison could not be made (exit 1)\n\n" +
+			"in-sync means THIS RELAY's head is this machine's head. It is one relay's answer and not a claim " +
+			"about the network: another relay can hold a different chain, and this command says nothing about " +
+			"one it did not ask. A relay that cannot be reached, does not serve the identity, or serves a chain " +
+			"that does not verify is reported as unknown, named, with the error — never as agreement.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runIdentityStatus(args[0], peerName)
+		},
+	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Relay to compare against — outranks the identity's advertised DfosRelay endpoint")
+	return cmd
+}
+
+func runIdentityStatus(target, peerOverride string) error {
+	did, err := resolveIdentityDID(target)
+	if err != nil {
+		return err
+	}
+	lr, err := getRelay()
+	if err != nil {
+		return err
+	}
+
+	result := &identityStatusResult{DID: did, Name: config.FindIdentityName(cfg, did)}
+
+	// The local side. No chain here is a REPORTABLE STATE, not an error: the
+	// relay's side is still worth asking about, and "this machine holds nothing"
+	// is an answer an operator came for rather than a failure to produce one.
+	local, err := lr.Relay.GetIdentity(did)
+	if err != nil {
+		return fmt.Errorf("read the chain for %s from the local relay: %w", did, err)
+	}
+	var localLog []string
+	if local != nil {
+		localLog = local.Log
+		result.Local = &identityStatusSide{
+			HeadCID:       local.HeadCID,
+			Operations:    len(local.Log),
+			LastCreatedAt: local.LastCreatedAt,
+		}
+	}
+
+	c, peer, err := identityStatusPeer(peerOverride, local)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return result.unknown("no relay to compare against: the identity advertises no DfosRelay service and no --peer was given")
+	}
+	result.Relay = peer
+
+	remoteLog, err := c.GetIdentityLog(did)
+	if err != nil {
+		// One sentence for every way the ask fails — unreachable, 404, a body
+		// that did not parse. They differ in cause and not in consequence: no
+		// chain came back, so there is nothing to compare, and a relay holding
+		// no chain for a DID is not evidence that this machine's is current.
+		return result.unknown(fmt.Sprintf("%s could not answer for %s: %v", peer.label(), did, err))
+	}
+	// Verified before compared. An unverifiable log is not a chain, and comparing
+	// against one would produce a verdict about bytes rather than about a history
+	// — the two agree right up until the moment the answer matters.
+	verified, err := protocol.VerifyIdentityChain(remoteLog)
+	if err != nil {
+		return result.unknown(fmt.Sprintf("the chain %s serves for %s does not verify: %v", peer.label(), did, err))
+	}
+	result.Remote = &identityStatusSide{
+		HeadCID:       verified.HeadCID,
+		Operations:    len(remoteLog),
+		LastCreatedAt: verified.LastCreatedAt,
+	}
+
+	common := commonPrefixLen(localLog, remoteLog)
+	switch {
+	case local == nil:
+		result.Verdict = identityStatusNoLocalChain
+	case common == len(localLog) && common == len(remoteLog):
+		result.Verdict = identityStatusInSync
+	case common == len(localLog):
+		result.Verdict = identityStatusBehind
+		result.BehindBy = len(remoteLog) - common
+	case common == len(remoteLog):
+		result.Verdict = identityStatusAhead
+		result.AheadBy = len(localLog) - common
+	default:
+		result.Verdict = identityStatusDiverged
+		fork := common
+		result.ForkIndex = &fork
+		result.LocalForkCreatedAt = opCreatedAt(localLog[common])
+		result.RemoteForkCreatedAt = opCreatedAt(remoteLog[common])
+	}
+	return result.emit()
+}
+
+// identityStatusPeer picks the relay this comparison asks, and says where the
+// choice came from.
+//
+// The two failures here are deliberately different shapes. A --peer that does
+// not resolve — an unknown name, a peer whose DID pin has moved — is an error
+// about the COMMAND: the operator named a relay this machine will not use, and
+// no comparison was attempted against anything. Having no relay to ask at all is
+// a fact about the IDENTITY, so it comes back as (nil, nil, nil) and the caller
+// reports it as the unknown verdict it is, with the rest of the document intact.
+func identityStatusPeer(peerOverride string, chain *relay.StoredIdentityChain) (*client.Client, *identityStatusPeerRef, error) {
+	if peerOverride != "" {
+		c, name, err := getPeerClient(peerOverride)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, &identityStatusPeerRef{URL: c.BaseURL, Source: "--peer", Name: name}, nil
+	}
+	// The identity's own advertised relay, read out of the chain this machine
+	// holds. It is the relay the identity says is its own, which is the only one
+	// whose head means anything about whether an operation is published — and it
+	// is read from local state, so a chain this machine does not hold advertises
+	// nothing and there is nothing to ask.
+	if chain == nil {
+		return nil, nil, nil
+	}
+	endpoints := protocol.RelayEndpoints(chain.State.Services)
+	if len(endpoints) == 0 {
+		return nil, nil, nil
+	}
+	return client.New(endpoints[0]), &identityStatusPeerRef{URL: endpoints[0], Source: "advertised DfosRelay"}, nil
+}
+
+// commonPrefixLen counts the leading operations two logs agree about, byte for
+// byte. A JWS token is a signature over its own position in a chain, so equal
+// tokens are the same operation and unequal ones are the fork.
+func commonPrefixLen(a, b []string) int {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
+// operationCount renders a count with its noun agreeing. This report is read
+// under pressure — an operator finding out whether the chain they are about to
+// act on is the current one — and `1 operation(s)` is a thing a reader has to
+// decode before they can read the sentence it sits in.
+func operationCount(n int) string {
+	return fmt.Sprintf("%d %s", n, plural(n, "operation", "operations"))
+}
+
+// opCreatedAt reads one operation's own timestamp for the report. A token that
+// will not decode reports nothing rather than a guess: the index is what locates
+// the fork, and the date is there to make it recognizable to a person.
+func opCreatedAt(token string) string {
+	_, payload, err := protocol.DecodeJWSUnsafe(token)
+	if err != nil || payload == nil {
+		return ""
+	}
+	createdAt, _ := payload["createdAt"].(string)
+	return createdAt
+}
+
+// unknown records why no comparison could be made and emits the document. The
+// verdict is never omitted and never softened: an absent answer reported as
+// silence is exactly how "in-sync" gets inferred from a relay that said nothing.
+func (r *identityStatusResult) unknown(reason string) error {
+	r.Verdict = identityStatusUnknown
+	r.Reason = reason
+	return r.emit()
+}
+
+// emit renders the result and returns the exit status. The five verdicts that
+// are ANSWERS exit 0, whatever they say; `unknown` exits 1, because a script
+// that cannot tell "I asked and they differ" from "I could not ask" will read
+// the second as the first.
+func (r *identityStatusResult) emit() error {
+	if jsonFlag {
+		outputJSON(r)
+	} else {
+		r.print()
+	}
+	if r.Verdict == identityStatusUnknown {
+		return &ExitCodeError{Code: 1}
+	}
+	return nil
+}
+
+func (r *identityStatusResult) print() {
+	fmt.Printf("DID:         %s\n", r.DID)
+	if r.Name != "" {
+		fmt.Printf("Name:        %s\n", r.Name)
+	}
+	if r.Local != nil {
+		fmt.Printf("Local:       head %s — %s, %s\n",
+			truncateMiddle(r.Local.HeadCID, 20), operationCount(r.Local.Operations), orDash(r.Local.LastCreatedAt))
+	} else {
+		fmt.Printf("Local:       no chain for this identity in the local relay\n")
+	}
+	if r.Relay != nil {
+		fmt.Printf("Relay:       %s — via %s\n", r.Relay.label(), r.Relay.Source)
+	} else {
+		fmt.Printf("Relay:       none — no relay was asked\n")
+	}
+	if r.Remote != nil {
+		fmt.Printf("Remote:      head %s — %s, %s\n",
+			truncateMiddle(r.Remote.HeadCID, 20), operationCount(r.Remote.Operations), orDash(r.Remote.LastCreatedAt))
+	}
+
+	fmt.Println()
+	switch r.Verdict {
+	case identityStatusInSync:
+		fmt.Printf("VERDICT: in-sync — this relay's head is this machine's head.\n")
+		fmt.Printf("  That is %s answering about its own copy. Another relay can hold another chain.\n", r.Relay.label())
+
+	case identityStatusBehind:
+		fmt.Printf("VERDICT: behind — %s holds %s this machine has not seen.\n", r.Relay.label(), operationCount(r.BehindBy))
+		fmt.Printf("  %s\n", identityStatusFetchHint(r))
+
+	case identityStatusAhead:
+		fmt.Printf("VERDICT: ahead-unpublished — this machine holds %s that %s does not.\n", operationCount(r.AheadBy), r.Relay.label())
+		fmt.Printf("  %s\n", identityStatusPublishHint(r))
+
+	case identityStatusDiverged:
+		fork := 0
+		if r.ForkIndex != nil {
+			fork = *r.ForkIndex
+		}
+		fmt.Printf("VERDICT: diverged — both sides extended a shared history of %s and then parted.\n", operationCount(fork))
+		fmt.Printf("  Fork at operation %d: this machine's divergent operation is dated %s, and the one\n",
+			fork, orDash(r.LocalForkCreatedAt))
+		fmt.Printf("  %s serves is dated %s.\n", r.Relay.label(), orDash(r.RemoteForkCreatedAt))
+		fmt.Printf("  Neither side is the answer. Two histories exist over one DID, and which one this\n")
+		fmt.Printf("  machine keeps is a decision an operator makes deliberately — nothing here makes it.\n")
+
+	case identityStatusNoLocalChain:
+		fmt.Printf("VERDICT: no-local-chain — this machine holds no chain for this identity, so there is\n")
+		fmt.Printf("  nothing to compare. %s serves %s.\n", r.Relay.label(), operationCount(r.Remote.Operations))
+		fmt.Printf("  %s\n", identityStatusFetchHint(r))
+
+	default:
+		fmt.Printf("VERDICT: unknown — %s\n", r.Reason)
+		fmt.Printf("  This is NOT in-sync. Nothing here says whether this machine's chain is current.\n")
+		if r.Relay == nil {
+			fmt.Printf("  '--peer <name>' names a relay to ask. 'dfos identity update --service\n")
+			fmt.Printf("  id=relay,type=DfosRelay,endpoint=<url>' is how an identity comes to advertise its own.\n")
+		}
+	}
+}
+
+// identityStatusFetchHint names the command that brings the relay's operations
+// here — with the peer's registered name when it has one, and with the step that
+// gives it one when the relay came out of the chain instead. `identity fetch`
+// takes a registered peer, so pointing at a bare URL would be a command that
+// does not run.
+func identityStatusFetchHint(r *identityStatusResult) string {
+	if r.Relay != nil && r.Relay.Name != "" {
+		return fmt.Sprintf("'dfos identity fetch %s --peer %s' brings them here.", r.DID, r.Relay.Name)
+	}
+	url := ""
+	if r.Relay != nil {
+		url = r.Relay.URL
+	}
+	return fmt.Sprintf("'dfos peer add <name> %s' registers it, then 'dfos identity fetch %s --peer <name>'.", url, r.DID)
+}
+
+// identityStatusPublishHint is the same rule for the other direction.
+func identityStatusPublishHint(r *identityStatusResult) string {
+	subject := firstNonEmpty(r.Name, r.DID)
+	if r.Relay != nil && r.Relay.Name != "" {
+		return fmt.Sprintf("'dfos identity publish %s --peer %s' puts them there.", subject, r.Relay.Name)
+	}
+	url := ""
+	if r.Relay != nil {
+		url = r.Relay.URL
+	}
+	return fmt.Sprintf("'dfos peer add <name> %s' registers it, then 'dfos identity publish %s --peer <name>'.", url, subject)
 }
 
 func validateCarriage(chain *relay.StoredIdentityChain) error {

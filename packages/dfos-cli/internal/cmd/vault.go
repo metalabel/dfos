@@ -228,6 +228,16 @@ func newVaultImportCmd() *cobra.Command {
 			// on another machine are not known here, so say it rather than let the
 			// operator infer a history the metadata does not have.
 			fmt.Printf("  Counter:         0 — this machine has no record of keys this seed minted elsewhere\n")
+			// And say what that costs, because a zero counter reads like a fresh
+			// vault and is not one. An import is by definition a phrase that has
+			// existed somewhere else; minting from index 0 against a seed another
+			// machine has already spent indices on hands two unrelated identities
+			// the same private key, with nothing on either chain to show it.
+			// 'recover' is what raises the counter past what the network can prove
+			// the seed spent, so it goes before the first mint, not after.
+			fmt.Printf("  Other holders of this phrase may have minted keys this machine cannot see. Run\n")
+			fmt.Printf("  'dfos recover --vault %s' before minting from it — a mint from an unknown\n", meta.Name)
+			fmt.Printf("  counter can reuse an index another machine already spent.\n")
 			return nil
 		},
 	}

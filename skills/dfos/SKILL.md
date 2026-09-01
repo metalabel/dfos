@@ -211,9 +211,12 @@ run `dfos <command> --help`, which is the binary itself and therefore always
 current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 
 **Identity** (`dfos identity …`, alias `id`)
-`create` · `list` · `show` · `keys` · `log` · `update` · `delete` · `restore` ·
-`publish` · `fetch` · `services` · `well-known` · `add-key` · `device-pubkey` ·
-`bind-domain` · `verify-binding` · `remove` · `forget`
+`create` · `list` · `show` · `status` (compare the local chain against the
+identity's relay: in-sync / behind / ahead-unpublished / diverged, and `unknown`
+with exit 1 when no relay could answer — silence is never agreement) · `keys` ·
+`log` · `update` · `delete` · `restore` · `publish` · `fetch` · `services` ·
+`well-known` · `add-key` · `device-pubkey` · `bind-domain` · `verify-binding` ·
+`remove` · `forget`
 
 **Content** (`dfos content …`)
 `create` · `list` · `show` · `log` · `download` · `update` · `delete` ·

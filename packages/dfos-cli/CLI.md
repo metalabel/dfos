@@ -325,6 +325,8 @@ dfos recover --vault restored --peer prod
 
 Those two commands are the whole flow. `vault import` is the one way a phrase enters a machine — it checks the words against the BIP-39 wordlist and their checksum, and it never reads a phrase from argv — and `recover` is what turns the adopted seed back into working identities.
 
+They are also in that order for a reason the import says out loud. An imported vault's derivation counter starts at 0, and that zero reads like a fresh vault while meaning the opposite: a phrase being imported has by definition existed elsewhere, and other holders may have minted keys this machine cannot see. Minting from index 0 against a seed another machine has already spent indices on hands two unrelated identities the byte-identical private key, with nothing on either chain to show it. `recover` is what raises the counter past every index the network can prove the seed spent, so it runs before the first mint.
+
 ### The two stages
 
 **Derive.** Keys come back out of the seed at `m/1684434803'/<index>'` for index 0, 1, 2, … . This is local arithmetic and it never ends on its own, so something has to say when to stop.
@@ -500,6 +502,8 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 
 Roles are reported for a `superseded` key as well as a `declared` one: a declared key's `roles` are its current roles, and a superseded key's are the roles it held before the rotation that retired it, read back out of the chain's own log. The status field is what separates the two, and the human table spells the second out as `was auth, no longer current`.
 
+A `superseded` verdict **names its basis**, because it is a claim about one copy of a chain and reads like a claim about the world. The reason line ends `(as of local head <cid>, <timestamp>; the identity's relay was not consulted)`, and the `--json` entry carries the same two facts under `asOf` with the CID whole. The verdict is only as current as that head: a chain forked locally, or simply never synced, says "no longer names this key" about a key the identity's own relay still declares live, in exactly the same words. [`dfos identity status <name>`](#is-this-machines-chain-current) is what asks the relay, and the `keys remove` refusal for a superseded key points at it.
+
 A role a chain declares but no possession proof admitted is marked **`<role> (void)`**. It is listed rather than dropped, because the chain really does name the key there — and marked rather than merged, because a void membership confers nothing: it is not in effective state, it never resolves, and it never enters the `key=` index. A key whose every role is void carries `void: true` and a reason saying so, and it is never an orphan: something claims it, the claim is simply empty.
 
 A key with origin `vault` is derivable again from that vault's phrase, which is what [`dfos recover`](#recovery) does; a `standalone` key is not, and this keystore is its only copy.
@@ -517,7 +521,7 @@ A key with origin `vault` is derivable again from that vault's phrase, which is 
 Every other status is refused, and the refusal says why:
 
 - **`declared`** is chain business. A declared key is rotated out of the chain that names it — `dfos identity update --rotate-controller | --rotate-auth | --rotate-assert` — not deleted out from under it.
-- **`superseded`** is kept for the reason `prune` keeps it: this machine's view of a chain can be behind the network's, so "no longer current here" is a statement about this relay and not about the world.
+- **`superseded`** is kept for the reason `prune` keeps it: this machine's view of a chain can be behind the network's, so "no longer current here" is a statement about this relay and not about the world. The refusal names the local head that verdict was read from and points at `dfos identity status <name>`, which asks the identity's relay.
 - **`login-client`** is infrastructure. Deleting the seed under the file that names it leaves `dfos login` holding a client identity it cannot prove; deleting `login-client.json` is what mints a new one, and the authorize host asks for consent again.
 - **`unreadable` / `unnamed` / `unrecognized`**: uncertainty is neither a candidate nor an orphan, and a status that cannot be established cannot be judged.
 
@@ -765,6 +769,33 @@ A fetched identity given a `--name` appears in `identity list` with `KEYS 0/N` �
 Without a name, the KEYS column reads `?`: probing the keystore costs one lookup per declared key, so it runs only for identities a local name points at. `?` is the absence of a probe, not a count of zero — a footnote under the table says so, and `identity fetch <did> --name <name>` registers the name that turns it into a count. A deleted identity is marked `(deleted)` on its row, the same fact `keys list` marks on its keys and `whoami` reports as `State: deleted`.
 
 `identity list --json` reports each identity's DID, local name, head CID, last-operation timestamp, operation count, and resolved state. The operation log itself is omitted — a roster that inlines every base64 operation of every chain is mostly bytes nobody asked for. `--include-log` emits the full stored shape instead, and `identity log <did>` shows one chain's operations.
+
+### Is this machine's chain current?
+
+Every other local surface reads the chain in this machine's relay as though it were the chain. It is one copy. A copy can be behind the identity's own relay, ahead of it with operations that were never published, or forked away from it entirely — and a verdict read off it, like a key's `superseded` status, is only as current as the copy. `identity status` is what asks:
+
+```bash
+dfos identity status alice                  # ask the relay the identity advertises
+dfos identity status alice --peer prod      # ask a relay you name
+dfos identity status alice --json
+```
+
+It fetches the operation log the relay serves, verifies it with the same rules an ingest applies, and compares it against the local log **token for token**. Byte equality over the ordered operations is what separates "behind" from "diverged": two chains with the same operation count and different histories are a fork, and a head CID alone cannot say where they parted.
+
+| Verdict             | Meaning                                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `in-sync`           | the relay's log and this machine's are the same operations in the same order                  |
+| `behind`            | this machine's log is a prefix of the relay's — the relay holds operations this machine lacks |
+| `ahead-unpublished` | the relay's log is a prefix of this machine's — operations signed here and never published    |
+| `diverged`          | a shared history, then two different ones. The report locates the fork and resolves nothing   |
+| `no-local-chain`    | this machine holds no chain for the identity, so only the relay's side is reported            |
+| `unknown`           | the comparison could not be made. Exit status 1; every other verdict exits 0                  |
+
+The relay that answered is **named** in every output, with the URL and whether it came from `--peer` or from the identity's advertised `DfosRelay` service. `in-sync` means that relay's head is this machine's head — one relay's answer, not a claim about the network, and nothing about a relay this command did not ask.
+
+Silence is never agreement. A relay that cannot be reached, serves no chain for the DID, or serves a chain that does not verify is `unknown`, named, with the error — the same discipline [`recover`](#the-oracle-is-named-and-its-silence-is-not-an-answer) holds its oracle to. An identity that advertises no relay, asked without `--peer`, is `unknown` too: there was nothing to compare against, which is a different fact from a comparison that came back clean.
+
+`diverged` is reported and not repaired. Two histories exist over one DID; the report gives the fork index and the timestamp of each side's first divergent operation, and which history this machine keeps is a decision an operator makes deliberately.
 
 To forget only this machine's registration for an identity:
 
@@ -1384,6 +1415,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | ------ | ------------------------------- | ------------------------------------------------------------ |
 | `GET`  | `identity list`                 | List all known identities (owned + fetched; `--include-log`) |
 | `GET`  | `identity show [name\|did]`     | Show identity state                                          |
+| `GET`  | `identity status <name\|did>`   | Compare the local chain against the identity's relay         |
 | `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                       |
 | `GET`  | `identity services [name\|did]` | Show resolved discovery services                             |
 | `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                 |
