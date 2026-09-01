@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -128,15 +129,17 @@ type keyVaultProvenance struct {
 // buildKeyLedger performs inline, on its own for readers that want only "which
 // phrase covers this key" and none of the ledger's enumeration or corpus work.
 //
-// A vault store that will not list degrades to an empty index rather than an
-// error, the same posture buildKeyLedger takes: provenance enriches an answer
-// about a key, and a key this machine holds is held whether or not a record for
-// it can be found.
-func vaultProvenanceIndex() map[string]*keyVaultProvenance {
+// A vault store that will not list is REPORTED, not papered over with an empty
+// index. An empty index and an unreadable one produce the same lookups and
+// opposite truths: the first says no phrase covers this key, the second says
+// nobody knows — and a caller that renders the first sentence off the second
+// condition tells an operator their only copy is a keystore that a written-down
+// phrase in fact covers.
+func vaultProvenanceIndex() (map[string]*keyVaultProvenance, error) {
 	index := map[string]*keyVaultProvenance{}
 	vaults, err := getVaults().List()
 	if err != nil {
-		return index
+		return nil, err
 	}
 	for _, meta := range vaults {
 		for _, rec := range meta.Minted {
@@ -151,7 +154,7 @@ func vaultProvenanceIndex() map[string]*keyVaultProvenance {
 			}
 		}
 	}
-	return index
+	return index, nil
 }
 
 // keyLedgerEntry is one key, folded. Nothing on it is secret: an account, an
@@ -1120,7 +1123,12 @@ func declaredKeyMiss(selector string) string {
 			continue
 		}
 		for _, k := range stateKeyRoles(chain.DID, chain.State) {
-			if selector != k.Key.ID && selector != k.Key.PublicKeyMultibase {
+			// Every spelling findKeyEntry matches for a held key is a miss to
+			// answer for an unheld one: the id, the public key, and both account
+			// shapes. An operator who names a key the way the keystore files it
+			// asked the same question as one who names it by id.
+			if selector != k.Key.ID && selector != k.Key.PublicKeyMultibase &&
+				!slices.Contains(keyAccountsFor(chain.DID, k.Key.ID, k.Key.PublicKeyMultibase), selector) {
 				continue
 			}
 			return fmt.Sprintf("'%s' is declared by %s as %s and not held on this machine — "+

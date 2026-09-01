@@ -912,15 +912,24 @@ func TestKeysShowNamesAKeyThisMachineDeclaresAndDoesNotHold(t *testing.T) {
 	declared := chain.State.AuthKeys[0]
 
 	// The other machine: it reads the same chain and holds none of its seeds.
+	// Every spelling a held key resolves under is a spelling the miss answers
+	// for — the id, the public key, and both account shapes.
 	keys = storeB
-	_, err = findKeyEntry(&keyLedger{}, declared.ID)
-	if err == nil {
-		t.Fatal("a key this machine does not hold resolved to a ledger entry")
-	}
-	for _, want := range []string{declared.ID, "declared by alice", "controller, auth, assert",
-		"not held on this machine", "dfos identity status alice"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("the miss is missing %q:\n%v", want, err)
+	for _, selector := range []string{
+		declared.ID,
+		declared.PublicKeyMultibase,
+		keyAccount(declared.PublicKeyMultibase),
+		legacyKeyAccount(did, declared.ID),
+	} {
+		_, err = findKeyEntry(&keyLedger{}, selector)
+		if err == nil {
+			t.Fatalf("selector %q resolved to a ledger entry on a machine with no seeds", selector)
+		}
+		for _, want := range []string{"declared by alice", "controller, auth, assert",
+			"not held on this machine", "dfos identity status alice"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the miss for %q is missing %q:\n%v", selector, want, err)
+			}
 		}
 	}
 

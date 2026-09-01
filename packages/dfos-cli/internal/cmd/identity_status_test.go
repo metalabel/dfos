@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -506,6 +507,52 @@ func TestIdentityStatusRosterNamesTheVaultThatMintedAHeldKey(t *testing.T) {
 
 	out, _ := statusHuman(t, "alice", "oracle")
 	assertContains(t, out, "held (vault 'personal' — derivable from phrase)")
+}
+
+// Unreadable vault records and absent vault records are opposite answers.
+// "standalone" means this keystore is the only copy, and a roster that says it
+// because the records could not be read tells an operator to treat a
+// phrase-covered key as unrecoverable. The roster says `held`, says why the
+// custody half is missing, and keeps the possession half — which the keystore
+// answered by itself.
+func TestIdentityStatusRosterSaysWhenVaultRecordsAreUnreadable(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createVault(t, "personal")
+	did := createIdentity(t, "alice", storeA)
+	keys = storeA
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = heldLog(t, did)
+	genesisKey := chainState(t, did).State.AuthKeys[0]
+
+	// A regular file where the vaults directory belongs: List fails for a reason
+	// that is not "no vaults exist", which is the case the index must not absorb.
+	dir := getVaults().Dir()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove vaults dir: %v", err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("plant file at vaults dir: %v", err)
+	}
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	if res.VaultsUnavailable == "" {
+		t.Fatalf("unreadable vault records went unreported: %+v", res.KeysBasis)
+	}
+	row := keyRow(t, res, genesisKey.ID)
+	if !row.Held || row.Vault != "" {
+		t.Fatalf("a held key under unreadable records came out %+v", row)
+	}
+
+	out, _ := statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "vault records could not be read")
+	if strings.Contains(out, "held (standalone)") || strings.Contains(out, "derivable from phrase") {
+		t.Fatalf("the roster made a custody claim off unreadable records:\n%s", out)
+	}
 }
 
 // The recovery case the section exists for: no chain here at all. The roster is

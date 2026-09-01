@@ -860,7 +860,9 @@ The `HELD` column has three values, and they are three different answers to what
 
 A key marked `<role> (void)` is one the chain declares and no possession proof admitted: it is not in effective state, it resolves nowhere, and holding it grants nothing. Void rows are listed with a footnote saying that, the same way [`identity keys`](#one-key-at-genesis) lists them.
 
-`--json` carries the roster under `keys` — `id`, `roles`, `publicKey`, `held`, `void`, and `vault` for a held key a vault record names — and its basis under `keysBasis`, with `source` (`remote` or `local`), `headCID`, and `lastCreatedAt`.
+The vault half of a `held` rendering depends on the vault records being readable, and unreadable records are not absent ones. When the records cannot be read, a held key renders as bare `held`, a note under the table names the reason, and no standalone-or-vault claim is made — an absent record proves standaloneness only when the records themselves could be listed. Possession is unaffected: whether a key is held is the keystore's answer, not the vaults'.
+
+`--json` carries the roster under `keys` — `id`, `roles`, `publicKey`, `held`, `void`, and `vault` for a held key a vault record names — and its basis under `keysBasis`, with `source` (`remote` or `local`), `headCID`, and `lastCreatedAt`. `vaultsUnavailable` carries the reason vault records could not be read, and its presence is why no `vault` field appears on any held key.
 
 To forget only this machine's registration for an identity:
 

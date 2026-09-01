@@ -2322,6 +2322,11 @@ type identityStatusResult struct {
 	// roster would read as an identity that declares no keys, which no chain does.
 	Keys      []identityStatusKeyRow   `json:"keys,omitempty"`
 	KeysBasis *identityStatusKeysBasis `json:"keysBasis,omitempty"`
+	// VaultsUnavailable is why no held key in this roster makes a vault-or-
+	// standalone claim: the vault records could not be read, and an absent record
+	// proves standaloneness only when the records themselves were readable. The
+	// held flags stand — possession is the keystore's answer, not the vaults'.
+	VaultsUnavailable string `json:"vaultsUnavailable,omitempty"`
 }
 
 // The two chains a roster can be read off. Which one answered is reported, never
@@ -2490,7 +2495,11 @@ func runIdentityStatus(target, peerOverride string) error {
 // half is here is asked of the keystore, one probe per key, and the vault
 // records answer where a held key's seed came from.
 func (r *identityStatusResult) attachKeys(state protocol.IdentityState, source, headCID, lastCreatedAt string) {
-	vaults := vaultProvenanceIndex()
+	vaults, vaultsErr := vaultProvenanceIndex()
+	r.VaultsUnavailable = ""
+	if vaultsErr != nil {
+		r.VaultsUnavailable = vaultsErr.Error()
+	}
 	rows := stateKeyRoles(r.DID, state)
 	out := make([]identityStatusKeyRow, 0, len(rows))
 	for _, k := range rows {
@@ -2700,7 +2709,11 @@ func (r *identityStatusResult) printKeys() {
 		if k.Void {
 			voids++
 		}
-		fmt.Printf("  %s %s %s\n", pad(k.ID, 36), pad(joinComma(k.Roles), 34), identityStatusHeld(k))
+		fmt.Printf("  %s %s %s\n", pad(k.ID, 36), pad(joinComma(k.Roles), 34), identityStatusHeld(k, r.VaultsUnavailable != ""))
+	}
+	if r.VaultsUnavailable != "" {
+		fmt.Printf("\n  The vault records could not be read (%s), so whether a phrase covers a held key\n", r.VaultsUnavailable)
+		fmt.Printf("  is unreported — an absent record proves standaloneness only when the records are readable.\n")
 	}
 	// The same footnote `identity keys` prints, for the same reason: a void row
 	// looks like a key and is a key the chain names, and nothing about the table
@@ -2715,14 +2728,21 @@ func (r *identityStatusResult) printKeys() {
 // are three different situations for the operator reading them: a key a
 // written-down phrase can mint again, a key this keystore is the only copy of,
 // and a key this machine cannot sign with at all.
-func identityStatusHeld(k identityStatusKeyRow) string {
+//
+// vaultsUnknown suspends the first two — "standalone" means no vault record
+// names this key, which is only a finding when the records could be read. A
+// bare `held` with the reason printed under the table is an incomplete answer
+// that says so; `held (standalone)` off unreadable records is a false one.
+func identityStatusHeld(k identityStatusKeyRow, vaultsUnknown bool) string {
 	switch {
-	case k.Held && k.Vault != "":
-		return fmt.Sprintf("held (vault '%s' — derivable from phrase)", k.Vault)
-	case k.Held:
-		return "held (standalone)"
-	default:
+	case !k.Held:
 		return "not held on this machine"
+	case vaultsUnknown:
+		return "held"
+	case k.Vault != "":
+		return fmt.Sprintf("held (vault '%s' — derivable from phrase)", k.Vault)
+	default:
+		return "held (standalone)"
 	}
 }
 
