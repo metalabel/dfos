@@ -6,6 +6,17 @@
   starts from a DOMAIN and asks the domain, because two of the artifacts a domain
   can serve say something about a DFOS identity, and this page checks both.
 
+  TWO BLOCKS, in this order, under a header that carries the binding's verdict:
+
+    identity binding   which identity this domain is bound to, and the evidence
+    domain app         whether this domain describes an app, whether that claim
+                       holds, and what the document actually says
+
+  The two blocks are the page's two questions, and each is answered in one place.
+  The panel titles are the plain question; the spec nouns — origin binding, app
+  description — live in the orienting prose with their glossary definitions, where
+  a reader who wants the exact term finds it.
+
   ORIGIN BINDING (ORIGIN-BINDING.md) is the HEADLINE, whatever it says. The domain
   attests a DID — a `_dfos` TXT record or `/.well-known/dfos-did` — and that DID's
   chain must name this exact domain back. It is the domain-first walk
@@ -42,15 +53,22 @@
   "this origin has no app description" or "this domain is silent", which are
   claims about someone else's server we did not observe.
 
+  WHAT THIS PAGE DELIBERATELY DOES NOT RENDER: the operation history of the DID an
+  app description proves. Those operations belong to the APP's identity, which is
+  routinely a DIFFERENT identity from the one bound to the domain — so a timeline
+  of them under this page's headline is evidence captioned by the wrong subject.
+  It is one click away on that identity's own page, where the caption is true.
+
+  What this page CAN say, and no other page is in a position to say, is how the
+  two identities relate — the one bound to the domain, and the one the app
+  description proved. It says it, once, as a plain fact, and it colours nothing:
+  the two being different is the ordinary arrangement, not a finding.
+
 */
 
-import type { Resolved } from '@metalabel/dfos-client';
-import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { useEffect, useState } from 'preact/hooks';
 import { BindingEvidence } from '../components/binding-evidence';
 import { Check, Checks } from '../components/checks';
-import { ProvenanceLine } from '../components/provenance';
-import { OpTimeline } from '../components/timeline';
 import {
   Badge,
   DidLink,
@@ -71,7 +89,6 @@ import {
 } from '../lib/binding-browser';
 import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
-import { toOpRows, type OpRow } from '../lib/op-rows';
 import {
   assessDomainBinding,
   attestedCandidate,
@@ -91,16 +108,23 @@ import {
   type AppDescription,
   type DomainVerdict,
   type LogComparison,
+  type OriginVerified,
 } from '../lib/wellknown';
 
 /** The relay beat, kept separate from the document beat: the relays may hold
  *  nothing at all for a DID the origin carries, which is an ABSENCE, not a
- *  disagreement, and must not be compared as though it were an empty log. */
+ *  disagreement, and must not be compared as though it were an empty log.
+ *
+ *  It carries the LOG and nothing else. The relays' operations for this DID are
+ *  not rendered on this page: they are the history of the APP's identity, and
+ *  this page's subject is the domain and the identity BOUND to it — which is
+ *  routinely a different identity. That history is one click away on the app
+ *  identity's own page, where it is captioned by the identity it belongs to. */
 type RelayBeat =
   | { phase: 'idle' }
   | { phase: 'loading' }
   | { phase: 'absent'; error: string }
-  | { phase: 'held'; log: string[]; rows: OpRow[]; resolved: Resolved<VerifiedIdentity> };
+  | { phase: 'held'; log: string[] };
 
 /** The origin-binding beat. The channels are kept beside the verdict because the
  *  panel renders BOTH — the verdict, and the per-channel evidence it was folded
@@ -210,17 +234,16 @@ export const Domain = (props: { host: string }) => {
     void (async () => {
       const client = getClient();
       try {
-        const [resolved, log] = await Promise.all([
+        const [, log] = await Promise.all([
+          // asked, and its answer deliberately not kept. The question this beat
+          // answers is whether the relays HOLD this identity, and a log served
+          // for an identity that does not resolve and verify is not a holding —
+          // so the call stays even though nothing on this page renders it.
           client.identity(did),
           client.log('identity', did),
         ]);
         if (dead) return;
-        setRelay({
-          phase: 'held',
-          log: log.value.map((e) => e.jwsToken),
-          rows: toOpRows(log.value),
-          resolved,
-        });
+        setRelay({ phase: 'held', log: log.value.map((e) => e.jwsToken) });
       } catch (e) {
         // the relays do not hold this identity — an absence, and a completely
         // ordinary one for a freshly minted app identity that lives only in
@@ -330,7 +353,7 @@ export const Domain = (props: { host: string }) => {
         <Panel
           title={
             <>
-              verification <Pill state="pending">checking origin…</Pill>
+              domain app <Pill state="pending">checking origin…</Pill>
             </>
           }
         >
@@ -339,24 +362,15 @@ export const Domain = (props: { host: string }) => {
           </Checks>
         </Panel>
       ) : (
-        <Verification
+        <DomainApp
           host={props.host}
           verdict={verdict}
+          binding={binding}
           relay={relay}
           comparison={comparison}
           onRecheck={() => setNonce((n) => n + 1)}
         />
       )}
-
-      {proven !== null ? <AppPanel app={proven.app} /> : null}
-      {verdict?.kind === 'no-carriage' ? <AppPanel app={verdict.app} /> : null}
-
-      {relay.phase === 'held' && proven !== null ? (
-        <Panel title="operation history" right={<span class="lbl">as the relays serve it</span>}>
-          <OpTimeline rows={relay.rows} headCid={relay.rows[relay.rows.length - 1]?.cid ?? ''} />
-          <ProvenanceLine provenance={relay.resolved.provenance} />
-        </Panel>
-      ) : null}
 
       {proven !== null ? (
         <Related
@@ -447,7 +461,7 @@ const headlineAccent = (beat: BindingBeat): 'ok' | 'warn' | 'bad' | undefined =>
 /**
  * The app-description state in one or two words, for the header's kv row. It is a
  * POINTER to the panel below rather than a verdict — each of these is said in
- * full, with its evidence and its plain definition, in the verification panel —
+ * full, with its evidence and its plain definition, in the domain-app block —
  * and nothing is softened on the way up: a redirect says it answered nothing, an
  * unreachable origin says it was not reached, and an absence says this origin
  * describes no app.
@@ -559,7 +573,7 @@ const StatePill = (props: { verdict: DomainVerdict }) => {
   }
 };
 
-/** The verification panel's accent — the app verdict's own colour, scoped to the
+/** The domain-app block's accent — the app verdict's own colour, scoped to the
  *  panel that reports it and no longer the page's. `no-app-description` carries
  *  none, for the same reason its pill is neutral: a rule down the side would read
  *  as a shortfall where the origin gave a complete answer. */
@@ -580,7 +594,7 @@ const appAccent = (verdict: DomainVerdict): 'ok' | 'warn' | 'bad' | undefined =>
 };
 
 // -----------------------------------------------------------------------------
-// ORIGIN BINDING — the domain-first walk, and the page's headline when it speaks
+// IDENTITY BINDING — the domain-first walk, and the evidence behind the headline
 //
 // Display discipline here is NORMATIVE (ORIGIN-BINDING.md, "Display Discipline"):
 // a binding proves control of a DOMAIN at check time — never personhood,
@@ -682,8 +696,12 @@ const OriginBindingPanel = (props: {
   return (
     <Panel
       title={
+        // `identity binding` in the title, `origin binding` as the term of art in
+        // the orient below. The panel answers a plain question — which identity is
+        // this domain bound to — and the spec noun, with its glossary definition,
+        // is where a reader who wants the exact term finds it.
         <>
-          origin binding{' '}
+          identity binding{' '}
           <Pill state={pill.state} def={pill.def} word={pill.text}>
             {pill.text}
           </Pill>
@@ -740,7 +758,7 @@ const OriginBindingPanel = (props: {
         <div class="ck-note" style={{ marginTop: 10 }}>
           This is the <Term word="domain attestation" def={GLOSSARY['domainAttestation'] ?? ''} /> (
           <code>dfos-did</code> / <code>_dfos</code> TXT), checked against the identity's signed
-          chain. The panels below check this domain's{' '}
+          chain. The block below checks this domain's{' '}
           <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> (
           <code>dfos-app.json</code>) — a different claim, which neither confirms nor denies this
           binding.
@@ -852,18 +870,35 @@ const BindingNextStep = (props: { binding: DomainBinding; onRecheck: () => void 
 };
 
 // -----------------------------------------------------------------------------
-// the verification ladder
+// DOMAIN APP — one block, one story
+//
+// The four-beat ladder and the document's own contents were two panels, and the
+// split asked the reader to hold a question open across a panel boundary: the
+// ladder said whether the claim holds, and the next panel said what the claim
+// WAS. They are one story — does this domain describe an app, and does the claim
+// hold — so they are one block, in that order, under one verdict pill.
+//
+// The document's contents keep their own framing inside it. Everything in them is
+// the application's own claim and none of it is vouched for by the checks above:
+// the ladder proving a chain says nothing about whether `name` is honest, and the
+// two must not blur into one another just because they now share a panel.
 // -----------------------------------------------------------------------------
 
-const Verification = (props: {
+const DomainApp = (props: {
   host: string;
   verdict: DomainVerdict;
+  binding: BindingBeat;
   relay: RelayBeat;
   comparison: LogComparison | null;
   onRecheck: () => void;
 }) => {
   const { verdict, relay, comparison } = props;
   const proven = originVerified(verdict);
+  // the document's own claims, shown whenever there IS a document to show them
+  // from — a chain that proved a DID, or a structurally valid one that carried no
+  // chain. A malformed document has no claims to render: it makes no claim at all.
+  const app: AppDescription | null =
+    proven !== null ? proven.app : verdict.kind === 'no-carriage' ? verdict.app : null;
 
   return (
     <Panel
@@ -872,7 +907,7 @@ const Verification = (props: {
       // about one document, and it colours the section that checked it
       title={
         <>
-          verification <StatePill verdict={verdict} />
+          domain app <StatePill verdict={verdict} />
         </>
       }
       accent={appAccent(verdict)}
@@ -1014,8 +1049,44 @@ const Verification = (props: {
         </div>
       ) : null}
 
+      {app !== null ? <AppClaims app={app} /> : null}
+
+      <RelationalLine binding={props.binding} proven={proven} />
+
       <NextStep verdict={verdict} onRecheck={props.onRecheck} />
     </Panel>
+  );
+};
+
+/**
+ * THE ONE FACT ONLY THIS PAGE IS IN A POSITION TO STATE.
+ *
+ * The identity page knows an identity; the app document names an identity. Only
+ * here are BOTH in hand at once — the identity this domain is bound to, and the
+ * identity its app description proved — and so only here can they be compared.
+ *
+ * Neither answer is a verdict, and the wording is careful to make that so: two
+ * different identities is the ORDINARY arrangement (an organization binds the
+ * domain, an app carries its own identity, and nothing in either spec asks them
+ * to be the same), and one identity doing both is equally ordinary. This states
+ * the relation and stops, because a page that colours this fact would be
+ * inventing a rule out of a coincidence.
+ *
+ * It renders only when both halves genuinely exist: a `bound` binding, and an app
+ * document whose carried chain derived a DID. Anything less and there is no
+ * comparison to make — only two absences that would be dressed as a finding.
+ */
+const RelationalLine = (props: { binding: BindingBeat; proven: OriginVerified | null }) => {
+  const { binding, proven } = props;
+  if (binding.phase !== 'done' || binding.binding.kind !== 'bound' || proven === null) return null;
+  // byte-exact, like every other DID comparison in this codebase
+  const same = binding.binding.did === proven.did;
+  return (
+    <div class="ck-note" style={{ marginTop: 10 }}>
+      {same
+        ? 'the app’s identity is the same identity this domain is bound to.'
+        : 'the app’s identity is a different identity than the one bound to this domain — ordinary: an organization binds the domain, and an app carries its own identity.'}
+    </div>
   );
 };
 
@@ -1117,23 +1188,20 @@ const RelayChecks = (props: { relay: RelayBeat; comparison: LogComparison | null
 // the document itself
 // -----------------------------------------------------------------------------
 
-/** What the document SAYS. Every field here is the application's own claim —
- *  amber by construction. `name` in particular is vouched for by nothing: the
- *  serving domain is the phishing-relevant binding, and the spec says so. */
-const AppPanel = (props: { app: AppDescription }) => (
-  <Panel
-    title="app description"
-    accent="warn"
-    right={<span class="lbl">the origin's own claims</span>}
-    orient={
-      <>
-        The document's contents, <b>as served</b>. Nothing vouches for <code>name</code> — an
-        application naming itself anything is not evidence of anything; the domain that served the
-        file is the binding that matters.
-      </>
-    }
-  >
-    <div class="kv">
+/** What the document SAYS, as a subsection of the block that checked it. Every
+ *  field here is the application's own claim, and the ladder above vouches for
+ *  none of it: `name` in particular is vouched for by nothing at all — the
+ *  serving domain is the phishing-relevant binding, and the spec says so. Sharing
+ *  a panel with the checks makes saying that MORE necessary, not less, so the
+ *  framing line stays attached to the claims it qualifies. */
+const AppClaims = (props: { app: AppDescription }) => (
+  <>
+    <div class="ck-note" style={{ marginTop: 14 }}>
+      The document's contents, <b>as served</b>. Nothing vouches for <code>name</code> — an
+      application naming itself anything is not evidence of anything; the domain that served the
+      file is the binding that matters.
+    </div>
+    <div class="kv" style={{ marginTop: 8 }}>
       <div class="k">name</div>
       <div class="v">
         {props.app.name !== undefined ? (
@@ -1169,5 +1237,5 @@ const AppPanel = (props: { app: AppDescription }) => (
         )}
       </div>
     </div>
-  </Panel>
+  </>
 );
