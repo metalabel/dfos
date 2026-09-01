@@ -73,7 +73,9 @@ func newAPICmd() *cobra.Command {
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 2 {
-				return fmt.Errorf("usage: dfos api <METHOD> <path> (e.g. dfos api GET /proof/v1/stats)\n" +
+				// Same rule as the method hint in relay.go: the example names a
+				// route every relay serves, so pasting it works.
+				return fmt.Errorf("usage: dfos api <METHOD> <path> (e.g. dfos api GET /.well-known/dfos-relay)\n" +
 					"       dfos api add|list|rm|refresh|call    (see 'dfos api --help')")
 			}
 			cmd.Printf(legacyDeprecation)
