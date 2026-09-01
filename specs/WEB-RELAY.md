@@ -287,7 +287,7 @@ The relay MUST publish a profile artifact signed by its own DID using the HEAD k
   "$schema": "https://schemas.dfos.com/profile/v1",
   "name": "edge.relay.dfos.com",
   "description": "Cloudflare edge relay for the DFOS network",
-  "links": [{ "uri": "https://dfos.com", "label": "operator", "description": "Metalabel" }]
+  "links": [{ "uri": "https://dfos.com", "label": "operator", "description": "DFOS Inc" }]
 }
 ```
 

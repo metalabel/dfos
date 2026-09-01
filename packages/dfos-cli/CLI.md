@@ -344,7 +344,7 @@ The mnemonic goes to **stderr**, always, from every command that prints it: `vau
 
 At a terminal the prompt reads the phrase with **echo off**: nothing appears as it is typed, and nothing of it stays in the scrollback, in a multiplexer's history, or in whatever is recording the session. A terminal that refuses to surrender its echo bit gets a hard failure naming the piped form, not a quiet fall-through to typing a seed in clear text. Piping is how the import is scripted — `printf '%s' "$PHRASE" | dfos vault import restored` — and a piped stdin has no echo to worry about either way.
 
-A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel. What that phrase gets you back is [Recovery](#recovery).
+A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at DFOS Inc. What that phrase gets you back is [Recovery](#recovery).
 
 ---
 
@@ -1458,7 +1458,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                   |
 | `POST` | `identity update [name\|did]`   | Rotate keys / set services (`--service`)                     |
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                  |
-| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                         |
+| `POST` | `identity add-key`              | Add a public key this machine holds to a role set            |
 | `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)           |
 | `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)        |
 | `POST` | `identity delete`               | Delete identity (restorable)                                 |
@@ -1518,6 +1518,5 @@ A proof authorizes one request and nothing else: it binds that method, that host
 ## What's Deferred
 
 - **Schema validation**: validate documents against bundled JSON schemas (currently warns on missing `$schema` only)
-- **Key backup/recovery**: mnemonic seed phrases or encrypted export
 - **Shell completion docs**: `dfos completion <bash|zsh|fish>` is cobra-generated and works today; per-shell installation is not documented here
 - **Batch refresh** (`identity fetch --all`): re-fetch all tracked remote identities
