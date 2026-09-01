@@ -2316,6 +2316,46 @@ type identityStatusResult struct {
 	LocalForkCreatedAt  string `json:"localForkCreatedAt,omitempty"`
 	RemoteForkCreatedAt string `json:"remoteForkCreatedAt,omitempty"`
 	Reason              string `json:"reason,omitempty"`
+	// Keys is the roster of keys one chain declares, joined against this machine's
+	// keystore, and KeysBasis says WHICH chain. Both are absent together, and only
+	// when there is neither a local chain nor a verified remote one: an empty
+	// roster would read as an identity that declares no keys, which no chain does.
+	Keys      []identityStatusKeyRow   `json:"keys,omitempty"`
+	KeysBasis *identityStatusKeysBasis `json:"keysBasis,omitempty"`
+}
+
+// The two chains a roster can be read off. Which one answered is reported, never
+// inferred: they disagree exactly when this command has something to say.
+const (
+	identityStatusKeysRemote = "remote"
+	identityStatusKeysLocal  = "local"
+)
+
+// identityStatusKeyRow is one key the basis chain declares: what it is called,
+// what it is declared for, and whether the private half is on this machine.
+// Roles are a fact about a chain and possession is a fact about this keystore —
+// the row carries both because the question an operator brings ("can I still act
+// as this identity") is answered by neither alone.
+type identityStatusKeyRow struct {
+	ID        string   `json:"id"`
+	Roles     []string `json:"roles"`
+	PublicKey string   `json:"publicKey"`
+	Held      bool     `json:"held"`
+	Void      bool     `json:"void,omitempty"`
+	// Vault is the vault whose minted-key record names this key — set only when
+	// held; a held key with no record is standalone, and this keystore is its only
+	// copy.
+	Vault string `json:"vault,omitempty"`
+}
+
+// identityStatusKeysBasis names the chain the roster was folded from, the same
+// way every verdict here names the relay that answered. A key list with no basis
+// reads as a claim about the identity when it is a claim about one copy of one
+// history — and the copies parting is the condition this command exists to find.
+type identityStatusKeysBasis struct {
+	Source        string `json:"source"`
+	HeadCID       string `json:"headCID"`
+	LastCreatedAt string `json:"lastCreatedAt,omitempty"`
 }
 
 func newIdentityStatusCmd() *cobra.Command {
@@ -2374,6 +2414,12 @@ func runIdentityStatus(target, peerOverride string) error {
 			Operations:    len(local.Log),
 			LastCreatedAt: local.LastCreatedAt,
 		}
+		// The local roster attaches HERE, before a relay has been chosen or asked,
+		// so every way this command exits early still carries a possession answer.
+		// Whether this machine holds a key is a question the keystore settles by
+		// itself, and a relay that cannot be reached does not make it unanswerable —
+		// it only makes the roster's basis the local chain, which is then said.
+		result.attachKeys(local.State, identityStatusKeysLocal, local.HeadCID, local.LastCreatedAt)
 	}
 
 	c, peer, err := identityStatusPeer(peerOverride, local)
@@ -2425,7 +2471,52 @@ func runIdentityStatus(target, peerOverride string) error {
 		result.LocalForkCreatedAt = opCreatedAt(localLog[common])
 		result.RemoteForkCreatedAt = opCreatedAt(remoteLog[common])
 	}
+
+	// The verified chain outranks the local one as the roster's basis wherever it
+	// is at least as current — including on a divergence, where it is the history
+	// the identity's relay is actually serving to everyone else. The exception is
+	// ahead-unpublished: there the relay's log is a proper PREFIX of this
+	// machine's, so the local head is strictly fresher and may declare a key the
+	// relay has never been told about. Reporting the remote roster then would hide
+	// a rotation that happened here.
+	if result.Verdict != identityStatusAhead {
+		result.attachKeys(verified.State, identityStatusKeysRemote, verified.HeadCID, verified.LastCreatedAt)
+	}
 	return result.emit()
+}
+
+// attachKeys folds one chain state into the possession roster and records which
+// chain it came from. Every row is a key the state DECLARES; whether the private
+// half is here is asked of the keystore, one probe per key, and the vault
+// records answer where a held key's seed came from.
+func (r *identityStatusResult) attachKeys(state protocol.IdentityState, source, headCID, lastCreatedAt string) {
+	vaults := vaultProvenanceIndex()
+	rows := stateKeyRoles(r.DID, state)
+	out := make([]identityStatusKeyRow, 0, len(rows))
+	for _, k := range rows {
+		row := identityStatusKeyRow{
+			ID:        k.Key.ID,
+			Roles:     k.Roles,
+			PublicKey: k.Key.PublicKeyMultibase,
+			Held:      k.Held,
+			Void:      k.Void,
+		}
+		// Provenance is reported only for a key this machine HOLDS. A vault record
+		// for a key that is not here says a written-down phrase could rederive it,
+		// which is a recovery answer; this section answers possession, and the two
+		// read as the same sentence if they share a column.
+		if k.Held {
+			for _, account := range keyAccountsFor(r.DID, k.Key.ID, k.Key.PublicKeyMultibase) {
+				if prov := vaults[account]; prov != nil {
+					row.Vault = prov.Name
+					break
+				}
+			}
+		}
+		out = append(out, row)
+	}
+	r.Keys = out
+	r.KeysBasis = &identityStatusKeysBasis{Source: source, HeadCID: headCID, LastCreatedAt: lastCreatedAt}
 }
 
 // identityStatusPeer picks the relay this comparison asks, and says where the
@@ -2577,6 +2668,61 @@ func (r *identityStatusResult) print() {
 			fmt.Printf("  '--peer <name>' names a relay to ask. 'dfos identity update --service\n")
 			fmt.Printf("  id=relay,type=DfosRelay,endpoint=<url>' is how an identity comes to advertise its own.\n")
 		}
+	}
+
+	r.printKeys()
+}
+
+// printKeys renders the possession roster. Its header names the head the roster
+// was folded from and why that head is the one this verdict reads, because the
+// rows below it are only true of that chain: the same DID under two histories
+// declares two rosters, and a table with no basis line cannot say which it is.
+func (r *identityStatusResult) printKeys() {
+	fmt.Println()
+	if r.KeysBasis == nil {
+		fmt.Printf("Keys:        no chain state to read a roster from — nothing to report possession against\n")
+		return
+	}
+	head := truncateMiddle(r.KeysBasis.HeadCID, 20)
+	switch {
+	case r.KeysBasis.Source == identityStatusKeysRemote:
+		fmt.Printf("Keys:        roster as of remote head %s — the verified chain %s serves\n", head, r.Relay.label())
+	case r.Verdict == identityStatusAhead:
+		fmt.Printf("Keys:        roster as of local head %s — ahead of the relay; includes operations not yet published\n", head)
+	default:
+		fmt.Printf("Keys:        roster as of local head %s, %s — the relay comparison could not be made\n",
+			head, orDash(r.KeysBasis.LastCreatedAt))
+	}
+
+	fmt.Printf("  %s %s %s\n", pad("KEY ID", 36), pad("ROLES", 34), "HELD")
+	voids := 0
+	for _, k := range r.Keys {
+		if k.Void {
+			voids++
+		}
+		fmt.Printf("  %s %s %s\n", pad(k.ID, 36), pad(joinComma(k.Roles), 34), identityStatusHeld(k))
+	}
+	// The same footnote `identity keys` prints, for the same reason: a void row
+	// looks like a key and is a key the chain names, and nothing about the table
+	// says it confers nothing.
+	if voids > 0 {
+		fmt.Printf("\n  %d key(s) marked (void) are declared by this chain and never proved: they are not in\n", voids)
+		fmt.Printf("  effective state and they resolve nowhere, so holding one grants nothing.\n")
+	}
+}
+
+// identityStatusHeld says where a key's private half is, in three classes that
+// are three different situations for the operator reading them: a key a
+// written-down phrase can mint again, a key this keystore is the only copy of,
+// and a key this machine cannot sign with at all.
+func identityStatusHeld(k identityStatusKeyRow) string {
+	switch {
+	case k.Held && k.Vault != "":
+		return fmt.Sprintf("held (vault '%s' — derivable from phrase)", k.Vault)
+	case k.Held:
+		return "held (standalone)"
+	default:
+		return "not held on this machine"
 	}
 }
 
