@@ -17,8 +17,10 @@
    - resolve-then-check: every resolved address is refused if it is private,
      loopback, link-local, unique-local, or v4-mapped into any of those
    - redirects are not followed: a redirect attests nothing (ORIGIN-BINDING.md),
-     so it is reported as silence — never as a contradiction, and never as the
-     ABSENCE that alone licenses the app-description fallback
+     so it is reported as its own status — never as a contradiction, and never
+     as an answer. The spec puts it in the NON-ANSWER class, where a verifier
+     "treats the path exactly as it treats absence": it licenses the
+     app-description fallback exactly as a 404 does
    - 1024-byte response cap (a conforming body is under a hundred bytes), 5s timeout
    - the TXT lookup makes no connection, so it needs no address policy of its own
 
@@ -48,23 +50,42 @@ const TXT_CLAIM_RE = /^did=(did:dfos:[2346789acdefhknrtvz]{31})$/;
 const ASCII_WS_RE = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
 
 /**
- * What ONE method established. Six outcomes, and the split between them is the
- * whole point:
+ * What ONE method established. Seven outcomes, and the split between them is the
+ * whole point. ORIGIN-BINDING.md sorts them into three classes, and the class a
+ * result lands in is what decides whether the app-description fallback fires:
+ *
+ * NON-ANSWERS — "the file attests nothing"; each licenses the fallback on HTTPS,
+ * because the spec's trigger is the class, not the status code:
+ *
+ *   none          — an ABSENCE the domain affirmatively demonstrated: an HTTPS
+ *                   404/410, or a DNS name carrying no `did=` record.
+ *   redirected    — any 3xx. "A redirect is a non-answer, never a contradiction …
+ *                   A verifier that receives any 3xx therefore treats the path
+ *                   exactly as it treats absence: the file attests nothing, the
+ *                   app-description fallback applies as it does on a 404."
+ *   malformed     — a 200 whose trimmed body is not exactly one DFOS DID — "the
+ *                   shape a host serving its application shell for every unknown
+ *                   path produces". Present without an answer, and the spec names
+ *                   it in the same fallback trigger as the other two.
+ *
+ * ANSWERS — the domain said something, and the fallback must NOT be reached past
+ * it (a document that IS a DID naming a different one is a contradiction):
  *
  *   ok            — the domain answered with a DFOS DID
- *   none          — the domain is silent (no record, no document: an ABSENCE it
- *                   affirmatively demonstrated — an HTTPS 404/410, nothing
- *                   weaker). Fallback-eligible on HTTPS.
- *   malformed     — the domain answered with something that is NOT a DID. Present
- *                   without an answer: silence for the verdict, but it BLOCKS the
- *                   app-description fallback, which applies only on absence.
  *   contradiction — the domain answered more than once, with a set it cannot mean
+ *
+ * QUERY FAILURE — its own class in the spec's stale row ("or the queries fail:
+ * network error, TLS failure, timeout, server error"), listed apart from the
+ * non-answers and therefore NOT fallback-licensing: we did not observe the path,
+ * so we cannot say it declined to answer.
+ *
  *   error         — we could not check (timeout, resolver failure, 5xx)
  *   refused       — the fetch never left this route (policy)
  */
 export type BindingMethodResult =
   | { status: 'ok'; did: string }
   | { status: 'none'; reason?: string }
+  | { status: 'redirected'; httpStatus: number; reason: string }
   | { status: 'malformed'; reason: string }
   | { status: 'contradiction'; reason: string }
   | { status: 'error'; reason?: string; httpStatus?: number }
@@ -106,9 +127,11 @@ export const parseTxtRecords = (records: string[][]): BindingMethodResult => {
 
 /**
  * Read a 200 body from `/.well-known/dfos-did`. A body that is exactly one DFOS
- * DID after ASCII trimming attests it; ANYTHING else is `malformed` — the
- * document is present, so the origin is not silent here, and the fallback to the
- * app description (which applies on ABSENCE only) must not fire.
+ * DID after ASCII trimming attests it; ANYTHING else is `malformed` — a document
+ * that is present and says nothing the spec can read, which is the third member
+ * of its non-answer class ("a 200 whose trimmed body is not exactly one DFOS
+ * DID, the shape a host serving its application shell for every unknown path
+ * produces") and licenses the app-description fallback exactly as a 404 does.
  */
 export const parseDidBody = (body: string): BindingMethodResult => {
   const trimmed = body.replace(ASCII_WS_RE, '');
@@ -117,6 +140,50 @@ export const parseDidBody = (body: string): BindingMethodResult => {
     return { status: 'malformed', reason: 'the document is not exactly one DFOS DID' };
   }
   return { status: 'ok', did: trimmed };
+};
+
+/**
+ * What the HTTPS response STATUS alone establishes, before a byte of the body is
+ * read. Pure, so the one judgement this method makes about a domain's answer is
+ * testable without a network — the same shape `api/wellknown.ts` uses.
+ *
+ * The three outcomes are the spec's three classes, and which one a status lands
+ * in is what decides whether the app-description fallback fires:
+ *
+ *   3xx      → `redirected`. A NON-ANSWER: the attestation must come from the
+ *              named origin at the fixed path, and a redirect is that origin
+ *              declining to answer there. It gets its own status rather than
+ *              folding into `none` because the two are different observations and
+ *              the evidence row says which — an absent document and an origin
+ *              pointing elsewhere are not the same fact about a domain. For the
+ *              FALLBACK they are one class: "A verifier that receives any 3xx
+ *              therefore treats the path exactly as it treats absence."
+ *   404/410  → `none`. An absence the origin affirmatively demonstrated.
+ *   4xx/5xx  → `error`. A QUERY FAILURE, the spec's separate class — we did not
+ *              observe the path, so it never declined to answer, and nothing is
+ *              licensed off a channel we never saw.
+ *
+ * `null` means the status settles nothing on its own — the answer is in the body.
+ */
+export const classifyDidStatus = (status: number): BindingMethodResult | null => {
+  if (status >= 300 && status < 400) {
+    return {
+      status: 'redirected',
+      httpStatus: status,
+      reason: 'the origin redirected; redirects are not followed',
+    };
+  }
+  if (status === 404 || status === 410) {
+    return { status: 'none', reason: `the origin serves no ${FIXED_PATH} (HTTP ${status})` };
+  }
+  if (status < 200 || status >= 300) {
+    return {
+      status: 'error',
+      httpStatus: status,
+      reason: 'the origin answered with an error status',
+    };
+  }
+  return null;
 };
 
 // -----------------------------------------------------------------------------
@@ -196,30 +263,8 @@ const probeHttps = async (host: string): Promise<BindingMethodResult> => {
     return { status: 'error', reason: 'the origin could not be reached' };
   }
 
-  // a redirect attests NOTHING — the attestation must come from the named origin
-  // at the fixed path, so this is silence rather than a contradiction. It is
-  // `error` and not `none` because a redirect is NOT the absence the spec's
-  // app-description fallback turns on ("if /.well-known/dfos-did is absent (a
-  // 404)"): an origin that redirects has not shown us the document is missing,
-  // and reading it as absence would let a fallback document naming another DID
-  // escalate a should-be-stale binding into a public accusation of `broken`.
-  if (res.status >= 300 && res.status < 400) {
-    return {
-      status: 'error',
-      httpStatus: res.status,
-      reason: 'the origin redirected; redirects are not followed',
-    };
-  }
-  if (res.status === 404 || res.status === 410) {
-    return { status: 'none', reason: `the origin serves no ${FIXED_PATH} (HTTP ${res.status})` };
-  }
-  if (!res.ok) {
-    return {
-      status: 'error',
-      httpStatus: res.status,
-      reason: 'the origin answered with an error status',
-    };
-  }
+  const byStatus = classifyDidStatus(res.status);
+  if (byStatus !== null) return byStatus;
 
   try {
     return parseDidBody(await boundedText(res));

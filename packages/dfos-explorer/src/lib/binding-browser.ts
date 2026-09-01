@@ -265,8 +265,9 @@ export const probeDnsFromBrowser = async (host: string): Promise<ChannelAttempt>
 /**
  * Read a 200 body from `/.well-known/dfos-did`. Mirrors `parseDidBody` in
  * api/binding.ts: exactly one DFOS DID after ASCII trimming attests it, and
- * ANYTHING else is `malformed` — the document is present, so the origin is not
- * silent here, and the app-description fallback (absence only) must not fire.
+ * ANYTHING else is `malformed` — a document that is present and answers nothing,
+ * which is the third member of ORIGIN-BINDING.md's non-answer class and licenses
+ * the app-description fallback exactly as a 404 does.
  */
 export const parseDidBody = (body: string): BindingMethodResult => {
   const trimmed = body.replace(ASCII_WS_RE, '');

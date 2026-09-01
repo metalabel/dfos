@@ -61,6 +61,10 @@ export const methodNote = (result: BindingMethodResult, did: string | null): str
         : `attests ${result.did} — a DIFFERENT identity`;
     case 'contradiction':
       return result.reason;
+    case 'redirected':
+      // named for what it was, never folded into "absent": the origin answered
+      // the path, and its answer was to point elsewhere
+      return `${result.reason} (HTTP ${result.httpStatus}) — a non-answer at this path`;
     case 'malformed':
       return `${result.reason} — present, but not an attestation`;
     case 'none':
@@ -133,8 +137,9 @@ const channelRow = (
 };
 
 /** The two attest-back channels, plus the app-description fallback on the rows
- *  where it was consulted. `fallback` is null when the well-known document was
- *  present — the fallback applies only on ABSENCE, so there is nothing to show. */
+ *  where it was consulted. `fallback` is null when the well-known document
+ *  ANSWERED — the fallback applies only on a non-answer (absence, a redirect, or
+ *  a body that is not a DID), so there is nothing to show. */
 export const BindingEvidence = (props: {
   https: BindingMethodResult;
   dns: BindingMethodResult;

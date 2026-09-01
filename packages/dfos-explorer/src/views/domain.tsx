@@ -183,9 +183,10 @@ export const Domain = (props: { host: string }) => {
     void (async () => {
       const channels = await probeBindingChannels(props.host);
       const probe = probeFromChannels(channels);
-      // the app-description fallback is a MUST, and ONLY on absence. Here it can
-      // also SUPPLY the candidate: an origin that publishes nothing but a SIWD
-      // app description already publishes its DID, and this reads it.
+      // the app-description fallback is a MUST, and ONLY on a non-answer —
+      // absence, a redirect, or a body that is not a DID. Here it can also SUPPLY
+      // the candidate: an origin that answers nothing at dfos-did but serves a
+      // SIWD app description already publishes its DID, and this reads it.
       const fallback = fallbackEligible(probe) ? await readAppAttestation(props.host) : undefined;
       const candidate = attestedCandidate(probe, fallback);
 
