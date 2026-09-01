@@ -19,8 +19,10 @@
      remains between check and connect; with the fixed path, https-only, and
      port 443 the residue is a GET of one constant path — accepted and named
      here rather than hidden.)
-   - redirects are not followed: the document lives at the fixed path or it
-     doesn't
+   - redirects are not followed, and a redirect is reported as its own
+     `redirected` status: the document lives at the fixed path or it doesn't,
+     so a redirect is a NON-ANSWER — never a contradiction, and never the
+     absence a 404 affirmatively demonstrates
    - 512KB response cap (well-knowns carry at most 100 ops), 5s timeout
    - short CDN caching via Cache-Control; Vercel's edge cache is the only
      cache and there is no per-caller state to rate-limit with — the CDN
@@ -73,6 +75,7 @@ interface ProxyEnvelope {
   status:
     | 'ok'
     | 'no-app-description'
+    | 'redirected'
     | 'http-error'
     | 'unreachable'
     | 'too-large'
@@ -82,6 +85,36 @@ interface ProxyEnvelope {
   body?: unknown;
   reason?: string;
 }
+
+/**
+ * What the response STATUS alone establishes, before a byte of the body is read.
+ * Split out as a pure function because it is the only judgement this route makes
+ * about the origin's answer, and the three outcomes it separates are the three
+ * the tab must keep apart:
+ *
+ *   redirected         — the origin answered, and its answer was "look elsewhere".
+ *                        The document must be served at the fixed path and
+ *                        redirects are never followed, so nothing was learned
+ *                        about what this origin serves there. A NON-ANSWER: not a
+ *                        contradiction, and not the absence a 404 demonstrates.
+ *   no-app-description — the origin answered, and the document is not there. An
+ *                        affirmative, complete answer: this origin describes no app.
+ *   http-error         — the origin answered with an error status.
+ *
+ * `null` means the status settles nothing on its own — the answer is in the body.
+ */
+export const classifyStatus = (status: number): ProxyEnvelope | null => {
+  if (status >= 300 && status < 400) {
+    return {
+      status: 'redirected',
+      httpStatus: status,
+      reason: 'the origin redirected; redirects are not followed',
+    };
+  }
+  if (status === 404 || status === 410) return { status: 'no-app-description', httpStatus: status };
+  if (status < 200 || status >= 300) return { status: 'http-error', httpStatus: status };
+  return null;
+};
 
 /** Read a response body under the byte cap. Throws 'too-large' past it. */
 const boundedJson = async (res: Response): Promise<unknown> => {
@@ -138,19 +171,8 @@ const fetchEnvelope = async (host: string): Promise<ProxyEnvelope> => {
     };
   }
 
-  if (res.status >= 300 && res.status < 400) {
-    return {
-      status: 'http-error',
-      httpStatus: res.status,
-      reason: 'the origin redirected; redirects are not followed',
-    };
-  }
-  if (res.status === 404 || res.status === 410) {
-    return { status: 'no-app-description', httpStatus: res.status };
-  }
-  if (!res.ok) {
-    return { status: 'http-error', httpStatus: res.status };
-  }
+  const byStatus = classifyStatus(res.status);
+  if (byStatus !== null) return byStatus;
 
   try {
     return { status: 'ok', httpStatus: res.status, body: await boundedJson(res) };

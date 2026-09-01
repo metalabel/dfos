@@ -479,6 +479,26 @@ describe('readAppAttestation', () => {
       did: app['client_did'],
     });
   });
+
+  // a redirect at the app-description path is a NON-ANSWER, and this fallback
+  // treats it exactly as it treats a redirect on the dfos-did channel: silence.
+  // The document must come from this origin at the fixed path, so an origin that
+  // redirects has shown nothing that may be read as an attestation.
+  it('is silent on a redirecting origin, and says a redirect is a non-answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          status: 'redirected',
+          httpStatus: 308,
+          reason: 'the origin redirected; redirects are not followed',
+        }),
+      ),
+    );
+    const out = await readAppAttestation('example.com');
+    expect(out.kind).toBe('silent');
+    if (out.kind === 'silent') expect(out.reason).toMatch(/a redirect is a non-answer/);
+  });
 });
 
 describe('attestedCandidate', () => {

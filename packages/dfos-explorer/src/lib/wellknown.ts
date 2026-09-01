@@ -46,6 +46,7 @@ export const CARRIAGE_CAP = 100;
 export type ProxyStatus =
   | 'ok'
   | 'no-app-description'
+  | 'redirected'
   | 'http-error'
   | 'unreachable'
   | 'too-large'
@@ -60,19 +61,30 @@ export interface ProxyEnvelope {
 }
 
 /**
- * What a fetch attempt established. `proxy-unavailable` is its own outcome and
- * never collapses into `absent`: in dev (vite, no serverless route) the fetch
- * 404s or answers HTML, and reporting that as "this origin serves no app
- * description" would be the explorer inventing an absence it never observed.
+ * What a fetch attempt established. Three outcomes that are constantly collapsed
+ * into one another are kept apart here, because each is a different claim:
+ *
+ *   no-app-description — the origin ANSWERED and the document is not there. A
+ *                        complete, affirmative answer: this origin describes no app.
+ *   redirected         — the origin answered the fixed path with a redirect. The
+ *                        document lives at the path itself and redirects are never
+ *                        followed, so this is a NON-ANSWER: nothing at all was
+ *                        learned about what the origin serves there. Not an
+ *                        absence, and not a failure to reach.
+ *   proxy-unavailable  — OUR route did not answer. In dev (vite, no serverless
+ *                        route) the fetch 404s or answers HTML, and reporting that
+ *                        as "this origin serves no app description" would be the
+ *                        explorer inventing an absence it never observed.
  */
 export type FetchOutcome =
   | { kind: 'ok'; document: unknown }
   | { kind: 'no-app-description'; httpStatus: number | null }
+  | { kind: 'redirected'; httpStatus: number | null }
   | { kind: 'unreachable'; status: ProxyStatus; reason: string; httpStatus: number | null }
   | { kind: 'proxy-unavailable'; reason: string };
 
 /** Human-readable detail for the failure states, without inventing certainty. */
-const REASONS: Record<Exclude<ProxyStatus, 'ok' | 'no-app-description'>, string> = {
+const REASONS: Record<Exclude<ProxyStatus, 'ok' | 'no-app-description' | 'redirected'>, string> = {
   'http-error': 'the origin answered with an error status',
   unreachable: 'the origin could not be reached',
   'too-large': 'the document exceeded the fetch size limit',
@@ -105,7 +117,23 @@ export const classifyEnvelope = (value: unknown): FetchOutcome => {
       return { kind: 'ok', document: env.body };
     case 'no-app-description':
       return { kind: 'no-app-description', httpStatus };
+    case 'redirected':
+      return { kind: 'redirected', httpStatus };
     case 'http-error':
+      // BACK-COMPAT ACROSS THE CACHE SKEW. The route answered 3xx with
+      // `http-error` before `redirected` existed, and its envelopes are held by
+      // the CDN for about a minute — so for that window a deployed tab can read
+      // an old-shaped answer. A 3xx httpStatus says unambiguously what happened
+      // whatever word the route wrapped it in, and honouring it costs nothing.
+      if (httpStatus !== null && httpStatus >= 300 && httpStatus < 400) {
+        return { kind: 'redirected', httpStatus };
+      }
+      return {
+        kind: 'unreachable',
+        status: env.status,
+        reason: reason || REASONS[env.status],
+        httpStatus,
+      };
     case 'unreachable':
     case 'too-large':
     case 'timeout':
@@ -318,7 +346,7 @@ export const compareLogs = (originLog: string[], relayLog: string[]): LogCompari
 
 /**
  * What the domain view renders. FOUR honest top-level states — verified,
- * relay-diverged, unreachable, no-app-description — plus two outcomes that are
+ * relay-diverged, unreachable, no-app-description — plus three outcomes that are
  * neither successes nor transport failures and must not be laundered into one:
  *
  *   malformed    — the origin served something, and it is not an app description
@@ -328,6 +356,11 @@ export const compareLogs = (originLog: string[], relayLog: string[]): LogCompari
  *                  Legitimate (the member is optional at scope=identity), but
  *                  nothing about an identity is verifiable from the origin alone,
  *                  so it is never green.
+ *   redirected   — the origin answered the fixed path with a redirect. It is kept
+ *                  apart from BOTH neighbours it is mistaken for: it is not
+ *                  `unreachable`, because the origin answered and the transport
+ *                  worked, and it is not `no-app-description`, because nothing was
+ *                  demonstrated about whether the document exists. A non-answer.
  *
  * Green requires a verified chain. There is no other way to earn it.
  */
@@ -344,7 +377,8 @@ export type DomainVerdict =
   | { kind: 'no-carriage'; app: AppDescription }
   | { kind: 'malformed'; errors: string[] }
   | { kind: 'unreachable'; reason: string; httpStatus: number | null; proxyDown: boolean }
-  | { kind: 'no-app-description'; httpStatus: number | null };
+  | { kind: 'no-app-description'; httpStatus: number | null }
+  | { kind: 'redirected'; httpStatus: number | null };
 
 /**
  * Fold a fetch outcome and the structural/chain checks into a verdict, WITHOUT
@@ -366,6 +400,9 @@ export const assessDocument = async (outcome: FetchOutcome): Promise<DomainVerdi
   }
   if (outcome.kind === 'no-app-description') {
     return { kind: 'no-app-description', httpStatus: outcome.httpStatus };
+  }
+  if (outcome.kind === 'redirected') {
+    return { kind: 'redirected', httpStatus: outcome.httpStatus };
   }
 
   const structural = validateStructure(outcome.document);

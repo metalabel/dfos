@@ -84,6 +84,33 @@ describe('classifyEnvelope', () => {
     });
   });
 
+  // a redirect is its own outcome, and neither of the two it keeps being folded
+  // into: not the ABSENCE a 404 demonstrated, and not a failure to reach
+  it('reads a redirect as a redirect, keeping the status', () => {
+    expect(
+      classifyEnvelope({
+        status: 'redirected',
+        httpStatus: 308,
+        reason: 'the origin redirected; redirects are not followed',
+      }),
+    ).toEqual({ kind: 'redirected', httpStatus: 308 });
+  });
+
+  // the route answered 3xx with `http-error` before `redirected` existed, and its
+  // envelopes are CDN-held for about a minute — so an old-shaped answer whose
+  // status says 3xx is read for what it plainly is
+  it('honours a 3xx carried under the old http-error word', () => {
+    expect(classifyEnvelope({ status: 'http-error', httpStatus: 301 })).toEqual({
+      kind: 'redirected',
+      httpStatus: 301,
+    });
+  });
+
+  it('keeps http-error unreachable when the status is not a redirect', () => {
+    expect(classifyEnvelope({ status: 'http-error', httpStatus: 500 }).kind).toBe('unreachable');
+    expect(classifyEnvelope({ status: 'http-error' }).kind).toBe('unreachable');
+  });
+
   it.each(['http-error', 'unreachable', 'too-large', 'timeout', 'refused'] as const)(
     'reads %s as unreachable, keeping the reason',
     (status) => {
@@ -485,5 +512,13 @@ describe('assessDocument', () => {
 
     const absent = await assessDocument({ kind: 'no-app-description', httpStatus: 404 });
     expect(absent).toMatchObject({ kind: 'no-app-description', httpStatus: 404 });
+  });
+
+  // the bug this outcome exists to close: a redirecting origin used to arrive as
+  // `unreachable`, which says the transport failed — it did not, the origin
+  // answered, and what it answered established nothing
+  it('carries a redirect through as its own verdict, never as unreachable', async () => {
+    const out = await assessDocument({ kind: 'redirected', httpStatus: 308 });
+    expect(out).toEqual({ kind: 'redirected', httpStatus: 308 });
   });
 });
