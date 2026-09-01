@@ -2435,6 +2435,14 @@ func commonPrefixLen(a, b []string) int {
 	return n
 }
 
+// operationCount renders a count with its noun agreeing. This report is read
+// under pressure — an operator finding out whether the chain they are about to
+// act on is the current one — and `1 operation(s)` is a thing a reader has to
+// decode before they can read the sentence it sits in.
+func operationCount(n int) string {
+	return fmt.Sprintf("%d %s", n, plural(n, "operation", "operations"))
+}
+
 // opCreatedAt reads one operation's own timestamp for the report. A token that
 // will not decode reports nothing rather than a guess: the index is what locates
 // the fork, and the date is there to make it recognizable to a person.
@@ -2478,8 +2486,8 @@ func (r *identityStatusResult) print() {
 		fmt.Printf("Name:        %s\n", r.Name)
 	}
 	if r.Local != nil {
-		fmt.Printf("Local:       head %s — %d operation(s), %s\n",
-			truncateMiddle(r.Local.HeadCID, 20), r.Local.Operations, orDash(r.Local.LastCreatedAt))
+		fmt.Printf("Local:       head %s — %s, %s\n",
+			truncateMiddle(r.Local.HeadCID, 20), operationCount(r.Local.Operations), orDash(r.Local.LastCreatedAt))
 	} else {
 		fmt.Printf("Local:       no chain for this identity in the local relay\n")
 	}
@@ -2489,8 +2497,8 @@ func (r *identityStatusResult) print() {
 		fmt.Printf("Relay:       none — no relay was asked\n")
 	}
 	if r.Remote != nil {
-		fmt.Printf("Remote:      head %s — %d operation(s), %s\n",
-			truncateMiddle(r.Remote.HeadCID, 20), r.Remote.Operations, orDash(r.Remote.LastCreatedAt))
+		fmt.Printf("Remote:      head %s — %s, %s\n",
+			truncateMiddle(r.Remote.HeadCID, 20), operationCount(r.Remote.Operations), orDash(r.Remote.LastCreatedAt))
 	}
 
 	fmt.Println()
@@ -2500,11 +2508,11 @@ func (r *identityStatusResult) print() {
 		fmt.Printf("  That is %s answering about its own copy. Another relay can hold another chain.\n", r.Relay.label())
 
 	case identityStatusBehind:
-		fmt.Printf("VERDICT: behind — %s holds %d operation(s) this machine has not seen.\n", r.Relay.label(), r.BehindBy)
+		fmt.Printf("VERDICT: behind — %s holds %s this machine has not seen.\n", r.Relay.label(), operationCount(r.BehindBy))
 		fmt.Printf("  %s\n", identityStatusFetchHint(r))
 
 	case identityStatusAhead:
-		fmt.Printf("VERDICT: ahead-unpublished — this machine holds %d operation(s) that %s does not.\n", r.AheadBy, r.Relay.label())
+		fmt.Printf("VERDICT: ahead-unpublished — this machine holds %s that %s does not.\n", operationCount(r.AheadBy), r.Relay.label())
 		fmt.Printf("  %s\n", identityStatusPublishHint(r))
 
 	case identityStatusDiverged:
@@ -2512,7 +2520,7 @@ func (r *identityStatusResult) print() {
 		if r.ForkIndex != nil {
 			fork = *r.ForkIndex
 		}
-		fmt.Printf("VERDICT: diverged — both sides extended a shared history of %d operation(s) and then parted.\n", fork)
+		fmt.Printf("VERDICT: diverged — both sides extended a shared history of %s and then parted.\n", operationCount(fork))
 		fmt.Printf("  Fork at operation %d: this machine's divergent operation is dated %s, and the one\n",
 			fork, orDash(r.LocalForkCreatedAt))
 		fmt.Printf("  %s serves is dated %s.\n", r.Relay.label(), orDash(r.RemoteForkCreatedAt))
@@ -2521,7 +2529,7 @@ func (r *identityStatusResult) print() {
 
 	case identityStatusNoLocalChain:
 		fmt.Printf("VERDICT: no-local-chain — this machine holds no chain for this identity, so there is\n")
-		fmt.Printf("  nothing to compare. %s serves %d operation(s).\n", r.Relay.label(), r.Remote.Operations)
+		fmt.Printf("  nothing to compare. %s serves %s.\n", r.Relay.label(), operationCount(r.Remote.Operations))
 		fmt.Printf("  %s\n", identityStatusFetchHint(r))
 
 	default:

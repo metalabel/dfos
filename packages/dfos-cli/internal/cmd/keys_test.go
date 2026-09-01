@@ -951,10 +951,12 @@ func TestSupersededVerdictNamesTheChainHeadItWasReadFrom(t *testing.T) {
 	if retired.Status != statusSuperseded {
 		t.Fatalf("the rotated-out key is %s, want %s", retired.Status, statusSuperseded)
 	}
-	// The prose carries the head, its date, and the fact that no relay answered.
+	// The prose carries the head, its date, and the fact that no relay answered —
+	// bracketed, so the basis reads as the ground under the finding rather than
+	// as a second clause hanging off the finding's own em-dash.
 	for _, want := range []string{
-		"as of local head", truncateMiddle(after.HeadCID, 16), after.LastCreatedAt,
-		"the identity's relay was not consulted",
+		"(as of local head " + truncateMiddle(after.HeadCID, 16) + ", " + after.LastCreatedAt +
+			"; the identity's relay was not consulted)",
 	} {
 		if !strings.Contains(retired.Reason, want) {
 			t.Fatalf("the superseded reason is missing %q:\n%s", want, retired.Reason)
@@ -988,8 +990,8 @@ func TestSupersededVerdictNamesTheChainHeadItWasReadFrom(t *testing.T) {
 	// verdict keeping their key is one relay's — and how to check it.
 	refusal := removeRefusal(t, genesis).Error()
 	for _, want := range []string{
-		"as of local head", truncateMiddle(after.HeadCID, 16),
-		"the identity's relay was not consulted",
+		"That verdict is as of local head " + truncateMiddle(after.HeadCID, 16) + ", " + after.LastCreatedAt +
+			"; the identity's relay was not consulted.",
 		"'dfos identity status alice' compares this machine's chain against the identity's relay",
 	} {
 		if !strings.Contains(refusal, want) {

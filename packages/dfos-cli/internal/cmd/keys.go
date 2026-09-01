@@ -103,12 +103,17 @@ type chainAsOf struct {
 // its date converts the verdict from a claim about the world into a claim about
 // a specific, checkable piece of local state; saying no relay was asked is the
 // other half, because the reader's next question is always whether one was.
+//
+// It carries NO em-dash of its own. The verdicts it attaches to already spend
+// one on the finding, and a clause appended after that dash reads as a second
+// half of the same thought rather than as the ground under it — so the callers
+// bracket it instead, in parentheses or in a sentence of its own.
 func chainBasis(headCID, lastCreatedAt string) string {
 	head := truncateMiddle(orDash(headCID), 16)
 	if lastCreatedAt == "" {
-		return fmt.Sprintf("as of local head %s — the identity's relay was not consulted", head)
+		return fmt.Sprintf("as of local head %s; the identity's relay was not consulted", head)
 	}
-	return fmt.Sprintf("as of local head %s (%s) — the identity's relay was not consulted", head, lastCreatedAt)
+	return fmt.Sprintf("as of local head %s, %s; the identity's relay was not consulted", head, lastCreatedAt)
 }
 
 type keyVaultProvenance struct {
@@ -803,7 +808,7 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 			stamp := ""
 			if basis, ok := in.basisByDID[entry.DID]; ok {
 				entry.AsOf = &chainAsOf{HeadCID: basis.HeadCID, LastCreatedAt: basis.LastCreatedAt}
-				stamp = ", " + chainBasis(basis.HeadCID, basis.LastCreatedAt)
+				stamp = " (" + chainBasis(basis.HeadCID, basis.LastCreatedAt) + ")"
 			}
 			entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation left it behind" + stamp
 			if len(entry.Roles) > 0 {

@@ -173,8 +173,11 @@ func TestIdentityStatusBehindCountsTheOperationsItLacks(t *testing.T) {
 		t.Fatalf("verdict = %q behindBy = %d, want behind/1 (%+v)", res.Verdict, res.BehindBy, res)
 	}
 
+	// One chain of each length, so both halves of the agreement are asserted:
+	// this machine holds one operation, the relay holds two.
 	out, _ := statusHuman(t, did, "oracle")
-	assertContains(t, out, "VERDICT: behind", "1 operation(s) this machine has not seen",
+	assertContains(t, out, "VERDICT: behind", "1 operation this machine has not seen",
+		"— 1 operation, ", "— 2 operations, ",
 		"dfos identity fetch "+did+" --peer oracle")
 }
 
@@ -200,7 +203,7 @@ func TestIdentityStatusAheadUnpublishedNamesThePublishPath(t *testing.T) {
 	}
 
 	out, _ := statusHuman(t, "alice", "oracle")
-	assertContains(t, out, "VERDICT: ahead-unpublished", "1 operation(s) that oracle (",
+	assertContains(t, out, "VERDICT: ahead-unpublished", "1 operation that oracle (",
 		"dfos identity publish alice --peer oracle")
 }
 
@@ -248,7 +251,7 @@ func TestIdentityStatusDivergedReportsTheForkAndChoosesNothing(t *testing.T) {
 	}
 
 	out, _ := statusHuman(t, "alice", "oracle")
-	assertContains(t, out, "VERDICT: diverged", "shared history of 1 operation(s)",
+	assertContains(t, out, "VERDICT: diverged", "shared history of 1 operation and then parted",
 		"Fork at operation 1", "Neither side is the answer", "deliberately")
 }
 
