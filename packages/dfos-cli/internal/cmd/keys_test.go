@@ -897,6 +897,50 @@ func TestKeysRemoveRefusesEveryStatusThatIsNotItsToJudge(t *testing.T) {
 	}
 }
 
+// A selector this machine holds no key for may still be a key an identity here
+// DECLARES. "no key matching" sends an operator hunting for a lost seed; the
+// truthful answer is that the private half is somewhere else, which is the
+// ordinary state of a chain custodied on one device and read on another.
+func TestKeysShowNamesAKeyThisMachineDeclaresAndDoesNotHold(t *testing.T) {
+	storeA, storeB, lr := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil || chain == nil {
+		t.Fatalf("get identity: chain=%v err=%v", chain, err)
+	}
+	declared := chain.State.AuthKeys[0]
+
+	// The other machine: it reads the same chain and holds none of its seeds.
+	// Every spelling a held key resolves under is a spelling the miss answers
+	// for — the id, the public key, and both account shapes.
+	keys = storeB
+	for _, selector := range []string{
+		declared.ID,
+		declared.PublicKeyMultibase,
+		keyAccount(declared.PublicKeyMultibase),
+		legacyKeyAccount(did, declared.ID),
+	} {
+		_, err = findKeyEntry(&keyLedger{}, selector)
+		if err == nil {
+			t.Fatalf("selector %q resolved to a ledger entry on a machine with no seeds", selector)
+		}
+		for _, want := range []string{"declared by alice", "controller, auth, assert",
+			"not held on this machine", "dfos identity status alice"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the miss for %q is missing %q:\n%v", selector, want, err)
+			}
+		}
+	}
+
+	// A selector nothing declares keeps the plain miss: the upgrade is a fact
+	// about the chain, not a softer way to say nothing matched.
+	if _, err := findKeyEntry(&keyLedger{}, "key_nothingherematchesthis"); err == nil ||
+		!strings.Contains(err.Error(), "no key matching") {
+		t.Fatalf("an undeclared selector reported %v", err)
+	}
+}
+
 func TestKeysRemoveOnAnUnknownSelectorRemovesNothing(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	createStandaloneIdentity(t, "alice", storeA)

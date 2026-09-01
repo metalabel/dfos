@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -121,6 +122,39 @@ type keyVaultProvenance struct {
 	Fingerprint string `json:"fingerprint"`
 	Index       uint32 `json:"index"`
 	Path        string `json:"derivationPath"`
+}
+
+// vaultProvenanceIndex maps every account a minted key can answer to onto the
+// vault record that minted it. It is the provenance half of the join
+// buildKeyLedger performs inline, on its own for readers that want only "which
+// phrase covers this key" and none of the ledger's enumeration or corpus work.
+//
+// A vault store that will not list is REPORTED, not papered over with an empty
+// index. An empty index and an unreadable one produce the same lookups and
+// opposite truths: the first says no phrase covers this key, the second says
+// nobody knows — and a caller that renders the first sentence off the second
+// condition tells an operator their only copy is a keystore that a written-down
+// phrase in fact covers.
+func vaultProvenanceIndex() (map[string]*keyVaultProvenance, error) {
+	index := map[string]*keyVaultProvenance{}
+	vaults, err := getVaults().List()
+	if err != nil {
+		return nil, err
+	}
+	for _, meta := range vaults {
+		for _, rec := range meta.Minted {
+			prov := &keyVaultProvenance{
+				Name:        meta.Name,
+				Fingerprint: meta.Fingerprint,
+				Index:       rec.Index,
+				Path:        vault.DerivationPath(rec.Index),
+			}
+			for _, account := range keyAccountsFor(rec.DID, rec.KeyID, rec.PublicKey) {
+				index[account] = prov
+			}
+		}
+	}
+	return index, nil
 }
 
 // keyLedgerEntry is one key, folded. Nothing on it is secret: an account, an
@@ -1055,6 +1089,9 @@ func findKeyEntry(l *keyLedger, selector string) (*keyLedgerEntry, error) {
 	case 1:
 		return matches[0], nil
 	case 0:
+		if declared := declaredKeyMiss(selector); declared != "" {
+			return nil, fmt.Errorf("%s", declared)
+		}
 		return nil, fmt.Errorf("no key matching '%s' — 'dfos keys list' shows what this machine holds", selector)
 	default:
 		var accounts []string
@@ -1064,6 +1101,42 @@ func findKeyEntry(l *keyLedger, selector string) (*keyLedgerEntry, error) {
 		return nil, fmt.Errorf("'%s' matches %d keys (%s) — name one by its account",
 			selector, len(matches), strings.Join(accounts, ", "))
 	}
+}
+
+// declaredKeyMiss answers the other half of a miss. A selector that names no key
+// this machine HOLDS may still name a key an identity here DECLARES, and "no key
+// matching" sends the operator looking for a lost seed when the fact is that the
+// private half was never on this machine — a normal state for a chain custodied
+// on one device and read on another. Empty when the selector names nothing.
+//
+// Bounded by the identities this machine has a name for, one point lookup each,
+// and never by the corpus — the same reason buildKeyLedger folds over held keys
+// rather than over chains.
+func declaredKeyMiss(selector string) string {
+	lr, err := getRelay()
+	if err != nil {
+		return ""
+	}
+	for name, ic := range cfg.Identities {
+		chain, err := lr.Relay.GetIdentity(ic.DID)
+		if err != nil || chain == nil {
+			continue
+		}
+		for _, k := range stateKeyRoles(chain.DID, chain.State) {
+			// Every spelling findKeyEntry matches for a held key is a miss to
+			// answer for an unheld one: the id, the public key, and both account
+			// shapes. An operator who names a key the way the keystore files it
+			// asked the same question as one who names it by id.
+			if selector != k.Key.ID && selector != k.Key.PublicKeyMultibase &&
+				!slices.Contains(keyAccountsFor(chain.DID, k.Key.ID, k.Key.PublicKeyMultibase), selector) {
+				continue
+			}
+			return fmt.Sprintf("'%s' is declared by %s as %s and not held on this machine — "+
+				"'dfos identity status %s' reports the full roster with possession",
+				selector, name, joinComma(k.Roles), name)
+		}
+	}
+	return ""
 }
 
 func printKeyEntry(e keyLedgerEntry) {

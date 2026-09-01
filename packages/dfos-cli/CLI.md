@@ -472,6 +472,8 @@ KEY ID                               ROLES                      HELD
 key_k7h2an38v2drtec7648vnvfdd4rdr44  controller, auth, assert   present
 ```
 
+That table reads the chain in this machine's relay. [`identity status`](#is-this-machines-chain-current) carries the same roster folded from the freshest chain that verifies — the identity's own relay's, where it is at least as current as this machine's — and resolves each held key to the vault that minted it or to this keystore alone.
+
 Rotation is scoped to the roles its flags name. `--rotate-auth` on a single-key identity replaces `authKeys` with a freshly minted key and carries `controllerKeys` and `assertKeys` forward untouched — so the displaced key is still the identity's controller and assert key, and the report says so rather than calling it retired:
 
 ```
@@ -543,6 +545,8 @@ A `superseded` verdict **names its basis**, because it is a claim about one copy
 A role a chain declares but no possession proof admitted is marked **`<role> (void)`**. It is listed rather than dropped, because the chain really does name the key there — and marked rather than merged, because a void membership confers nothing: it is not in effective state, it never resolves, and it never enters the `key=` index. A key whose every role is void carries `void: true` and a reason saying so, and it is never an orphan: something claims it, the claim is simply empty.
 
 A key with origin `vault` is derivable again from that vault's phrase, which is what [`dfos recover`](#recovery) does; a `standalone` key is not, and this keystore is its only copy.
+
+A selector that names no key this machine holds gets one of two misses, because they are two different situations. A selector nothing here knows about reports `no key matching '<sel>'`. A selector that names a key an identity registered here **declares** reports `'<sel>' is declared by <identity> as <roles> and not held on this machine`, and points at `dfos identity status <identity>` for the full roster — the private half living on another device is the ordinary state of a chain read on more than one machine, and "no key matching" reads as a lost seed.
 
 `prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Five rules bound it:
 
@@ -832,6 +836,33 @@ The relay that answered is **named** in every output, with the URL and whether i
 Silence is never agreement. A relay that cannot be reached, serves no chain for the DID, or serves a chain that does not verify is `unknown`, named, with the error — the same discipline [`recover`](#the-oracle-is-named-and-its-silence-is-not-an-answer) holds its oracle to. An identity that advertises no relay, asked without `--peer`, is `unknown` too: there was nothing to compare against, which is a different fact from a comparison that came back clean.
 
 `diverged` is reported and not repaired. Two histories exist over one DID; the report gives the fork index and the timestamp of each side's first divergent operation, and which history this machine keeps is a decision an operator makes deliberately.
+
+#### The possession roster
+
+Every verdict is followed by the keys the chain declares and which of them this machine holds the private half of, so "is my chain current" and "can I still sign as this identity" are one command's answer:
+
+```
+Keys:        roster as of remote head bafyreifv…5gekcrwioi — the verified chain prod (https://relay.dfos.com) serves
+  KEY ID                               ROLES                              HELD
+  key_k7h2an38v2drtec7648vnvfdd4rdr44  controller, auth, assert           held (vault 'personal' — derivable from phrase)
+  key_3kfv7dc73nat93f9rkednzf389288n8  auth (void)                        not held on this machine
+```
+
+The roster **names the head it was folded from**, for the reason every other line here names its source: one DID under two histories declares two rosters, and a key table with no basis cannot say which one it is reporting. The verified chain the relay serves is that head wherever it is at least as current — `in-sync`, `behind`, `diverged`, and `no-local-chain`, where the relay's chain is the only one there is and the roster is what says whether the keys of a chain this machine has lost are still in its keystore. `ahead-unpublished` reads the local head instead: the relay's log is a prefix of this machine's, so the local head is the fresher one and may declare a key the relay has never been told about. `unknown` reads the local head as well and says the comparison could not be made — a relay that cannot be reached leaves the comparison unanswerable, not the question of what this keystore holds. With neither a local chain nor a verified remote one there is no roster, and the line says so rather than printing an empty table.
+
+The `HELD` column has three values, and they are three different answers to what the loss of this machine costs:
+
+| Rendering                                     | Meaning                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------ |
+| `held (vault '<name>' — derivable from phrase)` | the seed is here, and that vault's written-down phrase mints it again         |
+| `held (standalone)`                             | the seed is here, and this keystore is its only copy                          |
+| `not held on this machine`                      | the chain declares the key and the private half is elsewhere                  |
+
+A key marked `<role> (void)` is one the chain declares and no possession proof admitted: it is not in effective state, it resolves nowhere, and holding it grants nothing. Void rows are listed with a footnote saying that, the same way [`identity keys`](#one-key-at-genesis) lists them.
+
+The vault half of a `held` rendering depends on the vault records being readable, and unreadable records are not absent ones. When the records cannot be read, a held key renders as bare `held`, a note under the table names the reason, and no standalone-or-vault claim is made — an absent record proves standaloneness only when the records themselves could be listed. Possession is unaffected: whether a key is held is the keystore's answer, not the vaults'.
+
+`--json` carries the roster under `keys` — `id`, `roles`, `publicKey`, `held`, `void`, and `vault` for a held key a vault record names — and its basis under `keysBasis`, with `source` (`remote` or `local`), `headCID`, and `lastCreatedAt`. `vaultsUnavailable` carries the reason vault records could not be read, and its presence is why no `vault` field appears on any held key.
 
 To forget only this machine's registration for an identity:
 
@@ -1453,7 +1484,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | ------ | ------------------------------- | ------------------------------------------------------------ |
 | `GET`  | `identity list`                 | List all known identities (owned + fetched; `--include-log`) |
 | `GET`  | `identity show [name\|did]`     | Show identity state                                          |
-| `GET`  | `identity status <name\|did>`   | Compare the local chain against the identity's relay         |
+| `GET`  | `identity status <name\|did>`   | Compare the local chain against the identity's relay, with key possession |
 | `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                       |
 | `GET`  | `identity services [name\|did]` | Show resolved discovery services                             |
 | `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                 |

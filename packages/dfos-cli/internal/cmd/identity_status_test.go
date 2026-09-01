@@ -14,11 +14,15 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -392,6 +396,329 @@ func TestIdentityStatusUsesTheAdvertisedRelayWhenNoPeerIsNamed(t *testing.T) {
 
 	out, _ := statusHuman(t, "alice", "")
 	assertContains(t, out, "via advertised DfosRelay", oracle.server.URL)
+}
+
+// --- the possession roster ---
+//
+// The roster answers a question the verdict does not: which keys the chain
+// declares, and which of them this machine can actually sign with. Both halves
+// are asserted against the same chain, because a roster read off the wrong head
+// is a confident answer about keys an identity no longer has.
+
+// keyRow finds one roster row by key id.
+func keyRow(t *testing.T, res identityStatusResult, id string) identityStatusKeyRow {
+	t.Helper()
+	for _, k := range res.Keys {
+		if k.ID == id {
+			return k
+		}
+	}
+	t.Fatalf("no roster row for %q; roster holds %+v", id, res.Keys)
+	return identityStatusKeyRow{}
+}
+
+// chainState reads the state the ACTIVE local relay projects for a DID.
+func chainState(t *testing.T, did string) *relay.StoredIdentityChain {
+	t.Helper()
+	chain, err := localRelayInstance.Relay.GetIdentity(did)
+	if err != nil || chain == nil {
+		t.Fatalf("get the chain for %s: chain=%v err=%v", did, chain, err)
+	}
+	return chain
+}
+
+// Possession is read off the KEYSTORE and the roster off the chain, so the same
+// chain reports the same key differently on two machines. Both renderings are
+// asserted over one identity, with only the active keystore changing.
+func TestIdentityStatusRosterReportsPossessionAgainstTheVerifiedHead(t *testing.T) {
+	storeA, storeB, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = heldLog(t, did)
+	genesisKey := chainState(t, did).State.AuthKeys[0]
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	// The sync half is untouched by the roster attaching to the same document.
+	if res.Verdict != identityStatusInSync || res.Local == nil || res.Remote == nil {
+		t.Fatalf("the verdict moved when the roster attached: %+v", res)
+	}
+	if res.KeysBasis == nil || res.KeysBasis.Source != identityStatusKeysRemote {
+		t.Fatalf("the roster names no remote basis: %+v", res.KeysBasis)
+	}
+	if res.KeysBasis.HeadCID != res.Remote.HeadCID {
+		t.Fatalf("basis head %q is not the verified remote head %q", res.KeysBasis.HeadCID, res.Remote.HeadCID)
+	}
+	row := keyRow(t, res, genesisKey.ID)
+	if !row.Held || row.Vault != "" || row.PublicKey != genesisKey.PublicKeyMultibase {
+		t.Fatalf("the genesis key of a --no-vault identity came out %+v", row)
+	}
+	if len(row.Roles) != 3 {
+		t.Fatalf("roles %v, want all three the genesis key is declared in", row.Roles)
+	}
+
+	out, err := statusHuman(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	assertContains(t, out, "Keys:        roster as of remote head", "the verified chain oracle (",
+		"KEY ID", genesisKey.ID, "held (standalone)")
+
+	// The same chain, on a machine that holds none of its keys. Nothing about the
+	// declaration changed; what changed is what this machine can sign with.
+	keys = storeB
+	res, err = statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	if row := keyRow(t, res, genesisKey.ID); row.Held {
+		t.Fatalf("a key on the other machine's keystore reported as held: %+v", row)
+	}
+	out, _ = statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "not held on this machine")
+}
+
+// A vault-minted key is one a written-down phrase can mint again; a standalone
+// key is one this keystore is the only copy of. The roster says which, because
+// the two are different answers to "what happens if this machine is lost".
+func TestIdentityStatusRosterNamesTheVaultThatMintedAHeldKey(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createVault(t, "personal")
+	did := createIdentity(t, "alice", storeA)
+	keys = storeA
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = heldLog(t, did)
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	row := keyRow(t, res, chainState(t, did).State.AuthKeys[0].ID)
+	if !row.Held || row.Vault != "personal" {
+		t.Fatalf("a vault-minted key lost its provenance: %+v", row)
+	}
+
+	out, _ := statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "held (vault 'personal' — derivable from phrase)")
+}
+
+// Unreadable vault records and absent vault records are opposite answers.
+// "standalone" means this keystore is the only copy, and a roster that says it
+// because the records could not be read tells an operator to treat a
+// phrase-covered key as unrecoverable. The roster says `held`, says why the
+// custody half is missing, and keeps the possession half — which the keystore
+// answered by itself.
+func TestIdentityStatusRosterSaysWhenVaultRecordsAreUnreadable(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createVault(t, "personal")
+	did := createIdentity(t, "alice", storeA)
+	keys = storeA
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = heldLog(t, did)
+	genesisKey := chainState(t, did).State.AuthKeys[0]
+
+	// A regular file where the vaults directory belongs: List fails for a reason
+	// that is not "no vaults exist", which is the case the index must not absorb.
+	dir := getVaults().Dir()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove vaults dir: %v", err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("plant file at vaults dir: %v", err)
+	}
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	if res.VaultsUnavailable == "" {
+		t.Fatalf("unreadable vault records went unreported: %+v", res.KeysBasis)
+	}
+	row := keyRow(t, res, genesisKey.ID)
+	if !row.Held || row.Vault != "" {
+		t.Fatalf("a held key under unreadable records came out %+v", row)
+	}
+
+	out, _ := statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "vault records could not be read")
+	if strings.Contains(out, "held (standalone)") || strings.Contains(out, "derivable from phrase") {
+		t.Fatalf("the roster made a custody claim off unreadable records:\n%s", out)
+	}
+}
+
+// The recovery case the section exists for: no chain here at all. The roster is
+// the relay's, and it is what says whether the keys of an identity this machine
+// has lost are still on this machine.
+func TestIdentityStatusRosterAttachesFromTheRelayWithNoLocalChain(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+	published := heldLog(t, did)
+	genesisKey := chainState(t, did).State.AuthKeys[0]
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = published
+
+	newMachineRelay(t) // the chain is gone from here; the keys are not
+
+	res, err := statusJSON(t, did, "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	if res.Verdict != identityStatusNoLocalChain {
+		t.Fatalf("verdict = %q, want %q", res.Verdict, identityStatusNoLocalChain)
+	}
+	if res.KeysBasis == nil || res.KeysBasis.Source != identityStatusKeysRemote {
+		t.Fatalf("with no local chain the roster must come from the relay: %+v", res.KeysBasis)
+	}
+	if row := keyRow(t, res, genesisKey.ID); !row.Held {
+		t.Fatalf("a key this machine still holds reported as absent: %+v", row)
+	}
+}
+
+// A relay that cannot be reached makes the COMPARISON unanswerable, not the
+// possession question. The roster stays, its basis says which head it came from
+// and that no comparison stands behind it, and the exit code is still 1.
+func TestIdentityStatusRosterSurvivesAnUnknownVerdict(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+	local := chainState(t, did)
+
+	dead := newFakeOracle(t)
+	dead.registerAsPeer(t, "gone")
+	dead.server.Close()
+
+	res, err := statusJSON(t, did, "gone")
+	if res.Verdict != identityStatusUnknown {
+		t.Fatalf("verdict = %q, want %q", res.Verdict, identityStatusUnknown)
+	}
+	assertExitCode(t, err, 1)
+	if res.KeysBasis == nil || res.KeysBasis.Source != identityStatusKeysLocal {
+		t.Fatalf("the roster names no local basis: %+v", res.KeysBasis)
+	}
+	if res.KeysBasis.HeadCID != local.HeadCID {
+		t.Fatalf("basis head %q is not the local head %q", res.KeysBasis.HeadCID, local.HeadCID)
+	}
+	if row := keyRow(t, res, local.State.AuthKeys[0].ID); !row.Held {
+		t.Fatalf("possession went unreported on an unknown verdict: %+v", row)
+	}
+
+	out, _ := statusHuman(t, did, "gone")
+	assertContains(t, out, "Keys:        roster as of local head", "the relay comparison could not be made")
+}
+
+// Ahead of the relay, the local head is the fresher one: it declares a key the
+// relay has never been told about. The roster reads THAT head, and says so.
+func TestIdentityStatusAheadRostersTheLocalHead(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+	genesisOnly := heldLog(t, did)
+	genesisKey := chainState(t, did).State.AuthKeys[0]
+	rotateEverything(t, "alice")
+	rotated := chainState(t, did)
+	if rotated.State.AuthKeys[0].ID == genesisKey.ID {
+		t.Fatal("the rotation did not replace the auth key")
+	}
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = genesisOnly
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	if res.Verdict != identityStatusAhead {
+		t.Fatalf("verdict = %q, want %q", res.Verdict, identityStatusAhead)
+	}
+	if res.KeysBasis == nil || res.KeysBasis.Source != identityStatusKeysLocal {
+		t.Fatalf("an ahead roster read the relay's head: %+v", res.KeysBasis)
+	}
+	if res.KeysBasis.HeadCID != rotated.HeadCID {
+		t.Fatalf("basis head %q is not the local head %q", res.KeysBasis.HeadCID, rotated.HeadCID)
+	}
+	// The unpublished key is the whole reason this verdict reads the local head.
+	if row := keyRow(t, res, rotated.State.AuthKeys[0].ID); !row.Held {
+		t.Fatalf("the unpublished key is missing from the roster: %+v", res.Keys)
+	}
+
+	out, _ := statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "Keys:        roster as of local head",
+		"ahead of the relay; includes operations not yet published", rotated.State.AuthKeys[0].ID)
+}
+
+// A void membership is a key the chain names and nothing proved. It is a row,
+// marked, with the footnote that says what the marker means — the same posture
+// `identity keys` takes, for the same reason: it looks like a key.
+func TestIdentityStatusRosterMarksAVoidMembership(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	keys = storeA
+
+	chain := chainState(t, did)
+	signer, err := selectHeldKey(did, chain.State.ControllerKeys, "controller")
+	if err != nil {
+		t.Fatalf("held controller key: %v", err)
+	}
+	controllerPriv, err := keys.GetPrivateKey(signer.Account)
+	if err != nil {
+		t.Fatalf("read controller key: %v", err)
+	}
+	// Introduced with no proof and no seed on this machine: declared, void, and
+	// unheld all at once, which is the row every part of the rendering is for.
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	unproved := protocol.NewMultikeyPublicKey(protocol.DeriveKeyID(protocol.EncodeMultikey(pub)), pub)
+	head, _, err := protocol.DecodeJWSUnsafe(chain.Log[len(chain.Log)-1])
+	if err != nil {
+		t.Fatalf("decode head: %v", err)
+	}
+	jws := signUnprovedIdentityUpdate(t, unprovedUpdate{
+		previousCID:    head.CID,
+		after:          chain.LastCreatedAt,
+		controllerKeys: chain.State.ControllerKeys,
+		authKeys:       append(append([]protocol.MultikeyPublicKey{}, chain.State.AuthKeys...), unproved),
+		assertKeys:     chain.State.AssertKeys,
+		kid:            signer.KID,
+		privateKey:     controllerPriv,
+	})
+	if res := lr.Relay.Ingest([]string{jws}); len(res) > 0 && res[0].Status == "rejected" {
+		t.Fatalf("the relay rejected an unproved introduction instead of voiding it: %s", res[0].Error)
+	}
+
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+	oracle.logsByDID[did] = heldLog(t, did)
+
+	res, err := statusJSON(t, "alice", "oracle")
+	if err != nil {
+		t.Fatalf("identity status: %v", err)
+	}
+	row := keyRow(t, res, unproved.ID)
+	if !row.Void || row.Held {
+		t.Fatalf("a void, unheld membership came out %+v", row)
+	}
+	if len(row.Roles) != 1 || row.Roles[0] != "auth (void)" {
+		t.Fatalf("roles %v, want the void marker", row.Roles)
+	}
+
+	out, _ := statusHuman(t, "alice", "oracle")
+	assertContains(t, out, "auth (void)", "not held on this machine",
+		"declared by this chain and never proved", "resolve nowhere")
 }
 
 func assertExitCode(t *testing.T, err error, want int) {
