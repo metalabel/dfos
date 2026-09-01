@@ -406,6 +406,12 @@ are ANDed. `--profile <anon|identity|delegated>` forces one. A 401 prints the
 host's challenge and stops — nothing is retried under stronger auth. A 403 prints
 the actions the route requires next to the actions the credential grants.
 
+Own-data reads — `profile.getOwnProfile`, the `memberships.*` operations — need no
+credential: the document offers the identity-proof scheme as an alternative on
+those routes, so `dfos api call` signs with a held key and nothing else.
+`dfos login` is only for delegated access — a third party spending a credential
+the user issued to it.
+
 The delegated profile spends a credential obtained by `dfos login --host <name-or-host>`,
 which lists the actions that host advertises and asks which of them to request. The
 credential is matched to the host by its `api:<host>` attenuation, not by its audience.
