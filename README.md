@@ -48,23 +48,23 @@ This repository contains the protocol specification, reference implementations i
 
 Each spec declares its own clock in its header; this table is the index, not the authority.
 
-| Spec                                        | Clock / status                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| [PROTOCOL](./specs/PROTOCOL.md)             | **v1 — frozen**, not yet final                                   |
-| [RELAY-CONTRACT](./specs/RELAY-CONTRACT.md) | **Frozen with v1** — the relay wire surface                      |
-| [WEB-RELAY](./specs/WEB-RELAY.md)           | Reference relay behavior, own `0.x` clock                        |
-| [DID-METHOD](./specs/DID-METHOD.md)         | **v1 — frozen**                                                  |
-| [CREDENTIALS](./specs/CREDENTIALS.md)       | **v1 — frozen**                                                  |
-| [CONTENT-MODEL](./specs/CONTENT-MODEL.md)   | Encoding rule frozen with v1; schema vocabulary on its own `0.x` |
-| [CREDITS](./specs/CREDITS.md)               | Settled — additive capability on v1                              |
-| [SIGNING](./specs/SIGNING.md)               | `0.1` — optional capability, own `0.x` clock                     |
-| [SIWD](./specs/SIWD.md)                     | `0.1` — optional authentication seam, own `0.x` clock            |
-| [API-AUTH](./specs/API-AUTH.md)             | `0.1` — optional capability, own `0.x` clock                     |
-| [ORIGIN-BINDING](./specs/ORIGIN-BINDING.md) | `0.1` — optional capability, own `0.x` clock                     |
-| [KEY-PROOF](./specs/KEY-PROOF.md)           | `0.1` — optional capability, own `0.x` clock                     |
-| [EXTENSIONS](./specs/EXTENSIONS.md)         | Companion — indexes registered names, defines no rules           |
-| [THREAT-MODEL](./specs/THREAT-MODEL.md)     | Companion — assembles specified surface, defines no rules        |
-| [CONFORMANCE](./specs/CONFORMANCE.md)       | Companion — tiers over the normative MUST sets, defines no rules |
+| Spec                                        | Clock / status                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| [PROTOCOL](./specs/PROTOCOL.md)             | **v1 — frozen**, not yet final                                     |
+| [RELAY-CONTRACT](./specs/RELAY-CONTRACT.md) | **Frozen with v1** — the relay wire surface                        |
+| [WEB-RELAY](./specs/WEB-RELAY.md)           | Reference relay behavior, own `0.x` clock                          |
+| [DID-METHOD](./specs/DID-METHOD.md)         | **v1 — frozen**                                                    |
+| [CREDENTIALS](./specs/CREDENTIALS.md)       | **v1 — frozen**                                                    |
+| [CONTENT-MODEL](./specs/CONTENT-MODEL.md)   | Encoding rule frozen with v1; schema vocabulary on its own `0.x`   |
+| [CREDITS](./specs/CREDITS.md)               | Settled — additive capability on v1                                |
+| [SIGNING](./specs/SIGNING.md)               | `0.1` — optional capability, own `0.x` clock                       |
+| [SIWD](./specs/SIWD.md)                     | `0.1` — optional authentication seam, own `0.x` clock              |
+| [API-AUTH](./specs/API-AUTH.md)             | `0.1` — optional capability, own `0.x` clock                       |
+| [ORIGIN-BINDING](./specs/ORIGIN-BINDING.md) | `0.1` — optional capability, own `0.x` clock                       |
+| [KEY-PROOF](./specs/KEY-PROOF.md)           | Envelope shares the protocol's v1 clock; ceremony on its own `0.x` |
+| [EXTENSIONS](./specs/EXTENSIONS.md)         | Companion — indexes registered names, defines no rules             |
+| [THREAT-MODEL](./specs/THREAT-MODEL.md)     | Companion — assembles specified surface, defines no rules          |
+| [CONFORMANCE](./specs/CONFORMANCE.md)       | Companion — tiers over the normative MUST sets, defines no rules   |
 
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [Chain explorer](https://explore.dfos.com) — client-side, verify-in-tab

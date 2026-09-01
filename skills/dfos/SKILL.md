@@ -446,18 +446,25 @@ keystore.
 _Availability_ is a multi-key story, and a vault does not replace it: an identity
 holds up to 256 controller and 256 auth keys, and **a single controller key
 authorizes identity operations (1-of-N — no multisig or threshold)** while auth
-keys authenticate to relays. On a second device run `dfos identity device-pubkey` (private seed
-never leaves it), then from a device holding a controller key run
-`dfos identity add-key` with the printed public key. Now losing one device is not
-losing the identity. This must be done _before_ a loss, while you still hold a
-controller key.
+keys authenticate to relays. A key enters a chain carrying its own signature over
+the introduction, so a second device's key is **proved from the device that holds
+it**: the operator custodying the chain displays a key-add code, and on that device
+`dfos keys add <authority>/<CODE>` (alias `keys prove`) resolves the code, shows
+the identity, the roles being consented to, and the key's six-word fingerprint,
+signs a KEY-PROOF envelope with the candidate key itself — the private half never
+leaves that device — presents it, and waits for the human's decision on the
+operator's surface. `dfos identity add-key` signs only for a key this machine
+already holds; where no operator custodies the chain, the CLI carries no challenge
+across devices. Now losing one device is not losing the identity. This must be done
+_before_ a loss, while you still hold a controller key.
 
 **`identity create` mints ONE key and declares it controller, auth, and assert.**
 Two keys off one seed in one keychain on one machine are one custody arrangement
 under two names — every event that reaches one reaches the other — so the genesis
 declares one key three times, which is what is actually true. Custody splits at
-the first key-add: `identity add-key` (a key generated on another device) or
-`keys prove` (a key presented to a ceremony someone else custodies the chain for).
+the first key-add: `identity add-key` (another key this machine already holds) or
+`keys add` (a key presented from the device that holds it, to a ceremony someone
+else custodies the chain for).
 Rotation is scoped to the roles its flags name — `--rotate-auth` alone leaves the
 displaced key still controller and assert, and the report says so — while
 `--rotate-controller --rotate-auth --rotate-assert` retires it outright and mints
@@ -513,7 +520,9 @@ Common failures and the fix (relay-origin messages reach you wrapped as
 - **`identity '<n>' … not found in local relay`** → create it, or
   `dfos identity fetch <did> --peer <p>`.
 - **`no held <role> key … on this device`** → run on the device that holds the
-  key, or add this device via `device-pubkey` + `add-key`.
+  key, or present this device's own key to a key-add ceremony
+  (`dfos keys add <authority>/<CODE>`), then re-fetch the chain once the operator
+  adopts it.
 - **`Warning: OS keychain not available …`** → harmless; it falls back to
   `~/.dfos/keys/`. Force file storage with `DFOS_NO_KEYCHAIN=1`.
 - **`connect to relay: …` / connection refused** → check `dfos peer info <name>`;
