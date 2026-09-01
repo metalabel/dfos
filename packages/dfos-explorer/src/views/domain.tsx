@@ -277,6 +277,13 @@ export const Domain = (props: { host: string }) => {
   // perfectly ordinary domain, and saying so is the answer, not the absence of one.
   const speaks = binding.phase === 'done' && domainBindingSpeaks(binding.binding);
 
+  // the identity this domain is BOUND to, and only when the walk actually bound
+  // one. Every other binding verdict either names a DID nothing was proved about
+  // or names none at all, and neither is an identity this page may hand a reader
+  // as the domain's.
+  const bound: string | null =
+    binding.phase === 'done' && binding.binding.kind === 'bound' ? binding.binding.did : null;
+
   return (
     <>
       <Panel
@@ -328,16 +335,6 @@ export const Domain = (props: { host: string }) => {
               </div>
             </>
           ) : null}
-          {proven !== null ? (
-            <>
-              <div class="k">
-                client_did <span class="lbl">derived from the carried chain</span>
-              </div>
-              <div class="v">
-                <DidLink did={proven.did} full />
-              </div>
-            </>
-          ) : null}
         </div>
       </Panel>
 
@@ -372,24 +369,28 @@ export const Domain = (props: { host: string }) => {
         />
       )}
 
-      {proven !== null ? (
-        <Related
-          rows={[
-            {
-              k: 'identity',
-              v: <DidLink did={proven.did} full />,
-            },
-            {
-              k: 'redirect targets',
-              v: proven.app.redirect_uris.map((uri) => (
-                <div key={uri} class="muted">
-                  {uri}
-                </div>
-              )),
-            },
-          ]}
-        />
-      ) : null}
+      {/* BOTH identities get a footer link, and each is named for what it is.
+          This page routinely holds two — the one the domain is bound to and the
+          one its app description proved — and a row labelled just `identity`
+          would leave the reader to guess which. A bound domain that describes no
+          app still earns the section: its identity is the whole point of the
+          page, and it needs somewhere to go from here. */}
+      <Related
+        rows={[
+          bound !== null ? { k: 'bound identity', v: <DidLink did={bound} full /> } : null,
+          proven !== null ? { k: 'app identity', v: <DidLink did={proven.did} full /> } : null,
+          proven !== null
+            ? {
+                k: 'redirect targets',
+                v: proven.app.redirect_uris.map((uri) => (
+                  <div key={uri} class="muted">
+                    {uri}
+                  </div>
+                )),
+              }
+            : null,
+        ].filter((row) => row !== null)}
+      />
     </>
   );
 };
