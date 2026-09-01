@@ -388,7 +388,7 @@ An index found past the walk is proof the gap limit ended it early, and `recover
 
 The keys it names are recovered and the counter clears them. What it warns about is the shortfall itself: the same gap that hid a known identity's key hides an identity whose **every** key sits past it, along with every index that identity holds. `--scan-depth N` walks through a gap that wide.
 
-`--json` carries the same fact as data rather than prose: `scanComplete`, `beyondScanIndices`, and `recommendedScanDepth`. `scanComplete: false` with indices listed is the proven shortfall; `false` with none listed is the unproven kind — a chain this run could not read, so what it declares was never checked against a derivation at all. A `--dry-run` on a machine holding no chains reports exactly that.
+`--json` carries the same fact as data rather than prose: `scanComplete`, `beyondScanIndices`, and `recommendedScanDepth`. `scanComplete: false` with indices listed is the proven shortfall; `false` with none listed is the unproven kind — a chain this run could not read, so what it declares was never checked against a derivation at all. `--dry-run` reads the oracle's chains too, so its `scanComplete` reports what it verified rather than what this machine happened to hold, and a dry run that reaches every chain reports the same shortfall the real run does.
 
 An oracle failure under `--json` carries a `reason` code beside its prose — `oracle-no-index`, `oracle-unreachable`, or `oracle-key-param-ignored` — because the operator's next move differs for each and a sentence is not something to branch on.
 
@@ -403,7 +403,15 @@ An oracle failure under `--json` carries a `reason` code beside its prose — `o
 
 `recover` writes by default. It is additive and idempotent — it stores keys, ingests chains, adds config names, and raises a counter, and it deletes nothing — and it is the command an operator reaches for at the worst moment, so making the disaster path take two invocations buys nothing. (`keys prune` is dry-run-by-default for the opposite reason: it deletes.)
 
-`--dry-run` scans and reports without writing anything: no keystore writes, no config writes, no chain pulls. Because it pulls no chains it cannot read key ids either, so identities it finds report as `found-but-not-fetched` — an honest account of what a look-only run can know.
+`--dry-run` predicts the run it stands in for. It runs the same scan, fetches each found identity's chain from the oracle, and verifies it in memory — so it folds the same key ids, computes the same vault records, the same counter floor, and the same `scanComplete` verdict a real run would. It writes none of it: no keystore writes, no config writes, no local-relay ingestion.
+
+The report speaks in the would-mood, because a dry run that found a recoverable key has to read as having found one. Keys come back `would-install` where a real run says `recovered`, identities `would-recover`, and the vault line reads `N would be added by a real run`. `already-present` is unchanged in both modes — it is a present-tense fact about this machine. The last line is the verdict:
+
+```
+DRY RUN: 2 recoverable keys across 1 identity — nothing was written. Re-run without --dry-run to restore.
+```
+
+A chain the oracle cannot serve, or one that does not verify, is a loud named failure in a dry run exactly as in a real one: the identity reports `found-but-not-fetched` with the reason, its keys report `not-installed`, `scanComplete` goes false, and the verdict names the identities that could not be read rather than rounding them down to "nothing to do".
 
 ---
 

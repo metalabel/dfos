@@ -657,7 +657,15 @@ func TestRecoverFindsAKeyARotationLeftBehind(t *testing.T) {
 	}
 }
 
-func TestRecoverDryRunWritesNothing(t *testing.T) {
+// TestRecoverDryRunPredictsTheRealRunAndWritesNothing pins both halves of the
+// dry-run contract at once, because either alone is satisfiable by a lie: a run
+// that writes nothing is trivially achieved by looking at nothing, and a run
+// that predicts correctly is trivially achieved by doing the work for real.
+//
+// So it runs dry, asserts the keystore, the config, and the vault are untouched,
+// then runs wet against the same corpus and asserts the two reports agree on
+// every number an operator would act on.
+func TestRecoverDryRunPredictsTheRealRunAndWritesNothing(t *testing.T) {
 	storeA, _, lr := setupDevices(t)
 	keys = storeA
 	oracle := newFakeOracle(t)
@@ -676,14 +684,30 @@ func TestRecoverDryRunWritesNothing(t *testing.T) {
 	importVault(t, "restored", mnemonic)
 	oracle.registerAsPeer(t, "oracle")
 
+	// The prose half. A dry run that found a live recoverable key must READ as
+	// having found one — the would-mood throughout, and a verdict at the end.
 	stdout, _, err := runCapturing(t, newRecover(t, map[string]string{
 		"vault": "restored", "peer": "oracle", "dry-run": "true",
 	}), nil)
 	if err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
-	if !strings.Contains(stdout, "Nothing was written") {
-		t.Errorf("the dry run does not say it wrote nothing:\n%s", stdout)
+	for _, want := range []string{
+		"dry run — fetches and verifies, writes nothing",
+		"would-install",
+		"would-recover",
+		"would be added by a real run",
+		"DRY RUN: 1 recoverable key across 1 identity — nothing was written. Re-run without --dry-run to restore.",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the dry run does not say %q:\n%s", want, stdout)
+		}
+	}
+	// The verdict is the LAST thing on screen, because it is the sentence an
+	// operator scrolls to.
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "DRY RUN:") {
+		t.Errorf("the dry run ends on %q rather than its verdict:\n%s", last, stdout)
 	}
 
 	held, err := storeB.Entries()
@@ -700,12 +724,115 @@ func TestRecoverDryRunWritesNothing(t *testing.T) {
 	if meta.NextIndex != 0 || len(meta.Minted) != 0 {
 		t.Errorf("the dry run moved the vault: counter %d, %d records", meta.NextIndex, len(meta.Minted))
 	}
-	// A chain it did not pull is a chain it cannot name key ids out of, and the
-	// report says so rather than claiming a recovery it did not perform.
+
+	var dry recoverResult
+	runJSON(t, newRecover(t, map[string]string{"vault": "restored", "peer": "oracle", "dry-run": "true"}), nil, &dry)
+	if len(dry.Identities) != 1 || dry.Identities[0].Status != "would-recover" {
+		t.Fatalf("dry-run identity status = %+v, want would-recover", dry.Identities)
+	}
+	for _, k := range dry.Keys {
+		if k.Outcome != "would-install" {
+			t.Errorf("dry-run key at index %d = %q (%s), want would-install", k.Index, k.Outcome, k.Reason)
+		}
+		// The outcome carries the mood, so there is nothing left for a reason to
+		// say — and a reason beside a success is what made the old output read
+		// as a failure.
+		if k.Reason != "" {
+			t.Errorf("a would-install key carries a reason it does not need: %q", k.Reason)
+		}
+	}
+	// Every chain was fetched and verified, so the completeness verdict is
+	// earned rather than withheld on account of the mode.
+	if !dry.ScanComplete {
+		t.Errorf("a dry run that verified every chain reports an incomplete scan: %+v", dry)
+	}
+
+	// The fidelity half: the same corpus, for real.
+	var wet recoverResult
+	runJSON(t, newRecover(t, map[string]string{"vault": "restored", "peer": "oracle"}), nil, &wet)
+
+	if wet.MintedAdded != dry.MintedAdded {
+		t.Errorf("the dry run predicted %d vault records, the real run added %d", dry.MintedAdded, wet.MintedAdded)
+	}
+	if wet.CounterAfter != dry.CounterAfter {
+		t.Errorf("the dry run predicted counter %d, the real run landed on %d", dry.CounterAfter, wet.CounterAfter)
+	}
+	if wet.ScanComplete != dry.ScanComplete || wet.HighestUsedIndex != dry.HighestUsedIndex {
+		t.Errorf("dry run and real run disagree on the scan: %+v vs %+v", dry, wet)
+	}
+	if len(wet.Keys) != len(dry.Keys) {
+		t.Fatalf("the dry run predicted %d keys, the real run reported %d", len(dry.Keys), len(wet.Keys))
+	}
+	for i := range wet.Keys {
+		d, w := dry.Keys[i], wet.Keys[i]
+		if d.Index != w.Index || d.PublicKey != w.PublicKey || d.DID != w.DID || d.KeyID != w.KeyID || d.Account != w.Account {
+			t.Errorf("key %d differs between prediction and run:\n dry %+v\n wet %+v", i, d, w)
+		}
+		if d.Outcome != "would-install" || w.Outcome != "recovered" {
+			t.Errorf("key %d outcomes = %q then %q, want would-install then recovered", i, d.Outcome, w.Outcome)
+		}
+		if !keys.HasKey(w.Account) {
+			t.Errorf("the real run did not install the key the dry run promised: %s", w.Account)
+		}
+	}
+}
+
+// TestRecoverDryRunReportsAChainTheOracleCannotServe is the loud half held
+// steady. Fetching in memory is what makes the dry run a prediction, and a fetch
+// that fails is still a named failure — never an absence, and never softened by
+// the verdict line at the end.
+func TestRecoverDryRunReportsAChainTheOracleCannotServe(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	keys = storeA
+	oracle := newFakeOracle(t)
+	oracle.registerAsPeer(t, "oracle")
+
+	mnemonic := createVault(t, "personal")
+	did := createIdentity(t, "alice", storeA)
+	chain, _ := lr.Relay.GetIdentity(did)
+	// The INDEX names the identity; the proof plane does not serve its log. A
+	// relay whose index outruns its own proof plane looks exactly like this.
+	for _, k := range chain.State.ControllerKeys {
+		oracle.declare(k.PublicKeyMultibase, did, false, "")
+	}
+
+	storeB, _, _ := setupDevices(t)
+	keys = storeB
+	importVault(t, "restored", mnemonic)
+	oracle.registerAsPeer(t, "oracle")
+
+	stdout, _, err := runCapturing(t, newRecover(t, map[string]string{
+		"vault": "restored", "peer": "oracle", "dry-run": "true",
+	}), nil)
+	// An unreadable chain is a finding, not a crash: the report still prints, so
+	// the operator sees which identity is affected and why.
+	if err != nil {
+		t.Fatalf("a dry run whose chain fetch failed errored out: %v", err)
+	}
+	for _, want := range []string{"found-but-not-fetched", "DRY RUN: nothing here is recoverable"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report does not say %q:\n%s", want, stdout)
+		}
+	}
+
 	var res recoverResult
 	runJSON(t, newRecover(t, map[string]string{"vault": "restored", "peer": "oracle", "dry-run": "true"}), nil, &res)
 	if len(res.Identities) != 1 || res.Identities[0].Status != "found-but-not-fetched" {
-		t.Errorf("dry-run identity status = %+v, want found-but-not-fetched", res.Identities)
+		t.Fatalf("identity status = %+v, want found-but-not-fetched", res.Identities)
+	}
+	if res.Identities[0].Reason == "" {
+		t.Error("a found-but-not-fetched identity carries no reason")
+	}
+	for _, k := range res.Keys {
+		if k.Outcome != "not-installed" || k.Reason == "" {
+			t.Errorf("key at index %d = %+v, want not-installed with a reason", k.Index, k)
+		}
+	}
+	// A chain it could not read is a chain whose declared keys it never checked
+	// against a derivation, so completeness is withheld — in dry run exactly as
+	// in a real one.
+	if res.ScanComplete {
+		t.Error("a chain the dry run could not read did not withhold scan completeness")
 	}
 }
 

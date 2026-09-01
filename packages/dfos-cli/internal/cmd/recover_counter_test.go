@@ -205,17 +205,39 @@ func TestRecoverScanShortfallBannerIsLoud(t *testing.T) {
 	}
 }
 
-// TestRecoverDryRunDoesNotClaimAScanItCouldNotCheck: --dry-run pulls no chain,
-// so on a fresh machine it reads none — and a chain it never read is one whose
-// declared keys it never matched against a derivation.
+// TestRecoverDryRunPredictsTheScanShortfall: a dry run fetches every identity
+// the scan found and verifies its chain in memory, so it reaches the same
+// finding the real run does — a chain declaring keys this seed derives PAST
+// where the gap limit stopped the walk.
 //
 // A dry run is exactly where an operator looks before deciding to trust a vault,
-// so a clean scanComplete on the strength of having looked at nothing is the
-// same silence-read-as-an-answer the rest of this command refuses.
-func TestRecoverDryRunDoesNotClaimAScanItCouldNotCheck(t *testing.T) {
+// so this is the report that has to be right. The old one pulled nothing, found
+// nothing, and reported an unproven incompleteness on the strength of having
+// looked at nothing.
+func TestRecoverDryRunPredictsTheScanShortfall(t *testing.T) {
 	rotatedPastTheScan(t)
 
 	before, _ := getVaults().Load("restored")
+
+	// The banner keeps its force under --dry-run and only its tense moves: the
+	// shortfall is proven either way, and what changes is who does the recovering.
+	stdout, _, err := runCapturing(t, newRecover(t, map[string]string{
+		"vault": "restored", "peer": "oracle", "scan-depth": "2", "dry-run": "true",
+	}), nil)
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	for _, want := range []string{
+		"SCAN DEPTH TOO SHALLOW",
+		"A real run recovers them and raises the counter past them.",
+		"--scan-depth 6",
+		"already spent",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the dry run does not say %q:\n%s", want, stdout)
+		}
+	}
+
 	var res recoverResult
 	runJSON(t, newRecover(t, map[string]string{
 		"vault": "restored", "peer": "oracle", "scan-depth": "2", "dry-run": "true",
@@ -224,18 +246,35 @@ func TestRecoverDryRunDoesNotClaimAScanItCouldNotCheck(t *testing.T) {
 	if !res.DryRun {
 		t.Error("the dry run does not record itself as one")
 	}
+	// PROVEN incomplete, not merely unchecked: the chains were read, and they
+	// name indices the walk never reached.
 	if res.ScanComplete {
-		t.Error("a dry run that read no chain claims a complete scan")
+		t.Error("a dry run that read a chain proving indices past the walk claims a complete scan")
 	}
-	// Unproven, not proven: no chain was read, so nothing showed an index past
-	// the walk. The two kinds of incompleteness are distinguishable in --json.
-	if len(res.BeyondScanIndices) != 0 {
-		t.Errorf("beyondScanIndices = %v, want none — no chain was read to prove one", res.BeyondScanIndices)
+	if !equalIndices(res.BeyondScanIndices, []uint32{4, 5}) {
+		t.Errorf("beyondScanIndices = %v, want [4 5]", res.BeyondScanIndices)
+	}
+	if res.RecommendedScanDepth != 6 {
+		t.Errorf("recommendedScanDepth = %d, want 6 (enough to reach index 5)", res.RecommendedScanDepth)
 	}
 
 	after, _ := getVaults().Load("restored")
 	if after.NextIndex != before.NextIndex || len(after.Minted) != len(before.Minted) {
 		t.Errorf("the dry run moved the vault: counter %d → %d", before.NextIndex, after.NextIndex)
+	}
+
+	// And the prediction holds against the run it stands in for.
+	var wet recoverResult
+	runJSON(t, newRecover(t, map[string]string{
+		"vault": "restored", "peer": "oracle", "scan-depth": "2",
+	}), nil, &wet)
+	if wet.MintedAdded != res.MintedAdded || wet.CounterAfter != res.CounterAfter {
+		t.Errorf("the dry run predicted %d records and counter %d; the real run did %d and %d",
+			res.MintedAdded, res.CounterAfter, wet.MintedAdded, wet.CounterAfter)
+	}
+	if !equalIndices(wet.BeyondScanIndices, res.BeyondScanIndices) || wet.RecommendedScanDepth != res.RecommendedScanDepth {
+		t.Errorf("the two runs disagree on the shortfall: %v/%d vs %v/%d",
+			res.BeyondScanIndices, res.RecommendedScanDepth, wet.BeyondScanIndices, wet.RecommendedScanDepth)
 	}
 }
 

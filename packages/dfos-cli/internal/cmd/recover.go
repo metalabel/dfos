@@ -30,6 +30,16 @@ package cmd
 //
 // The oracle is always NAMED in the output. "Used" and "unused" here are one
 // relay's answers, and one relay's index-absence is not global absence.
+//
+// --dry-run is the same walk with the write phase removed, and the contract is
+// that it PREDICTS the run it stands in for. It asks the oracle the same
+// questions, fetches each found identity's chain, and verifies it in memory with
+// protocol.VerifyIdentityChain — so it folds the same key ids, computes the same
+// records, the same counter floor, and the same scan-completeness verdict a real
+// run would. What it does not do is write: no keystore entry, no config name, no
+// vault record, and nothing ingested into the local relay. A dry run that
+// under-reports its own real run is worse than no dry run at all, because it is
+// read as an answer.
 
 import (
 	"crypto/ed25519"
@@ -100,6 +110,14 @@ type recoveredKey struct {
 	// keystore), "already-present" (the keystore already held it), or
 	// "not-installed" (the chain that would name it could not be read, so there
 	// is no account to store it under).
+	//
+	// A dry run reports "would-install" where a real run reports "recovered", and
+	// the same strings otherwise. The mood is in the vocabulary rather than in a
+	// reason, because a key a real run installs is a SUCCESS and reading it as
+	// one should not require noticing the dryRun field. "already-present" is a
+	// present-tense fact and does not shift; "not-installed" and
+	// "found-but-not-fetched" stay the genuine-failure words in both modes, and
+	// always carry a reason.
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason,omitempty"`
 	// Superseded records that the chain no longer names this key in any current
@@ -123,6 +141,7 @@ type recoveredIdentity struct {
 	// "already-present" (chain and keys were already here), or
 	// "found-but-not-fetched" (the index named it and the chain could not be
 	// read — the identity is real, and this machine still cannot act as it).
+	// A dry run says "would-recover" where a real run says "recovered".
 	Status     string   `json:"status"`
 	Operations int      `json:"operations,omitempty"`
 	Keys       []string `json:"keys,omitempty"`
@@ -200,7 +219,7 @@ func newRecoverCmd() *cobra.Command {
 			"is a loud failure, never an empty result.\n\n" +
 			"After a machine is lost the whole path is: 'dfos vault import <name>' to adopt the phrase, " +
 			"then 'dfos recover --vault <name>'. It writes by default and is idempotent — re-running " +
-			"converges. --dry-run scans and reports without writing anything.",
+			"converges. --dry-run scans and predicts the real run without writing anything.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if scanDepth < 1 {
@@ -218,7 +237,7 @@ func newRecoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&vaultName, "vault", "", "Vault whose phrase is being recovered from (default: config default-vault)")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Relay to ask the used/unused question — the oracle (default: the resolved peer)")
 	cmd.Flags().IntVar(&scanDepth, "scan-depth", defaultScanDepth, "Stop after this many consecutive unused indices")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Scan and report, writing nothing: no keys, no config, no chain pulls")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Scan and predict without writing: chains are fetched and verified in memory; no keys, no config, no local-relay ingestion")
 	cmd.Flags().BoolVar(&manifestOnly, "manifest-only", false, "Skip the scan entirely and recover only what this vault's own minted-key records name")
 	return cmd
 }
@@ -492,8 +511,9 @@ func scanVault(seed []byte, meta *vault.Metadata, oracle *client.Client, opts re
 
 // restoreFromHits turns the scan's findings into local state: chains in the
 // local relay, private keys in the keystore, provenance in the vault, names in
-// config. Under --dry-run it computes and reports the same thing and writes
-// none of it.
+// config. Under --dry-run it computes every one of those numbers off chains it
+// verified in memory and writes none of them, so what it reports is what a real
+// run from the same starting point does.
 func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle *client.Client, meta *vault.Metadata, vaultName string, opts recoverOptions) error {
 	lr, err := getRelay()
 	if err != nil {
@@ -535,7 +555,9 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 
 	// Pull each chain, then read it back from the local relay — so every key id
 	// this command installs comes from an operation the local relay ACCEPTED,
-	// never from an index row.
+	// never from an index row. A dry run installs nothing and so ingests nothing:
+	// it verifies the same log in memory instead, which admits the same
+	// operations under the same rules and leaves no trace.
 	chains := map[string]*chainFacts{}
 	for _, did := range order {
 		w := work[did]
@@ -595,10 +617,14 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 
 	// A chain that could not be READ is a chain whose keys were never matched
 	// against a derivation, so this run has no basis for saying the scan reached
-	// everything the vault spent. --dry-run pulls nothing at all, which is
-	// precisely the run an operator makes before deciding to trust the vault:
-	// answering it with a clean scan on the strength of having looked at nothing
-	// is the same silence-read-as-an-answer this command exists to refuse.
+	// everything the vault spent.
+	//
+	// --dry-run is held to that bar and can meet it: it fetches every identity
+	// the scan found and verifies the chain in memory, so what withholds
+	// completeness here is an unreadable or unverifiable CHAIN, never the mode. A
+	// dry run is precisely the run an operator makes before deciding to trust a
+	// vault, and it now earns its verdict the same way a real run does — by
+	// having read every chain it reports on.
 	if len(chains) < len(order) {
 		result.ScanComplete = false
 	}
@@ -720,9 +746,12 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 					"Resolve it ('dfos keys list' shows what this machine holds), then re-run", legacy, legacyDetail)
 				result.Keys = append(result.Keys, key)
 				continue
+			// The dry run got this far, so the chain named the key and the
+			// keystore does not hold it: a real run installs it. The outcome
+			// carries the mood — there is no reason to attach, because nothing
+			// went wrong.
 			case opts.dryRun:
-				key.Outcome = "recovered"
-				key.Reason = "dry run — nothing was written"
+				key.Outcome = "would-install"
 			default:
 				if _, err := keys.PutKey(account, h.private); err != nil {
 					key.Outcome = "not-installed"
@@ -756,7 +785,11 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 				entry.Reason = "the chain is local, and no key this phrase derives is installable under it"
 			}
 		case allAlreadyPresent(result.Keys, entry.DID):
+			// A present-tense fact in both modes: the keys are here now, and a
+			// real run would find them here too.
 			entry.Status = "already-present"
+		case opts.dryRun:
+			entry.Status = "would-recover"
 		default:
 			entry.Status = "recovered"
 		}
@@ -770,6 +803,8 @@ func restoreFromHits(result *recoverResult, hits []scanHit, seed []byte, oracle 
 	}
 	// A dry run computes the same numbers and writes none of them. The math is
 	// unchanged: the floor this run would install, over the counter as it stands.
+	// countNewRecords now sees the records a real run would write, because the
+	// chains behind them were fetched and verified rather than skipped.
 	if opts.dryRun {
 		result.MintedAdded = countNewRecords(meta, records)
 		result.CounterAfter = maxU32(meta.NextIndex, minNext)
@@ -982,17 +1017,42 @@ func (f *chainFacts) keyIDFor(publicKey string) (string, bool) {
 	return id, ok
 }
 
-// loadChainFacts gets a DID's chain into the local relay and folds it.
+// loadChainFacts gets one DID's chain and folds it. WHERE the chain comes from
+// is the only thing that differs by mode; the fold underneath is one function.
 //
-// The pull is unconditional when there is an oracle: ingestion is idempotent, and
-// a chain this machine happens to already hold may be behind the one the index
-// just pointed at. Under --dry-run nothing is pulled at all — the fold runs
-// against whatever the local relay already holds, so an identity the scan found
-// and this machine has never seen reports as found-but-not-fetched. That is the
-// honest dry-run answer: a chain it did not fetch is a chain it cannot read key
-// ids out of.
+// Real run, with an oracle. The pull is unconditional: ingestion is idempotent,
+// and a chain this machine happens to already hold may be behind the one the
+// index just pointed at. The chain is then read back OUT of the local relay, so
+// every key id this command installs comes from an operation the local relay
+// ACCEPTED rather than from an index row.
+//
+// --dry-run, with an oracle. The same log is fetched and verified IN MEMORY by
+// protocol.VerifyIdentityChain — the same verification an ingest performs — and
+// nothing is written. This is what makes the dry run a prediction rather than a
+// report on local emptiness: it folds the key ids the real run would fold, so
+// the records, the counter floor, and the scan-completeness verdict downstream
+// of this are the real run's numbers. A log the oracle cannot serve, or one that
+// does not verify, is still a loud named failure — found-but-not-fetched with
+// the reason — because a chain this run could not read is a chain whose declared
+// keys it never checked.
+//
+// --manifest-only. There is no oracle to ask, in either mode, so the fold runs
+// against whatever the local relay already holds and the banner above the report
+// says the scan never ran.
 func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string, dryRun bool) (*chainFacts, int, error) {
-	if oracle != nil && !dryRun {
+	if oracle != nil && dryRun {
+		log, err := oracle.GetIdentityLog(did)
+		if err != nil {
+			return nil, 0, fmt.Errorf("fetch chain from the oracle: %v", err)
+		}
+		verified, err := protocol.VerifyIdentityChain(log)
+		if err != nil {
+			return nil, 0, fmt.Errorf("the chain the oracle serves does not verify: %v", err)
+		}
+		return foldChainFacts(verified.State, log), len(log), nil
+	}
+
+	if oracle != nil {
 		log, err := oracle.GetIdentityLog(did)
 		if err != nil {
 			return nil, 0, fmt.Errorf("pull chain from the oracle: %v", err)
@@ -1009,14 +1069,23 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 		return nil, 0, fmt.Errorf("read chain from the local relay: %v", err)
 	}
 	if chain == nil {
-		if dryRun {
-			return nil, 0, fmt.Errorf("not in the local relay, and --dry-run pulls nothing")
+		if oracle == nil {
+			return nil, 0, fmt.Errorf("not in the local relay, and --manifest-only asks no relay")
 		}
 		return nil, 0, fmt.Errorf("not in the local relay after the pull")
 	}
+	return foldChainFacts(chain.State, chain.Log), len(chain.Log), nil
+}
 
+// foldChainFacts reduces a verified chain to what the write phase needs. It takes
+// the two things every source of a chain hands over — the folded state and the
+// raw log that state was folded from — so a chain read back out of the local
+// relay and a chain verified in memory a moment ago produce identical facts. The
+// local relay stores exactly the protocol.IdentityState this fold expects, which
+// is why there is one function here rather than two that drift.
+func foldChainFacts(state protocol.IdentityState, log []string) *chainFacts {
 	facts := &chainFacts{
-		deleted:       chain.State.IsDeleted,
+		deleted:       state.IsDeleted,
 		keyIDByPublic: map[string]string{},
 		currentRoles:  map[string][]string{},
 	}
@@ -1025,7 +1094,7 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 	// operator recovering from a phrase is most likely to hold — a rotation
 	// removes a key from current state, it does not retract the proof that
 	// admitted it, so the index still holds the row.
-	for _, token := range chain.Log {
+	for _, token := range log {
 		payload, err := protocol.PayloadFromJWS(token)
 		if err != nil {
 			continue
@@ -1052,9 +1121,9 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 		}
 	}
 	for role, set := range map[string][]protocol.MultikeyPublicKey{
-		"controller": chain.State.ControllerKeys,
-		"auth":       chain.State.AuthKeys,
-		"assert":     chain.State.AssertKeys,
+		"controller": state.ControllerKeys,
+		"auth":       state.AuthKeys,
+		"assert":     state.AssertKeys,
 	} {
 		for _, k := range set {
 			facts.currentRoles[k.ID] = append(facts.currentRoles[k.ID], role)
@@ -1068,7 +1137,7 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 	for id := range facts.currentRoles {
 		facts.currentRoles[id] = orderRoles(facts.currentRoles[id])
 	}
-	return facts, len(chain.Log), nil
+	return facts
 }
 
 // orderRoles puts a key's roles in controller→auth→assert order.
@@ -1139,7 +1208,7 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 	}
 	fmt.Printf("  Keystore:   %s\n", r.Backend)
 	if r.DryRun {
-		fmt.Printf("  Mode:       dry run — nothing was written\n")
+		fmt.Printf("  Mode:       dry run — fetches and verifies, writes nothing\n")
 	}
 	if !r.Scanned {
 		fmt.Printf("\n! MANIFEST ONLY — the derivation scan did NOT run, and no relay was asked.\n")
@@ -1195,7 +1264,7 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 
 	verb := "added"
 	if r.DryRun {
-		verb = "would be added"
+		verb = "would be added by a real run"
 	}
 	fmt.Printf("\nVault records: %d %s\n", r.MintedAdded, verb)
 	// The claim the counter line makes is scoped to what this run LEARNED, which
@@ -1230,7 +1299,7 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 	fmt.Printf("  - Keys minted OUTSIDE a vault are not derivable from any phrase. This command says\n")
 	fmt.Printf("    nothing about them — 'dfos keys list' shows what this machine holds.\n")
 	if r.DryRun {
-		fmt.Printf("\nNothing was written. Re-run without --dry-run to restore.\n")
+		fmt.Printf("\n%s\n", dryRunVerdict(r))
 		return
 	}
 	if hasOutcome(r.Keys, "recovered") {
@@ -1258,12 +1327,76 @@ func printScanShortfall(r *recoverResult) {
 	fmt.Printf("\n! SCAN DEPTH TOO SHALLOW — current key(s) beyond scan depth.\n")
 	fmt.Printf("  The scan walked %d indices and stopped after %d consecutive unused ones. A chain\n", r.IndicesScanned, r.ScanDepth)
 	fmt.Printf("  this run fetched declares key(s) this vault's seed derives at index %s,\n", strings.Join(indices, ", "))
-	fmt.Printf("  past that stop. They are recovered here and the counter clears them.\n")
+	// The finding is identical in both modes — a fetched chain proved the walk
+	// stopped short — and only the tense of what happens to those keys changes.
+	if r.DryRun {
+		fmt.Printf("  past that stop. A real run recovers them and raises the counter past them.\n")
+	} else {
+		fmt.Printf("  past that stop. They are recovered here and the counter clears them.\n")
+	}
 	fmt.Printf("  What the walk could NOT see is an identity whose every key sits past the same\n")
 	fmt.Printf("  gap — indices included. Until this vault is scanned that deep, minting from it\n")
 	fmt.Printf("  risks handing out an index another identity already spent.\n")
 	fmt.Printf("  Re-run with --scan-depth %d (or more): dfos recover --vault %s --scan-depth %d\n",
 		r.RecommendedScanDepth, r.Vault, r.RecommendedScanDepth)
+}
+
+// dryRunVerdict is the last line a dry run prints, and it exists because the run
+// it ends is one an operator reads for a yes or a no. A report that trails off
+// into caveats leaves them to total up the table themselves, and the failure
+// that put this line here was exactly that: a dry run that FOUND a live
+// recoverable key was read as having found nothing, because every sentence
+// around the finding spoke about what had not been written.
+//
+// It states a prediction about the real run, in the real run's own terms, and it
+// never rounds a loud line above it down to "nothing to do" — an identity whose
+// chain could not be read is named here rather than absorbed into a clean
+// "nothing would change".
+func dryRunVerdict(r *recoverResult) string {
+	wouldInstall := countOutcome(r.Keys, "would-install")
+	identities := map[string]bool{}
+	for _, k := range r.Keys {
+		if k.Outcome == "would-install" {
+			identities[k.DID] = true
+		}
+	}
+	notFetched := 0
+	for _, id := range r.Identities {
+		if id.Status == "found-but-not-fetched" {
+			notFetched++
+		}
+	}
+
+	switch {
+	case wouldInstall > 0:
+		return fmt.Sprintf("DRY RUN: %d recoverable %s across %d %s — nothing was written. Re-run without --dry-run to restore.",
+			wouldInstall, plural(wouldInstall, "key", "keys"),
+			len(identities), plural(len(identities), "identity", "identities"))
+	case notFetched > 0:
+		return fmt.Sprintf("DRY RUN: nothing here is recoverable — %d %s reported found-but-not-fetched, with the reason above.",
+			notFetched, plural(notFetched, "identity", "identities"))
+	case len(r.Keys) > 0 && countOutcome(r.Keys, "already-present") == len(r.Keys):
+		return "DRY RUN: every key found is already on this machine — a real run would change nothing."
+	default:
+		return "DRY RUN: no recoverable keys found — nothing would change."
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+func countOutcome(all []recoveredKey, outcome string) int {
+	n := 0
+	for _, k := range all {
+		if k.Outcome == outcome {
+			n++
+		}
+	}
+	return n
 }
 
 func hasOutcome(all []recoveredKey, outcome string) bool {

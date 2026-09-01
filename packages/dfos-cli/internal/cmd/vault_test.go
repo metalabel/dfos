@@ -150,6 +150,60 @@ func TestVaultImportRejectsABadChecksumAndReadsFromStdin(t *testing.T) {
 	}
 }
 
+// TestVaultImportUsageErrorNamesTheLabelAndNeverEchoesArgv covers the two ways
+// the one argument comes out wrong, and the near-miss is the whole reason this
+// command validates its own args: an operator who pasted the PHRASE where the
+// NAME goes has just published their seed to shell history and to the process
+// list, and `accepts 1 arg(s), received 24` tells them none of that.
+//
+// The error must say it WITHOUT reproducing a word. An error message lands in
+// scrollback, in a CI log, and in whatever is recording the session, so echoing
+// argv back copies the phrase into one more place at the moment it is already
+// exposed. Args is exercised directly here because runCapturing drives RunE and
+// cobra's argument validation never runs.
+func TestVaultImportUsageErrorNamesTheLabelAndNeverEchoesArgv(t *testing.T) {
+	setupDevices(t)
+	cmd := newVaultImportCmd()
+
+	err := cmd.Args(cmd, nil)
+	if err == nil {
+		t.Fatal("vault import with no argument was accepted")
+	}
+	for _, want := range []string{"needs a NAME", "dfos vault import <name>", "never an argument", "without echo", "stdin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the no-argument error does not say %q:\n%s", want, err)
+		}
+	}
+
+	// The near-miss. These are BIP-39 words, and none of them is a substring of
+	// the error text, so the absence check below means what it says.
+	words := []string{"abandon", "zebra", "kingdom", "trophy"}
+	err = cmd.Args(cmd, words)
+	if err == nil {
+		t.Fatal("vault import with a phrase where the name goes was accepted")
+	}
+	for _, want := range []string{
+		"takes one argument",
+		"a local NAME for the vault, not the phrase",
+		"treat the phrase as exposed",
+		"never argv",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the too-many-arguments error does not say %q:\n%s", want, err)
+		}
+	}
+	for _, w := range words {
+		if strings.Contains(err.Error(), w) {
+			t.Errorf("the error echoed the word %q back — that is one more copy of a phrase already exposed:\n%s", w, err)
+		}
+	}
+
+	// One argument is still one argument.
+	if err := cmd.Args(cmd, []string{"restored"}); err != nil {
+		t.Errorf("a single name was refused: %v", err)
+	}
+}
+
 func TestVaultShowHidesTheMnemonicUntilAskedAndConfirmed(t *testing.T) {
 	setupDevices(t)
 	mnemonic := createVault(t, "personal")
