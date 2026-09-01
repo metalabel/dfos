@@ -266,6 +266,16 @@ export const readAppAttestation = async (host: string): Promise<AppAttestation> 
   if (outcome.kind === 'no-app-description') {
     return { kind: 'silent', reason: 'the origin serves no app description either' };
   }
+  // a redirect here is silence for exactly the reason it is silence on the
+  // dfos-did channel (api/binding.ts): the document must come from this origin at
+  // the fixed path, so an origin that redirects has shown us nothing to attest
+  // with — and nothing this fallback may treat as an answer
+  if (outcome.kind === 'redirected') {
+    return {
+      kind: 'silent',
+      reason: 'the origin redirects at the app-description path — a redirect is a non-answer',
+    };
+  }
   const structural = validateStructure(outcome.document);
   if (!structural.ok) {
     return { kind: 'silent', reason: 'the app description is not structurally valid' };
