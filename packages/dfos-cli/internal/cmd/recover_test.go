@@ -697,11 +697,18 @@ func TestRecoverDryRunPredictsTheRealRunAndWritesNothing(t *testing.T) {
 		"would-install",
 		"would-recover",
 		"would be added by a real run",
+		// The counter line is the one place a dry run can promise a protection
+		// it did not install. It rose nothing, so it claims nothing: an operator
+		// who dry-runs and then mints is still exposed to the collision.
+		"Counter:       0 — would rise to 1, putting the next mint past every index this run learned",
 		"DRY RUN: 1 recoverable key across 1 identity — nothing was written. Re-run without --dry-run to restore.",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the dry run does not say %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "cannot reuse") {
+		t.Errorf("the dry run asserts a reuse guarantee it did not install:\n%s", stdout)
 	}
 	// The verdict is the LAST thing on screen, because it is the sentence an
 	// operator scrolls to.

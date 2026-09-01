@@ -1275,11 +1275,21 @@ func printRecoverResult(r *recoverResult, opts recoverOptions) {
 	if !r.ScanComplete {
 		safety = "past every index this run learned — indices the scan never reached remain unknown"
 	}
+	// A dry run raised no counter, so the protection is one a real run WOULD
+	// install rather than one that stands now. Stating it in the indicative
+	// asserted a guarantee that does not exist yet — an operator who dry-runs and
+	// then mints can still hand out an index this seed has already spent — which
+	// is the same class of register bug as a found key reading as a failure. The
+	// finding and the numbers are identical; only the mood moves.
+	wouldSafety := "putting the next mint past every index this run learned"
+	if !r.ScanComplete {
+		wouldSafety = "past every index this run learned — indices the scan never reached remain unknown"
+	}
 	switch {
 	case r.CounterAfter == r.CounterBefore:
 		fmt.Printf("Counter:       %d — unchanged\n", r.CounterBefore)
 	case r.DryRun:
-		fmt.Printf("Counter:       %d — would rise to %d: %s\n", r.CounterBefore, r.CounterAfter, safety)
+		fmt.Printf("Counter:       %d — would rise to %d, %s\n", r.CounterBefore, r.CounterAfter, wouldSafety)
 	default:
 		fmt.Printf("Counter:       %d → %d — %s\n", r.CounterBefore, r.CounterAfter, safety)
 	}

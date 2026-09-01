@@ -232,10 +232,16 @@ func TestRecoverDryRunPredictsTheScanShortfall(t *testing.T) {
 		"A real run recovers them and raises the counter past them.",
 		"--scan-depth 6",
 		"already spent",
+		// Nothing rose, and the scan fell short besides — so the counter line
+		// is would-mood AND keeps the scope it is entitled to.
+		"Counter:       0 — would rise to 6, past every index this run learned — indices the scan never reached remain unknown",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the dry run does not say %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(stdout, "cannot reuse") {
+		t.Errorf("the dry run asserts a reuse guarantee it did not install:\n%s", stdout)
 	}
 
 	var res recoverResult
