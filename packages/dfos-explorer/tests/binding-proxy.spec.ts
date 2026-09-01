@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDidBody, parseTxtRecords } from '../api/binding';
+import { classifyDidStatus, parseDidBody, parseTxtRecords } from '../api/binding';
 
 // The binding route's judgement lives in these two pure parsers: what a TXT name
 // is saying, and what a /.well-known/dfos-did body is saying. Everything else in
@@ -73,7 +73,9 @@ describe('parseDidBody', () => {
   });
 
   // present but not an attestation: `malformed` rather than `none`, because the
-  // document EXISTS — which is what blocks the app-description fallback
+  // document EXISTS and the evidence row says so. Both are non-answers and both
+  // license the app-description fallback — the STATUS is what keeps "there is no
+  // document" and "there is a document that says nothing" distinguishable.
   it('reports a non-DID body as malformed, never as absence', () => {
     for (const body of [
       '',
@@ -92,5 +94,48 @@ describe('parseDidBody', () => {
 
   it('rejects a body carrying more than the DID even on one line', () => {
     expect(parseDidBody(`${DID}\nnot a did`).status).toBe('malformed');
+  });
+});
+
+// The status half of the same judgement, and the line ORIGIN-BINDING.md draws
+// through it: a redirect and a 404 are both NON-ANSWERS (the fallback fires on
+// either), while a 5xx is a QUERY FAILURE — the spec's own separate class — and
+// licenses nothing, because a path we never saw never declined to answer.
+describe('classifyDidStatus', () => {
+  it('reads every redirect as a non-answer carrying its status', () => {
+    for (const status of [301, 302, 303, 307, 308]) {
+      expect(classifyDidStatus(status), String(status)).toEqual({
+        status: 'redirected',
+        httpStatus: status,
+        reason: 'the origin redirected; redirects are not followed',
+      });
+    }
+  });
+
+  // the regression this whole change closes: a redirect used to arrive as
+  // `error`, which is the query-failure class, and the fallback stayed shut
+  it('never reports a redirect as a query failure', () => {
+    for (const status of [301, 308]) {
+      expect(classifyDidStatus(status)?.status).not.toBe('error');
+    }
+  });
+
+  it('reads a 404 or a 410 as an absence the origin demonstrated', () => {
+    expect(classifyDidStatus(404)?.status).toBe('none');
+    expect(classifyDidStatus(410)?.status).toBe('none');
+  });
+
+  it('keeps every other non-2xx status a query failure', () => {
+    for (const status of [400, 403, 429, 500, 503]) {
+      const out = classifyDidStatus(status);
+      expect(out?.status, String(status)).toBe('error');
+      if (out?.status === 'error') expect(out.httpStatus).toBe(status);
+    }
+  });
+
+  // a 2xx settles nothing on its own — the answer is the trimmed body
+  it('leaves a success status to the body', () => {
+    expect(classifyDidStatus(200)).toBeNull();
+    expect(classifyDidStatus(204)).toBeNull();
   });
 });

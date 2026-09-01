@@ -145,6 +145,33 @@ describe('classifyBindingEnvelope', () => {
     }
   });
 
+  it('carries a redirected result through with its status and reason', () => {
+    const out = classifyBindingEnvelope({
+      https: {
+        status: 'redirected',
+        httpStatus: 308,
+        reason: 'the origin redirected; redirects are not followed',
+      },
+      dns: { status: 'none' },
+    });
+    expect(out.kind).toBe('answered');
+    if (out.kind === 'answered') {
+      expect(out.https).toEqual({
+        status: 'redirected',
+        httpStatus: 308,
+        reason: 'the origin redirected; redirects are not followed',
+      });
+    }
+  });
+
+  // a redirect result with no status is incoherent — the row states the code, and
+  // a redirect we cannot name is our route off-contract, not a fact about them
+  it('rejects a redirected result carrying no httpStatus', () => {
+    expect(
+      classifyBindingEnvelope({ https: { status: 'redirected' }, dns: { status: 'none' } }).kind,
+    ).toBe('proxy-unavailable');
+  });
+
   // the honesty rule: OUR route misbehaving is never evidence about THEIR domain
   it('never blames the domain for an off-contract answer', () => {
     expect(classifyBindingEnvelope(null).kind).toBe('proxy-unavailable');
@@ -201,24 +228,36 @@ describe('fetchBindingAttestation', () => {
 });
 
 // -----------------------------------------------------------------------------
-// the app-description fallback — MUST, and only on ABSENCE
+// the app-description fallback — MUST, and only on a NON-ANSWER
 // -----------------------------------------------------------------------------
 
 describe('fallbackEligible', () => {
-  it('fires only on an ABSENT well-known document', () => {
-    expect(fallbackEligible(answered({ status: 'none' }, { status: 'none' }))).toBe(true);
+  // ORIGIN-BINDING.md names all three members of the class: "If
+  // /.well-known/dfos-did yields a non-answer — a 404; a redirect, which is
+  // absence in everything but status code; or a 200 whose trimmed body is not
+  // exactly one DFOS DID … a verifier MUST fall back."
+  it('fires on every member of the non-answer class', () => {
+    for (const https of [
+      { status: 'none', reason: 'no document (HTTP 404)' },
+      { status: 'redirected', httpStatus: 301, reason: 'the origin redirected' },
+      { status: 'redirected', httpStatus: 308, reason: 'the origin redirected' },
+      { status: 'malformed', reason: 'the document is not exactly one DFOS DID' },
+    ] as BindingMethodResult[]) {
+      expect(fallbackEligible(answered(https, { status: 'none' })), https.status).toBe(true);
+    }
   });
 
-  // presence without an answer is not absence: the document exists, so the spec's
-  // fallback does not apply. Neither does a failure to establish anything at all
-  // — the spec's trigger is literal, "absent (a 404)", and nothing weaker.
-  it('does NOT fire on a malformed, errored, refused, or answered document', () => {
+  // a query FAILURE is its own class in the spec's stale row — "or the queries
+  // fail (network error, TLS failure, timeout, server error)" — listed apart from
+  // the non-answers. We never saw the path, so it never declined to answer, and
+  // an unobserved channel licenses nothing.
+  it('does NOT fire on a query failure, a refusal, or a document that ANSWERED', () => {
     for (const https of [
-      { status: 'malformed', reason: 'not a did' },
       { status: 'error', reason: 'timeout' },
-      { status: 'error', httpStatus: 302, reason: 'the origin redirected' },
+      { status: 'error', httpStatus: 503, reason: 'the origin answered with an error status' },
       { status: 'refused', reason: 'policy' },
       { status: 'ok', did: DID },
+      { status: 'contradiction', reason: 'multiple did= records' },
     ] as BindingMethodResult[]) {
       expect(fallbackEligible(answered(https, { status: 'none' })), https.status).toBe(false);
     }
@@ -387,31 +426,85 @@ describe('assessBinding', () => {
     expect(out.kind).toBe('stale');
   });
 
-  // the redirect corner, end to end: a redirecting origin is silence, the
-  // fallback never runs, and the verdict is stale — NOT broken, even though that
-  // origin's app description happens to name someone else
-  it('is stale on a redirecting origin, with no fallback consulted', () => {
+  // the redirect corner, end to end. The fallback IS consulted now (#400's
+  // non-answer class), and with nothing answering anywhere the verdict is still
+  // the silent one: "if no channel answers, the verdict is the silent one
+  // (stale) … never broken, because nothing contradicted anything".
+  it('is stale on a redirecting origin whose fallback is also silent', () => {
     const redirected: BindingMethodResult = {
-      status: 'error',
+      status: 'redirected',
       httpStatus: 302,
       reason: 'the origin redirected; redirects are not followed',
     };
     const probe = answered(redirected, { status: 'none' });
-    expect(fallbackEligible(probe)).toBe(false);
-    const out = assessBinding(DID, claimed, probe);
+    expect(fallbackEligible(probe)).toBe(true);
+    const out = assessBinding(DID, claimed, probe, {
+      kind: 'silent',
+      reason: 'the origin serves no app description either',
+    });
     expect(out.kind).toBe('stale');
     if (out.kind === 'stale') expect(out.reasons.join(' ')).toMatch(/HTTP 302/);
   });
 
-  // a malformed document is presence without an answer: silence for the verdict
-  it('is stale on a malformed https body with nothing else answering', () => {
+  // and the consequence the widened trigger buys, kept deliberately: a redirect
+  // no longer HIDES a fallback that attests. The origin declined to answer at
+  // dfos-did and answered at dfos-app.json, and the spec's fallback reads it.
+  it('binds through the fallback when the well-known redirected', () => {
     const out = assessBinding(
       DID,
       claimed,
-      answered({ status: 'malformed', reason: 'not exactly one DID' }, { status: 'none' }),
+      answered(
+        { status: 'redirected', httpStatus: 308, reason: 'the origin redirected' },
+        { status: 'none' },
+      ),
+      { kind: 'attests', did: DID },
     );
+    expect(out.kind).toBe('bound');
+    if (out.kind === 'bound') expect(out.attestedBy).toContain('app-fallback');
+  });
+
+  // the other side of the same coin, and the one that used to be unreachable: a
+  // fallback that ANSWERS with a different identity is a channel answering, and
+  // an answer naming someone else is what `broken` is for. L55's never-broken
+  // clause is about NO channel answering, which is not this.
+  it('is broken when a redirect’s fallback answers with a different identity', () => {
+    const out = assessBinding(
+      DID,
+      claimed,
+      answered(
+        { status: 'redirected', httpStatus: 301, reason: 'the origin redirected' },
+        { status: 'none' },
+      ),
+      { kind: 'answers-other', did: OTHER },
+    );
+    expect(out.kind).toBe('broken');
+    if (out.kind === 'broken') expect(out.details.join(' ')).toContain(OTHER);
+  });
+
+  // a malformed document is presence without an answer: silence for the verdict,
+  // and — since #400 — the third member of the class that licenses the fallback
+  it('is stale on a malformed https body with nothing else answering', () => {
+    const probe = answered(
+      { status: 'malformed', reason: 'not exactly one DID' },
+      {
+        status: 'none',
+      },
+    );
+    expect(fallbackEligible(probe)).toBe(true);
+    const out = assessBinding(DID, claimed, probe);
     expect(out.kind).toBe('stale');
     if (out.kind === 'stale') expect(out.reasons.join(' ')).toMatch(/not exactly one DID/);
+  });
+
+  // a 5xx is a query failure, not a non-answer — the fallback stays shut, and a
+  // dfos-app.json naming someone else cannot escalate an unobserved channel
+  it('leaves a 5xx unlicensed, so an unseen path never reaches a fallback', () => {
+    const probe = answered(
+      { status: 'error', httpStatus: 503, reason: 'the origin answered with an error status' },
+      { status: 'none' },
+    );
+    expect(fallbackEligible(probe)).toBe(false);
+    expect(assessBinding(DID, claimed, probe).kind).toBe('stale');
   });
 
   it('keeps our own route failing as its own state, never as stale', () => {

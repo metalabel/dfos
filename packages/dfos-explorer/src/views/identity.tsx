@@ -1594,9 +1594,10 @@ const OriginBindingPanel = (props: {
     const claim = props.claim;
     void (async () => {
       const answer = await fetchBindingAttestation(domain);
-      // the app-description fallback is a MUST, and ONLY on absence: a dfos-did
-      // document that is present but says something else is a contradiction, and
-      // must not be fallen through
+      // the app-description fallback is a MUST, and ONLY on a non-answer —
+      // absence, a redirect, or a body that is not a DID: a dfos-did document
+      // that ANSWERS with something else is a contradiction, and must not be
+      // fallen through
       const fell = fallbackEligible(answer) ? await runAppFallback(domain, props.did) : undefined;
       if (dead) return;
       if (answer.kind === 'answered') setProbe({ https: answer.https, dns: answer.dns });

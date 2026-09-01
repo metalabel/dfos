@@ -107,6 +107,7 @@ export const readOriginClaim = (services: ServiceEntry[]): OriginClaim => {
 export type BindingMethodStatus =
   | 'ok'
   | 'none'
+  | 'redirected'
   | 'malformed'
   | 'contradiction'
   | 'error'
@@ -115,6 +116,7 @@ export type BindingMethodStatus =
 export type BindingMethodResult =
   | { status: 'ok'; did: string }
   | { status: 'none'; reason?: string }
+  | { status: 'redirected'; httpStatus: number; reason: string }
   | { status: 'malformed'; reason: string }
   | { status: 'contradiction'; reason: string }
   | { status: 'error'; reason?: string; httpStatus?: number }
@@ -153,6 +155,14 @@ const readMethod = (value: unknown): BindingMethodResult | null => {
         : null;
     case 'none':
       return { status: 'none', ...(reason ? { reason } : {}) };
+    case 'redirected':
+      return typeof rec['httpStatus'] === 'number'
+        ? {
+            status: 'redirected',
+            httpStatus: rec['httpStatus'],
+            reason: reason ?? 'the origin redirected; redirects are not followed',
+          }
+        : null;
     case 'malformed':
       return { status: 'malformed', reason: reason ?? 'the answer is not a DFOS DID' };
     case 'contradiction':
@@ -218,13 +228,14 @@ export const fetchBindingAttestation = async (host: string): Promise<BindingProb
 };
 
 // -----------------------------------------------------------------------------
-// the app-description fallback — MUST, and only on ABSENCE
+// the app-description fallback — MUST, and only on a NON-ANSWER
 // -----------------------------------------------------------------------------
 
 /**
  * What the SIWD app description said when consulted. It is consulted only when
- * `/.well-known/dfos-did` is ABSENT: a document that is present but says
- * something else is a contradiction, and must not be fallen through.
+ * `/.well-known/dfos-did` yielded a NON-ANSWER — absence, a redirect, or a body
+ * that is not a DID. A document that ANSWERS with a different DID is a
+ * contradiction and must not be fallen through.
  *
  * `answers-other` is not a near-miss — it is an HTTPS answer naming a different
  * DID, which is exactly what `broken` is for.
@@ -303,21 +314,41 @@ export const runAppFallback = async (host: string, candidate: string): Promise<F
   appFallbackAgainst(await readAppAttestation(host), candidate);
 
 /**
- * True when the app-description fallback is eligible: the HTTPS well-known was
- * ABSENT. The spec's trigger is literal — "if /.well-known/dfos-did is absent (a
- * 404)" — so nothing weaker qualifies:
+ * True when the app-description fallback is eligible: the HTTPS well-known
+ * yielded a NON-ANSWER. The spec's trigger is the class, and it names all three
+ * members — ORIGIN-BINDING.md, "App-description fallback": "If
+ * /.well-known/dfos-did yields a **non-answer** — a `404`; a redirect, which is
+ * absence in everything but status code; or a `200` whose trimmed body is not
+ * exactly one DFOS DID, the shape a host serving its application shell for every
+ * unknown path produces — a verifier MUST fall back."
  *
- *   malformed — the document EXISTS (presence without an answer)
- *   error     — we never established anything, redirects included: an origin
- *               that redirects has not shown us the document is missing
+ *   none        the 404
+ *   redirected  the redirect. "A verifier that receives any 3xx therefore treats
+ *               the path exactly as it treats absence."
+ *   malformed   the 200 that is not a DID
  *
- * The stakes are the stale/broken split. Falling back on a non-absence lets a
- * dfos-app.json naming another DID turn a should-be-`stale` binding into a
- * public accusation of `broken`, which is exactly the over-accusation the
- * silence-is-not-contradiction discipline exists to prevent.
+ * What stays OUT is a query FAILURE, which the spec lists as its own class in the
+ * stale row — "or the queries fail (network error, TLS failure, timeout, server
+ * error)" — separately from the non-answers. A 5xx, a timeout, or a refusal is
+ * not the origin declining to answer at the path; it is us never having seen the
+ * path, and an unobserved channel licenses nothing.
+ *
+ * THE CONSEQUENCE, KEPT DELIBERATELY: a fallback document naming a DIFFERENT DID
+ * now produces `broken` where this used to stop at silence. That is the spec's
+ * intent, not a regression of the stale/broken discipline. The never-`broken`
+ * clause attached to redirects is about NO channel answering ("if no channel
+ * answers, the verdict is the silent one (stale) … never broken, because nothing
+ * contradicted anything"); a fallback that answers with another identity IS a
+ * channel answering, and the spec routes it to the contradiction verdict — "a
+ * body that **is** exactly one DFOS DID naming a different DID is a
+ * contradiction, and MUST NOT be fallen through" governs what the fallback may be
+ * reached PAST, not what its own answer means once reached.
  */
 export const fallbackEligible = (probe: BindingProbe): boolean =>
-  probe.kind === 'answered' && probe.https.status === 'none';
+  probe.kind === 'answered' &&
+  (probe.https.status === 'none' ||
+    probe.https.status === 'redirected' ||
+    probe.https.status === 'malformed');
 
 // -----------------------------------------------------------------------------
 // the fold
@@ -354,9 +385,14 @@ const readChannel = (label: 'https' | 'dns', result: BindingMethodResult): Chann
       return { kind: 'answer', method: label, did: result.did };
     case 'contradiction':
       return { kind: 'contradiction', detail: `${label} — ${result.reason}` };
+    case 'redirected':
+      // a non-answer: the origin declined to answer at the path. Silence for the
+      // verdict, and the row keeps the true reason rather than reading as absence
+      return { kind: 'silence', detail: `${label} — ${result.reason} (HTTP ${result.httpStatus})` };
     case 'malformed':
-      // present without an answer: silence for the verdict, and the caller has
-      // already declined to fall back because the document exists
+      // present without an answer: silence for the verdict, and — since #400's
+      // non-answer class — the caller has already fallen through to the app
+      // description, because a body that is not a DID answered nothing
       return { kind: 'silence', detail: `${label} — ${result.reason}` };
     case 'none':
       return { kind: 'silence', detail: `${label} — ${result.reason ?? 'nothing published'}` };
@@ -493,8 +529,8 @@ export type DomainBinding =
   | { kind: 'proxy-unavailable'; domain: string; reason: string };
 
 /** Every channel that ANSWERED, in the CLI's fixed order: the HTTPS slot first
- *  (the well-known document, or the app description standing in for it on
- *  absence), then DNS. Order makes the output stable; it never wins a
+ *  (the well-known document, or the app description standing in for it on a
+ *  non-answer), then DNS. Order makes the output stable; it never wins a
  *  disagreement. */
 const domainAnswers = (
   probe: Extract<BindingProbe, { kind: 'answered' }>,
