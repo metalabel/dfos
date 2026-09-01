@@ -472,9 +472,10 @@ Four things about it are worth knowing before you run it:
   and answer an unfiltered page — caught by a sentinel probe before the scan) are
   all loud failures, never "no keys found". `--manifest-only` is the deliberate
   degradation, and it banners that no scan ran.
-- **It writes by default** and is idempotent; `--dry-run` reports without writing
-  (and, pulling no chains, cannot name key ids, so it reports identities as
-  found-but-not-fetched).
+- **It writes by default** and is idempotent; `--dry-run` predicts the real run
+  without writing — it fetches each found identity's chain and verifies it in
+  memory, so its records, counter floor, and `scanComplete` are the real run's,
+  reported in the would-mood (`would-install`, `would-recover`).
 - **What it cannot see:** a derived key no identity operation ever declared is
   invisible to any index, one relay's absence is not global absence, and keys
   minted with `--no-vault` are not derivable from any phrase at all

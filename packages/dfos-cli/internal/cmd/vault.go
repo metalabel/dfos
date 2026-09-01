@@ -157,7 +157,31 @@ func newVaultImportCmd() *cobra.Command {
 			"argv lands in shell history and is readable in the process list. A phrase some vault on " +
 			"this machine already holds is refused by fingerprint, and the refusal names that vault: " +
 			"one seed, one vault, because two vaults over one phrase mint identical keys.",
-		Args: cobra.ExactArgs(1),
+		// The one argument this command takes is a NAME, and the near-miss worth
+		// spending a custom Args func on is the operator who typed the PHRASE
+		// where the name goes. `accepts 1 arg(s), received 24` does not tell them
+		// what just happened to their seed.
+		//
+		// Neither message reproduces a single word of what was passed. An error
+		// lands in the scrollback, in a CI log, and in whatever is recording the
+		// session, so echoing argv back would copy the phrase into one more place
+		// at the exact moment it is already exposed — and the phrase is precisely
+		// what the operator must now assume someone else can read.
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch len(args) {
+			case 1:
+				return nil
+			case 0:
+				return fmt.Errorf("vault import needs a NAME — a local label for the vault, not the phrase:\n" +
+					"  dfos vault import <name>\n" +
+					"The recovery phrase is never an argument: it is prompted without echo, or piped on stdin.")
+			default:
+				return fmt.Errorf("vault import takes one argument — a local NAME for the vault, not the phrase.\n" +
+					"If those words were the recovery phrase, they are now in this shell's history and\n" +
+					"were visible in the process list: treat the phrase as exposed.\n" +
+					"The phrase is prompted without echo, or piped on stdin — never argv.")
+			}
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if err := vault.ValidateName(name); err != nil {
