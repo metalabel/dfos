@@ -4,7 +4,7 @@
   "type": "module",
   "description": "DFOS Client — the client-side kit for participating in the protocol: resolve, verify, prove. Fetch, resolve, verify-orchestration and cache over untrusted relays, plus the SIWD and API-AUTH proof surfaces. Holds no keys; all crypto truth comes from @metalabel/dfos-protocol",
   "license": "MIT",
-  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "author": "DFOS Inc (https://dfos.com)",
   "repository": {
     "type": "git",
     "url": "https://github.com/metalabel/dfos.git",

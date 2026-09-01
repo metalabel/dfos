@@ -4,7 +4,7 @@
   "type": "module",
   "description": "DFOS Web Relay — verifying HTTP relay for identity chains, content chains, and content blobs",
   "license": "MIT",
-  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "author": "DFOS Inc (https://dfos.com)",
   "repository": {
     "type": "git",
     "url": "https://github.com/metalabel/dfos.git",

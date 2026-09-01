@@ -5,7 +5,7 @@
   "type": "module",
   "description": "DFOS Explorer — a chain explorer over untrusted relays that verifies in the browser. Renders relay claims instantly, then re-verifies everything in the tab via @metalabel/dfos-client; syncs the full operation log into a local IndexedDB index that folds offline. Every verdict is computed in the tab; the only server-side code is two small Node routes doing the DNS and well-known lookups a browser cannot.",
   "license": "MIT",
-  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "author": "DFOS Inc (https://dfos.com)",
   "repository": {
     "type": "git",
     "url": "https://github.com/metalabel/dfos.git",
