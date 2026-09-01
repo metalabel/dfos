@@ -1282,8 +1282,10 @@ func newIdentityVerifyBindingCmd() *cobra.Command {
 			"starts from the chain: read the claimed domain, then query the domain. With a bare hostname the walk " +
 			"starts from the domain: read its attestation, resolve that DID's chain, and require the chain to claim " +
 			"this exact domain. Both attestation methods are checked — https://<domain>/.well-known/dfos-did (falling " +
-			"back to /.well-known/dfos-app.json only when the well-known document is ABSENT) and a did= TXT record at " +
-			"_dfos.<domain>.\n\n" +
+			"back to /.well-known/dfos-app.json on any NON-ANSWER there: a 404, a redirect, or a document that is not " +
+			"exactly one DFOS DID) and a did= TXT record at _dfos.<domain>. Neither HTTPS fetch follows a redirect: a " +
+			"3xx is the origin declining to answer at the registered path, so it attests nothing and contradicts " +
+			"nothing.\n\n" +
 			"Verdicts and exit codes:\n" +
 			"  bound     0   at least one method attests this DID and no method answers anything else\n" +
 			"  broken    1   a method answers a different DID, the methods disagree, or DNS carries several did= records\n" +
