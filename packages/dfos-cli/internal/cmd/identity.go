@@ -1029,22 +1029,37 @@ func appendKeyGuarded(set []protocol.MultikeyPublicKey, newKey protocol.Multikey
 	return out, nil
 }
 
-// newIdentityDevicePubkeyCmd is the B-side of the multi-device handoff. It
-// generates a fresh keypair on THIS device, stores the private seed locally
-// under did#keyID, and prints ONLY the public Multikey for transport to a
-// device holding a controller key. No secret material ever leaves this device:
-// the public key is added to the chain by `dfos identity add-key` run on the
-// controller-holding device. This is 1-of-N availability, not key recovery.
+// newIdentityDevicePubkeyCmd mints a second key FOR THIS MACHINE. It generates a
+// keypair, stores the private seed in this machine's keystore under the key's own
+// content address, and prints ONLY the public Multikey and the id derived from it.
+// No secret material leaves this device.
+//
+// IT PUTS NOTHING IN A CHAIN. A key enters a chain carrying its own signature over
+// the introduction, and a printed public key is not that signature. What completes
+// the key is `dfos identity add-key` run HERE, which can prove the introduction
+// because the seed is here — the two commands agree on the key's id without
+// passing one between them, which is the whole reason the id is derived.
+//
+// Carrying the printed key to a device holding a controller key is the flow
+// `add-key` refuses: that machine holds no signature for a key that lives on this
+// one. A key on another device reaches a chain by being proved FROM that device,
+// against a ceremony operator's code — `dfos keys add`.
 func newIdentityDevicePubkeyCmd() *cobra.Command {
 	var controller bool
 
 	cmd := &cobra.Command{
 		Use:     "device-pubkey",
 		Aliases: []string{"device-key"},
-		Short:   "Generate a device keypair and print its public key for add-key on another device",
-		Long: "Generate a fresh keypair on this device for multi-device 1-of-N availability. " +
-			"The private seed stays here; the printed public Multikey is handed to a device holding a " +
-			"controller key, which adds it to the chain with 'dfos identity add-key'. No secret material leaves this device.",
+		Short:   "Generate a keypair on this machine and print its public key and id",
+		Long: "Generate a fresh keypair on this machine. The private seed is stored in this machine's keystore " +
+			"under the key's own content address; what is printed is the public Multikey and the id derived " +
+			"from it, so any machine holding the key computes that id from the public key alone and none has to " +
+			"be passed between them. No secret material leaves this device.\n\n" +
+			"This command puts nothing in a chain. A key enters a chain carrying its OWN signature over the " +
+			"introduction, so the key printed here is declared by 'dfos identity add-key' run on THIS machine, " +
+			"where the seed is and where the introduction can be proved.\n\n" +
+			"A key held on another device is not added this way — that device proves it itself, presenting it to " +
+			"a key-add ceremony with 'dfos keys add' against the code the ceremony operator displays.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, chain, err := requireIdentity()
 			if err != nil {
@@ -1084,10 +1099,11 @@ func newIdentityDevicePubkeyCmd() *cobra.Command {
 				fmt.Printf("  ID:                 %s\n", mk.ID)
 				fmt.Printf("  Public key:         %s\n", mk.PublicKeyMultibase)
 				fmt.Printf("  Suggested role:     %s\n", role)
-				fmt.Printf("\nGive the public key to a device holding a controller key and run there:\n")
+				fmt.Printf("\nDeclare it from this machine, where the seed is and the introduction can be proved:\n")
 				fmt.Printf("  dfos identity add-key --%s-key --id %s --pubkey %s\n", role, mk.ID, mk.PublicKeyMultibase)
-				fmt.Printf("\nAfter that update propagates, re-run 'dfos identity fetch' here so this\n")
-				fmt.Printf("device sees the in-chain key and can sign independently.\n")
+				fmt.Printf("\nThis key is not for another device: a key enters a chain carrying its own\n")
+				fmt.Printf("signature, so a device holding a controller key cannot add a key it does not\n")
+				fmt.Printf("hold. A key on another device is proved from there with 'dfos keys add'.\n")
 			}
 			return nil
 		},
