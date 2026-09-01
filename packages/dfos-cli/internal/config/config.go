@@ -27,14 +27,9 @@ type Config struct {
 	// ONE exception, documented at its writer: creating the first vault on a
 	// machine that has none may set it, because absence→presence is not a
 	// pointer two processes can race on.
-	DefaultVault string `toml:"default_vault,omitempty" json:"default_vault,omitempty"`
-	// ActiveContext is the removed mutable pointer of the `dfos use` era. It is
-	// parsed so an existing config.toml round-trips without losing the line, and
-	// it is never consulted by resolution. `dfos whoami` reports it as inert.
-	ActiveContext string                    `toml:"active_context,omitempty" json:"active_context,omitempty"`
-	Relays        map[string]RelayConfig    `toml:"relays,omitempty" json:"relays,omitempty"`
-	Identities    map[string]IdentityConfig `toml:"identities,omitempty" json:"identities,omitempty"`
-	Contexts      map[string]ContextConfig  `toml:"contexts,omitempty" json:"contexts,omitempty"`
+	DefaultVault string                    `toml:"default_vault,omitempty" json:"default_vault,omitempty"`
+	Relays       map[string]RelayConfig    `toml:"relays,omitempty" json:"relays,omitempty"`
+	Identities   map[string]IdentityConfig `toml:"identities,omitempty" json:"identities,omitempty"`
 	// Pointer so an empty Defaults is omitted by both encoders (json omitempty is
 	// a no-op on a struct value, which would otherwise render "defaults":{}).
 	Defaults *DefaultsConfig `toml:"defaults,omitempty" json:"defaults,omitempty"`
@@ -108,11 +103,6 @@ type IdentityConfig struct {
 	DID string `toml:"did" json:"did"`
 }
 
-type ContextConfig struct {
-	Identity string `toml:"identity" json:"identity"`
-	Relay    string `toml:"relay" json:"relay"`
-}
-
 type DefaultsConfig struct {
 	CredentialTTL string `toml:"credential_ttl,omitempty" json:"credential_ttl,omitempty"`
 }
@@ -150,19 +140,16 @@ func (r *ResolvedContext) Principal() string {
 }
 
 // The mechanisms of the resolution stack, in the spelling each is reported by.
-// The canonical selectors are --as / DFOS_AS / default-identity for the
-// identity and --relay / DFOS_RELAY / default-peer for the peer; the rest are
-// compat aliases kept working at the tier of the mechanism they alias.
+// The selectors are --as / DFOS_AS / default-identity for the identity and
+// --relay / DFOS_RELAY / default-peer for the peer. SourceFlagPeer is the one
+// addition to those six, and it is not a global: it names a command's own
+// --peer, which sits in front of the peer stack rather than inside it.
 const (
 	SourceFlagAs          = "--as"
-	SourceFlagIdentity    = "--identity"
 	SourceFlagRelay       = "--relay"
 	SourceFlagPeer        = "--peer"
-	SourceFlagCtx         = "--ctx"
 	SourceEnvAs           = "DFOS_AS"
-	SourceEnvIdentity     = "DFOS_IDENTITY"
 	SourceEnvRelay        = "DFOS_RELAY"
-	SourceEnvContext      = "DFOS_CONTEXT"
 	SourceDefaultIdentity = "config default-identity"
 	SourceDefaultPeer     = "config default-peer"
 	// SourcePositionalTarget is what a verb reports when its subject was typed
@@ -176,11 +163,12 @@ const (
 // struct rather than positional strings so every signing site passes the same
 // thing and no site can quietly grow a variant of the stack.
 type Overrides struct {
-	As       string // --as <name|did>
-	Identity string // --identity, compat alias of --as
-	Ctx      string // --ctx, compat alias naming an (identity, peer) pair
-	Relay    string // --relay <name>
-	Peer     string // --peer, compat alias of --relay
+	As    string // --as <name|did>, the global identity selector
+	Relay string // --relay <name>, the global peer selector
+	// Peer is a command's OWN --peer, the publish target or fetch source typed
+	// on the verb itself. It is written by requirePeer and by nothing else, and
+	// it outranks the whole peer stack: the closest name wins.
+	Peer string
 }
 
 // candidate is one rung of the stack: a value and the mechanism that supplied it.
@@ -241,7 +229,6 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Relays:     make(map[string]RelayConfig),
 		Identities: make(map[string]IdentityConfig),
-		Contexts:   make(map[string]ContextConfig),
 	}
 
 	data, err := os.ReadFile(ConfigPath())
@@ -260,9 +247,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.Identities == nil {
 		cfg.Identities = make(map[string]IdentityConfig)
-	}
-	if cfg.Contexts == nil {
-		cfg.Contexts = make(map[string]ContextConfig)
 	}
 	return cfg, nil
 }
@@ -291,45 +275,24 @@ func Save(cfg *Config) error {
 //
 // The tiers are:
 //
-//	identity: --as → --identity → --ctx | DFOS_AS → DFOS_IDENTITY → DFOS_CONTEXT | default-identity
-//	peer:     --relay → --peer → --ctx  | DFOS_RELAY → DFOS_CONTEXT              | default-peer
+//	identity: --as     → DFOS_AS    → default-identity
+//	peer:     --relay  → DFOS_RELAY → default-peer
 //
-// --identity, --peer, --ctx, DFOS_IDENTITY, and DFOS_CONTEXT are compat aliases
-// of the canonical selectors and sit at the tier of the mechanism they alias, so
-// a flag alias still beats an env var and an env alias still beats the config.
+// A command's own --peer sits in FRONT of the peer stack rather than inside it,
+// because the closest name wins: a flag typed on the verb is the most specific
+// statement available and nothing global may outrank it.
 func ResolveContext(cfg *Config, ov Overrides) (*ResolvedContext, error) {
-	// The context spec names both halves in one token, so it is read ONCE —
-	// from the flag if present, otherwise from the environment — and contributes
-	// to both halves at that mechanism's tier. Reading both at once would let a
-	// stale DFOS_CONTEXT half-override an explicit --ctx.
-	ctxSpec, ctxSource := ov.Ctx, SourceFlagCtx
-	if ctxSpec == "" {
-		ctxSpec, ctxSource = os.Getenv(SourceEnvContext), SourceEnvContext
-	}
-	ctxIdentity, ctxPeer, err := splitContextSpec(cfg, ctxSpec)
-	if err != nil {
-		return nil, err
-	}
-
-	identityCands := []candidate{{ov.As, SourceFlagAs}, {ov.Identity, SourceFlagIdentity}}
-	peerCands := []candidate{{ov.Relay, SourceFlagRelay}, {ov.Peer, SourceFlagPeer}}
-	if ctxSource == SourceFlagCtx {
-		identityCands = append(identityCands, candidate{ctxIdentity, SourceFlagCtx})
-		peerCands = append(peerCands, candidate{ctxPeer, SourceFlagCtx})
-	}
-	identityCands = append(identityCands,
-		candidate{os.Getenv(SourceEnvAs), SourceEnvAs},
-		candidate{os.Getenv(SourceEnvIdentity), SourceEnvIdentity})
-	peerCands = append(peerCands, candidate{os.Getenv(SourceEnvRelay), SourceEnvRelay})
-	if ctxSource == SourceEnvContext {
-		identityCands = append(identityCands, candidate{ctxIdentity, SourceEnvContext})
-		peerCands = append(peerCands, candidate{ctxPeer, SourceEnvContext})
-	}
-	identityCands = append(identityCands, candidate{cfg.DefaultIdentity, SourceDefaultIdentity})
-	peerCands = append(peerCands, candidate{cfg.DefaultPeer, SourceDefaultPeer})
-
-	identity, identitySource := firstSet(identityCands)
-	peer, peerSource := firstSet(peerCands)
+	identity, identitySource := firstSet([]candidate{
+		{ov.As, SourceFlagAs},
+		{os.Getenv(SourceEnvAs), SourceEnvAs},
+		{cfg.DefaultIdentity, SourceDefaultIdentity},
+	})
+	peer, peerSource := firstSet([]candidate{
+		{ov.Peer, SourceFlagPeer},
+		{ov.Relay, SourceFlagRelay},
+		{os.Getenv(SourceEnvRelay), SourceEnvRelay},
+		{cfg.DefaultPeer, SourceDefaultPeer},
+	})
 
 	result := &ResolvedContext{
 		IdentityName:   identity,
@@ -360,28 +323,6 @@ func ResolveContext(cfg *Config, ov Overrides) (*ResolvedContext, error) {
 	}
 
 	return result, nil
-}
-
-// splitContextSpec expands a --ctx / DFOS_CONTEXT token into its two halves: a
-// named context, an inline identity@peer pair, or an identity on its own (local
-// work with no peer).
-func splitContextSpec(cfg *Config, spec string) (identity, peer string, err error) {
-	if spec == "" {
-		return "", "", nil
-	}
-	if ctx, ok := cfg.Contexts[spec]; ok {
-		return ctx.Identity, ctx.Relay, nil
-	}
-	if parts := strings.SplitN(spec, "@", 2); len(parts) == 2 {
-		return parts[0], parts[1], nil
-	}
-	if _, ok := cfg.Identities[spec]; ok {
-		return spec, "", nil
-	}
-	if strings.HasPrefix(spec, "did:") {
-		return spec, "", nil
-	}
-	return "", "", fmt.Errorf("unknown context: %s (not a named context, identity@peer pair, or known identity)", spec)
 }
 
 // FindIdentityName finds the name for a DID in config.

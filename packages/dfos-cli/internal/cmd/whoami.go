@@ -57,11 +57,10 @@ type whoamiCredential struct {
 }
 
 type whoamiResult struct {
-	Identity        *whoamiIdentity    `json:"identity"`
-	SigningKey      whoamiSigningKey   `json:"signingKey"`
-	Credentials     []whoamiCredential `json:"credentials"`
-	Peer            *whoamiPeer        `json:"peer"`
-	LegacyActiveCtx string             `json:"legacyActiveContext,omitempty"`
+	Identity    *whoamiIdentity    `json:"identity"`
+	SigningKey  whoamiSigningKey   `json:"signingKey"`
+	Credentials []whoamiCredential `json:"credentials"`
+	Peer        *whoamiPeer        `json:"peer"`
 }
 
 type whoamiIdentity struct {
@@ -87,7 +86,7 @@ func newWhoamiCmd() *cobra.Command {
 			"mechanism, whether this device holds a key that can sign for it, which login credentials " +
 			"are stored locally, and which peer requests would go to. Reads only.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result := whoamiResult{Credentials: []whoamiCredential{}, LegacyActiveCtx: cfg.ActiveContext}
+			result := whoamiResult{Credentials: []whoamiCredential{}}
 
 			ctx, ctxErr := resolveCtx()
 			result.SigningKey = whoamiSigningKey{Backend: keys.Backend()}
@@ -250,10 +249,5 @@ func printWhoami(r whoamiResult, ctxErr, credErr error) {
 	} else {
 		fmt.Printf("Peer:        %s (%s)\n", r.Peer.Name, r.Peer.URL)
 		fmt.Printf("  Via:       %s\n", r.Peer.Source)
-	}
-
-	if r.LegacyActiveCtx != "" {
-		fmt.Printf("\nconfig.toml carries active_context = %q. It is inert: resolution never reads it.\n", r.LegacyActiveCtx)
-		fmt.Printf("Set a standing default with 'dfos config set default-identity <name|did>'.\n")
 	}
 }

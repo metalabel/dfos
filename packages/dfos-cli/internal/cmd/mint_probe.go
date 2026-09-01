@@ -77,7 +77,7 @@ func probeReservedIndices(meta *vault.Metadata, derived []vault.Derived, opts mi
 		return nil
 	}
 
-	ctx, c, err := requirePeer(opts.peer)
+	ctx, c, err := requirePeer(opts.peer, true)
 	switch {
 	case errors.Is(err, errNoPeerConfigured):
 		// The local-first mint: no relay was expected and none was asked.

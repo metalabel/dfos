@@ -125,7 +125,7 @@ That gets you the identity scope. For the credential set, three more steps:
 
    ```sh
    DFOS_NO_KEYCHAIN=1 dfos identity create --name my-app --no-vault
-   DFOS_NO_KEYCHAIN=1 dfos identity device-pubkey --identity my-app --json
+   DFOS_NO_KEYCHAIN=1 dfos identity device-pubkey --as my-app --json
    DFOS_NO_KEYCHAIN=1 dfos identity add-key --auth-key --id key_<from above> --pubkey z6Mk<from above> --as my-app
    ```
 

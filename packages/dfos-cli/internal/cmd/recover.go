@@ -295,7 +295,7 @@ func runRecover(opts recoverOptions) error {
 	// a scan whose result means nothing.
 	var oracle *client.Client
 	if !opts.manifestOnly {
-		ctx, c, err := requirePeer(opts.peerFlag)
+		ctx, c, err := requirePeer(opts.peerFlag, true)
 		if err != nil {
 			return err
 		}

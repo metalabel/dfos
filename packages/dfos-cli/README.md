@@ -76,21 +76,21 @@ dfos identity create --name bob --peer local
 dfos identity create --name witness --peer local
 
 # alice creates content
-CONTENT=$(dfos --ctx alice@local content create - --peer local --json <<'EOF' | jq -r .contentId
+CONTENT=$(dfos --as alice content create - --peer local --json <<'EOF' | jq -r .contentId
 {"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"private message"}
 EOF
 )
 
 # alice grants bob read access
 BOB=$(dfos identity show bob --json | jq -r .did)
-CRED=$(dfos --ctx alice@local credential grant "$CONTENT" "$BOB" --read --json | jq -r .credential)
+CRED=$(dfos --as alice credential grant "$CONTENT" "$BOB" --read --json | jq -r .credential)
 
 # bob downloads with credential
-dfos --ctx bob@local content download "$CONTENT" --credential "$CRED" --peer local
+dfos --as bob content download "$CONTENT" --credential "$CRED" --peer local
 
 # witness countersigns (solemnizes) the genesis operation, optionally tagged
 CID=$(dfos content show "$CONTENT" --json | jq -r .genesisCID)
-dfos --ctx witness@local witness "$CID" --relation endorses --peer local
+dfos --as witness witness "$CID" --relation endorses --peer local
 
 # verify
 dfos content verify "$CONTENT"
@@ -101,7 +101,7 @@ dfos content verify "$CONTENT"
 `dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. The CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before storing anything.
 
 ```bash
-# sign in as the active context's identity
+# sign in as the resolved identity
 dfos login
 
 # sign in as a named identity, asking for a scope that returns a credential
@@ -151,16 +151,15 @@ There is no mutable active context: no command updates the config tier as a side
 effect, so concurrent invocations carrying different `--as` values cannot race.
 Commands that sign print the resolved principal to stderr unless `--quiet`.
 
-`--ctx`, `--identity`, `--peer`, `DFOS_CONTEXT`, and `DFOS_IDENTITY` remain as
-deprecated aliases at the same precedence tier as the mechanism they alias.
+There is one spelling per mechanism. `--as` and `--relay` are the only global
+selectors; a `--peer` is always a command's own flag, and it outranks `--relay`
+for that command.
 
 Environment variables:
 
 ```
 DFOS_AS               Identity to act as (name or did:dfos:...)
 DFOS_RELAY            Peer to talk to (name)
-DFOS_IDENTITY         Deprecated alias of DFOS_AS
-DFOS_CONTEXT          Deprecated alias naming both halves (identity@peer)
 DFOS_CONFIG           Config file path (default: ~/.dfos/config.toml). Keys,
                       vaults, credentials, and relay.db all sit beside it.
 DFOS_NO_KEYCHAIN      Skip OS keychain; use file store ~/.dfos/keys/ and
@@ -181,51 +180,51 @@ dfos content publish <id> --peer prod   # submit when ready
 
 ## Commands
 
-| Command                     | Description                                             |
-| --------------------------- | ------------------------------------------------------- |
-| `vault create`              | Generate a seed vault; print its phrase once            |
-| `vault import`              | Adopt an existing BIP-39 phrase as a vault              |
-| `vault list`                | List vaults, fingerprints, and counters                 |
-| `vault show`                | Show one vault and the keys it minted                   |
-| `identity create`           | Mint keys from a vault + sign genesis                   |
-| `identity list`             | List all known identities                               |
-| `identity show`             | Show identity state                                     |
-| `identity keys`             | Show key state + keychain availability                  |
-| `identity services`         | Show resolved discovery services                        |
-| `identity well-known`       | Emit the app description with carried chain (`--patch`) |
-| `identity publish`          | Submit to a relay                                       |
-| `identity fetch`            | Download from a relay                                   |
-| `identity update`           | Rotate keys / set services                              |
-| `identity delete`           | Delete identity (restorable)                            |
-| `identity restore`          | Restore a deleted identity                              |
-| `identity log`              | Show operation history                                  |
-| `identity remove`           | Drop a name from config (data stays)                    |
-| `content create`            | Create content chain                                    |
-| `content show`              | Show content chain state                                |
-| `content update`            | Update content chain                                    |
-| `content download`          | Download blob                                           |
-| `content publish`           | Submit to a relay                                       |
-| `content fetch`             | Download from a relay                                   |
-| `content log`               | Show operation history                                  |
-| `content list`              | List locally stored content chains                      |
-| `content delete`            | Permanently delete content chain                        |
-| `credential grant`          | Issue read/write credential                             |
-| `credential revoke`         | Revoke a credential                                     |
-| `content verify`            | Re-verify chain integrity                               |
-| `witness`                   | Countersign (solemnize) an operation                    |
-| `login`                     | Sign in via SIWD, store the credential                  |
-| `auth proof`                | Sign an identity proof for one request (stdout)         |
-| `auth status`               | Show auth state                                         |
-| `api`                       | Raw HTTP to relay                                       |
-| `peer add/remove/list/info` | Manage relays (alias: `relay`)                          |
-| `use`                       | Set active context                                      |
-| `config list/get/set`       | Manage configuration                                    |
-| `status`                    | At-a-glance overview                                    |
-| `sync`                      | Sync with all configured relays                         |
-| `serve`                     | Run the local relay as an HTTP server                   |
-| `operation show`            | Inspect a protocol operation                            |
-| `countersigs`               | Show countersignatures for an operation                 |
-| `skill print/install`       | Print or install the DFOS Claude Code skill             |
-| `version`                   | Show version info                                       |
+| Command                        | Description                                             |
+| ------------------------------ | ------------------------------------------------------- |
+| `vault create`                 | Generate a seed vault; print its phrase once            |
+| `vault import`                 | Adopt an existing BIP-39 phrase as a vault              |
+| `vault list`                   | List vaults, fingerprints, and counters                 |
+| `vault show`                   | Show one vault and the keys it minted                   |
+| `identity create`              | Mint keys from a vault + sign genesis                   |
+| `identity list`                | List all known identities                               |
+| `identity show`                | Show identity state                                     |
+| `identity keys`                | Show key state + keychain availability                  |
+| `identity services`            | Show resolved discovery services                        |
+| `identity well-known`          | Emit the app description with carried chain (`--patch`) |
+| `identity publish`             | Submit to a relay                                       |
+| `identity fetch`               | Download from a relay                                   |
+| `identity update`              | Rotate keys / set services                              |
+| `identity delete`              | Delete identity (restorable)                            |
+| `identity restore`             | Restore a deleted identity                              |
+| `identity log`                 | Show operation history                                  |
+| `identity remove`              | Drop a name from config (data stays)                    |
+| `content create`               | Create content chain                                    |
+| `content show`                 | Show content chain state                                |
+| `content update`               | Update content chain                                    |
+| `content download`             | Download blob                                           |
+| `content publish`              | Submit to a relay                                       |
+| `content fetch`                | Download from a relay                                   |
+| `content log`                  | Show operation history                                  |
+| `content list`                 | List locally stored content chains                      |
+| `content delete`               | Permanently delete content chain                        |
+| `credential grant`             | Issue read/write credential                             |
+| `credential revoke`            | Revoke a credential                                     |
+| `content verify`               | Re-verify chain integrity                               |
+| `witness`                      | Countersign (solemnize) an operation                    |
+| `login`                        | Sign in via SIWD, store the credential                  |
+| `auth proof`                   | Sign an identity proof for one request (stdout)         |
+| `auth status`                  | Show auth state                                         |
+| `api add/list/refresh/rm/call` | Call an API that advertises the OpenAPI convention      |
+| `peer call`                    | Raw HTTP to a peer (alias: `relay call`)                |
+| `peer add/remove/list/info`    | Manage relays (alias: `relay`)                          |
+| `config list/get/set`          | Manage configuration                                    |
+| `status`                       | At-a-glance overview                                    |
+| `sync`                         | Sync with all configured relays                         |
+| `serve`                        | Run the local relay as an HTTP server                   |
+| `operation show`               | Inspect a protocol operation                            |
+| `countersigs`                  | Show countersignatures for an operation                 |
+| `skill print/install`          | Print or install the DFOS Claude Code skill             |
+| `version`                      | Show version info                                       |
 
 See [CLI.md](./CLI.md) for the full command reference (flags, examples, and the `--json` contract).

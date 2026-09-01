@@ -46,9 +46,6 @@ func newWitnessCmd() *cobra.Command {
 			// push to peer first — the target may only exist remotely
 			rn := peerName
 			if rn == "" {
-				rn = peerFlag
-			}
-			if rn == "" {
 				ctx, _ := resolveCtx()
 				if ctx != nil {
 					rn = ctx.RelayName
@@ -131,9 +128,6 @@ func newCountersigsCmd() *cobra.Command {
 			// fall through to peer
 			ctx, _ := resolveCtx()
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn == "" && ctx != nil {
 				rn = ctx.RelayName
 			}

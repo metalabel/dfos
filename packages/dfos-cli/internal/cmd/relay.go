@@ -4,9 +4,7 @@ package cmd
 //
 // The command is registered as `call` under the peer group, whose `relay` alias
 // supplies the documented spelling (the same arrangement `relay gc` already
-// uses). `dfos api <METHOD> <path>` is the deprecated legacy spelling and
-// forwards into runRelayCall from api.go, so both spellings run one
-// implementation and emit identical output.
+// uses), so `dfos relay call` and `dfos peer call` are one command.
 
 import (
 	"encoding/json"
@@ -21,8 +19,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// relayCallFlags is the flag set of the raw passthrough. It is a struct so the
-// deprecated `api` spelling binds the very same flags without redeclaring them.
+// relayCallFlags is the flag set of the raw passthrough, kept in a struct so the
+// command constructor and the runner share one declaration of it.
 type relayCallFlags struct {
 	auth           bool
 	body           string
@@ -48,7 +46,7 @@ func newRelayCallCmd() *cobra.Command {
 		Long:  "Make raw HTTP requests to the active peer. Use --auth to sign an identity proof for the request.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRelayCall(f, args, "dfos relay call")
+			return runRelayCall(f, args)
 		},
 	}
 
@@ -56,10 +54,8 @@ func newRelayCallCmd() *cobra.Command {
 	return cmd
 }
 
-// runRelayCall performs the passthrough. invocation is the spelling the user
-// typed ("dfos relay call" or the deprecated "dfos api"), used only so the
-// usage hint echoes the command they actually ran.
-func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
+// runRelayCall performs the passthrough.
+func runRelayCall(f *relayCallFlags, args []string) error {
 	method := strings.ToUpper(args[0])
 	path := args[1]
 
@@ -69,7 +65,7 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 		// The example is a route that EXISTS on every relay and needs no
 		// argument: an operator correcting a typo pastes the hint, and a hint
 		// that 404s teaches them the command is broken rather than their method.
-		return fmt.Errorf("invalid HTTP method %q\nusage: %s <METHOD> <path> (e.g. %s GET /.well-known/dfos-relay)", args[0], invocation, invocation)
+		return fmt.Errorf("invalid HTTP method %q\nusage: dfos relay call <METHOD> <path> (e.g. dfos relay call GET /.well-known/dfos-relay)", args[0])
 	}
 
 	ctx, err := resolveCtx()
@@ -77,7 +73,7 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 		return err
 	}
 	if ctx.RelayURL == "" {
-		return errNoPeer()
+		return errNoPeer(false)
 	}
 
 	c := client.New(ctx.RelayURL)

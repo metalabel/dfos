@@ -16,51 +16,31 @@ func TestForgetIdentityConfig(t *testing.T) {
 		cfg               *config.Config
 		wantName          string
 		wantDID           string
-		wantContexts      []string
-		wantActiveCleared bool
-		wantActive        string
 		wantIdentityCount int
 		wantErr           bool
 	}{
 		{
-			name:   "named identity removes referencing contexts and active selection",
+			name:   "named identity drops its registration",
 			target: "alice",
 			cfg: &config.Config{
-				ActiveContext: "work",
 				Identities: map[string]config.IdentityConfig{
 					"alice": {DID: testLoginSubject},
 					"bob":   {DID: testLoginOther},
 				},
-				Contexts: map[string]config.ContextConfig{
-					"work":   {Identity: "alice", Relay: "prod"},
-					"direct": {Identity: testLoginSubject, Relay: "prod"},
-					"other":  {Identity: "bob", Relay: "prod"},
-				},
 			},
 			wantName:          "alice",
 			wantDID:           testLoginSubject,
-			wantContexts:      []string{"direct", "work"},
-			wantActiveCleared: true,
-			wantActive:        "",
 			wantIdentityCount: 1,
 		},
 		{
-			name:   "bare DID leaves registrations and clears inline active context",
+			name:   "bare DID leaves registrations alone",
 			target: testLoginSubject,
 			cfg: &config.Config{
-				ActiveContext: testLoginSubject + "@prod",
 				Identities: map[string]config.IdentityConfig{
 					"bob": {DID: testLoginOther},
 				},
-				Contexts: map[string]config.ContextConfig{
-					"direct": {Identity: testLoginSubject, Relay: "prod"},
-					"other":  {Identity: "bob", Relay: "prod"},
-				},
 			},
 			wantDID:           testLoginSubject,
-			wantContexts:      []string{"direct"},
-			wantActiveCleared: true,
-			wantActive:        "",
 			wantIdentityCount: 1,
 		},
 		{
@@ -68,7 +48,6 @@ func TestForgetIdentityConfig(t *testing.T) {
 			target: "missing",
 			cfg: &config.Config{
 				Identities: map[string]config.IdentityConfig{},
-				Contexts:   map[string]config.ContextConfig{},
 			},
 			wantErr: true,
 		},
@@ -86,19 +65,8 @@ func TestForgetIdentityConfig(t *testing.T) {
 			if result.Name != tt.wantName || result.DID != tt.wantDID {
 				t.Fatalf("result identity = (%q, %q), want (%q, %q)", result.Name, result.DID, tt.wantName, tt.wantDID)
 			}
-			if !reflect.DeepEqual(result.RemovedContexts, tt.wantContexts) {
-				t.Fatalf("removed contexts = %v, want %v", result.RemovedContexts, tt.wantContexts)
-			}
-			if result.ActiveContextCleared != tt.wantActiveCleared || tt.cfg.ActiveContext != tt.wantActive {
-				t.Fatalf("active = %q, cleared=%v; want %q, %v", tt.cfg.ActiveContext, result.ActiveContextCleared, tt.wantActive, tt.wantActiveCleared)
-			}
 			if len(tt.cfg.Identities) != tt.wantIdentityCount {
 				t.Fatalf("identity count = %d, want %d", len(tt.cfg.Identities), tt.wantIdentityCount)
-			}
-			for _, removed := range tt.wantContexts {
-				if _, ok := tt.cfg.Contexts[removed]; ok {
-					t.Fatalf("context %q was not removed", removed)
-				}
 			}
 		})
 	}

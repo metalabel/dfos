@@ -831,7 +831,7 @@ const (
 // this machine had just found something wrong with the one it was told to use.
 func checkKeyLinkage(publicKey string, cer *ceremony) linkageReport {
 	report := linkageReport{}
-	ctx, c, err := requirePeer("")
+	ctx, c, err := requirePeer("", false)
 	switch {
 	case err == nil:
 		report.Oracle, report.OracleURL, report.OracleVia = ctx.RelayName, ctx.RelayURL, oracleViaPeer

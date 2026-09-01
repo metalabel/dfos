@@ -166,7 +166,7 @@ func newLoginCmd() *cobra.Command {
 				return fmt.Errorf("--timeout must be positive, got %q", timeoutFlag)
 			}
 
-			ctx, peer, err := requirePeer("")
+			ctx, peer, err := requirePeer("", false)
 			if err != nil {
 				return err
 			}

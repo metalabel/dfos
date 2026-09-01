@@ -9,9 +9,8 @@ package cmd
 // Nothing here is specific to the canonical deployment: the convention is the
 // whole interface, so a fork or a self-hosted API registers and calls the same way.
 //
-// `dfos api <METHOD> <path>` remains the deprecated raw passthrough it has
-// always been — the parent command carries its own RunE for the two-bare-argument
-// form, and cobra dispatches a matching subcommand before ever reaching it.
+// Raw HTTP to a peer is `dfos relay call` (or `dfos peer call`, the same command
+// under the group's own name). `dfos api` names an operation, never a route.
 
 import (
 	"bufio"
@@ -46,19 +45,7 @@ func apiFetcher() apispec.Fetcher {
 	return apispec.HTTPFetcher()
 }
 
-// legacyDeprecation is the line the raw `dfos api <METHOD> <path>` form prints.
-// The marker lives here rather than on the command itself so `api` — and
-// therefore `api add` / `list` / `rm` / `refresh` / `call` — appears in help at
-// all; a deprecated command is hidden from it, subcommands and all.
-//
-// `relay call` is the spelling CLI.md documents, and `relay` is the peer
-// group's alias — so the replacement is named both ways rather than sending a
-// reader to a top-level `relay` command that `dfos --help` does not list.
-const legacyDeprecation = `Command "api" is deprecated, use "dfos relay call <METHOD> <path>" ("relay" is the peer group's alias, so "dfos peer call" is the same command)` + "\n"
-
 func newAPICmd() *cobra.Command {
-	f := &relayCallFlags{}
-
 	cmd := &cobra.Command{
 		Use:     "api",
 		Short:   "Call any API that advertises the DFOS OpenAPI convention",
@@ -67,23 +54,19 @@ func newAPICmd() *cobra.Command {
 			"The document says which authentication artifact each route needs — anonymous, an identity " +
 			"proof, or a request proof with the credential it binds — and this client signs accordingly. " +
 			"The document is discovery, never authority: the host's own verdict decides every request.\n\n" +
-			"'dfos api <METHOD> <path>' is the deprecated raw passthrough to the active peer; " +
-			"'dfos relay call' is its spelling, and 'dfos peer call' is that same command under the group's own name.\n\n" +
+			"Raw HTTP to a peer is 'dfos relay call <METHOD> <path>' ('relay' is the peer group's alias, so " +
+			"'dfos peer call' is that same command).\n\n" +
 			"Normative spec: https://protocol.dfos.com/api-auth",
-		Args: cobra.ArbitraryArgs,
+		// NoArgs with a RunE rather than a bare parent command: cobra answers a
+		// non-runnable command with its help text and a zero exit, and a script
+		// that hands `api` two positional arguments is asking for something this
+		// command does not do. It has to fail, and say which name it did not know.
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 2 {
-				// Same rule as the method hint in relay.go: the example names a
-				// route every relay serves, so pasting it works.
-				return fmt.Errorf("usage: dfos api <METHOD> <path> (e.g. dfos api GET /.well-known/dfos-relay)\n" +
-					"       dfos api add|list|rm|refresh|call    (see 'dfos api --help')")
-			}
-			cmd.Printf(legacyDeprecation)
-			return runRelayCall(f, args, "dfos api")
+			return cmd.Help()
 		},
 	}
 
-	f.bind(cmd)
 	cmd.AddCommand(newAPIAddCmd())
 	cmd.AddCommand(newAPIListCmd())
 	cmd.AddCommand(newAPIRemoveCmd())

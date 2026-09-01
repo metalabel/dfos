@@ -544,7 +544,7 @@ func TestRotationStaysOnTheVaultThatMintedTheCurrentKeys(t *testing.T) {
 		DID string `json:"did"`
 	}
 	runJSON(t, create, nil, &created)
-	identityFlag = "alice"
+	asFlag = "alice"
 
 	// Rotation does NOT consult default-vault ("personal"): it follows the seed
 	// that minted the keys the identity currently publishes.
@@ -606,7 +606,7 @@ func createIdentityWithoutVault(t *testing.T, name string, store *keystore.Memor
 		DID string `json:"did"`
 	}
 	runJSON(t, cmd, nil, &res)
-	identityFlag = name
+	asFlag = name
 	return res.DID
 }
 

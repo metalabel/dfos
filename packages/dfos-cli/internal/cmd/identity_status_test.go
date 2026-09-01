@@ -58,7 +58,7 @@ func heldLog(t *testing.T, did string) []string {
 // which appends exactly one operation.
 func rotateEverything(t *testing.T, name string) {
 	t.Helper()
-	identityFlag = name
+	asFlag = name
 	update := newIdentityUpdateCmd()
 	mustSetFlag(t, update, "rotate-controller", "true")
 	mustSetFlag(t, update, "rotate-auth", "true")
@@ -380,7 +380,7 @@ func TestIdentityStatusUsesTheAdvertisedRelayWhenNoPeerIsNamed(t *testing.T) {
 		DID string `json:"did"`
 	}
 	runJSON(t, create, nil, &created)
-	identityFlag = "alice"
+	asFlag = "alice"
 	oracle.logsByDID[created.DID] = heldLog(t, created.DID)
 
 	res, err := statusJSON(t, "alice", "")
