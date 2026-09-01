@@ -852,11 +852,11 @@ The roster **names the head it was folded from**, for the reason every other lin
 
 The `HELD` column has three values, and they are three different answers to what the loss of this machine costs:
 
-| Rendering                                     | Meaning                                                                       |
-| --------------------------------------------- | ------------------------------------------------------------------------------ |
-| `held (vault '<name>' — derivable from phrase)` | the seed is here, and that vault's written-down phrase mints it again         |
-| `held (standalone)`                             | the seed is here, and this keystore is its only copy                          |
-| `not held on this machine`                      | the chain declares the key and the private half is elsewhere                  |
+| Rendering                                       | Meaning                                                               |
+| ----------------------------------------------- | --------------------------------------------------------------------- |
+| `held (vault '<name>' — derivable from phrase)` | the seed is here, and that vault's written-down phrase mints it again |
+| `held (standalone)`                             | the seed is here, and this keystore is its only copy                  |
+| `not held on this machine`                      | the chain declares the key and the private half is elsewhere          |
 
 A key marked `<role> (void)` is one the chain declares and no possession proof admitted: it is not in effective state, it resolves nowhere, and holding it grants nothing. Void rows are listed with a footnote saying that, the same way [`identity keys`](#one-key-at-genesis) lists them.
 
@@ -1480,71 +1480,71 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 ## Commands
 
-| Method | Command                         | Description                                                  |
-| ------ | ------------------------------- | ------------------------------------------------------------ |
-| `GET`  | `identity list`                 | List all known identities (owned + fetched; `--include-log`) |
-| `GET`  | `identity show [name\|did]`     | Show identity state                                          |
+| Method | Command                         | Description                                                               |
+| ------ | ------------------------------- | ------------------------------------------------------------------------- |
+| `GET`  | `identity list`                 | List all known identities (owned + fetched; `--include-log`)              |
+| `GET`  | `identity show [name\|did]`     | Show identity state                                                       |
 | `GET`  | `identity status <name\|did>`   | Compare the local chain against the identity's relay, with key possession |
-| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                       |
-| `GET`  | `identity services [name\|did]` | Show resolved discovery services                             |
-| `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                 |
-| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                   |
-| `POST` | `identity update [name\|did]`   | Rotate keys / set services (`--service`)                     |
-| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                  |
-| `POST` | `identity add-key`              | Add a public key this machine holds to a role set            |
-| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)           |
-| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)        |
-| `POST` | `identity delete`               | Delete identity (restorable)                                 |
-| `POST` | `identity restore`              | Restore a deleted identity                                   |
-| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                             |
-| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                           |
-| `GET`  | `identity log <name\|did>`      | Show identity operation history                              |
-| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)      |
-| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential                |
-| `GET`  | `content show <id>`             | Show content chain state                                     |
-| `GET`  | `content log <id>`              | Show operation history                                       |
-| `GET`  | `content download <id>`         | Download blob (stdout or file)                               |
-| `POST` | `content create <file\|->`      | Create content chain                                         |
-| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)                   |
-| `POST` | `content delete <id>`           | Permanently delete content chain                             |
-| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested             |
-| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                       |
-| `GET`  | `content fetch <id>`            | Download content chain from relay                            |
-| `GET`  | `content list`                  | List locally stored content chains                           |
-| `POST` | `credential grant <id> <did>`   | Issue read/write credential                                  |
-| `POST` | `credential revoke <cid>`       | Revoke a credential                                          |
-| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                            |
-| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                      |
-| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                      |
-| `GET`  | `operation show <cid>`          | Inspect a protocol operation                                 |
-| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--host`, `--scope`) |
-| `GET`  | `creds list`                    | List cached SIWD login credentials                           |
-| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                        |
-| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                        |
-| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`)   |
-| `GET`  | `auth status`                   | Show current auth state                                      |
-| `POST` | `api add <name> [source]`       | Register an API, cache its document (`--file`, `--yes`)      |
-| `GET`  | `api list`                      | List registered APIs and their documents' age                |
-| `POST` | `api refresh <name>`            | Refetch a registered API's document                          |
-| `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document               |
-| `*`    | `api call <name> <op>`          | Call one operation, signing what the document names          |
-| `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                     |
-| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                             |
-| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                      |
-| `GET`  | `peer info [name]`              | Show relay metadata                                          |
-| `POST` | `peer add <name> <url>`         | Register a named relay (`--no-sync`: no bulk log sync)       |
-| `SET`  | `peer repin <name>`             | Pin a peer to the identity it serves now                     |
-| `DEL`  | `peer remove <name>`            | Unregister a relay                                           |
-| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store           |
-| `GET`  | `config list`                   | Show full configuration                                      |
-| `GET`  | `config get <key>`              | Read a single config value                                   |
-| `SET`  | `config set <key> <value>`      | Write a config value                                         |
-| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats      |
-| `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer        |
-| `POST` | `sync [--peer <name>]`          | Pull the operation log from configured peers                 |
-| `*`    | `serve`                         | Run the local relay as an HTTP server                        |
-| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)     |
-| `GET`  | `version`                       | Show the installed CLI version                               |
+| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                                    |
+| `GET`  | `identity services [name\|did]` | Show resolved discovery services                                          |
+| `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                              |
+| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                                |
+| `POST` | `identity update [name\|did]`   | Rotate keys / set services (`--service`)                                  |
+| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                               |
+| `POST` | `identity add-key`              | Add a public key this machine holds to a role set                         |
+| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)                        |
+| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)                     |
+| `POST` | `identity delete`               | Delete identity (restorable)                                              |
+| `POST` | `identity restore`              | Restore a deleted identity                                                |
+| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                                          |
+| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                                        |
+| `GET`  | `identity log <name\|did>`      | Show identity operation history                                           |
+| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)                   |
+| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential                             |
+| `GET`  | `content show <id>`             | Show content chain state                                                  |
+| `GET`  | `content log <id>`              | Show operation history                                                    |
+| `GET`  | `content download <id>`         | Download blob (stdout or file)                                            |
+| `POST` | `content create <file\|->`      | Create content chain                                                      |
+| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)                                |
+| `POST` | `content delete <id>`           | Permanently delete content chain                                          |
+| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested                          |
+| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                                    |
+| `GET`  | `content fetch <id>`            | Download content chain from relay                                         |
+| `GET`  | `content list`                  | List locally stored content chains                                        |
+| `POST` | `credential grant <id> <did>`   | Issue read/write credential                                               |
+| `POST` | `credential revoke <cid>`       | Revoke a credential                                                       |
+| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                                         |
+| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                                   |
+| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                                   |
+| `GET`  | `operation show <cid>`          | Inspect a protocol operation                                              |
+| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--host`, `--scope`)              |
+| `GET`  | `creds list`                    | List cached SIWD login credentials                                        |
+| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                                     |
+| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                                     |
+| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`)                |
+| `GET`  | `auth status`                   | Show current auth state                                                   |
+| `POST` | `api add <name> [source]`       | Register an API, cache its document (`--file`, `--yes`)                   |
+| `GET`  | `api list`                      | List registered APIs and their documents' age                             |
+| `POST` | `api refresh <name>`            | Refetch a registered API's document                                       |
+| `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document                            |
+| `*`    | `api call <name> <op>`          | Call one operation, signing what the document names                       |
+| `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                                  |
+| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                                          |
+| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                                   |
+| `GET`  | `peer info [name]`              | Show relay metadata                                                       |
+| `POST` | `peer add <name> <url>`         | Register a named relay (`--no-sync`: no bulk log sync)                    |
+| `SET`  | `peer repin <name>`             | Pin a peer to the identity it serves now                                  |
+| `DEL`  | `peer remove <name>`            | Unregister a relay                                                        |
+| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store                        |
+| `GET`  | `config list`                   | Show full configuration                                                   |
+| `GET`  | `config get <key>`              | Read a single config value                                                |
+| `SET`  | `config set <key> <value>`      | Write a config value                                                      |
+| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats                   |
+| `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer                     |
+| `POST` | `sync [--peer <name>]`          | Pull the operation log from configured peers                              |
+| `*`    | `serve`                         | Run the local relay as an HTTP server                                     |
+| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)                  |
+| `GET`  | `version`                       | Show the installed CLI version                                            |
 
 ---
 
