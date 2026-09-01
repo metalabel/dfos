@@ -20,16 +20,12 @@ import (
 )
 
 var (
-	// persistent flags. --as and --relay are the canonical selectors; --ctx,
-	// --identity, and --peer are compat aliases of the same resolver, hidden in
-	// help and documented as aliases.
-	asFlag       string
-	relayFlag    string
-	ctxFlag      string
-	identityFlag string
-	peerFlag     string
-	jsonFlag     bool
-	quietFlag    bool
+	// persistent flags. --as and --relay are the two global selectors: one
+	// spelling each for the identity half and the peer half.
+	asFlag    string
+	relayFlag string
+	jsonFlag  bool
+	quietFlag bool
 
 	// shared state
 	cfg     *config.Config
@@ -158,15 +154,6 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
 	root.PersistentFlags().BoolVarP(&quietFlag, "quiet", "q", false, "Suppress the resolved-principal line on signing commands")
 
-	// Compat aliases. They resolve through the same stack at the same tier as
-	// the mechanism they alias; they are hidden so help teaches one spelling.
-	root.PersistentFlags().StringVar(&ctxFlag, "ctx", "", "Context (identity@peer) — alias of --as/--relay")
-	root.PersistentFlags().StringVar(&identityFlag, "identity", "", "Identity name — alias of --as")
-	root.PersistentFlags().StringVar(&peerFlag, "peer", "", "Peer name — alias of --relay")
-	for _, alias := range []string{"ctx", "identity", "peer"} {
-		_ = root.PersistentFlags().MarkHidden(alias)
-	}
-
 	// command groups
 	identityGroup := &cobra.Group{ID: "identity", Title: "Identity Commands"}
 	contentGroup := &cobra.Group{ID: "content", Title: "Content Commands"}
@@ -179,7 +166,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newWhoamiCmd())
-	root.AddCommand(newUseTombstoneCmd())
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newVaultCmd())
 	root.AddCommand(newKeysCmd())
@@ -243,7 +229,7 @@ func getRelay() (*localrelay.LocalRelay, error) {
 // site that needs a principal goes through here — there are no site-local
 // variants of the stack.
 func overrides() config.Overrides {
-	return config.Overrides{As: asFlag, Identity: identityFlag, Ctx: ctxFlag, Relay: relayFlag, Peer: peerFlag}
+	return config.Overrides{As: asFlag, Relay: relayFlag}
 }
 
 // resolveCtx resolves the current (identity, peer) pair from flags/env/config.
@@ -252,31 +238,25 @@ func resolveCtx() (*config.ResolvedContext, error) {
 }
 
 // requirePeer resolves the pair and ensures a peer is configured. peerOverride
-// is a command-local --peer flag.
+// is a command-local --peer flag; localPeerFlag says whether this command binds
+// one at all, which is what the not-configured message needs and cannot read off
+// the value — a bound flag left unset and an absent flag are both "".
 //
-// THE CLOSEST NAME WINS. A --peer typed on this command outranks a global
+// THE CLOSEST NAME WINS. A --peer typed on this command outranks the global
 // --relay outright, because specificity is what the whole resolution stack
-// orders by and a command-local flag is the most specific statement available.
-// The global tier ranks --relay above the --peer alias, which is right for two
-// global flags and inverted the moment one of them is a command's own: `dfos
-// --relay stale recover --peer authoritative` talked to `stale`.
-//
-// The mechanism is deliberately the smallest one that says it: clear the global
-// --relay for the PEER half only. Nothing else reads ov.Relay (the identity half
-// is built from ov.As and ov.Identity), and the plain aliases' global ordering
-// is untouched — this only fires when a command-local flag was actually typed.
-func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, error) {
+// orders by and a command-local flag is the most specific statement available:
+// `dfos --relay stale recover --peer authoritative` asks `authoritative`. This
+// is the only site that writes ov.Peer, which is why the stack can rank it in
+// front of every global tier without any site-local ordering of its own.
+func requirePeer(peerOverride string, localPeerFlag bool) (*config.ResolvedContext, *client.Client, error) {
 	ov := overrides()
-	if peerOverride != "" {
-		ov.Peer = peerOverride
-		ov.Relay = ""
-	}
+	ov.Peer = peerOverride
 	ctx, err := config.ResolveContext(cfg, ov)
 	if err != nil {
 		return nil, nil, err
 	}
 	if ctx.RelayURL == "" {
-		return nil, nil, errNoPeer()
+		return nil, nil, errNoPeer(localPeerFlag)
 	}
 	// Same gate getPeerClient applies: a resolved peer name means the identity
 	// config pinned to that name, not merely the URL parked under it.
@@ -312,9 +292,17 @@ func errNoIdentity() error {
 // this sentinel and nothing else.
 var errNoPeerConfigured = errors.New("no peer to talk to")
 
-// errNoPeer is the peer-side twin of errNoIdentity, same three-mechanism shape.
-func errNoPeer() error {
-	return fmt.Errorf("%w — name one:\n"+
+// errNoPeer is the peer-side twin of errNoIdentity. localPeerFlag adds the
+// command's own --peer at the head of the list, because that flag sits at the
+// head of the peer stack — but only for a command that binds one. Offering
+// --peer to `login` or `relay call`, which do not, would send an operator to a
+// flag those commands answer with "unknown flag".
+func errNoPeer(localPeerFlag bool) error {
+	local := ""
+	if localPeerFlag {
+		local = "  --peer <name>                           for this command\n"
+	}
+	return fmt.Errorf("%w — name one:\n"+local+
 		"  --relay <name>                          for this invocation\n"+
 		"  DFOS_RELAY=<name>                       for this environment\n"+
 		"  dfos config set default-peer <name>     as the standing default\n"+
@@ -607,25 +595,6 @@ func printLocalStoreStatus(store *localStoreStatus) {
 	fmt.Printf("  Kinds:   identity=%d content=%d artifact=%d credential=%d countersign=%d revocation=%d\n",
 		store.CountsByKind["identity"], store.CountsByKind["content"], store.CountsByKind["artifact"],
 		store.CountsByKind["credential"], store.CountsByKind["countersign"], store.CountsByKind["revocation"])
-}
-
-// newUseTombstoneCmd is what is left of `dfos use`. The command is gone: there
-// is no mutable active context to set, because a pointer two processes both
-// read and one of them writes is a race, and running parallel agents under
-// different identities is the normal case now. The tombstone exists only so the
-// removal reads as a removal — a bare "unknown command" would leave an operator
-// guessing where the mechanism went — and it is hidden from help so nothing
-// teaches it. It signs nothing, writes nothing, and always fails.
-func newUseTombstoneCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "use [identity[@peer]]",
-		Hidden: true,
-		Args:   cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("`dfos use` is removed — there is no mutable active context to set.\n" +
-				"Select an identity per invocation with --as <name|did> or DFOS_AS, or set the standing default with 'dfos config set default-identity <name|did>'.")
-		},
-	}
 }
 
 // helpers

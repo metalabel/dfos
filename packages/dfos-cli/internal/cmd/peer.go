@@ -446,7 +446,7 @@ func newPeerInfoCmd() *cobra.Command {
 					return err
 				}
 				if ctx == nil || ctx.RelayName == "" {
-					return errNoPeer()
+					return errNoPeer(false)
 				}
 				rn = ctx.RelayName
 			}

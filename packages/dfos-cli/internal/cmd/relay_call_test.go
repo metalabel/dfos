@@ -1,12 +1,10 @@
 package cmd
 
-// Raw-passthrough tests. `dfos relay call` is the spelling; `dfos api` is the
-// deprecated one that forwards into the same implementation. The point of the
-// pair is that the forward is byte-identical on stdout and costs exactly one
-// extra line on stderr.
+// Raw-passthrough tests. `dfos relay call` is the spelling, and `dfos peer call`
+// is that same command under the peer group's own name.
 //
-// These mutate the package globals (cfg, peerFlag), so as with the multi-device
-// tests they MUST NOT run with t.Parallel().
+// These mutate the package globals (cfg, relayFlag), so as with the
+// multi-device tests they MUST NOT run with t.Parallel().
 
 import (
 	"encoding/json"
@@ -15,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -22,17 +21,20 @@ import (
 )
 
 // setupRelayCall points the resolved context at a loopback server that echoes
-// the request it received as JSON.
-func setupRelayCall(t *testing.T) *httptest.Server {
+// the request it received as JSON. The returned counter is the number of
+// requests that server has answered, so a test can assert that a command made
+// no request at all rather than only that its output was empty.
+func setupRelayCall(t *testing.T) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 
 	// The context resolves from env before config, so clear the overrides a
 	// developer's shell may carry.
-	t.Setenv("DFOS_CONTEXT", "")
-	t.Setenv("DFOS_IDENTITY", "")
+	t.Setenv("DFOS_AS", "")
 	t.Setenv("DFOS_RELAY", "")
 
+	hits := &atomic.Int64{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		echo, _ := json.Marshal(map[string]string{
 			"method":     r.Method,
@@ -45,24 +47,22 @@ func setupRelayCall(t *testing.T) *httptest.Server {
 		_, _ = w.Write(echo)
 	}))
 
-	prevCfg, prevPeer, prevCtx, prevID := cfg, peerFlag, ctxFlag, identityFlag
+	prevCfg, prevRelay, prevAs := cfg, relayFlag, asFlag
 	cfg = &config.Config{
 		Relays:     map[string]config.RelayConfig{"test": {URL: srv.URL}},
 		Identities: map[string]config.IdentityConfig{},
-		Contexts:   map[string]config.ContextConfig{},
 	}
-	peerFlag, ctxFlag, identityFlag = "test", "", ""
+	relayFlag, asFlag = "test", ""
 	t.Cleanup(func() {
 		srv.Close()
-		cfg, peerFlag, ctxFlag, identityFlag = prevCfg, prevPeer, prevCtx, prevID
+		cfg, relayFlag, asFlag = prevCfg, prevRelay, prevAs
 	})
-	return srv
+	return srv, hits
 }
 
 // captureStdio swaps the process's stdout and stderr for pipes around fn. The
-// passthrough writes its response with fmt.Printf and cobra writes its
-// deprecation line to os.Stderr, so both have to be intercepted at the process
-// level rather than through cobra's writers.
+// passthrough writes its response with fmt.Printf, so it has to be intercepted
+// at the process level rather than through cobra's writers.
 func captureStdio(t *testing.T, fn func()) (stdout, stderr string) {
 	t.Helper()
 	oldOut, oldErr := os.Stdout, os.Stderr
@@ -81,8 +81,8 @@ func captureStdio(t *testing.T, fn func()) (stdout, stderr string) {
 }
 
 // runThroughRoot executes args against a bare root carrying only the command
-// under test, so cobra's own dispatch (and its deprecation notice) runs without
-// the real root's state lock and config load.
+// under test, so cobra's own dispatch runs without the real root's state lock
+// and config load.
 func runThroughRoot(t *testing.T, cmd *cobra.Command, args ...string) (stdout, stderr string, runErr error) {
 	t.Helper()
 	root := &cobra.Command{Use: "dfos", SilenceUsage: true, SilenceErrors: true}
@@ -113,30 +113,12 @@ func TestRelayCall(t *testing.T) {
 		}
 	})
 
-	t.Run("api forwards to the same implementation and warns once", func(t *testing.T) {
+	t.Run("the request flags reach the wire", func(t *testing.T) {
 		setupRelayCall(t)
-		stdout, stderr, err := runThroughRoot(t, newAPICmd(), "api", "GET", "/proof/v1/stats")
-		if err != nil {
-			t.Fatalf("api: %v", err)
-		}
-		if stdout != wantBody {
-			t.Fatalf("stdout = %q, want %q (identical to relay call)", stdout, wantBody)
-		}
-		lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
-		if len(lines) != 1 {
-			t.Fatalf("stderr = %q, want exactly one line", stderr)
-		}
-		if !strings.Contains(lines[0], "deprecated") || !strings.Contains(lines[0], "dfos relay call <METHOD> <path>") {
-			t.Fatalf("deprecation line = %q", lines[0])
-		}
-	})
-
-	t.Run("api binds the passthrough flags", func(t *testing.T) {
-		setupRelayCall(t)
-		stdout, _, err := runThroughRoot(t, newAPICmd(), "api", "POST", "/proof/v1/operations",
+		stdout, _, err := runThroughRoot(t, newRelayCallCmd(), "call", "POST", "/proof/v1/operations",
 			"--body", `{"operations":[]}`, "-i", "-H", "X-Test: yes")
 		if err != nil {
-			t.Fatalf("api: %v", err)
+			t.Fatalf("relay call: %v", err)
 		}
 		if !strings.HasPrefix(stdout, "HTTP 200\n") {
 			t.Fatalf("--include output = %q", stdout)
@@ -149,63 +131,48 @@ func TestRelayCall(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid method names the spelling that was typed", func(t *testing.T) {
+	t.Run("invalid method names the command", func(t *testing.T) {
 		setupRelayCall(t)
 		call := newRelayCallCmd()
 		err := call.RunE(call, []string{"BREW", "/x"})
 		if err == nil || !strings.Contains(err.Error(), "usage: dfos relay call <METHOD> <path>") {
 			t.Fatalf("relay call error = %v", err)
 		}
-		api := newAPICmd()
-		err = api.RunE(api, []string{"BREW", "/x"})
-		if err == nil || !strings.Contains(err.Error(), "usage: dfos api <METHOD> <path>") {
-			t.Fatalf("api error = %v", err)
-		}
 	})
+}
 
-	t.Run("the legacy raw form lives beside the subcommands", func(t *testing.T) {
-		api := newAPICmd()
-		// The Deprecated MARKER moved off the command when the subcommands
-		// landed — cobra hides a deprecated command from help, subcommands and
-		// all, which would make `api add` undiscoverable. The line it printed is
-		// emitted by the legacy path itself instead, byte-identical.
-		if api.Deprecated != "" {
-			t.Fatalf("api must not be marked Deprecated, or its subcommands vanish from help")
-		}
-		if api.Hidden {
-			t.Fatalf("api must be visible in help")
-		}
-		for _, name := range []string{"add", "list", "rm", "refresh", "call"} {
-			found, _, err := api.Find([]string{name})
-			if err != nil || found.Name() != name {
-				t.Fatalf("api %s did not resolve: %v", name, err)
-			}
-		}
-		// ArbitraryArgs is what lets a subcommand sit beside the legacy
-		// two-argument form: cobra dispatches the subcommand first and only
-		// falls through to RunE for the raw form.
-		if err := api.Args(api, []string{"add", "https://example.test/openapi.json"}); err != nil {
-			t.Fatalf("api arg validation rejects a non-raw invocation: %v", err)
-		}
-		if err := api.RunE(api, []string{"GET"}); err == nil || !strings.Contains(err.Error(), "usage: dfos api") {
-			t.Fatalf("wrong-arity error = %v", err)
-		}
-	})
+// `dfos api` names a registered operation. Two bare arguments are a raw HTTP
+// request, which is `dfos relay call` — and a script still typing the old form
+// has to hear about it in the exit code, not be handed a help page and a zero.
+func TestAPITakesNoRawRequest(t *testing.T) {
+	_, hits := setupRelayCall(t)
+	_, _, err := runThroughRoot(t, newAPICmd(), "api", "GET", "/proof/v1/stats")
+	if err == nil {
+		t.Fatal("dfos api GET /x still ran")
+	}
+	if !strings.Contains(err.Error(), "unknown command") || !strings.Contains(err.Error(), "GET") {
+		t.Fatalf("error = %v, want an unknown-command error naming GET", err)
+	}
+	// The refusal has to happen before the wire, not after it: a passthrough
+	// that requests and then errors would still have reached the peer.
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("the peer answered %d request(s); the old form is meant to reach nothing", n)
+	}
+}
 
-	t.Run("a subcommand invocation costs no deprecation line", func(t *testing.T) {
-		setupRelayCall(t)
-		store := setupAPIRegistry(t)
-		if err := store.Put(apispecRegistrationForTest(), []byte(registryDoc)); err != nil {
-			t.Fatal(err)
+// The subcommands are the whole of `api`, and they must stay discoverable: a
+// deprecated or hidden parent takes its subcommands out of help with it.
+func TestAPISubcommandsResolve(t *testing.T) {
+	api := newAPICmd()
+	if api.Deprecated != "" || api.Hidden {
+		t.Fatalf("api must be visible in help (deprecated=%q hidden=%v)", api.Deprecated, api.Hidden)
+	}
+	for _, name := range []string{"add", "list", "rm", "refresh", "call"} {
+		found, _, err := api.Find([]string{name})
+		if err != nil || found.Name() != name {
+			t.Fatalf("api %s did not resolve: %v", name, err)
 		}
-		_, stderr, err := runThroughRoot(t, newAPICmd(), "api", "list")
-		if err != nil {
-			t.Fatalf("api list: %v", err)
-		}
-		if strings.Contains(stderr, "deprecated") {
-			t.Fatalf("a subcommand must not inherit the legacy form's deprecation line: %q", stderr)
-		}
-	})
+	}
 }
 
 func TestRelayCallIsReachableUnderBothSpellings(t *testing.T) {

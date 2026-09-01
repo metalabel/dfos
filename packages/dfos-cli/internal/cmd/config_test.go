@@ -20,7 +20,6 @@ func TestConfigListRendersPlainAndJSONDifferently(t *testing.T) {
 	setupDevices(t)
 	cfg.Relays["prod"] = config.RelayConfig{URL: "https://prod.example.com"}
 	cfg.Identities["alice"] = config.IdentityConfig{DID: "did:dfos:alice123"}
-	cfg.Contexts["work"] = config.ContextConfig{Identity: "alice", Relay: "prod"}
 	cfg.DefaultPeer = "prod"
 	cfg.Defaults = &config.DefaultsConfig{CredentialTTL: "24h"}
 
@@ -39,7 +38,6 @@ func TestConfigListRendersPlainAndJSONDifferently(t *testing.T) {
 		"defaults.credential_ttl", "24h",
 		"Peers: 1", "https://prod.example.com",
 		"Identities: 1", "did:dfos:alice123",
-		"Contexts: 1", "alice @ prod",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain rendering does not report %q:\n%s", want, plain)

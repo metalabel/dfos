@@ -309,7 +309,7 @@ func TestALegacyDIDScopedAccountStillSignsAndStillLists(t *testing.T) {
 
 	// And it still signs: a rotation is signed by a controller key this device
 	// holds, which is exactly the key sitting under the legacy account.
-	identityFlag = "alice"
+	asFlag = "alice"
 	rotate := newIdentityUpdateCmd()
 	mustSetFlag(t, rotate, "rotate-auth", "true")
 	runJSON(t, rotate, nil, &struct{}{})
@@ -433,7 +433,7 @@ func TestSingleKeyRoundTripCreateRotateRecoverSign(t *testing.T) {
 	if n := countKeysInChain(recovered); n != 2 {
 		t.Fatalf("the fresh machine holds %d of the chain's keys, want 2", n)
 	}
-	identityFlag = res.Identities[0].Name
+	asFlag = res.Identities[0].Name
 	cc := newContentCreateCmd()
 	mustSetFlag(t, cc, "no-schema-warn", "true")
 	var content struct {

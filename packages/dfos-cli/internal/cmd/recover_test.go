@@ -882,7 +882,7 @@ func TestRecoverEndToEndRestoresSigning(t *testing.T) {
 	// identity and intersects its published auth keys with what this device
 	// holds — it never consults a vault — so a recovered key is indistinguishable
 	// from one that was never lost.
-	identityFlag = name
+	asFlag = name
 	content := newContentCreateCmd()
 	var created struct {
 		ContentID string `json:"contentId"`

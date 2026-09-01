@@ -30,8 +30,8 @@ import (
 
 // setupDevices wires the package globals for a multi-device test and returns
 // the two device keystores plus the shared local relay. cfg/keys/
-// localRelayInstance and the identityFlag override are reset on cleanup so
-// tests don't leak into each other.
+// localRelayInstance and the selector flags are reset on cleanup so tests don't
+// leak into each other.
 func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *localrelay.LocalRelay) {
 	t.Helper()
 
@@ -52,7 +52,6 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 	cfg = &config.Config{
 		Relays:     map[string]config.RelayConfig{},
 		Identities: map[string]config.IdentityConfig{},
-		Contexts:   map[string]config.ContextConfig{},
 	}
 
 	var err error
@@ -64,14 +63,13 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 
 	// The resolution stack reads the environment before the config, so blank
 	// every mechanism a developer's own shell may carry.
-	for _, k := range []string{config.SourceEnvAs, config.SourceEnvIdentity, config.SourceEnvRelay, config.SourceEnvContext} {
+	for _, k := range []string{config.SourceEnvAs, config.SourceEnvRelay} {
 		t.Setenv(k, "")
 	}
 
-	prevID, prevAs, prevRelay := identityFlag, asFlag, relayFlag
-	prevPeer, prevCtx := peerFlag, ctxFlag
+	prevAs, prevRelay := asFlag, relayFlag
 	prevJSON, prevQuiet, prevAnnounced := jsonFlag, quietFlag, signerAnnounced
-	asFlag, relayFlag, identityFlag, peerFlag, ctxFlag = "", "", "", "", ""
+	asFlag, relayFlag = "", ""
 	quietFlag, signerAnnounced = false, false
 	t.Cleanup(func() {
 		lr.Close()
@@ -79,8 +77,7 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 		cfg = nil
 		keys = nil
 		vaultStore = nil
-		identityFlag, asFlag, relayFlag = prevID, prevAs, prevRelay
-		peerFlag, ctxFlag = prevPeer, prevCtx
+		asFlag, relayFlag = prevAs, prevRelay
 		jsonFlag, quietFlag, signerAnnounced = prevJSON, prevQuiet, prevAnnounced
 	})
 
@@ -129,7 +126,7 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 // createIdentity runs `dfos identity create` with the given keystore active and
-// returns the DID. It registers the identity name and points identityFlag at it.
+// returns the DID. It registers the identity name and points asFlag at it.
 func createIdentity(t *testing.T, name string, store *keystore.MemoryStore) string {
 	t.Helper()
 	keys = store
@@ -139,7 +136,7 @@ func createIdentity(t *testing.T, name string, store *keystore.MemoryStore) stri
 		DID string `json:"did"`
 	}
 	runJSON(t, cmd, nil, &res)
-	identityFlag = name
+	asFlag = name
 	return res.DID
 }
 

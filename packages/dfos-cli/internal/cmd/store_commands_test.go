@@ -2,7 +2,7 @@ package cmd
 
 import "testing"
 
-func TestStatusStoreWorksWithoutActiveContext(t *testing.T) {
+func TestStatusStoreWorksWithNothingResolved(t *testing.T) {
 	_, _, lr := setupDevices(t)
 	cmd := newStatusCmd()
 	mustSetFlag(t, cmd, "store", "true")

@@ -66,7 +66,7 @@ func TestPeerPinRefusesAFetchThroughAMovedPin(t *testing.T) {
 	// the same way.
 	relayFlag = "prod"
 	defer func() { relayFlag = "" }()
-	_, _, err = requirePeer("")
+	_, _, err = requirePeer("", false)
 	assertMismatch(t, err, "prod", otherDID, pinnedDID)
 }
 

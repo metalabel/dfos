@@ -116,9 +116,6 @@ func newContentCreateCmd() *cobra.Command {
 			// push to peer if specified
 			var publishedTo []string
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -308,9 +305,6 @@ func newContentDownloadCmd() *cobra.Command {
 			// fall through to peer download
 			rn := peerName
 			if rn == "" {
-				rn = peerFlag
-			}
-			if rn == "" {
 				rn = ctx.RelayName
 			}
 			if rn == "" {
@@ -350,9 +344,10 @@ func newContentDownloadCmd() *cobra.Command {
 
 func newContentPublishCmd() *cobra.Command {
 	var peerName string
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "publish <contentId>",
 		Short: "Push content chain + blob to a peer",
+		Long:  "Push a content chain and its blob to a peer relay. The target peer is taken from --peer, else the resolved peer; one or the other is required.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
@@ -373,10 +368,13 @@ func newContentPublishCmd() *cobra.Command {
 
 			rn := peerName
 			if rn == "" {
-				rn = peerFlag
+				ctx, _ := resolveCtx()
+				if ctx != nil {
+					rn = ctx.RelayName
+				}
 			}
 			if rn == "" {
-				return errNoPeer()
+				return errNoPeer(true)
 			}
 
 			c, _, err := getPeerClient(rn)
@@ -432,6 +430,8 @@ func newContentPublishCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to publish to")
+	return cmd
 }
 
 func newContentFetchCmd() *cobra.Command {
@@ -443,9 +443,6 @@ func newContentFetchCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
 				if ctx != nil {
@@ -671,9 +668,6 @@ func newContentUpdateCmd() *cobra.Command {
 
 			// push to peer
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -755,9 +749,6 @@ func newContentDeleteCmd() *cobra.Command {
 
 			// push to peer
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {

@@ -44,9 +44,6 @@ func newConfigListCmd() *cobra.Command {
 				}
 				fmt.Printf("  %-24s %s\n", key, value)
 			}
-			if cfg.ActiveContext != "" {
-				fmt.Printf("  %-24s %s (inert — 'dfos use' is gone; nothing resolves through it)\n", "active_context", cfg.ActiveContext)
-			}
 
 			fmt.Printf("\nPeers: %d\n", len(cfg.Relays))
 			for _, name := range sortedKeys(cfg.Relays) {
@@ -58,13 +55,6 @@ func newConfigListCmd() *cobra.Command {
 				fmt.Printf("  %-24s %s\n", name, cfg.Identities[name].DID)
 			}
 
-			if len(cfg.Contexts) > 0 {
-				fmt.Printf("\nContexts: %d\n", len(cfg.Contexts))
-				for _, name := range sortedKeys(cfg.Contexts) {
-					c := cfg.Contexts[name]
-					fmt.Printf("  %-24s %s @ %s\n", name, c.Identity, c.Relay)
-				}
-			}
 			return nil
 		},
 	}

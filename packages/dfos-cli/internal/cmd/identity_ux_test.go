@@ -15,13 +15,13 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 )
 
-// createNamedIdentity is createIdentity without the identityFlag side effect,
+// createNamedIdentity is createIdentity without the asFlag side effect,
 // so a test can exercise the resolution stack itself rather than the flag tier
 // that would otherwise sit in front of it.
 func createNamedIdentity(t *testing.T, name string, store *keystore.MemoryStore) string {
 	t.Helper()
 	did := createIdentity(t, name, store)
-	identityFlag = ""
+	asFlag = ""
 	return did
 }
 
@@ -193,15 +193,14 @@ func TestIdentityUpdateServicesOnlyOnAVaultDerivedIdentity(t *testing.T) {
 	}
 }
 
-// `identity remove` clears the same dangling pointers `forget` does, and says
-// so in the same field names.
+// `identity remove` clears the same dangling default-identity `forget` does,
+// and says so in the same field name.
 func TestIdentityRemoveReportsClearedState(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
 
 	did := createNamedIdentity(t, "alice", storeA)
 	cfg.DefaultIdentity = "alice"
-	cfg.ActiveContext = "alice@prod"
 
 	var out identityRemoveResult
 	runJSON(t, newIdentityRemoveCmd(), []string{"alice"}, &out)
@@ -211,11 +210,8 @@ func TestIdentityRemoveReportsClearedState(t *testing.T) {
 	if !out.DefaultIdentityCleared {
 		t.Error("a default-identity pointing at the removed name was not reported as cleared")
 	}
-	if !out.ActiveContextCleared {
-		t.Error("an active context referencing the removed name was not reported as cleared")
-	}
-	if cfg.DefaultIdentity != "" || cfg.ActiveContext != "" {
-		t.Fatalf("config still holds a dangling pointer: default=%q active=%q", cfg.DefaultIdentity, cfg.ActiveContext)
+	if cfg.DefaultIdentity != "" {
+		t.Fatalf("config still holds a dangling pointer: default=%q", cfg.DefaultIdentity)
 	}
 
 	// Nothing dangling, nothing reported.
@@ -224,7 +220,7 @@ func TestIdentityRemoveReportsClearedState(t *testing.T) {
 	cfg.DefaultIdentity = "carol"
 	var quiet identityRemoveResult
 	runJSON(t, newIdentityRemoveCmd(), []string{"bob"}, &quiet)
-	if quiet.DefaultIdentityCleared || quiet.ActiveContextCleared {
+	if quiet.DefaultIdentityCleared {
 		t.Fatalf("removing an unreferenced name reported cleared state: %+v", quiet)
 	}
 	if cfg.DefaultIdentity != "carol" {

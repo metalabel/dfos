@@ -380,7 +380,7 @@ func TestIdentityCreateRecordsProvenanceBeforeThePeerSubmit(t *testing.T) {
 
 	// The point of the trail: a later bare rotation stays on the seed rather
 	// than minting a standalone replacement for a phrase-backed identity.
-	identityFlag = meta.Minted[0].DID
+	asFlag = meta.Minted[0].DID
 	rotate := newIdentityUpdateCmd()
 	mustSetFlag(t, rotate, "rotate-auth", "true")
 	var rotated struct {
@@ -409,7 +409,7 @@ func TestCommandLocalPeerOutranksTheGlobalRelay(t *testing.T) {
 
 	relayFlag = "stale"
 
-	ctx, _, err := requirePeer("authoritative")
+	ctx, _, err := requirePeer("authoritative", true)
 	if err != nil {
 		t.Fatalf("requirePeer: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestCommandLocalPeerOutranksTheGlobalRelay(t *testing.T) {
 	}
 
 	// With no command-local flag the global --relay answers exactly as before.
-	ctx, _, err = requirePeer("")
+	ctx, _, err = requirePeer("", true)
 	if err != nil {
 		t.Fatalf("requirePeer: %v", err)
 	}
@@ -430,14 +430,4 @@ func TestCommandLocalPeerOutranksTheGlobalRelay(t *testing.T) {
 		t.Fatalf("resolved peer = %q with no command-local flag, want stale", ctx.RelayName)
 	}
 
-	// And the GLOBAL tier ordering between the plain aliases is untouched:
-	// --relay still outranks the deprecated global --peer.
-	peerFlag = "authoritative"
-	ctx, _, err = requirePeer("")
-	if err != nil {
-		t.Fatalf("requirePeer: %v", err)
-	}
-	if ctx.RelayName != "stale" {
-		t.Fatalf("the global --relay lost to the global --peer alias: resolved %q, want stale", ctx.RelayName)
-	}
 }

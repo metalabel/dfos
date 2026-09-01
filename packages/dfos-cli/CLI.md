@@ -124,11 +124,13 @@ peer:      --relay <name>    →  DFOS_RELAY   →  default-peer in config
 
 The stack has no mutable pointer in it. The config tier is written by exactly one thing — `dfos config set` — and no command updates it as a side effect: nothing follows "last used" or "last created", and creating an identity does not select it. That is what makes concurrent invocations safe. Two agents running side by side each carry their own `--as` or their own `DFOS_AS`, and neither can disturb what the other signs as.
 
+There is one spelling per mechanism. `--as` and `--relay` are the only global selectors, `DFOS_AS` and `DFOS_RELAY` the only environment ones, and `default-identity` and `default-peer` the only config ones. There is no flag or variable that names both halves in one token, and no named-context table in `config.toml`.
+
 `--as` takes an identity name from config **or** a bare `did:dfos:` identifier. A DID needs no local registration.
 
 A verb that takes its subject as a positional argument — `identity update <name|did>`, like `delete`, `restore`, `show`, `log`, `forget`, and `remove` before it — acts on that identity, ahead of the whole stack. A target typed on the command line is the most explicit statement of intent available, so it outranks `--as`, `DFOS_AS`, and `default-identity`, and the disclosure line names `positional argument` as the mechanism it resolved through. With no positional the stack resolves as it always does.
 
-The same rule governs the peer half: **the closest name wins.** A few commands carry a `--peer` of their own — `recover` names the relay it asks the used/unused question of, `identity fetch` names the relay it pulls from — and that flag outranks the whole peer stack, the global `--relay` included. `dfos --relay stale recover --peer authoritative` asks `authoritative`. The global aliases keep their own ordering between themselves: `--relay` still outranks the deprecated global `--peer`.
+The same rule governs the peer half: **the closest name wins.** A few commands carry a `--peer` of their own — `recover` names the relay it asks the used/unused question of, `identity fetch` names the relay it pulls from — and that flag outranks the whole peer stack, the global `--relay` included. `dfos --relay stale recover --peer authoritative` asks `authoritative`. `--peer` is only ever a command's own flag; the global peer selector is `--relay` and nothing else.
 
 ### Disclosure
 
@@ -152,10 +154,6 @@ no identity to sign with — name one:
   DFOS_AS=<name|did>                          for this environment
   dfos config set default-identity <name|did> as the standing default
 ```
-
-### Deprecated aliases
-
-`--ctx`, `--identity`, `--peer`, `DFOS_CONTEXT`, and `DFOS_IDENTITY` are deprecated aliases of the canonical selectors. They keep working, hidden from help, at the tier of the mechanism they alias — a flag alias beats an environment variable, an environment alias beats the config default. `--ctx`/`DFOS_CONTEXT` name both halves at once as `identity@peer`, a named `[contexts]` entry, or an identity on its own.
 
 ### Configuration
 
@@ -206,7 +204,7 @@ A `[relays.<name>]` entry carries four kinds of key, and the difference is what 
 
 Policy is the operator's. It is seeded from the peer's advertised capabilities the first time the peer is registered, and nothing rewrites it after that — not `peer add` over an existing entry, not `peer info`. Only the label is refreshed freely, and only the pin commands move the pin.
 
-An `active_context` line left over from an earlier configuration is inert: resolution never reads it, and `dfos whoami` reports it as such.
+A key the file carries that is not in this document is not read. Unknown keys parse without complaint and disappear the next time `dfos config set` writes the file.
 
 ---
 
@@ -871,9 +869,9 @@ dfos identity forget alice
 dfos identity forget did:dfos:xxx
 ```
 
-This removes the named identity and its referencing contexts from config, clears a `default-identity` that pointed at it, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
+This removes the named identity from config, clears a `default-identity` that pointed at it, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
 
-`identity remove <name>` drops the name alone, leaving contexts and any cached credential in place. It clears the same dangling pointers a removed name would leave behind, and reports them in the same field names `forget` uses — `activeContextCleared` and `defaultIdentityCleared` under `--json`, and a line each in the human output — so which config state moved is read off the result rather than out of `config.toml`.
+`identity remove <name>` drops the name alone, leaving any cached credential in place. It clears the same dangling `default-identity` a removed name would leave behind, and reports it in the same field name `forget` uses — `defaultIdentityCleared` under `--json`, and a line in the human output — so which config state moved is read off the result rather than out of `config.toml`.
 
 ### Peer Sync
 
@@ -915,12 +913,13 @@ A one-shot `dfos` command never gossips. The local relay it opens has gossip off
 
 The three directions are therefore distinct, and only one of them puts local state on a peer:
 
-| What you run                                                       | Where it goes                                                      |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| `identity create`, `content create`, `credential grant`, `witness` | The local relay. Nothing leaves the machine.                       |
-| `content publish`, `identity publish`, `--peer`, `login`           | The peer you named, and no other.                                  |
-| `dfos sync`                                                        | Pulls from the peers the switches allow. It pushes nothing.        |
-| `dfos serve`                                                       | Participates in the mesh: each peer's own `gossip` switch decides. |
+| What you run                                                       | Where it goes                                                                                       |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `identity create`, `content create`, `credential grant`, `witness` | The local relay. Nothing leaves the machine.                                                        |
+| `content publish`, `identity publish`, `--peer`                    | The peer you named, and no other.                                                                   |
+| `login`                                                            | The authorize host that speaks for the identity, named by `--host` or resolved from the peer stack. |
+| `dfos sync`                                                        | Pulls from the peers the switches allow. It pushes nothing.                                         |
+| `dfos serve`                                                       | Participates in the mesh: each peer's own `gossip` switch decides.                                  |
 
 `serve` is the mesh participant, and relaying what it sequences is what makes it a node rather than a private store. Everything else writes locally and sends when told to.
 
@@ -1446,7 +1445,7 @@ dfos relay call GET /proof/v1/identities/did:dfos:xxx -i
 
 The `--auth` flag resolves the active identity, loads the auth key from the keychain, and signs an identity proof bound to this exact request — its method, the peer's host, the path as sent, and the body bytes. The proof always carries a `jti`, which the write-shaped routes require and the read-shaped ones ignore, so one flag is correct on every route.
 
-`call` is a subcommand of the peer group, so `dfos peer call` is the same command under the group's own name. `dfos api <METHOD> <path>` — an uppercase method and a path as the two bare arguments — is a deprecated alias of `dfos relay call <METHOD> <path>`: it takes the same arguments and flags and prints the same output, plus one deprecation line on stderr. It sits beside the [API client](#calling-an-api) subcommands, which cobra dispatches first, so the two spellings never collide.
+`call` is a subcommand of the peer group, so `dfos peer call` is the same command under the group's own name. Raw HTTP is these two spellings and no other: `dfos api` names a registered operation, never a route, and refuses a bare method and path.
 
 ### Signing a proof by hand
 
@@ -1466,15 +1465,13 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 ## Environment Variables
 
-| Variable               | Purpose                                               |
-| ---------------------- | ----------------------------------------------------- |
-| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)             |
-| `DFOS_RELAY`           | Peer to talk to (name)                                |
-| `DFOS_IDENTITY`        | Deprecated alias of `DFOS_AS`                         |
-| `DFOS_CONTEXT`         | Deprecated alias naming both halves (`identity@peer`) |
-| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`)     |
-| `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`      |
-| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks               |
+| Variable               | Purpose                                           |
+| ---------------------- | ------------------------------------------------- |
+| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)         |
+| `DFOS_RELAY`           | Peer to talk to (name)                            |
+| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
+| `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`  |
+| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
 
 ---
 
@@ -1529,7 +1526,6 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document                            |
 | `*`    | `api call <name> <op>`          | Call one operation, signing what the document names                       |
 | `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                                  |
-| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                                          |
 | `GET`  | `peer list`                     | List configured relays (alias: `relay`)                                   |
 | `GET`  | `peer info [name]`              | Show relay metadata                                                       |
 | `POST` | `peer add <name> <url>`         | Register a named relay (`--no-sync`: no bulk log sync)                    |

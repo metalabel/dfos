@@ -126,7 +126,7 @@ dfos relay add local http://localhost:8080
 dfos identity create --name my-id --peer local
 
 # create and publish content
-echo '{"type":"post","title":"hello"}' | dfos content create - --ctx my-id@local
+echo '{"type":"post","title":"hello"}' | dfos content create - --as my-id --peer local
 ```
 
 ## Library Usage

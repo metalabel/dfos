@@ -15,31 +15,15 @@ import (
 
 // --- `dfos use` is gone ------------------------------------------------------
 
-func TestUseIsRemovedAndSaysSo(t *testing.T) {
+// There is no mutable active context to set, because a pointer two processes
+// both read and one of them writes is a race, and running parallel agents under
+// different identities is the normal case. `use` is not a hidden command, not a
+// tombstone, and not a name this binary answers to at all.
+func TestUseIsNotACommand(t *testing.T) {
 	root := NewRootCmd()
-	found, _, err := root.Find([]string{"use"})
-	if err != nil {
-		t.Fatalf("find use: %v", err)
-	}
-	if found.Name() != "use" {
-		t.Fatalf("use resolved to %q", found.CommandPath())
-	}
-	if !found.Hidden {
-		t.Fatal("the use tombstone must stay hidden — nothing should teach the removed command")
-	}
-
-	runErr := found.RunE(found, []string{"alice@prod"})
-	if runErr == nil {
-		t.Fatal("dfos use must fail")
-	}
-	msg := runErr.Error()
-	for _, want := range []string{"removed", "--as", "DFOS_AS", "dfos config set default-identity"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("use error %q does not mention %q", msg, want)
-		}
-	}
-	if lines := strings.Split(msg, "\n"); len(lines) != 2 {
-		t.Fatalf("use error should be two lines, got %d: %q", len(lines), msg)
+	found, _, _ := root.Find([]string{"use"})
+	if found != nil && found.Name() == "use" {
+		t.Fatalf("use still resolves to a command: %q", found.CommandPath())
 	}
 }
 
@@ -52,14 +36,11 @@ func TestNothingAutoUpdatesTheConfigDefault(t *testing.T) {
 	if cfg.DefaultIdentity != "" {
 		t.Fatalf("identity create set default-identity to %q", cfg.DefaultIdentity)
 	}
-	if cfg.ActiveContext != "" {
-		t.Fatalf("identity create set active_context to %q", cfg.ActiveContext)
-	}
 
 	// And a second one does not either.
 	createIdentity(t, "bob", storeA)
-	if cfg.DefaultIdentity != "" || cfg.ActiveContext != "" {
-		t.Fatalf("config default moved on its own: default=%q active=%q", cfg.DefaultIdentity, cfg.ActiveContext)
+	if cfg.DefaultIdentity != "" {
+		t.Fatalf("config default moved on its own: default=%q", cfg.DefaultIdentity)
 	}
 }
 
@@ -69,7 +50,6 @@ func TestSigningAnnouncesTheResolvedPrincipal(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	did := createIdentity(t, "alice", storeA)
 
-	identityFlag = ""
 	asFlag = "alice"
 
 	signerAnnounced = false
@@ -113,19 +93,18 @@ func TestSigningAnnouncesTheResolvedPrincipal(t *testing.T) {
 func TestAnnouncementNamesTheMechanismThatResolved(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	createIdentity(t, "alice", storeA)
-	identityFlag = ""
 
 	for _, tc := range []struct {
 		name  string
 		setup func()
 		want  string
 	}{
+		{"flag", func() { asFlag = "alice" }, config.SourceFlagAs},
 		{"env", func() { t.Setenv(config.SourceEnvAs, "alice") }, config.SourceEnvAs},
 		{"config default", func() { cfg.DefaultIdentity = "alice" }, config.SourceDefaultIdentity},
-		{"alias flag", func() { identityFlag = "alice" }, config.SourceFlagIdentity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			asFlag, identityFlag, cfg.DefaultIdentity = "", "", ""
+			asFlag, cfg.DefaultIdentity = "", ""
 			t.Setenv(config.SourceEnvAs, "")
 			tc.setup()
 			signerAnnounced = false
@@ -219,7 +198,7 @@ func TestConfigSetIsTheOnlyWriterOfTheDefaults(t *testing.T) {
 		t.Fatalf("unknown default-peer error = %v", err)
 	}
 
-	// active_context is no longer writable — it is not part of the stack.
+	// active_context is not a config key: it is not part of the stack.
 	err := set.RunE(set, []string{"active_context", "alice@prod"})
 	if err == nil || !strings.Contains(err.Error(), "unknown config key") {
 		t.Fatalf("config set active_context = %v, want an unknown-key error", err)
@@ -233,7 +212,6 @@ func TestForgetClearsADanglingDefaultIdentity(t *testing.T) {
 	cfg := &config.Config{
 		DefaultIdentity: "alice",
 		Identities:      map[string]config.IdentityConfig{"alice": {DID: testLoginSubject}},
-		Contexts:        map[string]config.ContextConfig{},
 	}
 	result, err := forgetIdentityConfig(cfg, "alice")
 	if err != nil {
@@ -265,7 +243,7 @@ func TestWhoamiReportsEveryStateHonestly(t *testing.T) {
 	})
 
 	did := createIdentity(t, "alice", storeA)
-	identityFlag = ""
+	asFlag = ""
 
 	t.Run("key held", func(t *testing.T) {
 		asFlag = "alice"
@@ -313,23 +291,19 @@ func TestWhoamiReportsEveryStateHonestly(t *testing.T) {
 		}
 	})
 
-	t.Run("peer and legacy pointer", func(t *testing.T) {
+	t.Run("peer from the config tier", func(t *testing.T) {
 		cfg.Relays["prod"] = config.RelayConfig{URL: "https://prod.example.com"}
 		cfg.DefaultPeer = "prod"
-		cfg.ActiveContext = "alice@prod"
-		defer func() { cfg.DefaultPeer, cfg.ActiveContext = "", "" }()
+		defer func() { cfg.DefaultPeer = "" }()
 
 		var got whoamiResult
 		runJSON(t, newWhoamiCmd(), nil, &got)
 		if got.Peer == nil || got.Peer.Name != "prod" || got.Peer.Source != config.SourceDefaultPeer {
 			t.Fatalf("peer = %+v", got.Peer)
 		}
-		if got.LegacyActiveCtx != "alice@prod" {
-			t.Fatalf("legacy active context = %q — whoami must report it as inert, not hide it", got.LegacyActiveCtx)
-		}
-		// Reported, but never acted on: nothing resolved from it.
+		// The peer half resolved; the identity half has nothing to resolve from.
 		if got.Identity != nil {
-			t.Fatalf("the inert active_context resolved an identity: %+v", got.Identity)
+			t.Fatalf("an empty identity stack resolved an identity: %+v", got.Identity)
 		}
 	})
 }
@@ -347,25 +321,64 @@ func TestGlobalFlagSurface(t *testing.T) {
 			t.Fatalf("--%s must be visible in help", name)
 		}
 	}
+	// One spelling each. A hidden alias is still a second way to say the same
+	// thing, and two spellings of a selector is two things to reason about at
+	// every signing site — so the parser knows none of them.
 	for _, name := range []string{"ctx", "identity", "peer"} {
-		f := root.PersistentFlags().Lookup(name)
-		if f == nil {
-			t.Fatalf("compat alias --%s stopped working", name)
+		if f := root.PersistentFlags().Lookup(name); f != nil {
+			t.Fatalf("--%s is registered as a global flag", name)
 		}
-		if !f.Hidden {
-			t.Fatalf("compat alias --%s must be hidden — help teaches one spelling", name)
+	}
+}
+
+// Every command that documents a `--peer` of its own must actually BIND one.
+// `content publish` and `identity publish` read a peerName they never bound to a
+// flag: the value arrived through the global --peer alias, so the declaration
+// looked right and `--peer` on the verb only ever worked by accident. Removing
+// the alias turned both into "unknown flag". A parser-level roster is what
+// catches that class — a flag nothing binds is invisible to every other test.
+func TestEveryDocumentedCommandLocalPeerIsBound(t *testing.T) {
+	root := NewRootCmd()
+	for _, path := range [][]string{
+		{"auth", "proof"},
+		{"content", "create"}, {"content", "delete"}, {"content", "download"},
+		{"content", "fetch"}, {"content", "publish"}, {"content", "update"},
+		{"countersigs"},
+		{"credential", "grant"}, {"credential", "revoke"},
+		{"identity", "add-key"}, {"identity", "bind-domain"}, {"identity", "create"},
+		{"identity", "delete"}, {"identity", "fetch"}, {"identity", "publish"},
+		{"identity", "restore"}, {"identity", "status"}, {"identity", "update"},
+		{"operation", "show"},
+		{"recover"},
+		{"sync"},
+		{"witness"},
+	} {
+		found, _, err := root.Find(path)
+		if err != nil {
+			t.Errorf("find %v: %v", path, err)
+			continue
+		}
+		if found.Name() != path[len(path)-1] {
+			t.Errorf("%v resolved to %q", path, found.CommandPath())
+			continue
+		}
+		// LocalFlags, not Flags: the assertion is that THIS command declares the
+		// flag, and a merged persistent one from an ancestor would satisfy Flags
+		// without the verb owning anything.
+		if found.LocalFlags().Lookup("peer") == nil {
+			t.Errorf("%s binds no --peer", found.CommandPath())
 		}
 	}
 }
 
 func TestOverridesCarriesEverySelector(t *testing.T) {
-	prev := [5]string{asFlag, identityFlag, ctxFlag, relayFlag, peerFlag}
-	defer func() {
-		asFlag, identityFlag, ctxFlag, relayFlag, peerFlag = prev[0], prev[1], prev[2], prev[3], prev[4]
-	}()
+	prev := [2]string{asFlag, relayFlag}
+	defer func() { asFlag, relayFlag = prev[0], prev[1] }()
 
-	asFlag, identityFlag, ctxFlag, relayFlag, peerFlag = "a", "b", "c", "d", "e"
-	want := config.Overrides{As: "a", Identity: "b", Ctx: "c", Relay: "d", Peer: "e"}
+	// Peer stays empty: it is a command's own flag, written by requirePeer and
+	// never by the global surface.
+	asFlag, relayFlag = "a", "b"
+	want := config.Overrides{As: "a", Relay: "b"}
 	if got := overrides(); got != want {
 		t.Fatalf("overrides() = %+v, want %+v", got, want)
 	}

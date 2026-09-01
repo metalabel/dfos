@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -15,9 +16,6 @@ func testConfig() *Config {
 			"alice": {DID: "did:dfos:alice123"},
 			"bob":   {DID: "did:dfos:bob456"},
 		},
-		Contexts: map[string]ContextConfig{
-			"work": {Identity: "alice", Relay: "prod"},
-		},
 	}
 }
 
@@ -25,7 +23,7 @@ func testConfig() *Config {
 // shell (or a previous test) cannot leak into the case under test.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{SourceEnvAs, SourceEnvIdentity, SourceEnvRelay, SourceEnvContext} {
+	for _, k := range []string{SourceEnvAs, SourceEnvRelay} {
 		t.Setenv(k, "")
 	}
 }
@@ -122,121 +120,32 @@ func TestResolve_NothingSelectedIsAnonymousNotAnError(t *testing.T) {
 	}
 }
 
-// --- compat aliases ----------------------------------------------------------
+// --- the command-local peer -------------------------------------------------
 
-func TestResolve_AliasesSitAtTheirOwnTier(t *testing.T) {
+// A command's own --peer is not a tier OF the peer stack: it sits in front of
+// the whole of it, so `dfos --relay stale recover --peer authoritative` asks
+// authoritative. requirePeer is the only thing that writes it.
+func TestResolve_CommandLocalPeerOutranksEveryGlobalTier(t *testing.T) {
 	clearEnv(t)
 	cfg := testConfig()
-	cfg.DefaultIdentity = "alice"
+	cfg.DefaultPeer = "prod"
+	t.Setenv(SourceEnvRelay, "prod")
 
-	// --identity is a flag alias: it beats the env canonical.
-	t.Setenv(SourceEnvAs, "alice")
-	ctx := resolve(t, cfg, Overrides{Identity: "bob"})
-	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceFlagIdentity {
-		t.Fatalf("--identity = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
-	}
-
-	// DFOS_IDENTITY is an env alias: it beats the config default, and loses to
-	// the canonical env var that sits above it in the same tier.
-	t.Setenv(SourceEnvAs, "")
-	t.Setenv(SourceEnvIdentity, "bob")
-	ctx = resolve(t, cfg, Overrides{})
-	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceEnvIdentity {
-		t.Fatalf("DFOS_IDENTITY = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
-	}
-	t.Setenv(SourceEnvAs, "alice")
-	ctx = resolve(t, cfg, Overrides{})
-	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceEnvAs {
-		t.Fatalf("DFOS_AS over DFOS_IDENTITY = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
-	}
-
-	// --peer is the peer-side flag alias.
-	clearEnv(t)
-	ctx = resolve(t, cfg, Overrides{Peer: "staging"})
+	ctx := resolve(t, cfg, Overrides{Peer: "staging", Relay: "prod"})
 	if ctx.RelayName != "staging" || ctx.RelaySource != SourceFlagPeer {
-		t.Fatalf("--peer = (%q, %q)", ctx.RelayName, ctx.RelaySource)
-	}
-}
-
-func TestResolve_CtxAliasFillsBothHalves(t *testing.T) {
-	clearEnv(t)
-	cfg := testConfig()
-
-	for _, spec := range []string{"alice@prod", "work"} {
-		ctx := resolve(t, cfg, Overrides{Ctx: spec})
-		if ctx.IdentityName != "alice" || ctx.RelayName != "prod" {
-			t.Fatalf("--ctx %q = (%q, %q)", spec, ctx.IdentityName, ctx.RelayName)
-		}
-		if ctx.IdentitySource != SourceFlagCtx || ctx.RelaySource != SourceFlagCtx {
-			t.Fatalf("--ctx %q sources = (%q, %q)", spec, ctx.IdentitySource, ctx.RelaySource)
-		}
+		t.Fatalf("--peer = (%q, %q), want (staging, %q)", ctx.RelayName, ctx.RelaySource, SourceFlagPeer)
 	}
 
-	// Identity-only spec leaves the peer half open for another mechanism.
-	ctx := resolve(t, cfg, Overrides{Ctx: "bob", Relay: "prod"})
-	if ctx.IdentityName != "bob" || ctx.RelayName != "prod" || ctx.RelaySource != SourceFlagRelay {
-		t.Fatalf("identity-only ctx = %+v", ctx)
-	}
-
-	// --as wins the identity half of a --ctx pair; the peer half survives.
-	ctx = resolve(t, cfg, Overrides{Ctx: "alice@prod", As: "bob"})
-	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceFlagAs || ctx.RelayName != "prod" {
-		t.Fatalf("--as over --ctx = %+v", ctx)
-	}
-}
-
-func TestResolve_CtxEnvAliasIsEnvTier(t *testing.T) {
-	clearEnv(t)
-	cfg := testConfig()
-	cfg.DefaultIdentity = "bob"
-	t.Setenv(SourceEnvContext, "alice@prod")
-
-	ctx := resolve(t, cfg, Overrides{})
-	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceEnvContext {
-		t.Fatalf("DFOS_CONTEXT = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
-	}
-	if ctx.RelayName != "prod" || ctx.RelaySource != SourceEnvContext {
-		t.Fatalf("DFOS_CONTEXT peer = (%q, %q)", ctx.RelayName, ctx.RelaySource)
-	}
-
-	// The flag spelling wins outright: a stale DFOS_CONTEXT never contributes a
-	// half to an invocation that named its own context.
-	ctx = resolve(t, cfg, Overrides{Ctx: "bob"})
-	if ctx.IdentityName != "bob" || ctx.RelayName != "" {
-		t.Fatalf("--ctx over DFOS_CONTEXT = %+v", ctx)
-	}
-}
-
-// --- the removed pointer -----------------------------------------------------
-
-func TestResolve_ActiveContextIsInert(t *testing.T) {
-	clearEnv(t)
-	cfg := testConfig()
-	cfg.ActiveContext = "alice@prod"
-
-	ctx := resolve(t, cfg, Overrides{})
-	if ctx.HasIdentity() || ctx.RelayName != "" {
-		t.Fatalf("the removed active_context still resolves: %+v", ctx)
-	}
-
-	// It also loses to nothing, because it is not in the stack at all: a config
-	// default set explicitly is what answers.
-	cfg.DefaultIdentity = "bob"
-	ctx = resolve(t, cfg, Overrides{})
-	if ctx.IdentityName != "bob" {
-		t.Fatalf("default-identity = %q, want bob", ctx.IdentityName)
+	// It selects the peer half and nothing else — the identity half resolves
+	// through its own stack, untouched.
+	cfg.DefaultIdentity = "alice"
+	ctx = resolve(t, cfg, Overrides{Peer: "staging"})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceDefaultIdentity {
+		t.Fatalf("identity half = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
 	}
 }
 
 // --- error surfaces ----------------------------------------------------------
-
-func TestResolve_UnknownContextSpecErrors(t *testing.T) {
-	clearEnv(t)
-	_, err := ResolveContext(testConfig(), Overrides{Ctx: "nonexistent"})
-	if err == nil || !strings.Contains(err.Error(), "unknown context") {
-		t.Fatalf("error = %v", err)
-	}
-}
 
 func TestResolve_UnknownPeerNamesTheMechanism(t *testing.T) {
 	clearEnv(t)
@@ -291,5 +200,49 @@ func TestResolve_UnknownIdentityNameIsNotAResolutionError(t *testing.T) {
 	}
 	if !ctx.HasIdentity() {
 		t.Fatal("a named-but-unregistered identity must still count as selected")
+	}
+}
+
+// --- what a config.toml from an earlier layout does --------------------------
+
+// A file carrying keys this package no longer declares must still load. Nothing
+// resolves through them, and the keys leave the file the next time Save writes
+// it — but a parse error here would lock an operator out of every command at
+// once, which is a far worse outcome than an ignored line.
+func TestLoad_KeysThisPackageDoesNotDeclareAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DFOS_CONFIG", dir+"/config.toml")
+	body := "active_context = \"alice@prod\"\ndefault_identity = \"alice\"\n\n" +
+		"[contexts.work]\nidentity = \"alice\"\nrelay = \"prod\"\n"
+	if err := os.WriteFile(dir+"/config.toml", []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("a config.toml carrying undeclared keys failed to load: %v", err)
+	}
+	if cfg.DefaultIdentity != "alice" {
+		t.Fatalf("default_identity = %q, want alice — the keys around it must not cost the ones that count", cfg.DefaultIdentity)
+	}
+}
+
+// The environment names two mechanisms and no more. A DFOS_IDENTITY or
+// DFOS_CONTEXT still exported by a developer's shell or a CI job selects
+// nothing: it is an unset variable as far as this resolver is concerned.
+func TestResolve_TheEnvironmentNamesTwoMechanisms(t *testing.T) {
+	clearEnv(t)
+	cfg := testConfig()
+	cfg.DefaultIdentity = "alice"
+	cfg.DefaultPeer = "prod"
+	t.Setenv("DFOS_IDENTITY", "bob")
+	t.Setenv("DFOS_CONTEXT", "bob@staging")
+
+	ctx := resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceDefaultIdentity {
+		t.Fatalf("identity = (%q, %q), want alice via the config tier", ctx.IdentityName, ctx.IdentitySource)
+	}
+	if ctx.RelayName != "prod" || ctx.RelaySource != SourceDefaultPeer {
+		t.Fatalf("peer = (%q, %q), want prod via the config tier", ctx.RelayName, ctx.RelaySource)
 	}
 }

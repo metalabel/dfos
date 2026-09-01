@@ -39,9 +39,6 @@ func newOperationShowCmd() *cobra.Command {
 			// peer fallback
 			ctx, _ := resolveCtx()
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn == "" && ctx != nil {
 				rn = ctx.RelayName
 			}

@@ -101,9 +101,6 @@ func newCredentialGrantCmd() *cobra.Command {
 
 			var publishedTo []string
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -197,9 +194,6 @@ func newCredentialRevokeCmd() *cobra.Command {
 
 			// push to peer if specified
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {

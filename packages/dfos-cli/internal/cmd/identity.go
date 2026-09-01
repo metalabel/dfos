@@ -175,9 +175,6 @@ func newIdentityCreateCmd() *cobra.Command {
 			// peer rejection doesn't leave an orphaned name mapping
 			var publishedTo []string
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -808,9 +805,6 @@ func newIdentityUpdateCmd() *cobra.Command {
 
 			// push to peer if specified
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -1215,9 +1209,6 @@ func newIdentityBindDomainCmd() *cobra.Command {
 			}
 
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -1321,10 +1312,9 @@ func newIdentityVerifyBindingCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fetchIdentityFromPeerIfRequested(did)
 				chain, _ := lr.Relay.GetIdentity(did)
 				if chain == nil {
-					return fmt.Errorf("identity '%s' not found in local relay (fetch it with 'dfos identity fetch %s --peer <peer>')", arg, did)
+					return identityNotFound(arg)
 				}
 				return verifyBindingFromChain(chain)
 			}
@@ -1382,7 +1372,6 @@ func verifyBindingFromDomain(lr *localrelay.LocalRelay, domain string) error {
 		}.emit()
 	}
 
-	fetchIdentityFromPeerIfRequested(candidate)
 	chain, _ := lr.Relay.GetIdentity(candidate)
 	if chain == nil {
 		return fmt.Errorf(
@@ -1563,9 +1552,6 @@ func newIdentityAddKeyCmd() *cobra.Command {
 
 			// push to peer if specified
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -1665,9 +1651,6 @@ func newIdentityDeleteCmd() *cobra.Command {
 
 			// push to peer
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -1778,9 +1761,6 @@ func newIdentityRestoreCmd() *cobra.Command {
 
 			// push to peer
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn != "" {
 				c, _, err := getPeerClient(rn)
 				if err != nil {
@@ -1933,24 +1913,25 @@ func newIdentityShowCmd() *cobra.Command {
 			}
 
 			var chain *relay.StoredIdentityChain
+			subject := ""
 
 			if len(args) > 0 {
-				did, err := resolveIdentityDID(args[0])
+				subject = args[0]
+				did, err := resolveIdentityDID(subject)
 				if err != nil {
 					return err
 				}
-				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, err := requireIdentity()
+				ctx, chain2, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				chain = chain2
+				subject, chain = ctx.Principal(), chain2
 			}
 
 			if chain == nil {
-				return fmt.Errorf("identity not found")
+				return identityNotFound(subject)
 			}
 
 			if jsonFlag {
@@ -1993,7 +1974,7 @@ func newIdentityLogCmd() *cobra.Command {
 			}
 			chain, err := lr.Relay.GetIdentity(did)
 			if err != nil || chain == nil {
-				return fmt.Errorf("identity '%s' not found", args[0])
+				return identityNotFound(args[0])
 			}
 
 			if jsonFlag {
@@ -2060,22 +2041,23 @@ func newIdentityKeysCmd() *cobra.Command {
 			}
 
 			var chain *relay.StoredIdentityChain
+			subject := ""
 			if len(args) > 0 {
-				did, err := resolveIdentityDID(args[0])
+				subject = args[0]
+				did, err := resolveIdentityDID(subject)
 				if err != nil {
 					return err
 				}
-				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, err := requireIdentity()
+				ctx, chain2, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				chain = chain2
+				subject, chain = ctx.Principal(), chain2
 			}
 			if chain == nil {
-				return fmt.Errorf("identity not found")
+				return identityNotFound(subject)
 			}
 
 			// One row per KEY, not per role membership. A key declared in three
@@ -2155,22 +2137,23 @@ func newIdentityServicesCmd() *cobra.Command {
 			}
 
 			var chain *relay.StoredIdentityChain
+			subject := ""
 			if len(args) > 0 {
-				did, err := resolveIdentityDID(args[0])
+				subject = args[0]
+				did, err := resolveIdentityDID(subject)
 				if err != nil {
 					return err
 				}
-				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, err := requireIdentity()
+				ctx, chain2, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				chain = chain2
+				subject, chain = ctx.Principal(), chain2
 			}
 			if chain == nil {
-				return fmt.Errorf("identity not found")
+				return identityNotFound(subject)
 			}
 
 			services := chain.State.Services
@@ -2775,6 +2758,20 @@ func identityStatusPublishHint(r *identityStatusResult) string {
 	return fmt.Sprintf("'dfos peer add <name> %s' registers it, then 'dfos identity publish %s --peer <name>'.", url, subject)
 }
 
+// identityNotFound is the shape for "this machine does not hold that chain, and
+// pulling it is what to do next" — reads, and the publish whose whole job is to
+// push a chain that must exist first. The subject is echoed as the operator
+// named it and again in the fetch command, because `identity fetch` takes a name
+// or a DID either way and the useful next step is the one they can paste.
+//
+// `identity delete` and `identity restore` keep the bare form deliberately.
+// Fetching someone else's chain is not the next step toward signing a delete or
+// a restore for it — those need a controller key this machine holds — so a fetch
+// hint there would point at work that does not lead anywhere.
+func identityNotFound(subject string) error {
+	return fmt.Errorf("identity '%s' not found in local relay (fetch it with 'dfos identity fetch %s --peer <peer>')", subject, subject)
+}
+
 func validateCarriage(chain *relay.StoredIdentityChain) error {
 	if chain == nil {
 		return fmt.Errorf("identity not found")
@@ -2844,8 +2841,10 @@ func newIdentityWellKnownCmd() *cobra.Command {
 			}
 
 			var chain *relay.StoredIdentityChain
+			subject := ""
 			if len(args) > 0 {
-				did, err := resolveIdentityDID(args[0])
+				subject = args[0]
+				did, err := resolveIdentityDID(subject)
 				if err != nil {
 					return err
 				}
@@ -2861,11 +2860,12 @@ func newIdentityWellKnownCmd() *cobra.Command {
 				if ctx.IdentityDID == "" {
 					return fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
 				}
+				subject = ctx.Principal()
 				chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
 			}
 
 			if chain == nil {
-				return fmt.Errorf("identity not found")
+				return identityNotFound(subject)
 			}
 			if err := validateCarriage(chain); err != nil {
 				return err
@@ -2937,7 +2937,7 @@ func newIdentityWellKnownCmd() *cobra.Command {
 
 func newIdentityPublishCmd() *cobra.Command {
 	var peerName string
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "publish [name|did]",
 		Short: "Push identity chain to a peer",
 		Long:  "Push an identity's full operation chain to a peer relay. The target peer is taken from --peer, else the resolved peer; one or the other is required.",
@@ -2949,27 +2949,26 @@ func newIdentityPublishCmd() *cobra.Command {
 			}
 
 			var chain *relay.StoredIdentityChain
+			subject := ""
 			if len(args) > 0 {
-				did, err := resolveIdentityDID(args[0])
+				subject = args[0]
+				did, err := resolveIdentityDID(subject)
 				if err != nil {
 					return err
 				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, err := requireIdentity()
+				ctx, chain2, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				chain = chain2
+				subject, chain = ctx.Principal(), chain2
 			}
 			if chain == nil {
-				return fmt.Errorf("identity not found")
+				return identityNotFound(subject)
 			}
 
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
 				if ctx != nil {
@@ -2977,7 +2976,7 @@ func newIdentityPublishCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return errNoPeer()
+				return errNoPeer(true)
 			}
 
 			c, _, err := getPeerClient(rn)
@@ -3009,6 +3008,8 @@ func newIdentityPublishCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to publish to")
+	return cmd
 }
 
 func newIdentityFetchCmd() *cobra.Command {
@@ -3019,9 +3020,8 @@ func newIdentityFetchCmd() *cobra.Command {
 		Use:   "fetch <did|name>",
 		Short: "Download identity chain from peer into local relay",
 		Long: "Pull an identity's operation chain from a peer and ingest it into the local relay. The peer is " +
-			"taken from this command's --peer, else the global --relay (whose hidden alias is also --peer), else " +
-			"config default-peer. The two flags name the same thing at the same tier; the command-local one wins " +
-			"when both are given.",
+			"taken from this command's --peer, else the global --relay, else config default-peer. The two flags " +
+			"name the same thing, and the command-local one wins when both are given.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
@@ -3031,9 +3031,6 @@ func newIdentityFetchCmd() *cobra.Command {
 			}
 
 			rn := peerName
-			if rn == "" {
-				rn = peerFlag
-			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
 				if ctx != nil {
@@ -3086,20 +3083,18 @@ func newIdentityFetchCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Local name for this identity")
-	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from — same tier as the global --relay, and wins when both are given")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from — outranks the global --relay when both are given")
 	return cmd
 }
 
 // identityRemoveResult is what `identity remove` reports. `remove` and `forget`
-// clear overlapping config state, so they report it in the same field names:
-// the caller of either learns whether a dangling default-identity or active
-// context was cleared, rather than having to re-read config.toml to find out.
-// `remove` drops a name and nothing else, so it carries no credential or
-// context-removal fields — forget's job, not this one's.
+// clear the same dangling default-identity, so they report it in the same field
+// name: the caller of either learns whether it was cleared, rather than having
+// to re-read config.toml to find out. `remove` drops a name and nothing else,
+// so it carries no credential field — forget's job, not this one's.
 type identityRemoveResult struct {
 	Removed                string `json:"removed"`
 	DID                    string `json:"did"`
-	ActiveContextCleared   bool   `json:"activeContextCleared"`
 	DefaultIdentityCleared bool   `json:"defaultIdentityCleared"`
 }
 
@@ -3125,13 +3120,6 @@ func newIdentityRemoveCmd() *cobra.Command {
 				cfg.DefaultIdentity = ""
 				result.DefaultIdentityCleared = true
 			}
-			if cfg.ActiveContext != "" {
-				parts := strings.SplitN(cfg.ActiveContext, "@", 2)
-				if len(parts) > 0 && parts[0] == name {
-					cfg.ActiveContext = ""
-					result.ActiveContextCleared = true
-				}
-			}
 			config.Save(cfg)
 
 			if jsonFlag {
@@ -3141,9 +3129,6 @@ func newIdentityRemoveCmd() *cobra.Command {
 				if result.DefaultIdentityCleared {
 					fmt.Println("  default-identity cleared because it pointed at the removed name.")
 				}
-				if result.ActiveContextCleared {
-					fmt.Println("  Active context cleared because it referenced the removed name.")
-				}
 				fmt.Printf("  Data remains in local relay. Keys remain in keychain.\n")
 			}
 			return nil
@@ -3152,12 +3137,10 @@ func newIdentityRemoveCmd() *cobra.Command {
 }
 
 type identityForgetResult struct {
-	DID                    string   `json:"did"`
-	Name                   string   `json:"name,omitempty"`
-	RemovedContexts        []string `json:"removedContexts"`
-	ActiveContextCleared   bool     `json:"activeContextCleared"`
-	DefaultIdentityCleared bool     `json:"defaultIdentityCleared"`
-	CredentialRemoved      bool     `json:"credentialRemoved"`
+	DID                    string `json:"did"`
+	Name                   string `json:"name,omitempty"`
+	DefaultIdentityCleared bool   `json:"defaultIdentityCleared"`
+	CredentialRemoved      bool   `json:"credentialRemoved"`
 	// UnreadableCredentialFiles names the files in the credential store this
 	// forget could not open or parse. A file that will not parse may be a grant
 	// for this identity, so a forget that stepped over one removed what it could
@@ -3209,12 +3192,6 @@ func newIdentityForgetCmd() *cobra.Command {
 			} else {
 				fmt.Printf("Forgot local references for %s.\n", result.DID)
 			}
-			if len(result.RemovedContexts) > 0 {
-				fmt.Printf("  Removed context(s): %s\n", strings.Join(result.RemovedContexts, ", "))
-			}
-			if result.ActiveContextCleared {
-				fmt.Println("  Active context cleared because it referenced the forgotten identity.")
-			}
 			if result.CredentialRemoved {
 				fmt.Println("  Stored login credential removed.")
 			}
@@ -3243,7 +3220,7 @@ func newIdentityForgetCmd() *cobra.Command {
 }
 
 func forgetIdentityConfig(target *config.Config, nameOrDID string) (identityForgetResult, error) {
-	result := identityForgetResult{RemovedContexts: []string{}}
+	result := identityForgetResult{}
 	if identity, ok := target.Identities[nameOrDID]; ok {
 		result.Name = nameOrDID
 		result.DID = identity.DID
@@ -3258,32 +3235,6 @@ func forgetIdentityConfig(target *config.Config, nameOrDID string) (identityForg
 		result.DID = nameOrDID
 	}
 
-	for name, context := range target.Contexts {
-		if context.Identity == result.DID || (result.Name != "" && context.Identity == result.Name) {
-			delete(target.Contexts, name)
-			result.RemovedContexts = append(result.RemovedContexts, name)
-		}
-	}
-	sort.Strings(result.RemovedContexts)
-
-	active := target.ActiveContext
-	clearActive := false
-	for _, removed := range result.RemovedContexts {
-		if active == removed {
-			clearActive = true
-			break
-		}
-	}
-	if result.Name != "" && (active == result.Name || strings.HasPrefix(active, result.Name+"@")) {
-		clearActive = true
-	}
-	if active == result.DID || strings.HasPrefix(active, result.DID+"@") {
-		clearActive = true
-	}
-	if clearActive {
-		target.ActiveContext = ""
-		result.ActiveContextCleared = true
-	}
 	// Same reason as `identity remove`: a default-identity naming a forgotten
 	// identity is a dangling pointer, not a preference worth keeping.
 	if target.DefaultIdentity != "" &&
@@ -3295,45 +3246,6 @@ func forgetIdentityConfig(target *config.Config, nameOrDID string) (identityForg
 }
 
 // helpers
-
-// fetchIdentityFromPeerIfRequested best-effort pulls a DID's chain from an
-// explicitly requested --peer into the local store before a read command
-// (show/keys/services) resolves it, so `--peer X` reflects X's state rather
-// than only what is already local. No-op when no --peer is set. Ingest is
-// idempotent, so re-fetching an already-local chain is harmless.
-//
-// Best-effort by design: a peer that is down or doesn't carry the DID must NOT
-// mask a locally-available chain, so failures warn to stderr and fall through
-// to local resolution. This keeps the CLI's local-first contract (content
-// fetch / operation show / countersigs all read local first and only error
-// when local is missing) rather than turning a working local read into a hard
-// error just because --peer was passed.
-func fetchIdentityFromPeerIfRequested(did string) {
-	if peerFlag == "" {
-		return
-	}
-	c, _, err := getPeerClient(peerFlag)
-	if err != nil {
-		// Not "unavailable": this also catches a peer that no longer serves the
-		// DID config pins it to, and calling that a reachability problem would
-		// bury the one thing the operator needs to see.
-		fmt.Fprintf(os.Stderr, "Warning: not reading from peer %q; using local state\n%v\n", peerFlag, err)
-		return
-	}
-	log, err := c.GetIdentityLog(did)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: fetch from peer %q failed: %v; using local state\n", peerFlag, err)
-		return
-	}
-	if len(log) == 0 {
-		return
-	}
-	lr, err := getRelay()
-	if err != nil {
-		return
-	}
-	lr.Relay.Ingest(log)
-}
 
 func resolveIdentityDID(nameOrDID string) (string, error) {
 	did := nameOrDID

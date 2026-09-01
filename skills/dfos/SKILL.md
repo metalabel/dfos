@@ -184,19 +184,17 @@ agents each carrying their own `--as`/`DFOS_AS` never disturb one another.
 Commands that sign echo the resolved principal and the mechanism it came from to
 stderr (`Signing as alice (did:dfos:…) — via --as`) unless `--quiet`; a signing
 command with nothing resolvable fails and names all three mechanisms. Public
-reads are anonymous and silent. `--ctx`, `--identity`, `--peer`,
-`DFOS_CONTEXT`, and `DFOS_IDENTITY` are deprecated aliases at the same tier as
-the mechanism they alias.
+reads are anonymous and silent. There is one spelling per mechanism: `--as` and
+`--relay` are the only global selectors, and a `--peer` is always a command's
+own.
 
-| Variable               | Purpose                                               |
-| ---------------------- | ----------------------------------------------------- |
-| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)             |
-| `DFOS_RELAY`           | Peer to talk to (name)                                |
-| `DFOS_IDENTITY`        | Deprecated alias of `DFOS_AS`                         |
-| `DFOS_CONTEXT`         | Deprecated alias naming both halves (`identity@peer`) |
-| `DFOS_CONFIG`          | Config file path (default `~/.dfos/config.toml`)      |
-| `DFOS_NO_KEYCHAIN`     | Force file-based key and mnemonic storage (CI)        |
-| `DFOS_NO_UPDATE_CHECK` | Disable the background version check                  |
+| Variable               | Purpose                                          |
+| ---------------------- | ------------------------------------------------ |
+| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)        |
+| `DFOS_RELAY`           | Peer to talk to (name)                           |
+| `DFOS_CONFIG`          | Config file path (default `~/.dfos/config.toml`) |
+| `DFOS_NO_KEYCHAIN`     | Force file-based key and mnemonic storage (CI)   |
+| `DFOS_NO_UPDATE_CHECK` | Disable the background version check             |
 
 In headless/CI environments set `DFOS_NO_KEYCHAIN=1` to avoid interactive
 keychain prompts. `DFOS_CONFIG` moves the whole of a machine's dfos state
@@ -380,7 +378,7 @@ tag (1–64 chars: `endorses`, `coauthors`, `witnessed`, …).
 
 ```bash
 dfos identity create --name alice              # local only
-dfos --identity alice content create post.json # local only
+dfos --as alice content create post.json       # local only
 # …later…
 dfos peer add prod https://relay.dfos.com
 dfos identity publish alice --peer prod
@@ -515,8 +513,9 @@ Common failures and the fix (relay-origin messages reach you wrapped as
 
 - **`no identity to sign with…`** → pass `--as <name|did>`, set `DFOS_AS`, or run
   `dfos config set default-identity <name|did>`.
-- **`no peer to talk to…`** → `dfos peer add <name> <url>`, then pass `--relay <name>`
-  or run `dfos config set default-peer <name>`.
+- **`no peer to talk to…`** → pass `--peer <name>` if the command takes one, or
+  `--relay <name>` for the invocation, or `dfos config set default-peer <name>`;
+  register the peer first with `dfos peer add <name> <url>`.
 - **`identity '<n>' … not found in local relay`** → create it, or
   `dfos identity fetch <did> --peer <p>`.
 - **`no held <role> key … on this device`** → run on the device that holds the

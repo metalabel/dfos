@@ -273,7 +273,7 @@ func TestPruneKeepsADeletedIdentitysKeys(t *testing.T) {
 	keys = storeA
 
 	del := newIdentityDeleteCmd()
-	identityFlag = "alice"
+	asFlag = "alice"
 	if err := del.RunE(del, nil); err != nil {
 		t.Fatalf("identity delete: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestRotatedOutKeysAreSupersededNotOrphans(t *testing.T) {
 	// Every role, so the genesis key is left declared in none of them. Rotating
 	// one role would leave it current in the other two — see
 	// TestKeysListReportsWhatARotationRetired.
-	identityFlag = "alice"
+	asFlag = "alice"
 	update := newIdentityUpdateCmd()
 	mustSetFlag(t, update, "rotate-auth", "true")
 	mustSetFlag(t, update, "rotate-controller", "true")
@@ -670,7 +670,7 @@ func TestKeysListReportsWhatARotationRetired(t *testing.T) {
 		AuthKey       string `json:"authKey"`
 	}
 	runJSON(t, create, nil, &created)
-	identityFlag = "alice"
+	asFlag = "alice"
 
 	// A genesis key is one key in three roles, so rotating ONE role does not
 	// retire it: it is still the controller and the assert key, and the ledger
@@ -860,7 +860,7 @@ func TestKeysRemoveRefusesEveryStatusThatIsNotItsToJudge(t *testing.T) {
 
 	// Rotate every role, and the same key becomes superseded — still refused,
 	// for the reason prune retains it: this relay's view can trail the network.
-	identityFlag = "alice"
+	asFlag = "alice"
 	update := newIdentityUpdateCmd()
 	mustSetFlag(t, update, "rotate-auth", "true")
 	mustSetFlag(t, update, "rotate-controller", "true")
@@ -976,7 +976,7 @@ func TestSupersededVerdictNamesTheChainHeadItWasReadFrom(t *testing.T) {
 	before, _ := localRelayInstance.Relay.GetIdentity(did)
 	genesis := keyAccount(before.State.AuthKeys[0].PublicKeyMultibase)
 
-	identityFlag = "alice"
+	asFlag = "alice"
 	update := newIdentityUpdateCmd()
 	mustSetFlag(t, update, "rotate-controller", "true")
 	mustSetFlag(t, update, "rotate-auth", "true")

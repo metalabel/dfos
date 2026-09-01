@@ -158,7 +158,6 @@ func setupCredsTest(t *testing.T) {
 	cfg = &config.Config{
 		Relays:     map[string]config.RelayConfig{},
 		Identities: map[string]config.IdentityConfig{},
-		Contexts:   map[string]config.ContextConfig{},
 	}
 	t.Cleanup(func() { cfg = previousCfg })
 }
