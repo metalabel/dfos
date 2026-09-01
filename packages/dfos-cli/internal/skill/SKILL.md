@@ -256,9 +256,12 @@ with exit 1 when no relay could answer — silence is never agreement) · `keys`
   reserved key) and REFUSES the whole operation on a hit
   (`reason: mint-index-already-proved`). The reserved index stays burned, which
   is safe — the recovery scan's gap limit walks through burned indices by design.
-  The probe is best-effort and loud: no relay, a relay that cannot answer, and a
-  relay that stops answering each mint anyway behind a one-line note naming what
-  went unasked, while zero rows mints silently. `--no-mint-probe` skips it.
+  The probe is best-effort and loud: a relay that cannot answer and one that
+  stops answering each mint anyway behind a one-line note naming what went
+  unasked, while zero rows mints silently. With NO relay resolved, an imported
+  vault carries the same note and one created on this machine does not — an
+  imported phrase already exists elsewhere, a locally generated one does not.
+  `--no-mint-probe` skips the probe entirely.
   `recover` converges the counter over what a seed has already spent; the probe
   refuses the forward collision that converged counter cannot see.
 - **Services are full-state.** On `identity update`, `--service` (repeatable)

@@ -316,17 +316,19 @@ The reservation happened before the question was asked, so a refusal burns the i
 
 The probe is **best-effort, and loud about it.** It is a pre-check on top of minting, not a gate in front of it: a relay's silence never stops a local-first mint, and it is never read as permission either. What the mint could not establish is said out loud.
 
-| What happened                                                         | What the mint does                                      |
-| --------------------------------------------------------------------- | ------------------------------------------------------- |
-| No relay resolves — the local-first mint                              | Mints, noting that nothing was asked                    |
-| The relay serves no index (501), ignores `key=`, or cannot be reached | Mints, naming the relay and the cause                   |
-| The relay stops answering after the capability check                  | Mints, naming the relay                                 |
-| Zero rows for every reserved key                                      | Mints, silently — an unspent index is the ordinary case |
-| Rows for any reserved key                                             | Refuses, above                                          |
+| What happened                                                         | What the mint does                                                 |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| No relay resolves — the local-first mint                              | Mints; an imported vault carries a note, one created here does not |
+| The relay serves no index (501), ignores `key=`, or cannot be reached | Mints, naming the relay and the cause                              |
+| The relay stops answering after the capability check                  | Mints, naming the relay                                            |
+| Zero rows for every reserved key                                      | Mints, silently — an unspent index is the ordinary case            |
+| Rows for any reserved key                                             | Refuses, above                                                     |
 
 ```
 Note: the mint-collision probe did not run — no relay to ask. If this phrase is held on another machine, index 3 may already be spent there; 'dfos recover --vault restored' converges the counter.
 ```
+
+The no-relay note is scoped by where the seed came from, because that is what makes its sentence true: a vault created on this machine mints local-first without it, and an imported one carries it, since an imported phrase is by definition one that already exists somewhere else. Every other note fires for any vault-backed mint — those are cases where a relay was expected to answer and did not.
 
 The relay is the one the ordinary peer stack names: the command's own `--peer`, then `--relay`, `DFOS_RELAY`, then `default-peer`. `--no-mint-probe` mints without asking and prints nothing — an operator who opted out is not told what the opt-out cost. A mint from no vault asks nothing at all, because a key drawn from entropy has no index to collide on.
 

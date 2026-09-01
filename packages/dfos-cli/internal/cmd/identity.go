@@ -327,7 +327,7 @@ func newKeyMinter(vaultName string, count int, probe mintProbeOptions) (*keyMint
 	// After the reservation and before anything is handed out. The counter has
 	// already moved, so a refusal here BURNS the indices — which is the safe
 	// direction, and the refusal says so.
-	if err := probeReservedIndices(vaultName, derived, probe); err != nil {
+	if err := probeReservedIndices(meta, derived, probe); err != nil {
 		return nil, err
 	}
 	m.fingerprint = meta.Fingerprint

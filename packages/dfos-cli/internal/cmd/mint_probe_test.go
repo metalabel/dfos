@@ -199,10 +199,12 @@ func TestMintProbeMintsWithALoudNoticeWhenTheRelayCannotAnswer(t *testing.T) {
 	}
 }
 
-func TestMintProbeSaysSoWhenThereIsNoRelayToAsk(t *testing.T) {
+func TestMintProbeSaysSoWhenAnImportedVaultHasNoRelayToAsk(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
-	createVault(t, "personal")
+	// An IMPORTED phrase already exists somewhere else — that is what an import
+	// is — so the other holder the notice hypothesizes is not a hypothesis.
+	importVault(t, "restored", testMnemonic)
 
 	_, stderr, err := runCapturing(t, createNamed(t, "alice"), nil)
 	if err != nil {
@@ -211,11 +213,29 @@ func TestMintProbeSaysSoWhenThereIsNoRelayToAsk(t *testing.T) {
 	for _, want := range []string{
 		"the mint-collision probe did not run — no relay to ask",
 		"index 0 may already be spent there",
-		"'dfos recover --vault personal' converges the counter",
+		"'dfos recover --vault restored' converges the counter",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("the no-relay notice does not say %q:\n%s", want, stderr)
 		}
+	}
+}
+
+func TestALocalFirstMintFromAVaultCreatedHereSaysNothing(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+
+	_, stderr, err := runCapturing(t, createNamed(t, "alice"), nil)
+	if err != nil {
+		t.Fatalf("a local-first mint failed: %v", err)
+	}
+	// A phrase generated on this machine has no other holder at mint time, so
+	// there is no unasked question to report. Opening a first `identity create`
+	// with a warning about a machine that does not exist is what teaches an
+	// operator to read past the notice on the day it is true.
+	if strings.Contains(stderr, "mint-collision probe") {
+		t.Errorf("a vault created on this machine carried a no-relay notice:\n%s", stderr)
 	}
 }
 

@@ -72,7 +72,7 @@ type mintProbeHit struct {
 // other outcome — no relay, a relay that cannot answer, a relay that stops
 // answering halfway — leaves the mint to proceed behind a loud notice, because a
 // relay's silence is a fact about the relay and not about this vault.
-func probeReservedIndices(vaultName string, derived []vault.Derived, opts mintProbeOptions) error {
+func probeReservedIndices(meta *vault.Metadata, derived []vault.Derived, opts mintProbeOptions) error {
 	if opts.skip || len(derived) == 0 {
 		return nil
 	}
@@ -80,15 +80,33 @@ func probeReservedIndices(vaultName string, derived []vault.Derived, opts mintPr
 	ctx, c, err := requirePeer(opts.peer)
 	switch {
 	case errors.Is(err, errNoPeerConfigured):
-		// The local-first mint. Nothing is wrong here and nothing was asked.
-		mintProbeSkipped(vaultName, derived, "no relay to ask")
+		// The local-first mint: no relay was expected and none was asked.
+		//
+		// This is the ONE branch scoped by where the seed came from, and the
+		// scope is the truth of the sentence it would print. The notice
+		// hypothesizes another holder of this phrase; for an IMPORTED phrase
+		// that holder is not a hypothesis, because an import is by definition a
+		// phrase that already existed somewhere else. For a phrase generated
+		// here there is no other holder at mint time, and opening a first
+		// `identity create` with a warning about a machine that does not exist
+		// teaches an operator to read past the notice — which is what makes the
+		// same words worthless on the day they are true. If this phrase is
+		// carried elsewhere later, the import warning on THAT machine and its
+		// own probe cover the split, and any peer-connected mint here probes.
+		//
+		// No other branch is scoped this way. The rest fire when a relay was
+		// expected to answer and did not, and a silent skip there is exactly the
+		// silence-read-as-an-answer this whole path refuses.
+		if meta.Imported {
+			mintProbeSkipped(meta.Name, derived, "no relay to ask")
+		}
 		return nil
 	case err != nil:
 		// A relay WAS named and did not resolve: an unknown name, or a peer whose
 		// DID pin has moved. That is a different fact from having no relay at
 		// all, and it is not this command's to adjudicate — the mint is local and
 		// proceeds, saying which question went unasked.
-		mintProbeSkipped(vaultName, derived, "no relay could be resolved to ask — "+oneLineReason(err))
+		mintProbeSkipped(meta.Name, derived, "no relay could be resolved to ask — "+oneLineReason(err))
 		return nil
 	}
 
@@ -98,7 +116,7 @@ func probeReservedIndices(vaultName string, derived []vault.Derived, opts mintPr
 		if v.err != nil {
 			why = transportCause(v.err)
 		}
-		mintProbeSkipped(vaultName, derived, fmt.Sprintf("%s cannot answer: %s", label, why))
+		mintProbeSkipped(meta.Name, derived, fmt.Sprintf("%s cannot answer: %s", label, why))
 		return nil
 	}
 
@@ -110,7 +128,7 @@ func probeReservedIndices(vaultName string, derived []vault.Derived, opts mintPr
 			// The capability check passed and the relay stopped answering
 			// anyway. Best-effort means best-effort: an unanswered question is
 			// not a clean index, and it is not a hit either.
-			mintProbeSkipped(vaultName, derived, fmt.Sprintf("%s stopped answering: %s", label, transportCause(err)))
+			mintProbeSkipped(meta.Name, derived, fmt.Sprintf("%s stopped answering: %s", label, transportCause(err)))
 			return nil
 		}
 		if len(rows) == 0 {
@@ -128,7 +146,7 @@ func probeReservedIndices(vaultName string, derived []vault.Derived, opts mintPr
 	if len(hits) == 0 {
 		return nil
 	}
-	return errMintIndexAlreadyProved(vaultName, ctx.RelayName, ctx.RelayURL, hits)
+	return errMintIndexAlreadyProved(meta.Name, ctx.RelayName, ctx.RelayURL, hits)
 }
 
 // mintProbeSkipped is the loud half of best-effort. It names what was NOT
