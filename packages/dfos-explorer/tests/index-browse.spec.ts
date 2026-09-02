@@ -163,17 +163,26 @@ describe('gatedContentFromProbe — does this relay hold non-public content?', (
 });
 
 describe('decideGatedContentPresent — whether a public-only control is worth showing', () => {
-  const probe = (status: number, rows: number) => ({ relay: 'https://r.example', status, rows });
-
-  it('any relay definitively holding non-public rows shows the control', () => {
-    expect(decideGatedContentPresent([probe(200, 1)])).toBe(true);
-    expect(decideGatedContentPresent([probe(200, 0), probe(200, 3)])).toBe(true);
-    expect(decideGatedContentPresent([probe(0, 0), probe(200, 2)])).toBe(true);
+  const probe = (status: number, rows: number, relay = 'https://r.example') => ({
+    relay,
+    status,
+    rows,
   });
 
-  it('a definitive empty answer and nothing to the contrary hides it', () => {
+  it('the FIRST definitive relay decides — the one the feed will be served from', () => {
+    expect(decideGatedContentPresent([probe(200, 1)])).toBe(true);
     expect(decideGatedContentPresent([probe(200, 0)])).toBe(false);
-    expect(decideGatedContentPresent([probe(200, 0), probe(501, 0)])).toBe(false);
+  });
+
+  it('a later relay holding gated rows does NOT override an earlier definitive empty', () => {
+    // fetchIndexPage serves the feed from the first relay that answers 200, so a
+    // union across the set would show a control for rows the feed never reaches
+    expect(decideGatedContentPresent([probe(200, 0), probe(200, 3)])).toBe(false);
+  });
+
+  it('indeterminate relays are skipped until one answers', () => {
+    expect(decideGatedContentPresent([probe(0, 0), probe(200, 2)])).toBe(true);
+    expect(decideGatedContentPresent([probe(501, 0), probe(200, 0)])).toBe(false);
   });
 
   it('ALL-indeterminate (or empty) keeps the control — never withdraw on not having looked', () => {

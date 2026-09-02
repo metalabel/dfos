@@ -399,7 +399,8 @@ export const useIndexSignerKeyFilterRelays = (): string[] | null =>
   );
 
 // -----------------------------------------------------------------------------
-// CORPUS PROBE — does the serving relay hold any NON-PUBLIC content at all?
+// CORPUS PROBE — does the serving relay hold any NON-PUBLIC content in the
+// population a given feed enumerates?
 //
 // Not feature detection. The three probes above ask what a relay can DO; this one
 // asks what it HOLDS, and it exists for a different reason: a control that cannot
@@ -413,6 +414,22 @@ export const useIndexSignerKeyFilterRelays = (): string[] | null =>
 // "show N gated" control renders only when `gatedCount > 0`. The relay's own
 // answer decides whether the affordance exists, so ONE static bundle stays honest
 // against a public-only relay and against a relay full of dark rows.
+//
+// THREE THINGS THIS GETS RIGHT THAT A NAIVE VERSION WOULD NOT:
+//
+//  1. IT PROBES THE FEED'S OWN POPULATION. The caller passes the same `docSchema`
+//     narrowing its feed uses, because the toggle governs THAT feed. A relay
+//     holding gated chains of some other schema would otherwise light up a
+//     control that still cannot move the posts list.
+//  2. IT READS THE FIRST DEFINITIVE RELAY, in configured order — matching
+//     `fetchIndexPage`, which serves the feed from the first relay to answer 200
+//     and never unions across the set. A union would show the control on the
+//     strength of a relay the feed will not be reading from.
+//  3. IT DOES NOT CACHE. The other probes memoize for the session because a
+//     relay's CAPABILITIES do not change under it. A relay's CORPUS does: the
+//     first gated chain can land at any moment, and a control suppressed at
+//     first paint would stay suppressed for the session. One `limit=1` request
+//     per mount is the right price for an answer that is allowed to change.
 //
 //   rows came back  → non-public rows exist here → the toggle can do something
 //   zero rows       → nothing for it to reveal    → don't offer it
@@ -431,40 +448,54 @@ export const useIndexSignerKeyFilterRelays = (): string[] | null =>
 export const gatedContentFromProbe = (status: number, rows: number): boolean | null =>
   status >= 200 && status < 300 ? rows > 0 : null;
 
-/** Whether a public-only control is worth rendering against the configured relay
- *  set. ANY relay definitively reporting non-public rows decides it — the feeds
- *  fail over across the whole set, so a row on any of them can reach the screen.
- *  Failing that, a definitive empty from any relay hides the control, and an
- *  ALL-INDETERMINATE set keeps it: we never looked, so nothing is withdrawn on
- *  the strength of not having looked. Pure, unit-tested. */
+/** Whether a public-only control is worth rendering, decided by the FIRST relay
+ *  that answers definitively in configured order — the same relay `fetchIndexPage`
+ *  will serve the feed from. Indeterminate relays are skipped, and an
+ *  ALL-indeterminate set keeps the control: nothing is withdrawn on the strength
+ *  of not having looked. Pure, unit-tested. */
 export const decideGatedContentPresent = (probes: readonly BodyFilterProbe[]): boolean => {
-  let answered = false;
   for (const probe of probes) {
     const verdict = gatedContentFromProbe(probe.status, probe.rows);
-    if (verdict === true) return true;
-    if (verdict === false) answered = true;
+    if (verdict !== null) return verdict;
   }
-  return !answered;
+  return true;
 };
 
 /**
- * Whether any configured relay holds content it does not serve publicly — the
- * gate on the posts feed's "public only" control. `null` while the probe is in
- * flight (the control is withheld rather than flashed and retracted), then a
- * stable boolean. Same module-cached, once-per-session idiom as the gates above.
+ * Whether the serving relay holds content it does not serve publicly, within the
+ * `docSchema` population the calling feed enumerates — the gate on that feed's
+ * "public only" control. `null` while in flight (the control is withheld rather
+ * than flashed and retracted), then a boolean.
+ *
+ * Deliberately NOT memoized and deliberately NOT keyed to a hardcoded schema:
+ * the corpus is mutable, and `index-light` has no business knowing which
+ * `$schema` an application calls a post. Re-probes whenever the mount or the
+ * schema changes.
  *
  * This says nothing about whether such rows would be READABLE. A non-public row
  * enumerated here still renders with no title (the display-name circuit breaker
  * nulls it), which is the whole point of showing it: existence without content.
  */
-export const useIndexGatedContent = (): boolean | null =>
-  useProbe('gatedContent', (relays) =>
-    Promise.all(
-      relays.map((relay) =>
-        probeRelayBodyFilter(relay, '/index/v0/content?publicRead=false&limit=1', 'content'),
-      ),
-    ).then(decideGatedContentPresent),
-  );
+export const useIndexGatedContent = (enabled: boolean, docSchema?: string): boolean | null => {
+  const [present, setPresent] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let dead = false;
+    setPresent(null);
+    const path =
+      `/index/v0/content?publicRead=false&limit=1` +
+      (docSchema ? `&docSchema=${encodeURIComponent(docSchema)}` : '');
+    void Promise.all(getRelays().map((relay) => probeRelayBodyFilter(relay, path, 'content'))).then(
+      (probes) => {
+        if (!dead) setPresent(decideGatedContentPresent(probes));
+      },
+    );
+    return () => {
+      dead = true;
+    };
+  }, [enabled, docSchema]);
+  return present;
+};
 
 export interface IndexPage<T> {
   /** the rows of the CURRENT page only — paging replaces them, never appends. */

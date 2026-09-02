@@ -92,7 +92,7 @@ import {
 } from '../lib/origin-binding';
 import { useClientPager } from '../lib/paging';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
-import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
+import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
 import {
   emptyRevocations,
@@ -1420,6 +1420,127 @@ interface ResolvedProfile {
   publicRead: boolean;
 }
 
+/**
+ * What resolving an anchored profile came to.
+ *
+ * The point of the union is that the failures are NOT one failure. Reaching an
+ * anchored profile runs three gates in sequence — the chain has to resolve, the
+ * document bytes have to be served, and the served bytes have to hash to the CID
+ * the chain committed — and each gate fails for several distinct reasons that a
+ * reader would act on differently. Collapsing them into `null`, the previous
+ * behavior, rendered every one of them as "this identity has no profile", which
+ * is false in all of them.
+ *
+ * Three distinctions here are load-bearing and must not be re-merged:
+ *
+ *   NOT HELD vs COULD NOT ASK. A 404 from a relay that answered is a fact about
+ *   the corpus. A timeout is a fact about the network, and saying "not held
+ *   here" on the strength of one is the explorer inventing an answer it does not
+ *   have. Same split the NotFound page already draws.
+ *
+ *   SELF-CONTRADICTION vs SKEW. A relay serving bytes that do not match ITS OWN
+ *   `X-Document-Cid` is contradicting itself — that is the hostile-relay signal
+ *   and it is red. Bytes that match the serving relay's header but not the CID a
+ *   DIFFERENT relay's chain lookup reported are ordinary tip skew between two
+ *   relays, which is amber and usually fixes itself on a retry. Painting skew
+ *   red would cry wolf on a benign, common state and teach a reader to ignore
+ *   the one alarm that matters.
+ *
+ *   DIVERGENCE is neither. A relay contradicting a chain prefix this tab already
+ *   proved is refused by the client, and the only way out is the per-chain pin
+ *   discard — so it renders the same panel the rest of the app renders, for the
+ *   ANCHORED chain (the page-level panel covers the identity chain, a different
+ *   chain that can be perfectly healthy while this one diverges).
+ *
+ * `null` (the state, not a member) is "nothing to resolve, or still resolving" —
+ * the only case in which the header stays absent.
+ */
+type ProfileState =
+  | { kind: 'resolved'; profile: ResolvedProfile }
+  /** the anchored chain contradicts a prefix this tab already proved */
+  | { kind: 'diverged'; err: DivergenceError }
+  /** chain lookup: a relay answered 404 — this relay set does not hold it */
+  | { kind: 'chain-absent' }
+  /** chain lookup: 401/403 on the proof plane */
+  | { kind: 'chain-gated' }
+  /** chain lookup: nothing answered — timeout, 5xx, no reachable relay */
+  | { kind: 'chain-unreachable' }
+  /** bytes: 401/403 — held, and not served to an anonymous read */
+  | { kind: 'bytes-gated' }
+  /** bytes: 404 or an empty body — the chain is here, its document is not */
+  | { kind: 'bytes-absent' }
+  /** bytes: nothing answered */
+  | { kind: 'bytes-unreachable' }
+  /** RED: served bytes do not match the SERVING relay's own document CID */
+  | { kind: 'mismatch' }
+  /** AMBER: bytes match their relay's header but not the chain lookup's CID */
+  | { kind: 'skew' }
+  /** bytes verified against the committed CID and are not a profile document */
+  | { kind: 'not-profile' };
+
+/** The copy for each non-resolved state. Two-tone as everywhere else: amber for
+ *  "this relay set cannot show you the thing", red for "a relay answered with
+ *  something it should not have". Exactly one state is red. */
+const PROFILE_NOTE: Record<
+  Exclude<ProfileState, { kind: 'resolved' } | { kind: 'diverged' }>['kind'],
+  { state: 'warn' | 'bad'; text: string; detail: string }
+> = {
+  'chain-absent': {
+    state: 'warn',
+    text: 'not held here',
+    detail:
+      'This identity anchors a profile chain that none of your relays holds. The anchor is signed into the chain and public — the chain it names is simply not here. A relay is never authoritative on absence; another relay may serve it.',
+  },
+  'chain-gated': {
+    state: 'warn',
+    text: 'chain gated',
+    detail:
+      'A relay holds the anchored profile chain and requires authorization even to resolve it. Nothing about the profile can be shown from here.',
+  },
+  'chain-unreachable': {
+    state: 'warn',
+    text: 'could not resolve',
+    detail:
+      'No configured relay answered for the anchored profile chain — a timeout, a network failure, or a relay error. This says nothing about whether the profile exists: the question was never answered. Retry, or add a relay.',
+  },
+  'bytes-gated': {
+    state: 'warn',
+    text: 'bytes gated',
+    detail:
+      'The anchored profile chain resolved, and its document bytes are not served to an unauthenticated read. The document exists; this reader is not authorized for it.',
+  },
+  'bytes-absent': {
+    state: 'warn',
+    text: 'bytes not served here',
+    detail:
+      'The anchored profile chain resolved, and no relay served its document bytes. Nothing about the document can be shown — including whether one exists to be shown.',
+  },
+  'bytes-unreachable': {
+    state: 'warn',
+    text: 'could not fetch bytes',
+    detail:
+      'The anchored profile chain resolved, but no relay answered for its document bytes. The question went unanswered rather than answered in the negative. Retry, or add a relay.',
+  },
+  mismatch: {
+    state: 'bad',
+    text: 'relay contradicts itself',
+    detail:
+      'A relay served bytes for this profile that do not hash to the document CID that same relay declared for them. Whatever they contain, they are not the document it claimed to be sending, so none of them is rendered. This is a statement about the relay, not about the identity.',
+  },
+  skew: {
+    state: 'warn',
+    text: 'relay snapshots disagree',
+    detail:
+      'The bytes served match the document CID the serving relay declared, but not the head CID another relay reported for this chain. That is ordinary skew between relays at different points in the chain — retry, and it usually resolves.',
+  },
+  'not-profile': {
+    state: 'warn',
+    text: 'not a profile document',
+    detail:
+      'The anchored chain’s head document verified against its committed CID and does not declare the profile schema. There is nothing here to render as a profile.',
+  },
+};
+
 /** Served blob bytes → the value they decode to and the CID that value canonically
  *  encodes to, or `null` when the bytes will not decode at all. Undecodable bytes
  *  are not an exception to be handled somewhere else: they are a VERDICT about the
@@ -1437,65 +1558,42 @@ const decodeServedDocument = async (
   }
 };
 
-/**
- * What resolving an anchored profile came to.
- *
- * The point of the union is that the failures are NOT one failure. Reaching an
- * anchored profile runs three gates in sequence, and each has its own reason to
- * stop: the chain has to resolve, the document bytes have to be served, and the
- * served bytes have to hash to the CID the chain committed. Collapsing those
- * into `null` — the previous behavior — rendered all of them as "this identity
- * has no profile", which is false in every one of them and dangerous in one:
- * a CID MISMATCH is a relay handing over bytes that are not the document the
- * chain signed, and that must never read as a shrug.
- *
- * `null` (the state, not a member) is "nothing to resolve, or still resolving" —
- * the only case in which the header stays absent.
- */
-type ProfileState =
-  | { kind: 'resolved'; profile: ResolvedProfile }
-  /** the anchored chain did not resolve on any configured relay */
-  | { kind: 'unresolvable' }
-  /** the chain resolved; no relay served its document bytes anonymously */
-  | { kind: 'withheld' }
-  /** bytes were served and they do NOT hash to the chain's committed CID */
-  | { kind: 'mismatch' }
-  /** bytes verified against the committed CID and are not a profile document */
-  | { kind: 'not-profile' };
+/** Classify a proof-plane failure the way the NotFound page does: an answered
+ *  404 is absence, a 401/403 is gated, and anything else (0, 5xx) is a question
+ *  that never got answered. Pure, unit-tested. */
+export const chainFailureKind = (
+  claim: ClaimResult,
+): 'chain-absent' | 'chain-gated' | 'chain-unreachable' =>
+  claim.gated ? 'chain-gated' : claim.status === 404 ? 'chain-absent' : 'chain-unreachable';
 
-/** The copy for each non-resolved state. Two-tone as everywhere else: amber for
- *  "this relay set cannot show you the thing", red for "a relay answered with
- *  something it should not have". Only the mismatch is red, and it is red
- *  because it is the one state that is a statement about the RELAY rather than
- *  about what happens to be held. */
-const PROFILE_NOTE: Record<
-  Exclude<ProfileState, { kind: 'resolved' }>['kind'],
-  { state: 'warn' | 'bad'; text: string; detail: string }
-> = {
-  unresolvable: {
-    state: 'warn',
-    text: 'not resolvable here',
-    detail:
-      'This identity anchors a profile chain that none of your relays served. The anchor is signed into the chain and public — the chain it names is simply not held here. Absence on a relay is not absence from the network; try another relay.',
-  },
-  withheld: {
-    state: 'warn',
-    text: 'bytes not served here',
-    detail:
-      'The anchored profile chain resolved, but no relay served its document bytes to an unauthenticated read. Nothing about the document can be shown — including whether one exists to be shown.',
-  },
-  mismatch: {
-    state: 'bad',
-    text: 'bytes do not match the chain',
-    detail:
-      'A relay served bytes for the anchored profile that are not the document this identity’s chain committed — they do not hash to the committed CID, or they could not be decoded to check against it. They are not this profile, whatever they contain, so none of them is rendered. This is a statement about the relay, not about the identity.',
-  },
-  'not-profile': {
-    state: 'warn',
-    text: 'not a profile document',
-    detail:
-      'The anchored chain’s head document verified against its committed CID and does not declare the profile schema. There is nothing here to render as a profile.',
-  },
+/** The same three-way split for the content plane's blob fetch. An empty 200
+ *  body is ABSENCE, not a CID mismatch — there are no bytes to have mismatched.
+ *  Pure, unit-tested. */
+export const bytesFailureKind = (
+  blob: BlobResult,
+): 'bytes-gated' | 'bytes-absent' | 'bytes-unreachable' =>
+  blob.gated
+    ? 'bytes-gated'
+    : blob.status === 404 || (blob.status >= 200 && blob.status < 300)
+      ? 'bytes-absent'
+      : 'bytes-unreachable';
+
+/** Which integrity verdict a decoded document earns. RED (`mismatch`) requires
+ *  the SERVING relay to contradict its own `X-Document-Cid`; disagreement with a
+ *  chain lookup that may have come from a different relay is `skew`, and a relay
+ *  that sent no header cannot be shown to have contradicted itself. Pure,
+ *  unit-tested. */
+export const integrityVerdict = (
+  derivedCid: string | null,
+  servedDocCid: string | undefined,
+  /** `null` when the chain commits no current document — bytes served against
+   *  that are a disagreement between the two planes, which is skew, not a relay
+   *  contradicting itself. */
+  committedCid: string | null,
+): 'ok' | 'mismatch' | 'skew' => {
+  if (servedDocCid !== undefined && derivedCid !== servedDocCid) return 'mismatch';
+  if (derivedCid !== committedCid) return 'skew';
+  return 'ok';
 };
 
 /**
@@ -1507,15 +1605,18 @@ const PROFILE_NOTE: Record<
  * (the empirical effect of a public-read grant) — not a verified grant object.
  *
  * When the anchor is present and does not resolve, the header SAYS SO rather
- * than vanishing. An identity that anchors nothing and an identity whose
- * anchored chain this relay set cannot produce are different facts, and the
- * rest of the page already disagrees with the silent version: the related row
- * and the services table both render the anchor, and following it lands on an
- * honest 404. Naming the state leaks nothing — the anchor is on-chain and
- * public, so this says only what following it would already have said.
+ * than vanishing, and says WHICH failure it was. An identity that anchors
+ * nothing and an identity whose anchored chain this relay set cannot produce are
+ * different facts, and the rest of the page already disagrees with the silent
+ * version: the related row and the services table both render the anchor, and
+ * following it lands on an honest 404. Naming the state leaks nothing — the
+ * anchor is on-chain and public, so this says only what following it would
+ * already have said.
  */
 const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean }) => {
   const [state, setState] = useState<ProfileState | null>(null);
+  // a pin discard has to re-run the resolve; nothing else re-enters it
+  const [reresolve, setReresolve] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -1524,48 +1625,50 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
     const anchor = props.anchor;
     const relays = getRelays();
     void (async () => {
+      let res;
       try {
-        const [res, blob] = await Promise.all([
-          getClient().content(anchor),
-          fetchBlobRaw(anchor, relays),
-        ]);
+        res = await getClient().content(anchor);
+      } catch (e) {
         if (dead) return;
-        // gated / absent bytes — the chain is here, its document is not
-        if (!blob.bytes) return setState({ kind: 'withheld' });
-        const committedCid = res.value.chain.currentDocumentCID;
-        // DECODE INSIDE ITS OWN GATE. Bytes that will not decode cannot be
-        // checked against the committed CID, and the honest reading of that is
-        // the same as a failed check: a relay served something that is not the
-        // committed document. Letting a parse throw into the outer catch would
-        // report it as "the chain didn't resolve" — the chain resolved fine, and
-        // that laundering is exactly what these states exist to stop.
-        const decoded = await decodeServedDocument(blob.bytes);
-        if (dead) return;
-        // integrity gate — the served bytes MUST hash to the committed doc CID.
-        // Kept SEPARATE from the shape check below: a mismatch is a hostile-relay
-        // signal and must never be softened into "not held here".
-        if (!decoded || decoded.cid !== committedCid) return setState({ kind: 'mismatch' });
-        if (!isProfileContent(decoded.parsed)) return setState({ kind: 'not-profile' });
-        setState({
-          kind: 'resolved',
-          profile: {
-            name: decoded.parsed.name,
-            description: decoded.parsed.description,
-            avatar: parseMediaObject(decoded.parsed.avatar),
-            publicRead: !blob.gated,
-          },
-        });
-      } catch {
-        // the chain lookup rejected — the anchored chain did not resolve on any
-        // configured relay. `fetchBlobRaw` never rejects (it reports an absent
-        // body as no bytes), so this is the chain gate and only the chain gate.
-        if (!dead) setState({ kind: 'unresolvable' });
+        // a divergence is refused proof, not a missing chain — it has its own
+        // way out and its own panel
+        const divergence = divergenceErrorFrom(e);
+        if (divergence) return setState({ kind: 'diverged', err: divergence });
+        // otherwise ask the proof plane directly for a STATUS, so "nobody
+        // answered" never renders as "this chain is not held here"
+        const claim = await fetchClaim('content', anchor, relays);
+        if (!dead) setState({ kind: chainFailureKind(claim) });
+        return;
       }
+      const blob = await fetchBlobRaw(anchor, relays);
+      if (dead) return;
+      // `fetchBlobRaw` never rejects; it reports an absent body as no bytes. An
+      // EMPTY 200 body lands here too — zero bytes are absent bytes, never a
+      // failed integrity check.
+      if (!blob.bytes || blob.bytes.length === 0) return setState({ kind: bytesFailureKind(blob) });
+      const committedCid = res.value.chain.currentDocumentCID;
+      // DECODE INSIDE ITS OWN GATE. Bytes that will not decode cannot be checked
+      // against the committed CID, and the honest reading of that is the same as
+      // a failed check.
+      const decoded = await decodeServedDocument(blob.bytes);
+      if (dead) return;
+      const verdict = integrityVerdict(decoded?.cid ?? null, blob.servedDocCid, committedCid);
+      if (verdict !== 'ok') return setState({ kind: verdict });
+      if (!decoded || !isProfileContent(decoded.parsed)) return setState({ kind: 'not-profile' });
+      setState({
+        kind: 'resolved',
+        profile: {
+          name: decoded.parsed.name,
+          description: decoded.parsed.description,
+          avatar: parseMediaObject(decoded.parsed.avatar),
+          publicRead: !blob.gated,
+        },
+      });
     })();
     return () => {
       dead = true;
     };
-  }, [props.anchor, props.chainVerified]);
+  }, [props.anchor, props.chainVerified, reresolve]);
 
   if (!state) return null;
   if (state.kind === 'resolved') {
@@ -1578,6 +1681,9 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
         publicRead={state.profile.publicRead}
       />
     );
+  }
+  if (state.kind === 'diverged') {
+    return <DivergedPanel err={state.err} onDiscarded={() => setReresolve((n) => n + 1)} />;
   }
   const note = PROFILE_NOTE[state.kind];
   return (

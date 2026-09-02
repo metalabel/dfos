@@ -55,14 +55,20 @@ import { useHashParam } from '../router';
 /** The lead content feed's type. Everything else lives under #/documents. */
 const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
 
-// the six primitive buckets, in a stable render order for the by-kind bar
+// The six primitive buckets, in a stable render order for the by-kind bar.
+//
+// These label OPERATION counts, like every other figure in the band — the bar
+// partitions the operation log by the primitive each entry acts on. "identity
+// ops", not "identities": the bare primitive name beside a number is exactly the
+// reading the stat cells above were relabelled to stop making, and the legend
+// sits directly under them.
 const KIND_LABEL: Record<OpKind, string> = {
-  'identity-op': 'identity',
-  'content-op': 'content',
-  credential: 'credential',
-  artifact: 'artifact',
-  countersign: 'countersign',
-  revocation: 'revocation',
+  'identity-op': 'identity ops',
+  'content-op': 'content ops',
+  credential: 'credential ops',
+  artifact: 'artifact ops',
+  countersign: 'countersign ops',
+  revocation: 'revocation ops',
 };
 
 const KIND_COLOR: Record<OpKind, string> = {
@@ -556,13 +562,15 @@ const PostsPanel = (props: { indexed: boolean | null; ordered: boolean | null })
   };
 
   // the control is offered only where it can DO something: a relay holding no
-  // non-public content answers both sides of the filter with the same rows, and
-  // a toggle that promises "including gated chains" over a corpus with none is a
+  // non-public POSTS answers both sides of the filter with the same rows, and a
+  // toggle that promises "including gated chains" over a corpus with none is a
   // claim the feed then fails to keep. Same discipline as the document browser's
-  // `gatedCount > 0` guard — the relay's answer decides. `null` (probe in
-  // flight) withholds it rather than flashing it; the FEED is unaffected either
-  // way, since `publicOnly` filters identically on a corpus with nothing to hide.
-  const gatedPresent = useIndexGatedContent();
+  // `gatedCount > 0` guard — the relay's answer decides. The probe carries this
+  // panel's own `docSchema`, so it measures the population the toggle governs
+  // rather than the relay's whole corpus. `null` (probe in flight) withholds the
+  // control rather than flashing it; the FEED is unaffected either way, since
+  // `publicOnly` filters identically on a corpus with nothing to hide.
+  const gatedPresent = useIndexGatedContent(props.indexed === true, POST_SCHEMA);
 
   if (props.indexed === false) {
     return (

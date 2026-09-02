@@ -729,8 +729,17 @@ paths:
         (profile/v1 → name): null only when the identity declares no
         profile-labeled content-chain anchor; on circuit breakers the object is
         kept with docSchema/name null and anchor preserved as the verification
-        pointer. Relays without the capability (capabilities.index false or
-        absent) return 501.
+        pointer. docSchema null is an honest unknown — bytes not held, bytes
+        undecodable, or a document declaring no string $schema — never a claim
+        about what the document says.
+
+        DELETED IDENTITIES: a relay MAY omit isDeleted rows from the DISCOVERY
+        shapes of this route (the bare listing, the keyset and ordered walks,
+        nameContains, hasPublicProfile) and MUST return them, carrying
+        isDeleted true, from either RESOLUTION shape — did= and key=. The
+        presence of did= or key= makes the request a resolution whatever other
+        filters it carries. Relays without the capability (capabilities.index
+        false or absent) return 501.
       tags: [Index]
       parameters:
         - name: did
@@ -738,7 +747,9 @@ paths:
           required: false
           schema:
             type: string
-          description: Exact DID match (zero or one row)
+          description: >-
+            Exact DID match (zero or one row). A RESOLUTION shape: a deleted
+            identity MUST still be returned, carrying isDeleted true.
         - name: key
           in: query
           required: false
@@ -754,7 +765,11 @@ paths:
             proof admitting it, never matches: that membership is void, it
             publishes no link between chains, and indexing it would let a
             stranger burn a key they do not hold by writing it into a chain. One
-            key may match many identities, and a deleted identity still matches.
+            key may match many identities. A RESOLUTION shape: a deleted
+            identity MUST still match — key-loss recovery starts from a restored
+            seed holding no DID, and mint-time burn checking refuses a key that
+            already proves somewhere, so a hidden sealed row is a wrong answer
+            rather than a thinner one.
             The value is opaque: a string no chain ever proved matches nothing,
             with no format validation and no 400.
         - name: hasPublicProfile
