@@ -13,8 +13,10 @@
      is fixed to /.well-known/dfos-app.json and nothing else is ever fetched
    - the hostname must be a public DNS name: no IP literals, no userinfo, no
      ports, no paths; it must carry a dot and an alphabetic TLD
-   - resolve-then-check: every resolved address is refused if it is private,
-     loopback, link-local, unique-local, or v4-mapped into any of those.
+   - resolve-then-check: every resolved address must be globally routable, and
+     only globally routable addresses are fetched. The rule is an ALLOWLIST, not
+     a denylist — an address passes by being demonstrably public unicast, so a
+     range nobody thought of is refused by default rather than reached.
      (The runtime's fetch re-resolves on connect, so a rebinding window
      remains between check and connect; with the fixed path, https-only, and
      port 443 the residue is a GET of one constant path — accepted and named
@@ -29,6 +31,8 @@
      collapse plus the small timeout is the throttle this route gets
 
 */
+
+import { BlockList, isIPv4, isIPv6 } from 'node:net';
 
 const FIXED_PATH = '/.well-known/dfos-app.json';
 const MAX_BODY_BYTES = 512 * 1024;
@@ -47,29 +51,129 @@ export const validateHostname = (raw: unknown): string | null => {
   return host;
 };
 
-/** True when a resolved address must not be fetched from this route. */
-export const isForbiddenAddress = (address: string): boolean => {
-  const addr = address.toLowerCase();
-  if (addr.includes(':')) {
-    // v6: loopback, unspecified, link-local fe80::/10, unique-local fc00::/7
-    if (addr === '::' || addr === '::1') return true;
-    if (/^fe[89ab]/.test(addr)) return true;
-    if (/^f[cd]/.test(addr)) return true;
-    // v4-mapped (::ffff:a.b.c.d) — check the embedded v4
-    const mapped = addr.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-    if (mapped) return isForbiddenAddress(mapped[1]!);
-    return false;
-  }
-  const octets = addr.split('.').map(Number);
-  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n > 255)) return true;
-  const [a, b] = octets as [number, number, number, number];
-  if (a === 0 || a === 10 || a === 127) return true; // this-net, private, loopback
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64/10
-  if (a === 169 && b === 254) return true; // link-local
-  if (a === 172 && b >= 16 && b <= 31) return true; // private 172.16/12
-  if (a === 192 && b === 168) return true; // private 192.168/16
-  return false;
+/*
+
+  WHICH ADDRESSES THIS ROUTE MAY FETCH FROM
+
+  The rule is an ALLOWLIST — an address passes only by being demonstrably public
+  unicast — because the denylist this replaced was the wrong shape for the job.
+  A denylist has to name every range that must not be reached, and the ranges it
+  forgets are exactly the ones an attacker aims a DNS record at: it knew about
+  RFC1918 and loopback but not 192.0.0.0/24, 198.18.0.0/15, 240.0.0.0/4,
+  fec0::/10, or the transition prefixes that smuggle a v4 inside a v6 literal.
+  Inverting the predicate makes every such omission harmless — a range nobody
+  thought of is refused by default, and the burden of proof sits on the address.
+
+  `node:net`'s BlockList does the CIDR matching, which is what keeps the tables
+  below declarative: it expands `::`, compares on prefix length rather than on
+  text, and unwraps a v4-mapped literal against v4 rules, so nothing here parses
+  an address by hand. It is a STATIC import, unlike the deferred
+  `import('node:dns/promises')` in `fetchEnvelope`, because the predicate is
+  synchronous and both call sites read it that way. That costs nothing: this
+  module is only ever loaded on Node — as a Vercel function, through the dev
+  server's `ssrLoadModule`, and in the node-environment tests. The browser
+  reaches this route over HTTP and never imports it.
+
+*/
+
+/**
+ * The IPv4 special-purpose ranges (IANA's registry). None of them is a public
+ * destination, whether because it is private (10/8, 172.16/12, 192.168/16),
+ * infrastructure (100.64/10, 192.0.0/24), local to the host or link (127/8,
+ * 169.254/16 — which is where cloud metadata services sit), documentation or
+ * benchmarking (192.0.2/24, 198.18/15, 198.51.100/24, 203.0.113/24), or simply
+ * not unicast (224/4, 240/4). 240/4 subsumes the broadcast address
+ * 255.255.255.255, so that needs no entry of its own.
+ */
+const V4_SPECIAL_PURPOSE: readonly [string, number][] = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+];
+
+/**
+ * Every globally routable IPv6 unicast address lives in 2000::/3. That single
+ * membership test is what a v6 denylist can never be: loopback, unspecified,
+ * link-local, unique-local, site-local fec0::/10, multicast ff00::/8 and every
+ * transition prefix all sit OUTSIDE it, so they are refused without being named.
+ */
+const V6_GLOBAL_UNICAST: readonly [string, number][] = [['2000::', 3]];
+
+/**
+ * The carve-outs inside 2000::/3 that are still not destinations. 2002::/16 is
+ * refused OUTRIGHT rather than judged by the v4 it embeds: 6to4 relaying is
+ * deprecated (RFC 7526), so nothing this route wants to read is only reachable
+ * through it, and refusing the prefix is a smaller rule than unpacking it.
+ */
+const V6_SPECIAL_PURPOSE: readonly [string, number][] = [
+  ['2001::', 32], // Teredo
+  ['2001:2::', 48], // benchmarking
+  ['2001:10::', 28], // ORCHID (deprecated)
+  ['2001:20::', 28], // ORCHIDv2
+  ['2001:db8::', 32], // documentation
+  ['2002::', 16], // 6to4
+];
+
+/**
+ * IPv4-mapped IPv6 (`::ffff:a.b.c.d`) — the form `dns.lookup` hands back for an
+ * A record on a dual-stack resolve. It names a v4 destination, not a v6 one, so
+ * its verdict must be the EMBEDDED v4's; left to the 2000::/3 gate it would fall
+ * outside and every mapped public address would be refused.
+ *
+ * The other two v4-embedding prefixes need no such handling, and deliberately
+ * get none. `::/96` (IPv4-compatible, deprecated) and `64:ff9b::/96` (the NAT64
+ * well-known prefix) both sit outside 2000::/3, so they are refused whatever
+ * they carry — which is the right answer both ways round: a private v4 inside
+ * one is an SSRF attempt, and a public v4 inside one is only reachable through a
+ * NAT64 gateway this route does not have.
+ */
+const V6_V4_MAPPED: readonly [string, number][] = [['::ffff:0.0.0.0', 96]];
+
+const blockList = (subnets: readonly [string, number][], type: 'ipv4' | 'ipv6'): BlockList => {
+  const list = new BlockList();
+  for (const [network, prefix] of subnets) list.addSubnet(network, prefix, type);
+  return list;
 };
+
+const V4_BLOCKED = blockList(V4_SPECIAL_PURPOSE, 'ipv4');
+const V6_ROUTABLE = blockList(V6_GLOBAL_UNICAST, 'ipv6');
+const V6_BLOCKED = blockList(V6_SPECIAL_PURPOSE, 'ipv6');
+const V6_MAPPED = blockList(V6_V4_MAPPED, 'ipv6');
+
+/**
+ * True when an address is a public unicast destination — the only kind this
+ * route fetches from. A string that is neither a v4 nor a v6 literal is NOT
+ * routable: it cannot be shown to be safe, so it is refused rather than passed
+ * through on the assumption that it will fail to connect anyway.
+ */
+const isGloballyRoutable = (address: string): boolean => {
+  if (isIPv4(address)) return !V4_BLOCKED.check(address, 'ipv4');
+  if (!isIPv6(address)) return false;
+  // BlockList unwraps a v4-mapped literal against its v4 rules, so the embedded
+  // address is judged by the v4 table without this file parsing the text itself
+  if (V6_MAPPED.check(address, 'ipv6')) return !V4_BLOCKED.check(address, 'ipv6');
+  if (!V6_ROUTABLE.check(address, 'ipv6')) return false;
+  return !V6_BLOCKED.check(address, 'ipv6');
+};
+
+/**
+ * True when a resolved address must not be fetched from this route. It keeps its
+ * own name because refusal is the decision both call sites are making, and the
+ * inversion is where the allowlist meets them.
+ */
+export const isForbiddenAddress = (address: string): boolean => !isGloballyRoutable(address);
 
 interface ProxyEnvelope {
   status:

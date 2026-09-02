@@ -14,8 +14,9 @@
   imports rather than restates:
    - https only, port 443 only — the caller supplies ONLY a hostname; the path is
      fixed to /.well-known/dfos-did and nothing else is ever fetched
-   - resolve-then-check: every resolved address is refused if it is private,
-     loopback, link-local, unique-local, or v4-mapped into any of those
+   - resolve-then-check: every resolved address must be globally routable, and
+     only globally routable addresses are fetched — an allowlist of public
+     unicast, so a range nobody named is refused rather than reached
    - redirects are not followed: a redirect attests nothing (ORIGIN-BINDING.md),
      so it is reported as its own status — never as a contradiction, and never
      as an answer. The spec puts it in the NON-ANSWER class, where a verifier
