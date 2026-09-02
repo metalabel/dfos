@@ -335,6 +335,11 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 		wantOrigin  = "*"
 		wantMethods = "GET, POST, PUT, OPTIONS"
 		wantHeaders = "Content-Type, Authorization"
+		// X-Document-Cid is the blob route's claim about which document it is
+		// sending. Unexposed, a cross-origin reader cannot check served bytes
+		// against the SERVING relay's own claim, so a relay contradicting itself
+		// is indistinguishable from two relays disagreeing.
+		wantExpose = "X-Document-Cid"
 	)
 
 	// GET on a proof-plane route carries CORS headers.
@@ -352,6 +357,9 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	if got := resp.Header.Get("Access-Control-Allow-Headers"); got != wantHeaders {
 		t.Fatalf("Allow-Headers = %q, want %q", got, wantHeaders)
 	}
+	if got := resp.Header.Get("Access-Control-Expose-Headers"); got != wantExpose {
+		t.Fatalf("Expose-Headers = %q, want %q", got, wantExpose)
+	}
 
 	// OPTIONS preflight returns 204 with the same headers.
 	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/proof/v1/operations", nil)
@@ -368,6 +376,9 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	}
 	if got := preflight.Header.Get("Access-Control-Allow-Methods"); got != wantMethods {
 		t.Fatalf("preflight Allow-Methods = %q, want %q", got, wantMethods)
+	}
+	if got := preflight.Header.Get("Access-Control-Expose-Headers"); got != wantExpose {
+		t.Fatalf("preflight Expose-Headers = %q, want %q", got, wantExpose)
 	}
 }
 

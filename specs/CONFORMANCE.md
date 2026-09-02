@@ -164,7 +164,22 @@ A relay ingests, sequences, and serves. It implements:
   actor/name/public-read filters; deterministic ordering; complete keyset/ordered-cursor
   walks; and cursor canonicality (non-canonical base64 encodings of a well-formed
   cursor are rejected) live in the relay tier on the index family's own `0.x` clock
-  (WEB-RELAY.md "Index (v0)", `specs/WEB-RELAY.md`). The artifact and operation
+  (WEB-RELAY.md "Index (v0)", `specs/WEB-RELAY.md`). Two rules bound what a row and
+  a listing may claim. **Discovery and resolution differ for deleted identities**:
+  a relay MAY omit `isDeleted: true` identities from the DISCOVERY shapes of
+  `/index/v0/identities` (the unfiltered listing, the keyset and ordered walks,
+  `nameContains`, `hasPublicProfile`) and MUST return them, carrying
+  `isDeleted: true`, from either RESOLUTION shape — `did=` and `key=` — with the
+  presence of either making the request a resolution whatever other filters it
+  carries. Absence from a listing is a relay's retention and serving choice, while
+  an empty answer to a named DID is a relay asserting non-existence, and an empty
+  answer to `key=` breaks the has-ever-proved contract that key-loss recovery and
+  mint-time burn checking both rest on. And **a projection MUST NOT outlive its
+  bytes**: an identity row's `profile.docSchema` MUST be `null` whenever the relay
+  does not hold the anchored chain's current head bytes, including when it holds no
+  such chain, so a non-null value is always a claim that those bytes are held here
+  (`null` itself is the honest unknown — not held, undecodable, or no `$schema`).
+  The artifact and operation
   families expose `ingestedAt` — a relay-local receipt stamp, excluded from
   cross-relay parity by construction — and both surfaces MUST report the same
   `ingestedAt` for the same operation on any one relay. The credits family additionally carries the credit projection's

@@ -244,10 +244,19 @@ func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
 }
 
 // TestIndexIdentitiesKeyIsHasEverProved pins the history semantics: a key a later
-// update rotates out KEEPS matching, and a deleted chain KEEPS matching (carrying
-// isDeleted). Both are the cases a current-state implementation gets wrong, and
-// both are exactly the cases key-loss recovery depends on — possession, once
-// demonstrated, does not become untrue.
+// update rotates out KEEPS matching, and deleting the chain does not erase the
+// deletion from the index — the row records it. Both are the cases a current-state
+// implementation gets wrong, and both are exactly the cases key-loss recovery
+// depends on — possession, once demonstrated, does not become untrue.
+//
+// The deletion half pins BOTH resolution shapes unconditionally. WEB-RELAY.md's
+// discovery-vs-resolution rule lets a relay omit deleted identities from the
+// DISCOVERY shapes of this route (the bare listing, the walks, nameContains,
+// hasPublicProfile) — and requires `did=` AND `key=` to return them carrying
+// isDeleted. `key=` is not a convenience here: key-loss recovery starts from a
+// restored seed holding no DID, and mint-time burn checking refuses a key that
+// already proves somewhere. A hidden sealed row tells a returning holder their
+// identity never existed, and tells a minter that a spent key is free.
 func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)
@@ -287,12 +296,45 @@ func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	}
 	postOperationsAccepted(t, base, []string{deleteToken})
 
+	// RESOLUTION 1 — `key=`. The has-ever-proved lookup MUST still answer with the
+	// sealed chain. This is the assertion the recovery and burn-check paths rest
+	// on, and neither has a DID to fall back to.
 	rows := identityRowsMatching(t, base, keyParam(rotatedOut.mk.PublicKeyMultibase))
 	if len(rows) != 1 || rows[0].DID != id.did {
-		t.Fatalf("key=<rotated-out> after deletion = %+v, want the row for %s", rows, id.did)
+		t.Fatalf("key=<rotated-out> after deletion = %+v, want the row for %s — `key=` is a resolution shape and MUST return a deleted identity", rows, id.did)
 	}
 	if !rows[0].IsDeleted {
 		t.Fatalf("key=<rotated-out> row for a deleted chain reports isDeleted=false: %+v — the route defines no isDeleted filter, so the field is how a consumer knows", rows[0])
+	}
+
+	// RESOLUTION 2 — `did=`. The identifier itself, same MUST.
+	resolved := identityRowsMatching(t, base, "did="+url.QueryEscape(id.did))
+	if len(resolved) != 1 || resolved[0].DID != id.did {
+		t.Fatalf("did=<deleted chain> = %+v, want the row for %s — `did=` is a resolution shape and MUST return a deleted identity", resolved, id.did)
+	}
+	if !resolved[0].IsDeleted {
+		t.Fatalf("did=<deleted chain> row reports isDeleted=false: %+v — the field is how a consumer knows", resolved[0])
+	}
+
+	// PRECEDENCE — a discovery-shaped filter riding along does NOT convert a
+	// resolution back into a discovery. The sealed chain published no profile, so
+	// `hasPublicProfile=false` is the filter it satisfies; the row MUST survive it.
+	// If a relay reapplied its deleted-exclusion whenever any other filter was
+	// present, the resolution guarantee would evaporate exactly when a caller
+	// narrowed a lookup they already held the identifier for.
+	narrowed := identityRowsMatching(t, base, "did="+url.QueryEscape(id.did)+"&hasPublicProfile=false")
+	if len(narrowed) != 1 || narrowed[0].DID != id.did || !narrowed[0].IsDeleted {
+		t.Fatalf("did=<deleted chain>&hasPublicProfile=false = %+v, want the sealed row for %s — `did=` makes the request a resolution whatever else it carries", narrowed, id.did)
+	}
+
+	// DISCOVERY — here, and only here, either behavior is conformant. A relay that
+	// lists deleted identities returns the row and it MUST carry isDeleted; a
+	// relay that omits them does not return it. What is never conformant is a
+	// sealed row presented as live, so that is what this asserts.
+	for _, row := range identityRowsMatching(t, base, "hasPublicProfile=false") {
+		if row.DID == id.did && !row.IsDeleted {
+			t.Fatalf("hasPublicProfile=false listed the deleted chain %s as live: %+v", id.did, row)
+		}
 	}
 }
 

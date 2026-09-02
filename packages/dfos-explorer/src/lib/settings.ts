@@ -2,9 +2,9 @@
 
   SETTINGS — small user preferences, localStorage-backed, observable
 
-  The auto-sync interval, the public-only feed filter, and whether the home
-  intro has been dismissed. Kept separate from relays.ts because these are UI
-  ergonomics, not the trust-relevant relay/quorum parameters.
+  The auto-sync interval, the home posts feed's public-only filter, and whether
+  the home intro has been dismissed. Kept separate from relays.ts because these
+  are UI ergonomics, not the trust-relevant relay/quorum parameters.
 
 */
 
@@ -52,10 +52,18 @@ export const setAutoSyncMinutes = (n: number): void => {
 };
 
 /**
- * Whether content feeds hide gated (non-public-read) rows. Defaults to ON —
- * public-only is what a stranger's explorer should show first, and a gated row
- * carries no readable title to show anyway. A `pub` hash param overrides this
- * per-link; the toggle writes both.
+ * Whether the HOME POSTS FEED hides gated (non-public-read) rows. Defaults to
+ * ON — public-only is what a stranger's explorer should show first, and a gated
+ * row carries no readable title to show anyway. A `pub` hash param overrides
+ * this per-link; the toggle writes both.
+ *
+ * ONE SURFACE READS THIS, and the name is the only thing about it that ever
+ * sounded app-wide. The document browser and search do not consult it: both
+ * enumerate public-only unconditionally, search because the relay restricts a
+ * `titleContains` query to public rows server-side and never projects a
+ * non-public title. So this is the posts feed's preference, not a global
+ * visibility mode, and it is documented as such rather than left reading like a
+ * setting whose reach a reader would have to grep for.
  */
 export const getPublicOnly = (): boolean => {
   try {

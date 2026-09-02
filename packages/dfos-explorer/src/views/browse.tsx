@@ -183,8 +183,17 @@ const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   );
 };
 
-const IndexIdentitiesLight = (props: { page: IndexPage<IndexIdentityRow>; query: string }) => {
+const IndexIdentitiesLight = (props: {
+  page: IndexPage<IndexIdentityRow>;
+  query: string;
+  /** whether the listing behind this page is narrowed to public profiles — the
+   *  empty state must not say "no PUBLIC identities" about a query that asked
+   *  for all of them. Defaults to the narrowed reading, which is every caller
+   *  that does not pass it. */
+  publicOnly?: boolean;
+}) => {
   const { page } = props;
+  const publicOnly = props.publicOnly !== false;
   const needle = props.query.trim();
   // rows are ALREADY filtered SERVER-SIDE (the relay's `nameContains` runs before
   // pagination) — render them straight, no client-side needle pass.
@@ -200,8 +209,8 @@ const IndexIdentitiesLight = (props: { page: IndexPage<IndexIdentityRow>; query:
       ) : page.rows.length === 0 ? (
         <span class="muted">
           {needle
-            ? `no public identities in the relay index match “${needle}”.`
-            : 'the relay index returned no public identities.'}
+            ? `no ${publicOnly ? 'public ' : ''}identities in the relay index match “${needle}”.`
+            : `the relay index returned no ${publicOnly ? 'public ' : ''}identities.`}
         </span>
       ) : (
         <table>
@@ -332,6 +341,29 @@ export const BrowseIdentities = () => {
   const [query, setQuery] = useHashParam('q');
   const [cursor, setCursor] = useHashParam('after');
   const [includeGated, setIncludeGated] = useState(false);
+  // THE INDEX-PATH SIBLING of `includeGated`, and a separate piece of state
+  // because it drives a different query against a different source. Default OFF:
+  // the population it reveals is chains that publish no public profile, which is
+  // most often a bare chain with nothing to read, so it is opt-in the same way
+  // the local path's control is.
+  //
+  // IT RIDES THE HASH, alongside the cursor, and it must. A keyset cursor is
+  // minted against one query and means nothing to another, and `useIndexPageStack`
+  // deliberately keeps a restored cursor on a deep-linked first mount rather than
+  // resetting it. So a link into page 3 of a widened listing, with the toggle
+  // living only in component state, would restore the cursor into the NARROWER
+  // query — a page of rows from neither enumeration. Carrying both in the URL is
+  // what makes the link mean what it showed.
+  //
+  // What it CANNOT reach: sealed (`isDeleted`) identities. A relay may exclude
+  // those from the DISCOVERY shapes of /index/v0/identities — a relay that has
+  // sealed thousands of chains would otherwise make its live identities
+  // un-enumerable — while still returning them from the resolution shapes
+  // (`did=`, `key=`). Dropping `hasPublicProfile` widens the profile predicate
+  // and nothing else; a sealed chain is reached by its DID or its key, or from
+  // the proof plane.
+  const [npParam, setNpParam] = useHashParam('np');
+  const includeNoProfile = npParam === '1';
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
   // the LOCAL fallback listing is materialized whole (up to BROWSE_LIMIT rows)
@@ -342,7 +374,14 @@ export const BrowseIdentities = () => {
   // a keystroke doesn't re-page the index on every character; the relay filters
   // over the projected profile name (amber) before paginating.
   const nameContains = useDebounced(query.trim(), 250);
-  const index = useIndexIdentities(indexed === true, true, {
+  // THE TOGGLE ONLY WIDENS AN UNFILTERED ENUMERATION. A relay never projects a
+  // non-public profile's name, so those rows carry no name for `nameContains` to
+  // match and a name search cannot reach them however this is set. The title, the
+  // orient copy and the empty state all read THIS rather than the raw toggle, so
+  // none of them promises rows the active query cannot return — and the note
+  // below says why when the two disagree.
+  const showingNonPublic = includeNoProfile && !nameContains;
+  const index = useIndexIdentities(indexed === true, !includeNoProfile, {
     nameContains,
     cursor,
     onCursor: setCursor,
@@ -373,7 +412,7 @@ export const BrowseIdentities = () => {
     <Panel
       title={
         <>
-          public identities{' '}
+          {mode === 'index' && showingNonPublic ? 'identities' : 'public identities'}{' '}
           {mode === 'index' ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
@@ -385,10 +424,13 @@ export const BrowseIdentities = () => {
       orient={
         mode === 'index' ? (
           <>
-            Identities with a publicly-readable profile, straight off the relay's{' '}
-            <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
-            <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab folds its chain.
-            Search runs server-side over projected names (a relay-asserted substring, amber).
+            {showingNonPublic
+              ? 'Every identity chain the relay enumerates, whether or not it publishes a readable profile,'
+              : 'Identities with a publicly-readable profile,'}{' '}
+            straight off the relay's <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> —
+            every row is an <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab
+            folds its chain. Search runs server-side over projected names (a relay-asserted
+            substring, amber).
           </>
         ) : (
           <>
@@ -417,9 +459,30 @@ export const BrowseIdentities = () => {
           </button>
         </div>
       ) : null}
+      {mode === 'index' ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <button
+            class={includeNoProfile ? 'on' : ''}
+            onClick={() => setNpParam(includeNoProfile ? '' : '1')}
+          >
+            include identities without a public profile
+          </button>
+          <span class="lbl">
+            {showingNonPublic
+              ? 'every enumerated chain — a row with no readable name says so'
+              : 'showing only chains with a readable profile'}
+          </span>
+        </div>
+      ) : null}
+      {mode === 'index' && includeNoProfile && nameContains ? (
+        <div class="ck-note" style={{ marginBottom: 8 }}>
+          a name search cannot reach these: the relay never projects a non-public profile's name, so
+          there is no name for the filter to match. Clear the search to enumerate them.
+        </div>
+      ) : null}
 
       {mode === 'index' ? (
-        <IndexIdentitiesLight page={index} query={query} />
+        <IndexIdentitiesLight page={index} query={query} publicOnly={!showingNonPublic} />
       ) : mode === 'index-unavailable' ? (
         <IndexUnavailable noun="identities" loading={index.loading} onRetry={index.retry} />
       ) : !result || total === 0 ? (

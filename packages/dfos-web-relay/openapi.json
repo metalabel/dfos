@@ -135,7 +135,7 @@
                         },
                         "opCount": {
                           "type": "integer",
-                          "description": "Total operations in the global log"
+                          "description": "Operations this relay HOLDS in its global log. On a relay that prunes or culls, this is below the log's tip position and is not a proxy for it; counts are relay-local and not comparable across relays"
                         },
                         "countsByKind": {
                           "type": "object",
@@ -1113,7 +1113,7 @@
       "get": {
         "operationId": "indexIdentities",
         "summary": "Enumerate identity chains (non-authoritative index)",
-        "description": "Cursor-paginated enumeration of identity chains, DID ascending. A\ndiscovery hint, never authority — every row carries the identifiers a\nclient needs to re-derive its claims from the frozen proof plane. The\nindex cannot lie by assertion (a fabricated row fails the client's\nfold) but CAN lie by omission — absence of a row is not proof of\nabsence. The `profile` object is the single well-known projection\n(profile/v1 → name): null only when the identity declares no\nprofile-labeled content-chain anchor; on circuit breakers the object is\nkept with docSchema/name null and anchor preserved as the verification\npointer. Relays without the capability (capabilities.index false or\nabsent) return 501.\n",
+        "description": "Cursor-paginated enumeration of identity chains, DID ascending. A\ndiscovery hint, never authority — every row carries the identifiers a\nclient needs to re-derive its claims from the frozen proof plane. The\nindex cannot lie by assertion (a fabricated row fails the client's\nfold) but CAN lie by omission — absence of a row is not proof of\nabsence. The `profile` object is the single well-known projection\n(profile/v1 → name): null only when the identity declares no\nprofile-labeled content-chain anchor; on circuit breakers the object is\nkept with docSchema/name null and anchor preserved as the verification\npointer. docSchema null is an honest unknown — bytes not held, bytes\nundecodable, or a document declaring no string $schema — never a claim\nabout what the document says.\n\nDELETED IDENTITIES: a relay MAY omit isDeleted rows from the DISCOVERY\nshapes of this route (the bare listing, the keyset and ordered walks,\nnameContains, hasPublicProfile) and MUST return them, carrying\nisDeleted true, from either RESOLUTION shape — did= and key=. The\npresence of did= or key= makes the request a resolution whatever other\nfilters it carries. Relays without the capability (capabilities.index\nfalse or absent) return 501.\n",
         "tags": [
           "Index"
         ],
@@ -1125,7 +1125,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Exact DID match (zero or one row)"
+            "description": "Exact DID match (zero or one row). A RESOLUTION shape: a deleted identity MUST still be returned, carrying isDeleted true."
           },
           {
             "name": "key",
@@ -1134,7 +1134,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Reverse lookup \"which identities has this key ever been PROVED into\". Matched byte-for-byte against the multibase public-key strings of every key-role membership a possession proof admitted across the chain's whole history — auth, assert and controller alike, not just the current head, so a key a later update rotated out still matches. A key a chain merely DECLARED, with no possession proof admitting it, never matches: that membership is void, it publishes no link between chains, and indexing it would let a stranger burn a key they do not hold by writing it into a chain. One key may match many identities, and a deleted identity still matches. The value is opaque: a string no chain ever proved matches nothing, with no format validation and no 400."
+            "description": "Reverse lookup \"which identities has this key ever been PROVED into\". Matched byte-for-byte against the multibase public-key strings of every key-role membership a possession proof admitted across the chain's whole history — auth, assert and controller alike, not just the current head, so a key a later update rotated out still matches. A key a chain merely DECLARED, with no possession proof admitting it, never matches: that membership is void, it publishes no link between chains, and indexing it would let a stranger burn a key they do not hold by writing it into a chain. One key may match many identities. A RESOLUTION shape: a deleted identity MUST still match — key-loss recovery starts from a restored seed holding no DID, and mint-time burn checking refuses a key that already proves somewhere, so a hidden sealed row is a wrong answer rather than a thinner one. The value is opaque: a string no chain ever proved matches nothing, with no format validation and no 400."
           },
           {
             "name": "hasPublicProfile",
