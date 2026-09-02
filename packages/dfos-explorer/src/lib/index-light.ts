@@ -398,6 +398,74 @@ export const useIndexSignerKeyFilterRelays = (): string[] | null =>
     ),
   );
 
+// -----------------------------------------------------------------------------
+// CORPUS PROBE — does the serving relay hold any NON-PUBLIC content at all?
+//
+// Not feature detection. The three probes above ask what a relay can DO; this one
+// asks what it HOLDS, and it exists for a different reason: a control that cannot
+// change what is on screen must not be on screen. A relay whose whole corpus is
+// public answers `publicRead=false` and `no filter` with the same rows, so a
+// "public only" toggle over that corpus is a promise the page cannot keep — flip
+// it, watch nothing move, and the honest thing the explorer says everywhere else
+// about gated chains reads as decoration.
+//
+// This is the shape `browseDocuments` already uses on the local path, where the
+// "show N gated" control renders only when `gatedCount > 0`. The relay's own
+// answer decides whether the affordance exists, so ONE static bundle stays honest
+// against a public-only relay and against a relay full of dark rows.
+//
+//   rows came back  → non-public rows exist here → the toggle can do something
+//   zero rows       → nothing for it to reveal    → don't offer it
+//   non-2xx         → indeterminate               → defer to the next relay
+//
+// A relay predating the `publicRead` filter IGNORES it and answers with its whole
+// corpus, which reads here as "rows exist" — the toggle renders and behaves
+// exactly as it does today. That is the right direction for this gate: an unknown
+// relay keeps the control rather than having it silently withdrawn.
+// -----------------------------------------------------------------------------
+
+/** Interpret one relay's non-public-content probe: rows back means the relay
+ *  holds content it does not serve publicly (or ignored the filter, same
+ *  direction), zero rows means it holds none, and a non-2xx / throw (`status` 0)
+ *  is no verdict at all. Pure, unit-tested. */
+export const gatedContentFromProbe = (status: number, rows: number): boolean | null =>
+  status >= 200 && status < 300 ? rows > 0 : null;
+
+/** Whether a public-only control is worth rendering against the configured relay
+ *  set. ANY relay definitively reporting non-public rows decides it — the feeds
+ *  fail over across the whole set, so a row on any of them can reach the screen.
+ *  Failing that, a definitive empty from any relay hides the control, and an
+ *  ALL-INDETERMINATE set keeps it: we never looked, so nothing is withdrawn on
+ *  the strength of not having looked. Pure, unit-tested. */
+export const decideGatedContentPresent = (probes: readonly BodyFilterProbe[]): boolean => {
+  let answered = false;
+  for (const probe of probes) {
+    const verdict = gatedContentFromProbe(probe.status, probe.rows);
+    if (verdict === true) return true;
+    if (verdict === false) answered = true;
+  }
+  return !answered;
+};
+
+/**
+ * Whether any configured relay holds content it does not serve publicly — the
+ * gate on the posts feed's "public only" control. `null` while the probe is in
+ * flight (the control is withheld rather than flashed and retracted), then a
+ * stable boolean. Same module-cached, once-per-session idiom as the gates above.
+ *
+ * This says nothing about whether such rows would be READABLE. A non-public row
+ * enumerated here still renders with no title (the display-name circuit breaker
+ * nulls it), which is the whole point of showing it: existence without content.
+ */
+export const useIndexGatedContent = (): boolean | null =>
+  useProbe('gatedContent', (relays) =>
+    Promise.all(
+      relays.map((relay) =>
+        probeRelayBodyFilter(relay, '/index/v0/content?publicRead=false&limit=1', 'content'),
+      ),
+    ).then(decideGatedContentPresent),
+  );
+
 export interface IndexPage<T> {
   /** the rows of the CURRENT page only — paging replaces them, never appends. */
   rows: T[];

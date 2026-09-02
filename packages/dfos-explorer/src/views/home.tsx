@@ -31,7 +31,12 @@ import { getDb } from '../lib/db-instance';
 import { ensureDivergenceCheck, useDivergenceReport } from '../lib/divergence-store';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
+import {
+  useIndexCapable,
+  useIndexContent,
+  useIndexGatedContent,
+  useIndexIter2,
+} from '../lib/index-light';
 import {
   logSource,
   useIndexLog,
@@ -104,6 +109,16 @@ interface Observatory {
 // local and relay share a unit (ops vs ops); the per-kind figures are CHAIN
 // counts locally but OP counts in the hint, so they stay relay-asserted.
 //
+// EVERY FIGURE IN THIS BAND COUNTS OPERATIONS, AND THE LABELS SAY SO. The
+// per-kind cells read `stats.countsByKind`, which the relay spec defines as
+// "global-log counts by primitive kind" — LOG ENTRIES bucketed by what they act
+// on, never chains. A relay whose identities average four ops apiece reports an
+// `identity` bucket several times its identity-chain count, so a cell labelled
+// "identities" over that number is not a rounding error, it is a different
+// quantity. Chain counts are not a figure any relay serves: the index family
+// exposes no totals, so a chain count is only ever reached by enumerating, and
+// nothing on this landing page has enumerated anything. Say ops, mean ops.
+//
 // Preferring the local figure is only honest while the local index still
 // describes the network, so the band carries one line when it doesn't — see
 // DivergenceNotice.
@@ -173,7 +188,8 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const fullyVerified = assertedOps > 0 && localOps >= assertedOps;
   const oldest = fullyVerified && obs?.oldestOpAt ? obs.oldestOpAt : hint.oldestOpAt;
 
-  // by-kind: relay-asserted proportions — the network's shape, always available.
+  // by-kind: relay-asserted OPERATION proportions — the shape of the log, always
+  // available. Not chain counts; see the section header.
   const kindCounts: [OpKind, number][] = OP_KINDS.map((k) => [k, asserted(k) ?? 0]);
   const total = kindCounts.reduce((n, [, c]) => n + c, 0);
 
@@ -195,13 +211,21 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
         {/* the verified delta lives in the panel's right label, not inline — one
             statement of it, and the strip stays one line. */}
         <StatCell label="operations" value={num(hint.opCount ?? null)} green={fullyVerified} />
-        <StatCell label="identities" value={num(asserted('identity-op'))} green={fullyVerified} />
         <StatCell
-          label="content chains"
+          label="identity operations"
+          value={num(asserted('identity-op'))}
+          green={fullyVerified}
+        />
+        <StatCell
+          label="content operations"
           value={num(asserted('content-op'))}
           green={fullyVerified}
         />
-        <StatCell label="credentials" value={num(asserted('credential'))} green={fullyVerified} />
+        <StatCell
+          label="credential operations"
+          value={num(asserted('credential'))}
+          green={fullyVerified}
+        />
         <StatCell label="oldest op" value={oldest ? fmtAge(oldest) : '—'} green={fullyVerified} />
       </div>
 
@@ -219,13 +243,18 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
               ) : null,
             )}
           </div>
+          {/* the legend keys the BAR, so it lists exactly what the bar drew — a
+              kind the relay reports zero of has no segment, and a dot beside a
+              zero is a key to nothing. Same `c > 0` guard as the segments. */}
           <div class="kindbar-legend">
-            {kindCounts.map(([k, c]) => (
-              <span key={k} class="kindbar-key">
-                <span class="kindbar-dot" style={{ background: KIND_COLOR[k] }} />
-                {KIND_LABEL[k]} <b>{fmtCount(c)}</b>
-              </span>
-            ))}
+            {kindCounts.map(([k, c]) =>
+              c > 0 ? (
+                <span key={k} class="kindbar-key">
+                  <span class="kindbar-dot" style={{ background: KIND_COLOR[k] }} />
+                  {KIND_LABEL[k]} <b>{fmtCount(c)}</b>
+                </span>
+              ) : null,
+            )}
           </div>
         </>
       ) : null}
@@ -526,6 +555,15 @@ const PostsPanel = (props: { indexed: boolean | null; ordered: boolean | null })
     setPubParam(next ? '1' : '0');
   };
 
+  // the control is offered only where it can DO something: a relay holding no
+  // non-public content answers both sides of the filter with the same rows, and
+  // a toggle that promises "including gated chains" over a corpus with none is a
+  // claim the feed then fails to keep. Same discipline as the document browser's
+  // `gatedCount > 0` guard — the relay's answer decides. `null` (probe in
+  // flight) withholds it rather than flashing it; the FEED is unaffected either
+  // way, since `publicOnly` filters identically on a corpus with nothing to hide.
+  const gatedPresent = useIndexGatedContent();
+
   if (props.indexed === false) {
     return (
       <Panel title="posts" right={<span class="lbl">needs a relay index</span>}>
@@ -547,16 +585,18 @@ const PostsPanel = (props: { indexed: boolean | null; ordered: boolean | null })
         </span>
       }
     >
-      <div class="filters" style={{ marginBottom: 8 }}>
-        <button class={publicOnly ? 'on' : ''} onClick={toggle}>
-          public only
-        </button>
-        <span class="lbl">
-          {publicOnly
-            ? 'gated chains hidden'
-            : 'including gated chains — their titles are never rendered'}
-        </span>
-      </div>
+      {gatedPresent === true ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <button class={publicOnly ? 'on' : ''} onClick={toggle}>
+            public only
+          </button>
+          <span class="lbl">
+            {publicOnly
+              ? 'gated chains hidden'
+              : 'including gated chains — their titles are never rendered'}
+          </span>
+        </div>
+      ) : null}
       {!ordered && props.ordered !== null ? (
         <div class="ck-note" style={{ marginBottom: 8 }}>
           this relay doesn’t honour <code>order=</code>, so these are in the index’s lexical order,

@@ -332,6 +332,19 @@ export const BrowseIdentities = () => {
   const [query, setQuery] = useHashParam('q');
   const [cursor, setCursor] = useHashParam('after');
   const [includeGated, setIncludeGated] = useState(false);
+  // THE INDEX-PATH SIBLING of `includeGated`, and a separate piece of state
+  // because it drives a different query against a different source. Default OFF:
+  // the population it reveals is chains that publish no public profile, which is
+  // most often a bare chain with nothing to read, so it is opt-in the same way
+  // the local path's control is.
+  //
+  // What it CANNOT reach: sealed (`isDeleted`) identities. An origin relay may
+  // exclude those from every enumeration shape of /index/v0/identities — a relay
+  // that has sealed thousands of chains would otherwise make its live identities
+  // un-enumerable — while still resolving them by `did=`. Dropping
+  // `hasPublicProfile` widens the profile predicate and nothing else; a sealed
+  // chain is reached by its DID, or from the proof plane.
+  const [includeNoProfile, setIncludeNoProfile] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
   // the LOCAL fallback listing is materialized whole (up to BROWSE_LIMIT rows)
@@ -342,7 +355,7 @@ export const BrowseIdentities = () => {
   // a keystroke doesn't re-page the index on every character; the relay filters
   // over the projected profile name (amber) before paginating.
   const nameContains = useDebounced(query.trim(), 250);
-  const index = useIndexIdentities(indexed === true, true, {
+  const index = useIndexIdentities(indexed === true, !includeNoProfile, {
     nameContains,
     cursor,
     onCursor: setCursor,
@@ -373,7 +386,7 @@ export const BrowseIdentities = () => {
     <Panel
       title={
         <>
-          public identities{' '}
+          {mode === 'index' && includeNoProfile ? 'identities' : 'public identities'}{' '}
           {mode === 'index' ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
@@ -385,10 +398,13 @@ export const BrowseIdentities = () => {
       orient={
         mode === 'index' ? (
           <>
-            Identities with a publicly-readable profile, straight off the relay's{' '}
-            <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
-            <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab folds its chain.
-            Search runs server-side over projected names (a relay-asserted substring, amber).
+            {includeNoProfile
+              ? 'Every identity chain the relay enumerates, whether or not it publishes a readable profile,'
+              : 'Identities with a publicly-readable profile,'}{' '}
+            straight off the relay's <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> —
+            every row is an <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab
+            folds its chain. Search runs server-side over projected names (a relay-asserted
+            substring, amber).
           </>
         ) : (
           <>
@@ -415,6 +431,27 @@ export const BrowseIdentities = () => {
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} without a public profile
           </button>
+        </div>
+      ) : null}
+      {mode === 'index' ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <button
+            class={includeNoProfile ? 'on' : ''}
+            onClick={() => setIncludeNoProfile((v) => !v)}
+          >
+            include identities without a public profile
+          </button>
+          <span class="lbl">
+            {includeNoProfile
+              ? 'every enumerated chain — a row with no readable name says so'
+              : 'showing only chains with a readable profile'}
+          </span>
+        </div>
+      ) : null}
+      {mode === 'index' && includeNoProfile && nameContains ? (
+        <div class="ck-note" style={{ marginBottom: 8 }}>
+          a name search cannot reach these: the relay never projects a non-public profile's name, so
+          there is no name for the filter to match. Clear the search to enumerate them.
         </div>
       ) : null}
 

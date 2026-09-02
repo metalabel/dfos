@@ -119,7 +119,11 @@ paths:
                         description: Count of operations pending processing (-1 if unavailable)
                       opCount:
                         type: integer
-                        description: Total operations in the global log
+                        description: >-
+                          Operations this relay HOLDS in its global log. On a
+                          relay that prunes or culls, this is below the log's
+                          tip position and is not a proxy for it; counts are
+                          relay-local and not comparable across relays
                       countsByKind:
                         type: object
                         description: Operation counts bucketed by primitive kind (all six keys present)

@@ -1420,6 +1420,84 @@ interface ResolvedProfile {
   publicRead: boolean;
 }
 
+/** Served blob bytes → the value they decode to and the CID that value canonically
+ *  encodes to, or `null` when the bytes will not decode at all. Undecodable bytes
+ *  are not an exception to be handled somewhere else: they are a VERDICT about the
+ *  bytes, and the caller reads them as one — bytes that cannot be checked against
+ *  the committed CID have failed the check. */
+const decodeServedDocument = async (
+  bytes: Uint8Array,
+): Promise<{ parsed: unknown; cid: string } | null> => {
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: false }).decode(bytes));
+    const cid = (await dagCborCanonicalEncode(parsed as Record<string, unknown>)).cid.toString();
+    return { parsed, cid };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * What resolving an anchored profile came to.
+ *
+ * The point of the union is that the failures are NOT one failure. Reaching an
+ * anchored profile runs three gates in sequence, and each has its own reason to
+ * stop: the chain has to resolve, the document bytes have to be served, and the
+ * served bytes have to hash to the CID the chain committed. Collapsing those
+ * into `null` — the previous behavior — rendered all of them as "this identity
+ * has no profile", which is false in every one of them and dangerous in one:
+ * a CID MISMATCH is a relay handing over bytes that are not the document the
+ * chain signed, and that must never read as a shrug.
+ *
+ * `null` (the state, not a member) is "nothing to resolve, or still resolving" —
+ * the only case in which the header stays absent.
+ */
+type ProfileState =
+  | { kind: 'resolved'; profile: ResolvedProfile }
+  /** the anchored chain did not resolve on any configured relay */
+  | { kind: 'unresolvable' }
+  /** the chain resolved; no relay served its document bytes anonymously */
+  | { kind: 'withheld' }
+  /** bytes were served and they do NOT hash to the chain's committed CID */
+  | { kind: 'mismatch' }
+  /** bytes verified against the committed CID and are not a profile document */
+  | { kind: 'not-profile' };
+
+/** The copy for each non-resolved state. Two-tone as everywhere else: amber for
+ *  "this relay set cannot show you the thing", red for "a relay answered with
+ *  something it should not have". Only the mismatch is red, and it is red
+ *  because it is the one state that is a statement about the RELAY rather than
+ *  about what happens to be held. */
+const PROFILE_NOTE: Record<
+  Exclude<ProfileState, { kind: 'resolved' }>['kind'],
+  { state: 'warn' | 'bad'; text: string; detail: string }
+> = {
+  unresolvable: {
+    state: 'warn',
+    text: 'not resolvable here',
+    detail:
+      'This identity anchors a profile chain that none of your relays served. The anchor is signed into the chain and public — the chain it names is simply not held here. Absence on a relay is not absence from the network; try another relay.',
+  },
+  withheld: {
+    state: 'warn',
+    text: 'bytes not served here',
+    detail:
+      'The anchored profile chain resolved, but no relay served its document bytes to an unauthenticated read. Nothing about the document can be shown — including whether one exists to be shown.',
+  },
+  mismatch: {
+    state: 'bad',
+    text: 'bytes do not match the chain',
+    detail:
+      'A relay served bytes for the anchored profile that are not the document this identity’s chain committed — they do not hash to the committed CID, or they could not be decoded to check against it. They are not this profile, whatever they contain, so none of them is rendered. This is a statement about the relay, not about the identity.',
+  },
+  'not-profile': {
+    state: 'warn',
+    text: 'not a profile document',
+    detail:
+      'The anchored chain’s head document verified against its committed CID and does not declare the profile schema. There is nothing here to render as a profile.',
+  },
+};
+
 /**
  * Profile header — renders an identity's profile when it anchors one via a
  * ContentAnchor service and the doc is publicly readable. The bytes are
@@ -1427,13 +1505,21 @@ interface ResolvedProfile {
  * cannot dress arbitrary bytes up as someone's profile. The "public" pill means
  * exactly what was observed: the bytes were served to an UNAUTHENTICATED fetch
  * (the empirical effect of a public-read grant) — not a verified grant object.
+ *
+ * When the anchor is present and does not resolve, the header SAYS SO rather
+ * than vanishing. An identity that anchors nothing and an identity whose
+ * anchored chain this relay set cannot produce are different facts, and the
+ * rest of the page already disagrees with the silent version: the related row
+ * and the services table both render the anchor, and following it lands on an
+ * honest 404. Naming the state leaks nothing — the anchor is on-chain and
+ * public, so this says only what following it would already have said.
  */
 const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean }) => {
-  const [profile, setProfile] = useState<ResolvedProfile | null>(null);
+  const [state, setState] = useState<ProfileState | null>(null);
 
   useEffect(() => {
     let dead = false;
-    setProfile(null);
+    setState(null);
     if (!props.anchor || !props.chainVerified) return;
     const anchor = props.anchor;
     const relays = getRelays();
@@ -1443,23 +1529,37 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
           getClient().content(anchor),
           fetchBlobRaw(anchor, relays),
         ]);
-        if (dead || !blob.bytes) return; // gated / absent → no public profile to show
+        if (dead) return;
+        // gated / absent bytes — the chain is here, its document is not
+        if (!blob.bytes) return setState({ kind: 'withheld' });
         const committedCid = res.value.chain.currentDocumentCID;
-        const text = new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes);
-        const parsed: unknown = JSON.parse(text);
-        const derived = (
-          await dagCborCanonicalEncode(parsed as Record<string, unknown>)
-        ).cid.toString();
-        // integrity gate — the served bytes MUST hash to the committed doc CID
-        if (dead || derived !== committedCid || !isProfileContent(parsed)) return;
-        setProfile({
-          name: parsed.name,
-          description: parsed.description,
-          avatar: parseMediaObject(parsed.avatar),
-          publicRead: !blob.gated,
+        // DECODE INSIDE ITS OWN GATE. Bytes that will not decode cannot be
+        // checked against the committed CID, and the honest reading of that is
+        // the same as a failed check: a relay served something that is not the
+        // committed document. Letting a parse throw into the outer catch would
+        // report it as "the chain didn't resolve" — the chain resolved fine, and
+        // that laundering is exactly what these states exist to stop.
+        const decoded = await decodeServedDocument(blob.bytes);
+        if (dead) return;
+        // integrity gate — the served bytes MUST hash to the committed doc CID.
+        // Kept SEPARATE from the shape check below: a mismatch is a hostile-relay
+        // signal and must never be softened into "not held here".
+        if (!decoded || decoded.cid !== committedCid) return setState({ kind: 'mismatch' });
+        if (!isProfileContent(decoded.parsed)) return setState({ kind: 'not-profile' });
+        setState({
+          kind: 'resolved',
+          profile: {
+            name: decoded.parsed.name,
+            description: decoded.parsed.description,
+            avatar: parseMediaObject(decoded.parsed.avatar),
+            publicRead: !blob.gated,
+          },
         });
       } catch {
-        // no renderable public profile — the identity view stands on its own
+        // the chain lookup rejected — the anchored chain did not resolve on any
+        // configured relay. `fetchBlobRaw` never rejects (it reports an absent
+        // body as no bytes), so this is the chain gate and only the chain gate.
+        if (!dead) setState({ kind: 'unresolvable' });
       }
     })();
     return () => {
@@ -1467,15 +1567,29 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
     };
   }, [props.anchor, props.chainVerified]);
 
-  if (!profile) return null;
+  if (!state) return null;
+  if (state.kind === 'resolved') {
+    return (
+      <ProfileCard
+        name={state.profile.name}
+        description={state.profile.description}
+        avatar={state.profile.avatar}
+        verify="verified"
+        publicRead={state.profile.publicRead}
+      />
+    );
+  }
+  const note = PROFILE_NOTE[state.kind];
   return (
-    <ProfileCard
-      name={profile.name}
-      description={profile.description}
-      avatar={profile.avatar}
-      verify="verified"
-      publicRead={profile.publicRead}
-    />
+    <div class="profile-card">
+      <div class="profile-body">
+        <div class="profile-name">
+          <b>anchored profile</b>
+          <Pill state={note.state}>{note.text}</Pill>
+        </div>
+        <div class="profile-desc">{note.detail}</div>
+      </div>
+    </div>
   );
 };
 

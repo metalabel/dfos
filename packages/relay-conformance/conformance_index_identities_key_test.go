@@ -244,10 +244,18 @@ func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
 }
 
 // TestIndexIdentitiesKeyIsHasEverProved pins the history semantics: a key a later
-// update rotates out KEEPS matching, and a deleted chain KEEPS matching (carrying
-// isDeleted). Both are the cases a current-state implementation gets wrong, and
-// both are exactly the cases key-loss recovery depends on — possession, once
-// demonstrated, does not become untrue.
+// update rotates out KEEPS matching, and deleting the chain does not erase the
+// deletion from the index — the row records it. Both are the cases a current-state
+// implementation gets wrong, and both are exactly the cases key-loss recovery
+// depends on — possession, once demonstrated, does not become untrue.
+//
+// The deletion half asserts on the POINT LOOKUP, deliberately. WEB-RELAY.md's
+// enumeration-vs-resolution rule lets a relay omit deleted identities from every
+// ENUMERATION shape of this route — `key=` included — while requiring `did=` to
+// resolve them carrying isDeleted. So the `did=` assertion is the MUST and is
+// unconditional; the `key=` assertion below accepts either behavior, and pins the
+// row's isDeleted only on a relay that chose to serve it. Asserting the sealed row
+// on `key=` would fail a conformant origin for a permitted choice.
 func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)
@@ -287,12 +295,34 @@ func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	}
 	postOperationsAccepted(t, base, []string{deleteToken})
 
-	rows := identityRowsMatching(t, base, keyParam(rotatedOut.mk.PublicKeyMultibase))
-	if len(rows) != 1 || rows[0].DID != id.did {
-		t.Fatalf("key=<rotated-out> after deletion = %+v, want the row for %s", rows, id.did)
+	// RESOLUTION — the MUST. A caller naming the DID gets the row back, carrying
+	// the deletion. A relay answering this with an empty page would be asserting
+	// non-existence about a chain it holds, which no relay is entitled to do.
+	resolved := identityRowsMatching(t, base, "did="+url.QueryEscape(id.did))
+	if len(resolved) != 1 || resolved[0].DID != id.did {
+		t.Fatalf("did=<deleted chain> = %+v, want the row for %s — the point lookup MUST resolve a deleted identity", resolved, id.did)
 	}
-	if !rows[0].IsDeleted {
-		t.Fatalf("key=<rotated-out> row for a deleted chain reports isDeleted=false: %+v — the route defines no isDeleted filter, so the field is how a consumer knows", rows[0])
+	if !resolved[0].IsDeleted {
+		t.Fatalf("did=<deleted chain> row reports isDeleted=false: %+v — the route defines no isDeleted filter, so the field is how a consumer knows", resolved[0])
+	}
+
+	// ENUMERATION — either behavior is conformant. A relay that lists deleted
+	// identities returns the row and it MUST carry isDeleted; a relay that omits
+	// them returns an empty page. What is NOT conformant is a row that comes back
+	// claiming to be live, so that is the only thing asserted here.
+	rows := identityRowsMatching(t, base, keyParam(rotatedOut.mk.PublicKeyMultibase))
+	switch len(rows) {
+	case 0:
+		t.Logf("key=<rotated-out> after deletion returned no rows — this relay omits deleted identities from enumeration, which the spec permits")
+	case 1:
+		if rows[0].DID != id.did {
+			t.Fatalf("key=<rotated-out> after deletion = %+v, want the row for %s or an empty page", rows, id.did)
+		}
+		if !rows[0].IsDeleted {
+			t.Fatalf("key=<rotated-out> enumerated a deleted chain as live: %+v — a relay that serves the row MUST carry isDeleted", rows[0])
+		}
+	default:
+		t.Fatalf("key=<rotated-out> after deletion = %+v, want at most the row for %s", rows, id.did)
 	}
 }
 

@@ -139,6 +139,13 @@ export const Search = () => {
     setDraft(q);
   }, [q]);
 
+  // public-only, hardcoded, and it stays that way — unlike the browse listing,
+  // which now offers a toggle to drop the filter. This lane is a NAME search, and
+  // the relay never projects a non-public profile's name (the display-name
+  // registry's circuit breaker nulls it). So `hasPublicProfile=false` rows have
+  // no name for `nameContains` to match: dropping the filter here would widen the
+  // query by exactly zero rows while advertising that it widened it. Browse can
+  // offer the control because browse enumerates; search cannot.
   const index = useIndexIdentities(indexed === true && needle.length > 0, true, {
     nameContains: needle,
     cursor,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decideGatedContentPresent,
   decideIter2,
+  gatedContentFromProbe,
   indexBrowseMode,
   indexCredSource,
   indexListState,
@@ -139,6 +141,44 @@ describe('decideIter2 — support across the ordered relay set', () => {
   it('all-indeterminate (or empty) → unsupported — the SAFE default', () => {
     expect(decideIter2([501, 0, 500])).toBe(false);
     expect(decideIter2([])).toBe(false);
+  });
+});
+
+describe('gatedContentFromProbe — does this relay hold non-public content?', () => {
+  it('a served page with rows → yes; a served empty page → no', () => {
+    expect(gatedContentFromProbe(200, 1)).toBe(true);
+    expect(gatedContentFromProbe(200, 0)).toBe(false);
+  });
+
+  it('a relay that IGNORES publicRead= answers with rows → reads as yes (the safe direction)', () => {
+    // an unfiltered corpus page comes back non-empty, so the control is kept
+    expect(gatedContentFromProbe(200, 25)).toBe(true);
+  });
+
+  it('non-2xx and network failures are no verdict at all', () => {
+    expect(gatedContentFromProbe(501, 0)).toBeNull();
+    expect(gatedContentFromProbe(500, 0)).toBeNull();
+    expect(gatedContentFromProbe(0, 0)).toBeNull();
+  });
+});
+
+describe('decideGatedContentPresent — whether a public-only control is worth showing', () => {
+  const probe = (status: number, rows: number) => ({ relay: 'https://r.example', status, rows });
+
+  it('any relay definitively holding non-public rows shows the control', () => {
+    expect(decideGatedContentPresent([probe(200, 1)])).toBe(true);
+    expect(decideGatedContentPresent([probe(200, 0), probe(200, 3)])).toBe(true);
+    expect(decideGatedContentPresent([probe(0, 0), probe(200, 2)])).toBe(true);
+  });
+
+  it('a definitive empty answer and nothing to the contrary hides it', () => {
+    expect(decideGatedContentPresent([probe(200, 0)])).toBe(false);
+    expect(decideGatedContentPresent([probe(200, 0), probe(501, 0)])).toBe(false);
+  });
+
+  it('ALL-indeterminate (or empty) keeps the control — never withdraw on not having looked', () => {
+    expect(decideGatedContentPresent([probe(501, 0), probe(0, 0)])).toBe(true);
+    expect(decideGatedContentPresent([])).toBe(true);
   });
 });
 
