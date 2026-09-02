@@ -239,7 +239,7 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 
 	pKey, err := resolveKey(pKid)
 	if err != nil {
-		return fmt.Errorf("failed to resolve parent credential key: %v", err)
+		return fmt.Errorf("failed to resolve parent credential key: %w", err)
 	}
 
 	pVerified, err := VerifyCredential(parentJws, pKey, "", "")

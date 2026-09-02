@@ -58,6 +58,22 @@ func operationSizeForCap(payload map[string]any, fullEncoded []byte) (int, error
 }
 
 // KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
+//
+// A RESOLVER ERROR IS A TYPED FACT AND MUST REACH THE CALLER INTACT. Only the
+// resolver knows WHY a key did not resolve — "the identity chain has not synced
+// to this store yet" and "this kid is malformed" are the same `error` value at
+// this seam, and only the resolver's own sentinel separates them. Every verify
+// entrypoint in this package therefore re-wraps a resolver failure with %w and
+// never %v or %s, so a caller can classify it with errors.Is.
+//
+// The rule exists because the alternative was tried and was a vulnerability: the
+// relay used to classify "is this a missing dependency?" by substring-matching
+// the error TEXT, and much of that text is attacker-influenced (a kid, a typ, a
+// credential audience are all submitter-chosen and appear verbatim in messages
+// here). A submitter could spell a permanent rejection so it read as retryable
+// and the relay would keep and re-verify the operation forever. Preserving the
+// chain is what lets the classification be a fact rather than a spelling.
+// TestResolverErrorSurvivesEveryVerifyEntrypoint pins it.
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
 // RevocationChecker reports whether a credential (by issuer DID + credential
@@ -1066,7 +1082,12 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 	creatorPubKey, err := credentialResolveKey(vcKid)
 	if err != nil {
-		return fmt.Errorf("cannot resolve creator key for authorization verification")
+		// %w, never %v: the resolver's error is the ONLY carrier of "this
+		// identity is not here yet" and a caller (the relay ingest classifier)
+		// branches on it with errors.Is. Flattening it to text would force that
+		// caller back onto substring matching of a message an attacker can
+		// influence.
+		return fmt.Errorf("cannot resolve creator key for authorization verification: %w", err)
 	}
 
 	opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
@@ -1281,7 +1302,7 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 			}
 
 			if err := verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt, resolveKey, opts); err != nil {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: %s", idx, err)
+				return nil, fmt.Errorf("log[%d]: authorization verification failed: %w", idx, err)
 			}
 		}
 
@@ -1422,7 +1443,7 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 		}
 
 		if err := verifyContentAuthorization(authorization, opDID, currentState.CreatorDID, currentState.ContentID, createdAt, resolveKey, opts); err != nil {
-			return nil, fmt.Errorf("authorization verification failed: %s", err)
+			return nil, fmt.Errorf("authorization verification failed: %w", err)
 		}
 	}
 

@@ -26,6 +26,7 @@ import {
 } from '../credentials';
 import { MAX_CREDENTIAL_SIZE } from '../credentials/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
+import { carryDependencyMissing } from '../dependency';
 import { deriveContentId } from './derivation';
 import { ContentOperation, MAX_OPERATION_SIZE } from './schemas';
 import type { Signer, VerifiedIdentity } from './schemas';
@@ -327,8 +328,15 @@ export const verifyContentChain = async (input: {
           ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
         });
       } catch (err) {
+        // carryDependencyMissing, not a bare re-throw: the credential path
+        // resolves the ISSUER through the caller's resolver, so an unsynced
+        // issuer surfaces here. Dropping the marker at this boundary would make
+        // a retryable miss look like a verdict on the operation.
         const message = err instanceof Error ? err.message : 'unknown error';
-        throw new Error(`log[${idx}]: authorization verification failed: ${message}`);
+        throw carryDependencyMissing(
+          err,
+          new Error(`log[${idx}]: authorization verification failed: ${message}`),
+        );
       }
     }
 
@@ -493,8 +501,10 @@ export const verifyContentExtensionFromTrustedState = async (input: {
         ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
       });
     } catch (err) {
+      // See the same wrap in verifyContentChain: the marker must cross this
+      // boundary or an unsynced credential issuer reads as a permanent failure.
       const message = err instanceof Error ? err.message : 'unknown error';
-      throw new Error(`authorization verification failed: ${message}`);
+      throw carryDependencyMissing(err, new Error(`authorization verification failed: ${message}`));
     }
   }
 

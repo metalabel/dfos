@@ -16,6 +16,7 @@
 
 */
 
+import { isDependencyMissing, markDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   decodeMultikey,
   verifyArtifact,
@@ -69,58 +70,34 @@ export const FORK_POINT_STATE_ERROR_PREFIX = 'failed to compute state at fork po
 export const IDENTITY_CONFLICTING_EXTENSION_ERROR =
   'identity chains are linear: conflicting extension refused';
 
-/**
- * Substrings that mark a verify-time failure as a missing-dependency (the
- * signing identity / key has not synced yet). These are the only cases where a
- * thrown verification error is retryable rather than a permanent rejection.
+/*
+ * DEPENDENCY CLASSIFICATION IS A TYPED FACT, NOT A SPELLING.
  *
- * This list is the UNION across both relay implementations and MUST stay
- * byte-identical to the Go twin's `dependencyFailureSubstrings` in ingest.go.
- * The two had drifted — Go carried the content-chain entries, TS carried the
- * credential entries in a second, separately-applied predicate — so the same op
- * could be permanently rejected by one twin and kept retryable by the other.
- * Since a permanent rejection DELETES the raw op (`markOpRejected`), a
- * misclassification is unrecoverable; the union is the correct reconciliation
- * (strictly more retries, never more deletions).
+ * A rejection is retryable when the referenced identity or key is simply not in
+ * this store yet — sync or gossip may deliver it and the same operation then
+ * verifies. Every other rejection is permanent, and a permanent rejection
+ * DELETES the raw op (`markOpRejected`), which is unrecoverable. So the
+ * discriminator has to be a fact the verifier knows, not a phrase in a message.
  *
- * Every entry is a real, greppable producer:
+ * It used to be a list of substrings matched against the error text, and that
+ * text quotes submitter-controlled input verbatim: a credential's audience
+ * reaches "credential audience ${aud} does not match ...", a kid and a typ reach
+ * messages of their own. A submitter who spelled one of the watched phrases
+ * inside one of those fields turned a PERMANENT rejection into a retryable one —
+ * so the op was never deleted, was re-verified on every sequencer cycle, and
+ * varying one byte to mint a fresh CID grew the raw-op store without bound.
+ * Choosing a string chose the relay's control flow.
  *
- *   - "unknown identity:"          — `createKeyResolver`: identity chain not synced
- *   - "unknown key "               — `createKeyResolver`: key not on the (synced)
- *     identity ("unknown key <id> on identity <did>")
- *   - "unknown previous operation" — content/identity chain dependency, surfaced
- *     directly or through a wrapped verify error
- *   - "content chain not found:"   — same, for the content chain lookup (the
- *     trailing colon keeps it off the relays' bare 404 body of the same words)
- *   - "issuer identity not found:" — dfos-protocol `dfos-credential.ts`:
- *     credential issuer chain not synced
- *   - " not found on identity "    — dfos-protocol `dfos-credential.ts` /
- *     `credit-claim.ts`: "key <id> not found on identity <did>"
+ * The marker replaces it: `markDependencyMissing` is applied at the resolver
+ * miss sites below and inside the protocol at the two places its own resolver
+ * contract can miss (an unknown issuer identity, a key absent from a resolved
+ * identity), and `isDependencyMissing` reads it back here. Nothing in between
+ * can be spelled from outside.
  *
- * Keeping this a narrow, explicit list (not the full error text) is what makes
- * the structured `dependencyMissing` flag deterministic and twin-equivalent.
+ * THE TWO TWINS MUST CLASSIFY IDENTICALLY, and now do so structurally rather
+ * than by keeping two lists of phrases in sync — the Go twin's `ErrDependencyMissing`
+ * (ingest.go) wraps the same miss sites and is read with errors.Is.
  */
-const DEPENDENCY_FAILURE_SUBSTRINGS = [
-  'unknown identity:',
-  'unknown key ',
-  'unknown previous operation',
-  'content chain not found:',
-  'issuer identity not found:',
-  ' not found on identity ',
-];
-
-/** True if a thrown verification error message indicates a missing dependency. */
-const isKeyResolutionFailure = (message: string): boolean =>
-  DEPENDENCY_FAILURE_SUBSTRINGS.some((s) => message.includes(s));
-
-/**
- * Credential verification surfaces the unsynced-issuer dependency with different
- * messages ("issuer identity not found: <iss>", "key <id> not found on identity
- * <did>") than the chain key resolvers. Both are now entries in the single union
- * list above, so this is the same predicate under the credential-site name —
- * kept as a distinct name because the call site reads better with it.
- */
-const isCredentialDependencyFailure = isKeyResolutionFailure;
 
 export type AdmissionMode = 'current' | 'historical';
 
@@ -302,11 +279,18 @@ export const createKeyResolver =
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
 
+    // The two MISS sites: this store does not hold the chain, or holds it and
+    // has never seen the key. Both may be answered differently once more of the
+    // graph arrives, so both are marked retryable. The malformed-kid failure
+    // above is NOT marked — no amount of syncing makes a kid that is not a DID
+    // URL into one, so that op is durably rejected.
     const identity = await store.getIdentityChain(did);
-    if (!identity) throw new Error(`unknown identity: ${did}`);
+    if (!identity) throw markDependencyMissing(new Error(`unknown identity: ${did}`));
 
     const publicKeyMultibase = provedKeyMultibase(identity, keyId);
-    if (!publicKeyMultibase) throw new Error(`unknown key ${keyId} on identity ${did}`);
+    if (!publicKeyMultibase) {
+      throw markDependencyMissing(new Error(`unknown key ${keyId} on identity ${did}`));
+    }
     return decodeMultikey(publicKeyMultibase).keyBytes;
   };
 
@@ -411,8 +395,11 @@ export const createCurrentKeyResolver =
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
 
+    // Only the unknown-identity failure is a dependency miss here. A DELETED
+    // identity and a key that is merely no longer current are verdicts this
+    // store is already entitled to reach; re-asking later cannot change them.
     const identity = await store.getIdentityChain(did);
-    if (!identity) throw new Error(`unknown identity: ${did}`);
+    if (!identity) throw markDependencyMissing(new Error(`unknown identity: ${did}`));
     if (identity.state.isDeleted) throw new Error('signing identity is deleted');
 
     // CURRENT means EFFECTIVE — the arrays already exclude every membership no
@@ -649,7 +636,7 @@ const ingestContentOp = async (
         cid,
         status: 'rejected',
         error: message,
-        dependencyMissing: isKeyResolutionFailure(message),
+        dependencyMissing: isDependencyMissing(err),
       };
     }
     const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
@@ -720,7 +707,7 @@ const ingestContentOp = async (
         cid,
         status: 'rejected',
         error: message,
-        dependencyMissing: isKeyResolutionFailure(message),
+        dependencyMissing: isDependencyMissing(err),
       };
     }
     const updated: StoredContentChain = {
@@ -797,7 +784,7 @@ const ingestContentOp = async (
       cid,
       status: 'rejected',
       error: message,
-      dependencyMissing: isKeyResolutionFailure(message),
+      dependencyMissing: isDependencyMissing(err),
     };
   }
 
@@ -845,7 +832,7 @@ const ingestCountersign = async (
       cid: await computeOpCID(jwsToken),
       status: 'rejected',
       error: message,
-      dependencyMissing: isKeyResolutionFailure(message),
+      dependencyMissing: isDependencyMissing(err),
     };
   }
 
@@ -934,7 +921,7 @@ const ingestArtifact = async (
       cid: await computeOpCID(jwsToken),
       status: 'rejected',
       error: message,
-      dependencyMissing: isKeyResolutionFailure(message),
+      dependencyMissing: isDependencyMissing(err),
     };
   }
 
@@ -983,7 +970,7 @@ const ingestRevocation = async (
       cid: await computeOpCID(jwsToken),
       status: 'rejected',
       error: message,
-      dependencyMissing: isKeyResolutionFailure(message),
+      dependencyMissing: isDependencyMissing(err),
     };
   }
 
@@ -1054,7 +1041,7 @@ const ingestPublicCredential = async (
       cid: await computeOpCID(jwsToken),
       status: 'rejected',
       error: message,
-      dependencyMissing: isCredentialDependencyFailure(message),
+      dependencyMissing: isDependencyMissing(err),
     };
   }
 

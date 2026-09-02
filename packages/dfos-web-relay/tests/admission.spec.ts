@@ -15,12 +15,14 @@ import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
+  decodeJwsUnsafe,
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { ingestOperations, NONCURRENT_SIGNING_KEY_ERROR } from '../src/ingest';
 import { createRelay } from '../src/relay';
+import { sequenceOps } from '../src/sequencer';
 import { MemoryRelayStore } from '../src/store';
 import type { PeerClient } from '../src/types';
 import { chainKeyProof } from './key-proofs';
@@ -441,5 +443,218 @@ describe('pending-op admission provenance', () => {
 
     expect(await target.getOperation(committedArtifact.artifactCID)).toBeDefined();
     expect(await target.countUnsequenced()).toBe(0);
+  });
+});
+
+/*
+
+  DEPENDENCY CLASSIFICATION IS A TYPED FACT, NOT A SPELLING.
+
+  The relay keeps a rejected op pending when the rejection is a missing
+  dependency and DELETES the raw op otherwise. That branch used to be decided by
+  substring-matching the human-readable error, and much of that text quotes what
+  the submitter wrote — a credential's audience is echoed verbatim into
+  "credential audience ${aud} does not match operation signer ${did}". Spelling
+  one of the watched phrases inside that field made a PERMANENT rejection
+  classify as retryable, so the op was never deleted and was re-verified on every
+  sequencer cycle. The Go twin carries the same pair
+  (dfos-web-relay-go/ingest_typed_dependency_test.go).
+
+*/
+
+/** One of the phrases the deleted substring list matched. */
+const POISON_PHRASE = 'unknown identity: ';
+
+/**
+ * A delegated content update whose authorization credential names an audience
+ * the submitter chose. The credential verifies; it simply does not authorize
+ * this signer, so the rejection is permanent — and the audience reaches the
+ * error text verbatim, which is where the old classifier read it.
+ */
+const ingestPoisonedAudience = async (store: MemoryRelayStore, audienceDID: string) => {
+  const creator = await createIdentity();
+  const delegate = await createIdentity();
+  const genesis = await signContent(creator.did, creator.oldAuth, 'genesis', 1);
+  const seeded = await ingestOperations(
+    [creator.jwsToken, delegate.jwsToken, genesis.jwsToken],
+    store,
+  );
+  const contentID = seeded[2]!.chainId!;
+
+  const now = Math.floor(Date.now() / 1000);
+  const credential = await createDFOSCredential({
+    issuerDID: creator.did,
+    audienceDID,
+    att: [{ resource: `chain:${contentID}`, action: 'write' }],
+    exp: now + 3600,
+    signer: creator.oldAuth.signer,
+    keyId: creator.oldAuth.keyId,
+    iat: now,
+  });
+
+  const document = await dagCborCanonicalEncode({ type: 'post', title: 'delegated' });
+  const delegated = await signContentOperation({
+    operation: {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: genesis.operationCID,
+      documentCID: document.cid.toString(),
+      baseDocumentCID: null,
+      createdAt: timestamp(3),
+      note: null,
+      authorization: credential,
+    },
+    signer: delegate.oldAuth.signer,
+    kid: `${delegate.did}#${delegate.oldAuth.keyId}`,
+  });
+  return {
+    jwsToken: delegated.jwsToken,
+    result: (await ingestOperations([delegated.jwsToken], store))[0]!,
+  };
+};
+
+describe('typed dependency classification', () => {
+  it('does not let submitter-chosen text buy retryability', async () => {
+    const store = new MemoryRelayStore();
+    const { result } = await ingestPoisonedAudience(
+      store,
+      `${POISON_PHRASE}chosen-by-the-submitter`,
+    );
+    expect(result.status).toBe('rejected');
+    expect(result.dependencyMissing).not.toBe(true);
+  });
+
+  it('durably deletes the raw op a poisoned rejection produced', async () => {
+    const store = new MemoryRelayStore();
+    const { jwsToken } = await ingestPoisonedAudience(
+      store,
+      `${POISON_PHRASE}chosen-by-the-submitter`,
+    );
+    const decoded = decodeJwsUnsafe(jwsToken)!;
+    const cid = (await dagCborCanonicalEncode(decoded.payload)).cid.toString();
+    await store.putRawOp(cid, jwsToken);
+
+    const { result } = await sequenceOps(store);
+    expect(result.rejected).toBe(1);
+    expect(await store.countUnsequenced()).toBe(0);
+  });
+
+  it('keeps a genuine dependency miss retryable on every op kind', async () => {
+    // A well-formed identity no store below has ever seen: every op it signs
+    // verifies once its chain arrives.
+    const stranger = await createIdentity();
+    const strangerKid = `${stranger.did}#${stranger.oldAuth.keyId}`;
+    const expectRetryable = (result: Awaited<ReturnType<typeof ingestOperations>>[number]) => {
+      expect(result.status).toBe('rejected');
+      expect(result.dependencyMissing).toBe(true);
+    };
+
+    const content = await signContent(stranger.did, stranger.oldAuth, 'orphan', 1);
+    expectRetryable((await ingestOperations([content.jwsToken], new MemoryRelayStore()))[0]!);
+
+    const artifact = await signArtifact({
+      payload: {
+        version: 1,
+        type: 'artifact',
+        did: stranger.did,
+        content: { $schema: 'test/v1', title: 'orphan' },
+        createdAt: timestamp(1),
+      } as ArtifactPayload,
+      signer: stranger.oldAuth.signer,
+      kid: strangerKid,
+    });
+    expectRetryable((await ingestOperations([artifact.jwsToken], new MemoryRelayStore()))[0]!);
+
+    const countersign = await signCountersignature({
+      payload: {
+        version: 1,
+        type: 'countersign',
+        did: stranger.did,
+        targetCID: stranger.operationCID,
+        relation: 'witness',
+        createdAt: timestamp(1),
+      } as CountersignPayload,
+      signer: stranger.oldAuth.signer,
+      kid: strangerKid,
+    });
+    expectRetryable((await ingestOperations([countersign.jwsToken], new MemoryRelayStore()))[0]!);
+
+    const revocation = await signRevocation({
+      issuerDID: stranger.did,
+      credentialCID: stranger.operationCID,
+      signer: stranger.oldAuth.signer,
+      keyId: stranger.oldAuth.keyId,
+    });
+    expectRetryable((await ingestOperations([revocation.jwsToken], new MemoryRelayStore()))[0]!);
+
+    const now = Math.floor(Date.now() / 1000);
+    const publicCredential = await createDFOSCredential({
+      issuerDID: stranger.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:*', action: 'read' }],
+      exp: now + 3600,
+      signer: stranger.oldAuth.signer,
+      keyId: stranger.oldAuth.keyId,
+      iat: now,
+    });
+    expectRetryable((await ingestOperations([publicCredential], new MemoryRelayStore()))[0]!);
+  });
+
+  it('keeps a delegated op retryable when only its credential issuer is unsynced', async () => {
+    // The credential path resolves the ISSUER through the caller's resolver, so
+    // this miss happens a layer below the op's own signer and has to cross the
+    // authorization re-wrap in the protocol to be classified correctly.
+    const store = new MemoryRelayStore();
+    const creator = await createIdentity();
+    const delegate = await createIdentity();
+    const middle = await createIdentity(); // deliberately NOT ingested
+    const genesis = await signContent(creator.did, creator.oldAuth, 'genesis', 1);
+    const seeded = await ingestOperations(
+      [creator.jwsToken, delegate.jwsToken, genesis.jwsToken],
+      store,
+    );
+    const contentID = seeded[2]!.chainId!;
+
+    const now = Math.floor(Date.now() / 1000);
+    const parent = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: middle.did,
+      att: [{ resource: `chain:${contentID}`, action: 'write' }],
+      exp: now + 3600,
+      signer: creator.oldAuth.signer,
+      keyId: creator.oldAuth.keyId,
+      iat: now,
+    });
+    const leaf = await createDFOSCredential({
+      issuerDID: middle.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${contentID}`, action: 'write' }],
+      prf: [parent],
+      exp: now + 3600,
+      signer: middle.oldAuth.signer,
+      keyId: middle.oldAuth.keyId,
+      iat: now,
+    });
+
+    const document = await dagCborCanonicalEncode({ type: 'post', title: 'delegated' });
+    const delegated = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did: delegate.did,
+        previousOperationCID: genesis.operationCID,
+        documentCID: document.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: timestamp(3),
+        note: null,
+        authorization: leaf,
+      },
+      signer: delegate.oldAuth.signer,
+      kid: `${delegate.did}#${delegate.oldAuth.keyId}`,
+    });
+    const result = (await ingestOperations([delegated.jwsToken], store))[0]!;
+    expect(result.status).toBe('rejected');
+    expect(result.dependencyMissing).toBe(true);
   });
 });

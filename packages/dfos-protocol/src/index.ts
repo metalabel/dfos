@@ -1,4 +1,5 @@
 export * from './crypto';
+export * from './dependency';
 export * from './chain';
 export * from './credentials';
 export * from './key-proof';
