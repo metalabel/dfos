@@ -98,13 +98,24 @@ func newRouter(r *Relay) http.Handler {
 // withCORS wraps a handler with a permissive CORS policy so browser clients can
 // read the public proof plane cross-origin. The policy is kept byte-for-byte in
 // sync with the TS relay: Allow-Origin *, Allow-Methods GET, POST, PUT, OPTIONS,
-// Allow-Headers Content-Type, Authorization, and 204 on preflight.
+// Allow-Headers Content-Type, Authorization, Expose-Headers X-Document-Cid, and
+// 204 on preflight.
+//
+// Expose-Headers is load-bearing, not decoration. A cross-origin reader sees
+// only the CORS-safelisted response headers unless the server names the rest,
+// and X-Document-Cid is the blob route's own statement of which document it
+// believes it is sending. A browser client that cannot read it cannot check
+// served bytes against the SERVING relay's claim — only against a chain lookup
+// that may have come from a different relay — which collapses "this relay
+// contradicts itself" into "two relays disagree". Withholding it does not make
+// a browser client safer; it makes it blinder.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 		h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		h.Set("Access-Control-Expose-Headers", "X-Document-Cid")
 		if req.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

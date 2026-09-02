@@ -15,8 +15,23 @@
 import { describe, expect, it } from 'vitest';
 import { bytesFailureKind, chainFailureKind, integrityVerdict } from '../src/views/identity';
 
-const claim = (status: number, gated = false) => ({ relay: 'https://r.example', status, gated });
-const blob = (status: number, gated = false) => ({ relay: 'https://r.example', status, gated });
+/** One relay's outcome. */
+const at = (status: number, gated = false, relay = `https://r${status}.example`) => ({
+  relay,
+  status,
+  gated,
+});
+
+/** A result carrying the whole attempt list — what the fetchers now return. The
+ *  top-level relay/status/gated mirror the LAST attempt, which is exactly the
+ *  partial view these classifiers exist to stop reading on its own. */
+const over = (...attempts: ReturnType<typeof at>[]) => {
+  const last = attempts[attempts.length - 1] ?? at(0);
+  return { ...last, attempts };
+};
+
+const claim = (status: number, gated = false) => over(at(status, gated));
+const blob = (status: number, gated = false) => over(at(status, gated));
 
 describe('chainFailureKind — a proof-plane failure is three different facts', () => {
   it('an answered 404 is absence', () => {
@@ -37,7 +52,38 @@ describe('chainFailureKind — a proof-plane failure is three different facts', 
   });
 });
 
-describe('bytesFailureKind — the same split on the content plane', () => {
+describe('chainFailureKind — the verdict is over the SET, not the last relay', () => {
+  it('timeout on A + 404 on B is NOT absence, even though 404 was answered last', () => {
+    // the reported case: the fetchers keep the last failure, so this result's
+    // own status is 404. Absence requires unanimity — A never answered.
+    expect(chainFailureKind(over(at(0), at(404)))).toBe('chain-unreachable');
+  });
+
+  it('absence requires EVERY relay asked to have answered 404', () => {
+    expect(chainFailureKind(over(at(404), at(404)))).toBe('chain-absent');
+    expect(chainFailureKind(over(at(404), at(503)))).toBe('chain-unreachable');
+  });
+
+  it('one gated answer wins outright — it is the most informative thing said', () => {
+    expect(chainFailureKind(over(at(401, true), at(404)))).toBe('chain-gated');
+    expect(chainFailureKind(over(at(404), at(403, true)))).toBe('chain-gated');
+    expect(chainFailureKind(over(at(0), at(401, true)))).toBe('chain-gated');
+  });
+
+  it('no relay asked is unreachable — "every relay said 404" must not be vacuous', () => {
+    expect(chainFailureKind({ relay: '', status: 404, gated: false, attempts: [] })).toBe(
+      'chain-unreachable',
+    );
+  });
+
+  it('a result with no attempt list at all still classifies off itself', () => {
+    // fixtures and older callers construct these literals directly
+    expect(chainFailureKind({ relay: 'r', status: 404, gated: false })).toBe('chain-absent');
+    expect(chainFailureKind({ relay: 'r', status: 0, gated: false })).toBe('chain-unreachable');
+  });
+});
+
+describe('bytesFailureKind — the same split, and the same aggregate, on the content plane', () => {
   it('404 is absence and 401/403 is gated', () => {
     expect(bytesFailureKind(blob(404))).toBe('bytes-absent');
     expect(bytesFailureKind(blob(401, true))).toBe('bytes-gated');
@@ -51,6 +97,12 @@ describe('bytesFailureKind — the same split on the content plane', () => {
   it('unreachable and 5xx stay their own answer', () => {
     expect(bytesFailureKind(blob(0))).toBe('bytes-unreachable');
     expect(bytesFailureKind(blob(503))).toBe('bytes-unreachable');
+  });
+
+  it('mixed outcomes aggregate the same way the chain leg does', () => {
+    expect(bytesFailureKind(over(at(0), at(404)))).toBe('bytes-unreachable');
+    expect(bytesFailureKind(over(at(404), at(404)))).toBe('bytes-absent');
+    expect(bytesFailureKind(over(at(403, true), at(404)))).toBe('bytes-gated');
   });
 });
 

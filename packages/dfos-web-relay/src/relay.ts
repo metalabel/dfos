@@ -500,6 +500,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   // Policy matches the Go relay byte-for-byte. Applied to every route so
   // browser-based proof-plane reads (and writes) succeed cross-origin.
+  //
+  // EXPOSE-HEADERS IS LOAD-BEARING, not decoration. A cross-origin reader can
+  // only see the CORS-safelisted response headers (content-type, content-length
+  // and friends) unless the server names the rest here. `X-Document-Cid` is the
+  // blob route's own statement of which document it believes it is sending, and
+  // a browser client that cannot read it cannot check served bytes against the
+  // SERVING relay's claim — only against a chain lookup that may have come from
+  // a different relay. That collapses "this relay contradicts itself", which is
+  // a hostile-relay signal, into "two relays disagree", which is ordinary skew.
+  // Withholding it does not make a browser client safer; it makes it blinder.
   app.use('*', async (c, next) => {
     // preflight: answer directly with 204 and the CORS headers
     if (c.req.method === 'OPTIONS') {
@@ -507,6 +517,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Expose-Headers': 'X-Document-Cid',
       });
     }
     await next();
@@ -514,6 +525,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     c.res.headers.set('Access-Control-Allow-Origin', '*');
     c.res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
     c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    c.res.headers.set('Access-Control-Expose-Headers', 'X-Document-Cid');
     return;
   });
 

@@ -32,27 +32,50 @@ export interface ClaimResult {
   gated: boolean; // 401/403 — exists but content-plane gated
   body?: Record<string, unknown>;
   error?: string;
+  /** every relay tried, in configured order — see {@link RelayAttempt}. */
+  attempts?: RelayAttempt[];
+}
+
+/**
+ * ONE relay's outcome, kept because the LAST one is not the whole answer.
+ *
+ * These fetchers walk the relay set and report the last failure, which is fine
+ * for showing a reader an error string and wrong for CLASSIFYING absence. Relay
+ * A timing out and relay B answering 404 leaves a `status: 404` behind, and a
+ * caller reading only that concludes "no relay holds this" when one relay never
+ * answered at all. A 404 is a fact about a corpus; a timeout is a fact about a
+ * network, and no number of the second adds up to the first. Callers that draw
+ * that distinction read `attempts` and decide over the whole set.
+ */
+export interface RelayAttempt {
+  relay: string;
+  status: number; // 0 = network error / timeout
+  gated: boolean;
 }
 
 const tryJson = async (url: string): Promise<Response> =>
   fetch(url, { mode: 'cors', signal: AbortSignal.timeout(10000) });
 
-/** First relay that answers 2xx wins; otherwise the most informative failure. */
+/** First relay that answers 2xx wins; otherwise the most informative failure,
+ *  with EVERY relay's outcome carried in `attempts` for callers that classify. */
 export const fetchClaim = async (
   kind: 'identities' | 'content',
   id: string,
   relays: string[],
 ): Promise<ClaimResult> => {
+  const attempts: RelayAttempt[] = [];
   let last: ClaimResult = { relay: '', status: 0, gated: false, error: 'no relay reachable' };
   for (const relay of relays) {
     try {
       const res = await tryJson(`${relay}${PROOF}/${kind}/${encodeURIComponent(id)}`);
+      attempts.push({ relay, status: res.status, gated: res.status === 401 || res.status === 403 });
       if (res.ok) {
         return {
           relay,
           status: res.status,
           gated: false,
           body: (await res.json()) as Record<string, unknown>,
+          attempts,
         };
       }
       last = {
@@ -62,6 +85,7 @@ export const fetchClaim = async (
         error: await res.text().catch(() => ''),
       };
     } catch (e) {
+      attempts.push({ relay, status: 0, gated: false });
       last = {
         relay,
         status: 0,
@@ -70,7 +94,7 @@ export const fetchClaim = async (
       };
     }
   }
-  return last;
+  return { ...last, attempts };
 };
 
 /** Fetch a single operation's JWS from the first relay that serves it. */
@@ -204,12 +228,18 @@ export interface BlobResult {
   status: number; // 0 = network error
   gated: boolean;
   bytes?: Uint8Array;
+  /** the serving relay's own `X-Document-Cid` — its claim about WHICH document
+   *  these bytes are. Requires the relay to CORS-expose the header; absent when
+   *  it does not, which costs a browser reader the self-contradiction check. */
   servedDocCid?: string;
   mediaType?: string;
+  /** every relay tried, in configured order — see {@link RelayAttempt}. */
+  attempts?: RelayAttempt[];
 }
 
 /** Content-plane blob fetch with honest status classification. */
 export const fetchBlobRaw = async (contentId: string, relays: string[]): Promise<BlobResult> => {
+  const attempts: RelayAttempt[] = [];
   let last: BlobResult = { relay: '', status: 0, gated: false };
   for (const relay of relays) {
     try {
@@ -217,6 +247,7 @@ export const fetchBlobRaw = async (contentId: string, relays: string[]): Promise
         mode: 'cors',
         signal: AbortSignal.timeout(15000),
       });
+      attempts.push({ relay, status: res.status, gated: res.status === 401 || res.status === 403 });
       if (res.ok) {
         const bytes = await boundedBytes(res);
         const servedDocCid = res.headers.get('x-document-cid') ?? undefined;
@@ -228,12 +259,14 @@ export const fetchBlobRaw = async (contentId: string, relays: string[]): Promise
           bytes,
           ...(servedDocCid ? { servedDocCid } : {}),
           ...(mediaType ? { mediaType } : {}),
+          attempts,
         };
       }
       last = { relay, status: res.status, gated: res.status === 401 || res.status === 403 };
     } catch {
+      attempts.push({ relay, status: 0, gated: false });
       last = { relay, status: 0, gated: false };
     }
   }
-  return last;
+  return { ...last, attempts };
 };

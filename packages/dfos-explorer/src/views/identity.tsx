@@ -92,7 +92,13 @@ import {
 } from '../lib/origin-binding';
 import { useClientPager } from '../lib/paging';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
-import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
+import {
+  fetchBlobRaw,
+  fetchClaim,
+  type BlobResult,
+  type ClaimResult,
+  type RelayAttempt,
+} from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
 import {
   emptyRevocations,
@@ -1558,31 +1564,97 @@ const decodeServedDocument = async (
   }
 };
 
-/** Classify a proof-plane failure the way the NotFound page does: an answered
- *  404 is absence, a 401/403 is gated, and anything else (0, 5xx) is a question
- *  that never got answered. Pure, unit-tested. */
+/**
+ * Classify a failure over the WHOLE relay set, not over whichever relay was
+ * tried last.
+ *
+ * This is the distinction that makes the difference honest. The fetchers walk
+ * the configured relays and keep the last failure, so a set where relay A timed
+ * out and relay B answered 404 leaves a bare `status: 404` behind — and reading
+ * only that, the page tells a reader "no relay holds this" when one relay never
+ * answered at all. A 404 is a claim about a corpus. A timeout is a claim about a
+ * network. No quantity of the second adds up to the first.
+ *
+ * So absence requires UNANIMITY — every relay that was asked answered a
+ * definitive 404 — while a single gated answer wins outright (it is the most
+ * informative thing anyone said: something is there), and anything left over is
+ * a question that did not get answered. An empty attempt list is unreachable
+ * rather than absent: "every relay said 404" must not be vacuously true when no
+ * relay was asked.
+ *
+ * Pure, unit-tested.
+ */
+const aggregateFailure = <T,>(
+  attempts: readonly RelayAttempt[],
+  kinds: { gated: T; absent: T; unreachable: T },
+): T => {
+  if (attempts.length === 0) return kinds.unreachable;
+  if (attempts.some((a) => a.gated)) return kinds.gated;
+  if (attempts.every((a) => a.status === 404)) return kinds.absent;
+  return kinds.unreachable;
+};
+
+/** The attempt list, or the result itself read as a single attempt when a caller
+ *  (or a fixture) produced one without it. */
+const attemptsOf = (result: {
+  relay: string;
+  status: number;
+  gated: boolean;
+  attempts?: RelayAttempt[];
+}): RelayAttempt[] =>
+  result.attempts ?? [{ relay: result.relay, status: result.status, gated: result.gated }];
+
+/** Classify a proof-plane failure across every relay asked: any gated answer is
+ *  gated, unanimous 404s are absence, and anything else is a question that never
+ *  got answered. Pure, unit-tested. */
 export const chainFailureKind = (
   claim: ClaimResult,
 ): 'chain-absent' | 'chain-gated' | 'chain-unreachable' =>
-  claim.gated ? 'chain-gated' : claim.status === 404 ? 'chain-absent' : 'chain-unreachable';
+  aggregateFailure(attemptsOf(claim), {
+    gated: 'chain-gated',
+    absent: 'chain-absent',
+    unreachable: 'chain-unreachable',
+  });
 
-/** The same three-way split for the content plane's blob fetch. An empty 200
- *  body is ABSENCE, not a CID mismatch — there are no bytes to have mismatched.
- *  Pure, unit-tested. */
+/** The same aggregate for the content plane's blob fetch, with one case decided
+ *  before it: a relay that ANSWERED 2xx and sent no body has told us the bytes
+ *  are not there, which is absence — and never a CID mismatch, since there are
+ *  no bytes to have mismatched. Pure, unit-tested. */
 export const bytesFailureKind = (
   blob: BlobResult,
 ): 'bytes-gated' | 'bytes-absent' | 'bytes-unreachable' =>
-  blob.gated
-    ? 'bytes-gated'
-    : blob.status === 404 || (blob.status >= 200 && blob.status < 300)
-      ? 'bytes-absent'
-      : 'bytes-unreachable';
+  blob.status >= 200 && blob.status < 300
+    ? 'bytes-absent'
+    : aggregateFailure(attemptsOf(blob), {
+        gated: 'bytes-gated',
+        absent: 'bytes-absent',
+        unreachable: 'bytes-unreachable',
+      });
 
-/** Which integrity verdict a decoded document earns. RED (`mismatch`) requires
- *  the SERVING relay to contradict its own `X-Document-Cid`; disagreement with a
- *  chain lookup that may have come from a different relay is `skew`, and a relay
- *  that sent no header cannot be shown to have contradicted itself. Pure,
- *  unit-tested. */
+/**
+ * Which integrity verdict a decoded document earns. RED (`mismatch`) requires
+ * the SERVING relay to contradict its own `X-Document-Cid`; disagreement with a
+ * chain lookup that may have come from a different relay is `skew`.
+ *
+ * A RELAY THAT SENDS NO READABLE HEADER GETS `skew`, NEVER RED, and that is a
+ * deliberate downgrade rather than an oversight. `X-Document-Cid` is a custom
+ * response header, so a browser cannot read it cross-origin unless the serving
+ * origin lists it in `Access-Control-Expose-Headers`. Both reference relays now
+ * do. That does not make it universal, and deliberately so:
+ *
+ *   - a relay fronted by a CDN, a proxy, or a platform-managed CORS config
+ *     (function-URL settings, an API gateway) has an expose list that the relay
+ *     process does not control, and the header has to be added THERE too;
+ *   - a third-party relay need not send the header at all — WEB-RELAY.md does
+ *     not name it, so nothing is out of spec if it does not.
+ *
+ * Against any of those, `servedDocCid` is `undefined` and a genuine mismatch
+ * reads as `skew`. That is the honest direction rather than a lost check: the
+ * bytes are refused either way, and what is withheld is only the ACCUSATION —
+ * naming which party is wrong needs evidence this reader does not have.
+ *
+ * Pure, unit-tested.
+ */
 export const integrityVerdict = (
   derivedCid: string | null,
   servedDocCid: string | undefined,
