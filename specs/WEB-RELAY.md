@@ -24,7 +24,7 @@ The relay serves two distinct planes of data with different access models:
 
 Signed chain operations, artifacts, and countersignatures. These are cryptographic proofs — anyone can verify them with a public key. The proof plane gossips freely: relays push operations to peers, peers verify and store independently.
 
-All proof plane routes are unauthenticated. The operations themselves carry their own authentication (Ed25519 signatures).
+All proof plane routes are unauthenticated. The operations themselves carry their own authentication (Ed25519 signatures). The one proof-plane entry that carries no signature is the placeholder of a [sealed entry](#sealed-entries-0x) — a blinded commitment that an operation exists, whose bytes live behind the content plane.
 
 ### Content Plane (private)
 
@@ -50,7 +50,7 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`** —
 Six route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery lives at the root by [RFC 8615](https://www.rfc-editor.org/rfc/rfc8615)'s convention, and `dfos-relay` is a suffix minted in that RFC's registry-governed namespace: §3 requires registering new suffixes in the IANA Well-Known URIs registry, tracked in the [extension registry's external-registrations table](https://protocol.dfos.com/extensions#external-registrations). It announces the base and the relay's own release version.
-- **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[content plane / document gateway](#content-plane--document-gateway)**, an optional surface on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to that clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+- **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/log`) — these belong to the **[content plane / document gateway](#content-plane--document-gateway)**, an optional surface on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to that clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths and the authorized per-chain log of [Sealed Entries](#sealed-entries-0x). They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 - **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status).
 - **Index** (`GET /index/v0/*`) — an optional, non-authoritative query surface over the current-state projections the relay already folds: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. On its own unfrozen `0.x` clock, gated by `capabilities.index`. See [Index (v0)](#index-v0).
@@ -309,7 +309,8 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
     "log": true,
     "revocations": true,
     "index": true,
-    "signing": false
+    "signing": false,
+    "sealed": false
   },
   "profile": "eyJhbGciOiJFZERTQSIs...",
   "openapi": "/openapi.json",
@@ -323,7 +324,8 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
       "artifact": 5,
       "credential": 8,
       "countersign": 3,
-      "revocation": 1
+      "revocation": 1,
+      "sealed": 0
     },
     "oldestOpAt": "2026-03-25T00:00:00.000Z",
     "headCid": "bafy..."
@@ -344,6 +346,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status) index is served (`GET /revocations/v1/*`). Reference relays serve it by default; a relay MAY disable it (501). An absent flag reads as `true` (the family predates the flag)                                                                                                                                                                                                         |
 | `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                                                                                                                                                                                                                                                                                                |
 | `capabilities.signing`     | boolean        | Whether the [signing mailbox](https://protocol.dfos.com/signing) courier is served (`/signing/v0/*`). Opt-in: reference relays default it off, and an absent flag reads as `false`                                                                                                                                                                                                                                                       |
+| `capabilities.sealed`      | boolean        | Whether [sealed entries](#sealed-entries-0x) are served — the content-plane sealing and reading routes (`POST` / `GET /content/:contentId/log`). Opt-in on the content-plane clock: an absent flag reads as `false`, and a relay that does not serve the capability still carries or skips placeholders it syncs, per that section                                                                                                          |
 | `ingestion`                | string         | [Admission-mode](#ingestion-admission) hint: `"open"` (anonymous submissions admitted, subject to policy), `"proof-required"` (identity proof required), or `"closed"`. Absent derives from `capabilities.write`: `true` reads as `"open"`, `false` as `"closed"`                                                                                                                                                                        |
 | `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                                                                                                                                                                                                                                                                               |
 | `openapi`                  | string         | OPTIONAL. URL of an OpenAPI document describing this relay's full HTTP surface — absolute, or root-relative resolved against the relay's base URL. Serving the document is SHOULD, never MUST; a relay that serves one advertises it here, and absence means none is served. The document is discovery, never authority: the routes, capability gates, and auth rules in this spec govern regardless of what an advertised document says |
@@ -351,12 +354,12 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                                                                                                                                                                                                                                                                                                |
 | `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                                                                                                                                                                                                                                                                                             |
 | `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                                                                                                                                                                                                                                                                                                   |
-| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation`                                                                                                                                                                                                                                                                     |
+| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation`, and `sealed` — the global placeholder count, the only sealed count any surface exposes ([Sealed Entries](#sealed-entries-0x))                                                                                                                                       |
 | `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                                                                                                                                                                                                                                                                                        |
 | `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                                                                                                                                                                                                                                                                                                  |
-| `stats.peerSync`           | object         | OPTIONAL additive telemetry. Per-peer sync state keyed by endpoint: `lastAttemptAt`, `lastSuccessAt`, `lastReceived`, `lastInserted`, `caughtUp`, `consecutiveFailures`, `lastReconcile*`; absent when no sync peer is configured                                                                                                                                                                                                        |
+| `stats.peerSync`           | object         | OPTIONAL additive telemetry. Per-peer sync state keyed by endpoint: `lastAttemptAt`, `lastSuccessAt`, `lastReceived`, `lastInserted`, `caughtUp`, `consecutiveFailures`, `lastReconcile*`, and `pinMismatch` — the [peer identity pin](#peer-identity-pin) refusal currently suppressing traffic to that peer, or `null` when the peer is unpinned, unverifiable, or serving the DID it is pinned to; absent when no sync peer is configured |
 
-`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. When `capabilities.signing` is `false` or absent, the `/signing/v0/*` routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. When `capabilities.signing` is `false` or absent, the `/signing/v0/*` routes return **501 Not Implemented**. When `capabilities.sealed` is `false` or absent, `POST` and `GET /content/:contentId/log` return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
 Capability gates fire **first** — before authentication, body parsing, or any store lookup — uniformly across every gated family. Where two gates stack (content-plane blob upload is gated by `content` and then `write`), the plane-existence gate fires before the write gate.
 
@@ -389,6 +392,106 @@ The relay maintains a global append-only operation log: every successfully inges
 - **Retraction MUST be expressed as revocation.** Deleting bytes from one relay's log does not propagate — a peer that already synced them keeps them, and nothing on the wire says they left. The act that travels is the signed one: a [revocation](#revocation-ingestion) retracts a credential everywhere the revocation reaches, which is everywhere the credential could be honored. Retraction on an **identity chain** is likewise a chain operation — an `update` removing the key — never a rewrite of the chain's history.
 - **Relays SHOULD retain revocations indefinitely.** Revocations are the retraction record and they are tiny; a relay that prunes operations SHOULD prune around them. SHOULD, not MUST — retention is physical sovereignty, and the peer rule above is what keeps a pruning relay from becoming an authority on absence.
 - **A cursor past a relay's retention answers `400` or a from-scratch first page — never a silently empty page.** A puller holding a cursor into entries the relay no longer serves either learns it (`400`, the invalid-cursor self-heal under [Peering](#peering)) or resumes from the log's current beginning; an empty page that reads as caught-up would convert one relay's retention into every downstream peer's silent gap.
+
+---
+
+## Sealed Entries (0.x)
+
+> **Status — `0.x`, on the content-plane clock.** Sealed entries put operation bytes behind the content plane's verifier the way document blobs already are, and leave one public trace of each on the global log. The placeholder shape, the sealing and reading routes, the `reveal/v1` artifact, and the projection rules are specified here. `/proof/v1/*` is unchanged and stays [contract-frozen](https://protocol.dfos.com/relay-contract); the placeholder is the one thing the proof plane ever shows of a sealed operation. A relay advertises the capability as `capabilities.sealed`; when the flag is `false` or absent, the sealing and reading routes answer **501** and the relay seals nothing of its own.
+
+A **sealed entry** is a blinded, timestamped commitment that an operation happened — published where every relay can see it, revealing nothing about what it was. It is the proof-plane trace of a content chain whose operations are not public: the creator holds a priority claim any verifier can later check, the log keeps its shape (no gaps, peers sync cleanly), and the operation itself is served only to readers [the unified verifier](#the-unified-verifier) authorizes. Identity chains never seal — they are the verification substrate for everything the DID signs and stay resolvable in full ([PROTOCOL.md](https://protocol.dfos.com/spec)).
+
+What a sealed entry discloses is exactly two facts: that one operation was sealed, and when this relay sealed it. What it MUST NOT disclose: the operation CID, the chain, the signer, any document CID, and any per-chain or per-identity count. The chain's name is the one that needs saying. A `contentId` derives from the genesis operation's CID, so a sealed genesis that exposed its CID would make the chain addressable by name and enumerable by anyone who can hash. The commitment is blinded for that reason.
+
+### The placeholder
+
+The entry on the global log is a **placeholder**:
+
+```json
+{
+  "cid": "bafyrei…",
+  "kind": "sealed",
+  "chainId": null,
+  "commitment": "uEiA…",
+  "createdAt": "2026-09-02T00:00:00.000Z"
+}
+```
+
+- `kind: "sealed"` is a seventh primitive kind. The entry carries no `jwsToken` — there is nothing to verify — and `chainId` is `null`, because naming the chain is the disclosure the entry exists to avoid.
+- `commitment` is the blinded commitment to the sealed operation: the SHA-256 digest of the operation CID's binary form concatenated with a **nonce** of 32 random bytes, carried as a `sha2-256` multihash in multibase base64url (`u…`). The nonce is chosen by the submitter and held by the relay alongside the sealed bytes; it reaches the proof plane only inside a [reveal](#reveal-httpsschemasdfoscomrevealv1). Because an operation CID already commits to a whole signed operation, a revealed commitment leaves nothing about the operation to brute-force.
+- `createdAt` is the **relay's ingest time**, not the operation's signed `createdAt`. The operation's own clock is inside the withheld bytes and stays a claim the reveal proves later. The relay's stamp is the priority anchor, on the same trust posture as `ingestedAt` everywhere else: a cooperating host's endorsement, corroborated by every peer that synced the placeholder at the time.
+- `cid` is the CID of the placeholder object itself — the dag-cbor canonical encoding of `{ "version": 1, "type": "sealed", "commitment", "createdAt" }`. The entry is therefore addressable by `GET /proof/v1/operations/:cid`, cursors work unchanged, and the contract's same-CID-different-bytes rule holds for a placeholder exactly as for an operation.
+
+A placeholder is written once and never rewritten, by the append-only discipline of [Operation Log](#operation-log). A reveal appends; it does not edit.
+
+### Sealing (`POST /content/:contentId/log`)
+
+Sealed operations enter through the **content plane**, not `POST /proof/v1/operations`: the plane already gated to a chain's principals is the one that may accept bytes it will not publish.
+
+Requirements:
+
+- `capabilities.content`, `capabilities.write`, and `capabilities.sealed` all `true`; each gate answers **501**, in that order, before anything else is examined.
+- A valid identity proof (`Authorization: DFOS`, `jti` REQUIRED — this is a write-shaped surface). The presenter MUST be the operation's signing DID.
+- Body: `{ "jwsToken": "<did:dfos:content-op JWS>", "nonce": "<32 bytes, base64url>" }`.
+- The operation MUST pass **full verification** exactly as an ordinary content-operation ingest does — signature, current-state key resolution, chain resolution, fork rules, authorization for a non-creator signer, deletion gates — against this relay's complete view of the chain, sealed operations included. A sealed operation is a committed operation in every respect except publication.
+- The chain MUST NOT currently be authorized for anonymous read by a standing public grant. Sealing a publicly readable chain is a contradiction; a creator taking a public chain dark revokes the grant first (see [Transitions](#transitions)).
+
+On success the relay stores the operation bytes and the nonce as sealed, appends the placeholder to the global log, folds the operation into its sealed-inclusive view of the chain, and answers `{ "cid": "<operation CID>", "status": "new" | "duplicate", "sealed": { "cid", "commitment", "createdAt" } }`. Verification outcomes use the contract's three statuses; a dependency failure is reported as `rejected`, and a sealed submission is never buffered — the submitter is the chain's principal and holds every predecessor. A sealed operation never gossips as an operation; what gossips is the placeholder, on the global log, like any other entry. The operation's `documentCID` blob is uploaded and served by the existing blob routes under the existing gates.
+
+### Reading a sealed chain (`GET /content/:contentId/log?after={cursor}&limit=N`)
+
+The content plane's per-chain log is the authorized reader's view of the whole chain — public and sealed operations together, in chain order, under the same envelope as the frozen per-chain log. Entries are `{ cid, jwsToken, sealed }`, where `sealed` is `null` for a publicly ingested operation and `{ "cid", "commitment", "nonce" }` for a sealed one: the placeholder's CID and the nonce that opens it, so any authorized reader can recompute the commitment against the public placeholder, and the creator can mint a reveal without the relay's help.
+
+Access is [the unified verifier](#the-unified-verifier)'s, verbatim — the gate on [blob download](#blob-download-get-contentcontentidblobref): a standing public grant admits anonymously; otherwise an identity proof, and for a non-creator a `read` credential whose delegation chain roots at the creator. For a space-signed chain the creator is the space identity, so a member reading a sealed chain is always the credential path, and the issuer of those credentials is whoever the creator names — never the relay.
+
+**Absence is the only unauthorized shape.** A request this verifier does not admit MUST be answered exactly as a request for a chain the relay does not hold — the same status and the same body. A distinguishable refusal would confirm that a chain exists, which is the fact sealing withholds: an invalid or absent credential renders the same absence as not-there.
+
+### What the proof plane shows
+
+The proof plane's view of a chain is its **public prefix** — the operations ingested through `POST /proof/v1/operations`, whether directly, by gossip, by sync, or by a reveal. `GET /proof/v1/content/:contentId`, `GET /proof/v1/content/:contentId/log`, and read-through fold and serve exactly that, and a chain whose genesis is sealed has no public prefix and is absent from all three. Head selection on the proof plane runs over the public prefix; the relay's sealed-inclusive view has its own head, served only on the content plane's authorized routes. On the public path `blob/head` resolves to the public prefix's head, and a `:ref` naming a sealed operation is not-found, whatever grant is standing — the public path sees exactly what the proof plane sees.
+
+Chain order is one order. A sealed operation's `previousOperationCID` may name a sealed or a public operation, but a **public** submission whose previous operation is sealed and unrevealed is a [dependency failure](#dependency-failures) on the proof plane — its predecessor is not in the public store. A creator taking a chain public therefore reveals in chain order, and the ordinary sequencer does the rest.
+
+### Reveal (`https://schemas.dfos.com/reveal/v1`)
+
+A sealed operation is revealed in two entries. The operation's bytes are ingested publicly through `POST /proof/v1/operations`, where they land as an ordinary `content` entry at a new position, verified as any operation is. And the signer publishes a **reveal artifact** — an ordinary [artifact](#artifacts) signed by the operation's signing DID — whose content is:
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/reveal/v1",
+  "sealed": "bafyrei…",
+  "commitment": "uEiA…",
+  "opCID": "bafyrei…",
+  "nonce": "…"
+}
+```
+
+`sealed` is the placeholder's CID (the locator), `commitment` the placeholder's commitment, `opCID` the revealed operation, and `nonce` the 32 bytes that blinded it. Verification, by anyone, forever: recompute the commitment from `opCID` and `nonce`; it MUST equal `commitment`; and the placeholder at `sealed` MUST carry that commitment. The placeholder's `createdAt` is then a public, relay-attested time at which the revealed operation already existed — the priority claim, provable to a verifier who never held a credential.
+
+The relay adds two checks to [artifact verification](#verification-1). A relay that holds the placeholder MUST refuse a reveal whose recomputed commitment does not match it, and a relay that holds the revealed operation MUST refuse a reveal whose signing DID is not that operation's signing DID. A relay that holds neither accepts the artifact on its stateless merits, as it does any artifact: the claim is checkable by whoever holds the placeholder. The placeholder is never rewritten. The reveal artifact and the public operation are two new entries, and the placeholder stays where it was.
+
+### Transitions
+
+| from → to     | mechanism                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dark → public | reveal each sealed operation in chain order, then mint the standing `aud: "*"` read grant                                                                                                                                                                                                                                                                        |
+| public → dark | revoke the standing grant, then seal **forward**: every operation after the revocation is sealed. The public prefix is not recalled — synced copies exist, and retraction on the log is revocation, never rewrite ([Operation Log](#operation-log)). Going dark stops new disclosure; it does not retract. Retraction of what was public is the off state's cull |
+| off → dark    | re-derive the chain (deterministic — same `contentId`) and seal every operation; the chain never appears on the proof plane                                                                                                                                                                                                                                      |
+| any → off     | revoke, then cull, retaining revocation facts                                                                                                                                                                                                                                                                                                                    |
+
+### Index, stats, peers, and witnesses
+
+- **`/index/v0/*` MUST NOT project a chain with no public prefix** — no row of any shape: not `isDeleted`, not `publicRead: false`. Absence is the only existence-secret shape. A chain with a public prefix and sealed operations projects **only its public prefix** (`headCID`, `opCount`, `headAt` of the public fold), and its projected `publicRead` is whatever the standing grants say — for a chain sealed forward, `false`. `/index/v0/operations` does not enumerate placeholders, and `kind=sealed` is a `400` like any value outside that route's enumerated set: a placeholder has no actor and no chain, and its clock is already the global log's.
+- **`stats.countsByKind.sealed`** is the global count of placeholders this relay holds — additive telemetry, one number for the whole log. No surface exposes a per-chain or per-identity sealed count.
+- **A syncing peer carries placeholders verbatim.** It appends the entry to its own log at its own position, dedupes by `cid`, and MUST NOT fold a placeholder as a chain operation or route it to a chain. A peer that does not serve `capabilities.sealed` MAY skip placeholders instead; either way a placeholder is never a rejection and never poisons a cursor. Sealed bytes never ride the log. A peer holding a `read` credential for the chain reads them through `GET /content/:contentId/log` as any reader does, and materializes the blobs under [Content Following](#content-following)'s existing gate — a peer presenting a credential is just a reader.
+- **A countersignature MAY target a placeholder CID.** The target exists — a placeholder counts as stored for the [target-exists check](#relay-level-checks) — and the witness attests to the commitment as it stood at the time, which strengthens the priority claim with a second party's clock. The witness-≠-author rule is vacuous for a placeholder: no author is disclosed, and the relay does not attempt to resolve one.
+
+### What sealing accepts
+
+- **Deletion counts.** Global-log positions are dense, so the run of placeholders leaks how many operations were sealed, and a relay's position deltas leak how much was culled. Accepted and documented ([THREAT-MODEL.md](https://protocol.dfos.com/threat-model)). Opaque cursors would not close it — they would break the transparent-keyset conduct and the puller self-heal under [Peering](#peering), and `stats.headCid` and `stats.opCount` leak the tip regardless.
+- **Timing correlation.** A placeholder at time T followed by public activity from some identity near T is a correlation channel. Accepted; this document defines no mitigation.
+- **The anchor is attested, not proven.** `createdAt` is the sealing relay's stamp, corroborated by peers' copies — a chosen host's endorsement with the same trust posture as `ingestedAt`, never a consensus clock.
+- **The host holds the bytes and the nonce.** Sealing is host-cooperative, exactly as blob confidentiality is ([Trust and security model](#trust-and-security-model)). A sealed operation is withheld by an honest host, not encrypted against a hostile one.
 
 ---
 
@@ -477,7 +580,7 @@ The optional `:ref` parameter selects which operation's document to return:
 
 ### Enumerating a Chain's Documents
 
-There is deliberately no relay-side document list route — it would only be a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:ref` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
+There is deliberately no relay-side document list route — it would only be a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:ref` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID` — or, for a chain with [sealed operations](#sealed-entries-0x), the authorized `GET /content/:contentId/log`, which enumerates the whole chain. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
 
 ### Standing Authorization
 
@@ -870,6 +973,8 @@ The full surface of a reference relay, frozen and optional families together. Co
 | `POST` | `/signing/v0/requests/:cid/decline`         | signing     | none — advisory                                |
 | `PUT`  | `/content/:contentId/blob/:ref`             | content     | identity proof                                 |
 | `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or identity proof + credential  |
+| `POST` | `/content/:contentId/log`                   | content     | identity proof (the operation's signer)        |
+| `GET`  | `/content/:contentId/log`                   | content     | standing auth, or identity proof + credential  |
 
 ---
 
@@ -892,6 +997,7 @@ Gossip fires on `new` status only — `duplicate` results are not re-gossiped, p
 ```typescript
 interface PeerConfig {
   url: string;
+  did?: string; // the peer's identity pin; absent = unchecked
   gossip?: boolean; // default: true
   readThrough?: boolean; // default: true
   sync?: boolean; // default: true
@@ -899,6 +1005,10 @@ interface PeerConfig {
 ```
 
 No relay roles or types. Topology is emergent from configuration. A relay with `gossip: true, readThrough: false, sync: false` is a write-only edge node. A relay with `gossip: false, readThrough: true, sync: false` is a read-only cache.
+
+### Peer identity pin
+
+Every other piece of peer state — the sync cursor, the gossip-disabled set, the blob circuit breaker — is keyed by URL, and a URL is an address, not an identity. `did` is the DID a peer must keep serving for its entry to keep meaning the relay it was configured against. A pinned peer is checked against its `/.well-known/dfos-relay` before each touch and re-checked on a short cadence; a peer that answers as a different relay is skipped in every direction — no log pulled, no operation pushed, no read-through miss answered out of it, no blob fetched from it — and the refusal is reported as `stats.peerSync.pinMismatch` in the relay's own well-known. An absent `did` means unchecked: a peer named by URL alone carries no claim about identity, which keeps every existing configuration valid. A well-known that cannot be fetched, answers non-200, or names no `did` is not a mismatch — absence of contact is not evidence of a changed identity, and the operation the relay was about to run fails in its own words. The relay enforces a pin it is handed and never writes one; trust-on-first-use — pinning an unpinned entry to whoever answers first — belongs to whatever owns the configuration (the CLI's `config.toml`, [CLI.md → Peers](https://protocol.dfos.com/cli#peers)). The Go reference relay implements the pin; the TypeScript reference relay carries URL-only peer configuration.
 
 ### PeerClient Interface
 

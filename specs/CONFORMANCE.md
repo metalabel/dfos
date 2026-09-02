@@ -175,6 +175,19 @@ A relay ingests, sequences, and serves. It implements:
   remain available. Given the same accepted operations and held blobs, parity means the
   reference relays serve byte-identical canonicalized-JSON rows, ordering, filters, and
   cursor pages.
+- **Sealed entries (`capabilities.sealed`)** (if served) — the content-plane sealing and
+  reading routes (`POST` / `GET /content/{contentId}/log`), the placeholder shape on the
+  global log (`kind: "sealed"`, `chainId: null`, no token, blinded commitment, relay ingest
+  time), full verification of a sealed submission against the relay's sealed-inclusive
+  view, the absence-shaped refusal on the authorized read, the public-prefix rule for every
+  proof-plane view of a chain with sealed operations, the `reveal/v1` checks (commitment
+  recomputation; signer equals the revealed operation's signer), the index exclusion (no
+  row for a chain with no public prefix; public prefix only otherwise), the global-only
+  `stats.countsByKind.sealed`, and the peer rule (placeholders carried verbatim or skipped,
+  never folded) live in the relay tier on the content plane's own `0.x` clock
+  (WEB-RELAY.md "Sealed Entries", `specs/WEB-RELAY.md`). A relay advertising
+  `capabilities.sealed: false` or omitting the flag returns **501 Not Implemented** from
+  both routes while adjacent content and proof surfaces remain available.
 - **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
   `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
   keyset / opaque token) as specified per route (RELAY-CONTRACT.md "Error Body" /

@@ -60,6 +60,19 @@ gated by an API-AUTH identity proof plus (for non-creators) a read credential
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
 
+**Sealed operations sit on the same boundary.** A content chain's operations can be
+sealed — the bytes and the nonce that blinds them are held by the relay and served only
+through the content plane's verifier, while the proof plane carries a blinded, relay-
+timestamped placeholder per operation (WEB-RELAY.md "Sealed Entries", `specs/WEB-RELAY.md`).
+The placeholder discloses two facts — that one operation was sealed, and when this relay
+sealed it — and nothing else: not the operation CID, the chain, the signer, a document CID,
+or any per-chain count. Blinding (`H(opCID ‖ nonce)`, a 32-byte nonce) is what keeps a
+sealed genesis from naming its chain, since a `contentId` derives from the genesis CID. The
+guarantee is the content plane's: an honest host withholds; a hostile host can read what it
+holds and open every commitment it holds the nonce for. The priority claim a placeholder
+carries is the sealing relay's attestation of ingest time, corroborated by every peer that
+synced the placeholder — the same trust posture as `ingestedAt`, never a consensus clock.
+
 ### Authority currency — honest-host arbitrated
 
 The same honest-host split that governs content confidentiality governs **how current an
@@ -442,6 +455,25 @@ These are known and deliberately accepted for v1.
   this bullet names the standard construction that trust decision declines. (Content chains sit
   outside the risk: their order converges by deterministic head selection over signed operations,
   with no order authority to equivocate.)
+- **The global log's shape leaks counts.** Log positions are dense, so a run of sealed
+  placeholders reveals how many operations a relay sealed, and position deltas across a
+  relay's retention reveal how much it culled. Opaque cursors would not close this — they
+  would break the transparent-keyset conduct and the puller self-heal, and the well-known's
+  `stats.opCount` / `stats.headCid` leak the tip regardless (WEB-RELAY.md "Sealed
+  Entries" / "Operation Log", `specs/WEB-RELAY.md`). Accepted; per-chain and per-identity
+  sealed counts are the line held — no surface exposes them.
+- **Sealed placeholders are a timing-correlation channel.** A placeholder at time T
+  followed by public activity from some identity near T correlates the two. Nothing in the
+  corpus mitigates it; the placeholder's `createdAt` is deliberately the relay's ingest
+  time rather than the operation's signed clock, which removes the finer clock-skew
+  fingerprint but not the coarse correlation (WEB-RELAY.md "Sealed Entries",
+  `specs/WEB-RELAY.md`).
+- **A sealed entry's priority anchor is host-attested.** The placeholder's timestamp is
+  the sealing relay's endorsement, corroborated by peers' synced copies — a chosen host's
+  word, with the same trust posture as `ingestedAt` and the same absence of a transparency
+  structure noted for home-relay order above. A relay that backdates a placeholder is
+  detectable only by comparison against peers that synced it (WEB-RELAY.md "Sealed
+  Entries", `specs/WEB-RELAY.md`).
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md
   "Philosophy", `specs/PROTOCOL.md`; WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`).
