@@ -262,6 +262,14 @@ func (r *Relay) pullAndStoreBlob(contentID, operationCID string, key BlobKey) {
 		if r.blobSourceCoolingDown(peer.URL) {
 			continue // breaker open for this source — skip without a network hit
 		}
+		// A peer whose pinned identity moved is not a source. The bytes are
+		// content-address-verified below, so a mismatched peer could not slip bad
+		// bytes past that check — but "which relays this machine talks to" is a
+		// posture the operator set, and a re-keyed peer is outside it whatever the
+		// hashes say.
+		if r.peerPinned(peer) != nil {
+			continue
+		}
 		bytes, err := r.peerClient.GetBlob(peer.URL, contentID, operationCID)
 		if err != nil {
 			if errors.Is(err, ErrBlobNotFound) {

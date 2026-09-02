@@ -306,3 +306,62 @@ func TestBuildPeerConfigsKeepsTheGossipSwitch(t *testing.T) {
 	assertFlag(t, "https://on.example", "gossip", peerByURL(t, peers, "https://on.example").Gossip, boolPtr(true))
 	assertFlag(t, "https://off.example", "gossip", peerByURL(t, peers, "https://off.example").Gossip, boolPtr(false))
 }
+
+// TestPeerConfigForCarriesThePin is the gap that let `dfos serve` run its whole
+// peer loop — sync, gossip, read-through, blob materialization — against a peer
+// set identified by URL alone. config.toml held the pin the CLI's own commands
+// refuse to cross, and the mapping into the relay library dropped it on the
+// floor.
+func TestPeerConfigForCarriesThePin(t *testing.T) {
+	const pin = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+
+	pinned := PeerConfigFor(config.RelayConfig{URL: "https://relay.example", DID: pin})
+	if pinned.DID != pin {
+		t.Fatalf("the pin must reach the relay library, got %q", pinned.DID)
+	}
+
+	// A hand-written entry with only a url makes no claim about identity, and ""
+	// is what the library reads as unchecked.
+	unpinned := PeerConfigFor(config.RelayConfig{URL: "https://relay.example"})
+	if unpinned.DID != "" {
+		t.Errorf("an unpinned entry must stay unpinned, got %q", unpinned.DID)
+	}
+
+	// A peer this machine must not bulk-sync is still gossiped to and read
+	// through, so the pin has to survive the sync override.
+	off := PeerConfigFor(config.RelayConfig{URL: "https://relay.example", DID: pin, Sync: boolPtr(false)})
+	if off.DID != pin {
+		t.Errorf("forcing sync off must not drop the pin, got %q", off.DID)
+	}
+}
+
+// TestMergePeerConfigsKeepsThePinTheRedefinitionOmits: naming a relay twice is
+// how an operator attaches a flag to a config.toml peer, and the --peers object
+// form has no obligation to restate an identity config.toml already recorded.
+// Letting the redefinition win outright would turn "gossip off here" into "and
+// stop checking who this is".
+func TestMergePeerConfigsKeepsThePinTheRedefinitionOmits(t *testing.T) {
+	const configured = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+	const explicit = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
+
+	inherited := mergePeerConfigs(
+		[]relay.PeerConfig{{URL: "https://relay.example", DID: configured}},
+		[]relay.PeerConfig{{URL: "https://relay.example", Gossip: boolPtr(false)}},
+		quietLogger(),
+	)
+	peer := peerByURL(t, inherited, "https://relay.example")
+	if peer.DID != configured {
+		t.Errorf("an omitted did must inherit the config pin, got %q", peer.DID)
+	}
+	assertFlag(t, peer.URL, "gossip", peer.Gossip, boolPtr(false))
+
+	// An explicit one still wins outright: only an ABSENT pin inherits.
+	stated := mergePeerConfigs(
+		[]relay.PeerConfig{{URL: "https://relay.example", DID: configured}},
+		[]relay.PeerConfig{{URL: "https://relay.example", DID: explicit}},
+		quietLogger(),
+	)
+	if got := peerByURL(t, stated, "https://relay.example").DID; got != explicit {
+		t.Errorf("an explicit did must win, got %q", got)
+	}
+}

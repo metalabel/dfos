@@ -85,6 +85,13 @@ type Relay struct {
 	// being silently absent.
 	peerSyncMu sync.Mutex
 	peerSync   map[string]*PeerSyncStatus
+	// peerPins caches the per-URL peer-identity pin verdict (see peerpin.go).
+	// In-memory and process-local like the two above: it records what a peer
+	// served recently, never durable state, and a restart honestly re-asks. It
+	// carries its own mutex because the gate is hit from the sync goroutine, the
+	// per-chunk gossip goroutines, and request handlers concurrently.
+	peerPinMu sync.Mutex
+	peerPins  map[string]peerPinVerdict
 	// maxOpsPerSyncCycle is this relay's per-peer per-cycle fetch cap, defaulted
 	// from the package constant of the same name. A field rather than a bare
 	// const read so tests can lower it and exercise the backlog boundary (a
@@ -271,6 +278,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		gossipProofSigned:  gossipProofSigned,
 		reconcileCycle:     make(map[string]int),
 		peerSync:           peerSync,
+		peerPins:           make(map[string]peerPinVerdict),
 		maxOpsPerSyncCycle: maxOpsPerSyncCycle,
 		materializeDirty:   newDirtyQueue(),
 		gcDirty:            newDirtyQueue(),
@@ -473,6 +481,16 @@ func (r *Relay) SyncFromPeers() error {
 		if peer.Sync != nil && !*peer.Sync {
 			continue
 		}
+		// A pinned peer that has started answering as someone else is not synced
+		// from. Bulk sync is the unbounded direction — every chain the peer holds
+		// lands in the local store — so it is the one where "whoever answers at
+		// this URL" is least acceptable. The verdict is recorded on the status row
+		// because a skipped cycle otherwise looks exactly like a quiet one.
+		if mismatch := r.peerPinned(peer); mismatch != nil {
+			r.recordPeerPin(peer.URL, mismatch)
+			continue
+		}
+		r.recordPeerPin(peer.URL, nil)
 		attemptAt := time.Now()
 		// readStore for the cursor read — never races on the ingestion tx.
 		cursor, _ := r.readStore.GetPeerCursor(peer.URL)

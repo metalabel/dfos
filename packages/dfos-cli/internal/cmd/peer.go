@@ -770,7 +770,9 @@ var peerPinChecks = map[string]error{}
 // A well-known that cannot be fetched is NOT a failure: it is not evidence of a
 // changed identity, and turning an offline peer into a pin error would report
 // the wrong thing. The operation the caller was about to run fails on its own,
-// in its own words. Nothing is pinned from a contact that did not happen.
+// in its own words. Nothing is pinned from a contact that did not happen — nor
+// from one that named no identity, which is the same fact arriving over a live
+// connection.
 func verifyPeerPin(name string) error {
 	r, ok := cfg.Relays[name]
 	if !ok || r.URL == "" {
@@ -782,7 +784,13 @@ func verifyPeerPin(name string) error {
 	c := client.New(r.URL)
 	c.Peer = name
 	info, err := c.GetRelayInfo()
-	if err != nil {
+	if err != nil || info.DID == "" {
+		// Two ways to learn nothing: the peer never answered, or it answered
+		// without naming an identity. Neither pins anything. Writing an empty DID
+		// would be worse than writing none — the config would gain a key
+		// indistinguishable from unpinned, the trust announcement would fire on
+		// every invocation because the next one re-reads it as unpinned, and the
+		// entry would never acquire a real pin.
 		peerPinChecks[name] = nil
 		return nil
 	}

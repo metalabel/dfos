@@ -952,7 +952,9 @@ An entry with no `did` — one written by hand, or registered while the peer was
 Pinned peer 'prod' to did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar on first contact ('dfos peer repin prod' to change).
 ```
 
-Every invocation after that is checked against it. A well-known that cannot be fetched pins nothing and refuses nothing: an unreachable peer is a reachability problem, and the operation the caller was running reports it in its own words.
+Every invocation after that is checked against it. A well-known that cannot be fetched pins nothing and refuses nothing: an unreachable peer is a reachability problem, and the operation the caller was running reports it in its own words. A well-known that answers without naming a `did` is the same fact over a live connection — it names no identity, so it pins none.
+
+`dfos serve` runs the check over every registered peer before it opens the relay, so a moved pin refuses the boot rather than starting a node that peers with a relay this machine did not register. From then on the embedded relay holds the pin itself: a registered peer's `did` reaches the peer loop, where a peer serving a different identity is skipped in every direction — no log pulled, no operation gossiped, no read-through miss answered, no document blob fetched — and the refusal is reported at `stats.peerSync` in this relay's own well-known. `--peers` entries carry a pin in their object form (see [Serve](#serve)); one named by URL alone is unpinned and unchecked.
 
 What a pin does not establish is who the peer is in the world — only that it is the same one as last time. `peer info`'s profile line is scoped the same way: a valid profile signature says the peer's self-description was signed by a key in its own HEAD state, which is a claim about internal consistency and not about identity.
 
@@ -985,13 +987,25 @@ dfos serve --port 4444 --peers https://relay.example.com
 Peers accept three forms. Comma-separated URLs and a JSON array of URLs configure
 every peer with defaults; a JSON array of objects sets the per-peer switches
 (`gossip` pushes new operations, `readThrough` fetches on a local 404, `sync` polls
-the peer's `/log` — all default to `true`):
+the peer's `/log` — all default to `true`) and the peer's identity pin (`did`):
 
 ```bash
 dfos serve --peers 'https://relay-a.example.com,https://relay-b.example.com'
 dfos serve --peers '["https://relay-a.example.com","https://relay-b.example.com"]'
 dfos serve --peers '[{"url":"https://relay-a.example.com"},{"url":"https://relay-b.example.com","gossip":false}]'
+dfos serve --peers '[{"url":"https://relay-a.example.com","did":"did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"}]'
 ```
+
+`did` is the identity a peer must keep serving. Every other piece of peer state
+is keyed by URL, and a URL is an address rather than an identity: with a pin, a
+peer that starts answering as a different relay is skipped in every direction —
+no log is pulled from it, no operation is pushed to it, no read-through miss is
+answered out of it, no document blob is fetched from it — and the refusal is
+reported at `stats.peerSync` in the well-known. A peer named by URL alone carries
+no pin and is not checked. Registered peers carry their `did` in `config.toml`,
+written on registration and moved only by `dfos peer repin`; `serve` checks each
+of them before it opens the relay, pins an unpinned entry to whoever answers
+first, and refuses to boot on a pin that moved.
 
 A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected — a bad peer config fails

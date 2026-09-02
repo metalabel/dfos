@@ -68,15 +68,18 @@ func runRelayCall(f *relayCallFlags, args []string) error {
 		return fmt.Errorf("invalid HTTP method %q\nusage: dfos relay call <METHOD> <path> (e.g. dfos relay call GET /.well-known/dfos-relay)", args[0])
 	}
 
-	ctx, err := resolveCtx()
+	// requirePeer, not a bare resolveCtx + client.New. Every other peer-bound
+	// command reaches the pin gate through this funnel; the raw passthrough — the
+	// one command that can reach ANY route on the peer, and the one an operator
+	// reaches for when something is already wrong — was the only one that did
+	// not, so a relay whose pinned identity had moved answered it silently. It
+	// binds no --peer of its own, hence ("", false), which is the same
+	// errNoPeer(false) this returned before when no peer resolved.
+	ctx, c, err := requirePeer("", false)
 	if err != nil {
 		return err
 	}
-	if ctx.RelayURL == "" {
-		return errNoPeer(false)
-	}
 
-	c := client.New(ctx.RelayURL)
 	headers := map[string]string{}
 
 	for _, h := range f.headers {
