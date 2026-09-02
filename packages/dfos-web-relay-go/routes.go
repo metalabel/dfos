@@ -446,6 +446,13 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
+			// A peer whose pinned identity moved is not asked. Read-through serves
+			// the peer's answer as this relay's own — and ingests it — so answering
+			// from a relay that is no longer the one configured here is how a
+			// stranger's chain state enters the store wearing this relay's name.
+			if r.peerPinned(peer) != nil {
+				continue
+			}
 			complete := r.readThroughIdentity(peer.URL, did)
 			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil && complete {
@@ -500,6 +507,13 @@ func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
 	if chain == nil && r.peerClient != nil {
 		for _, peer := range r.peers {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
+				continue
+			}
+			// A peer whose pinned identity moved is not asked. Read-through serves
+			// the peer's answer as this relay's own — and ingests it — so answering
+			// from a relay that is no longer the one configured here is how a
+			// stranger's chain state enters the store wearing this relay's name.
+			if r.peerPinned(peer) != nil {
 				continue
 			}
 			complete := r.readThroughIdentity(peer.URL, did)
@@ -602,6 +616,11 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 	if chain == nil && r.peerClient != nil {
 		for _, peer := range r.peers {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
+				continue
+			}
+			// Same gate as the identity read-through: a moved pin means this is no
+			// longer the relay the operator chose to answer on behalf of.
+			if r.peerPinned(peer) != nil {
 				continue
 			}
 			complete := r.readThroughContent(peer.URL, contentID)

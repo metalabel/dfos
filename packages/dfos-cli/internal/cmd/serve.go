@@ -193,6 +193,18 @@ All flags support environment variable fallbacks for container deployment:
 				opts.Index = &indexDisabled
 			}
 
+			// The pin, before the loop that runs on it. `serve` is the one command
+			// that talks to peers continuously, in every direction, for as long as
+			// the process lives — so its registered peers get exactly the treatment
+			// `dfos sync` gives them: an unpinned entry is pinned to whoever answers
+			// first, and a pin that moved refuses the boot rather than starting a
+			// mesh node against a relay that is not the one this machine registered.
+			// Config writes live here and only here; the relay library enforces the
+			// pin it is handed and never mints one.
+			if err := verifyConfiguredPeerPins(); err != nil {
+				return err
+			}
+
 			// close any existing lazy-opened relay (serve uses its own opts)
 			if localRelayInstance != nil {
 				localRelayInstance.Close()
@@ -399,8 +411,15 @@ All flags support environment variable fallbacks for container deployment:
 
 // peerSpec is the JSON object form of one entry in --peers / PEERS. It mirrors
 // relay.PeerConfig's per-peer switches; a nil flag means "default" (enabled).
+//
+// DID is the identity pin: the DID this peer must keep serving for the entry to
+// go on meaning the relay it was written against. Only the object form can carry
+// one, because only the object form says anything about a peer beyond its
+// address — a bare URL, in either of the other two spellings, makes no claim
+// about identity and stays unpinned.
 type peerSpec struct {
 	URL         string `json:"url"`
+	DID         string `json:"did"`
 	Gossip      *bool  `json:"gossip"`
 	ReadThrough *bool  `json:"readThrough"`
 	Sync        *bool  `json:"sync"`
@@ -411,6 +430,8 @@ type peerSpec struct {
 //	https://a.example,https://b.example            comma-separated URLs
 //	["https://a.example","https://b.example"]      JSON array of URLs
 //	[{"url":"https://a.example","gossip":false}]   JSON array of per-peer objects
+//
+// The object form additionally carries `did`, the peer's identity pin.
 //
 // Anything starting with "[" is JSON and MUST parse as JSON: the earlier silent
 // fallback to comma-splitting turned a malformed (or object-form) array into a
@@ -450,6 +471,7 @@ func parsePeers(s string) ([]relay.PeerConfig, error) {
 			}
 			peers = append(peers, relay.PeerConfig{
 				URL:         strings.TrimSpace(spec.URL),
+				DID:         strings.TrimSpace(spec.DID),
 				Gossip:      spec.Gossip,
 				ReadThrough: spec.ReadThrough,
 				Sync:        spec.Sync,
@@ -500,6 +522,33 @@ func validatePeerURL(raw string) error {
 	// RawQuery/Fragment) is caught too.
 	if strings.ContainsAny(raw, "?#") {
 		return fmt.Errorf("invalid peer URL %q: want a base URL with no query or fragment", raw)
+	}
+	return nil
+}
+
+// verifyConfiguredPeerPins runs the pin gate over every registered peer `serve`
+// is about to run its loop against, in sorted name order so the boot output (and
+// the first failure on a machine with several moved pins) is the same on every
+// run.
+//
+// Every peer, not just the sync-eligible ones: a peer with `sync = false` is
+// still gossiped to and still read through, and both of those reach the peer.
+// The `--peers` entries are deliberately NOT here — they are supplied for this
+// run and carry their pin inline, so there is no config.toml entry to trust on
+// first use and nothing to write.
+func verifyConfiguredPeerPins() error {
+	names := make([]string, 0, len(cfg.Relays))
+	for name := range cfg.Relays {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if cfg.Relays[name].URL == "" {
+			continue
+		}
+		if err := verifyPeerPin(name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

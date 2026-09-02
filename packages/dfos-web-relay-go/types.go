@@ -160,7 +160,22 @@ type RelayOptions struct {
 
 // PeerConfig configures a single peer relay.
 type PeerConfig struct {
-	URL         string
+	URL string
+	// DID is the identity this URL is pinned to — the DID it must keep serving
+	// for this entry to keep meaning the relay it was configured against. Peer
+	// state everywhere else in this library is keyed purely by URL, and a URL is
+	// an address, not an identity: without a pin, a relay that re-keyed and a
+	// different relay answering at that address are indistinguishable, and every
+	// direction of peer traffic (sync pull, gossip push, read-through, blob
+	// materialization) runs against whoever answered.
+	//
+	// "" means UNCHECKED, and that is the compatible default on purpose: a peer
+	// named by URL alone — a `--peers` URL, the TS twin's peer config, every
+	// existing caller — carries no claim about identity, and inventing one would
+	// turn a working mesh into a boot failure. The pin is opt-in, supplied by a
+	// caller that recorded an identity to hold the peer to (the CLI's config.toml
+	// `did`, the object form of `--peers`).
+	DID         string
 	Gossip      *bool // nil or true = push new ops (default), false = disabled
 	ReadThrough *bool // nil or true = fetch on local 404 (default), false = disabled
 	Sync        *bool // nil or true = poll /log (default), false = disabled
@@ -187,6 +202,23 @@ type GossipProofSigner func(method, host, path string, body []byte) (string, err
 // what every mock in the test suite does, unchanged.
 type SigningPeerClient interface {
 	SubmitOperationsSigned(peerURL string, operations []string, sign GossipProofSigner) error
+}
+
+// IdentifyingPeerClient is the OPTIONAL half of PeerClient that can ask a peer
+// which DID it serves — the one question PeerConfig.DID has to be checked
+// against.
+//
+// It is a separate interface for the same reason SigningPeerClient is: the
+// relay expresses the intent and the caller owns the transport, so a PeerClient
+// that cannot (or will not) fetch a peer's well-known simply does not implement
+// this, and every mock in the test suite keeps compiling and keeps working.
+// A pin against such a transport is UNCHECKABLE, not violated — see peerPinned,
+// which treats "cannot ask" the same way it treats "asked and got no answer".
+type IdentifyingPeerClient interface {
+	// GetPeerDID returns the DID the peer at peerURL currently serves. An error
+	// means the question was not answered (unreachable, non-200, undecodable) —
+	// it never means the peer answered with a different identity.
+	GetPeerDID(peerURL string) (string, error)
 }
 
 // PeerClient is the injected peer transport — the relay expresses intent,
@@ -409,6 +441,13 @@ type PeerSyncStatus struct {
 	LastReconcileAt       *string `json:"lastReconcileAt"`
 	LastReconcileReceived int     `json:"lastReconcileReceived"`
 	LastReconcileInserted int     `json:"lastReconcileInserted"`
+	// PinMismatch names the peer-pin refusal currently suppressing traffic to
+	// this peer, or null when the peer is unpinned, unpinnable, or serving the
+	// DID it is pinned to. A skipped peer is otherwise indistinguishable from a
+	// peer with nothing to send — the cycle attempts, receives nothing, fails
+	// nothing — which is exactly the silence a moved pin must not be able to hide
+	// in. See peerPinned.
+	PinMismatch *string `json:"pinMismatch"`
 }
 
 // newKindCounts returns a countsByKind map pre-seeded with all six buckets at 0, so the

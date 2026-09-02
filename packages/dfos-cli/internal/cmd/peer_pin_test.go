@@ -375,3 +375,100 @@ func TestPeerAddPreservesThePolicyFlagsOnReRegistration(t *testing.T) {
 		t.Fatalf("re-registration rewrote the operator's proof flag: %v", r.Proof)
 	}
 }
+
+// TestPeerPinRefusesARawRelayCall is the passthrough hole. `dfos relay call`
+// resolved a peer and built a client by hand instead of going through
+// requirePeer, so it was the one peer-bound command that never reached the pin
+// gate — and it is the command that can reach ANY route on the peer, including
+// the write-shaped ones under --auth.
+func TestPeerPinRefusesARawRelayCall(t *testing.T) {
+	setupSync(t)
+	peer := newFakePeer(t) // serves pinnedDID
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: otherDID}
+	relayFlag = "prod"
+	defer func() { relayFlag = "" }()
+
+	cmd := newRelayCallCmd()
+	_, _, err := runCapturing(t, cmd, []string{"GET", "/.well-known/dfos-relay"})
+	assertMismatch(t, err, "prod", otherDID, pinnedDID)
+	if peer.infoHits.Load() != 1 {
+		t.Errorf("a refused call must stop at the pin check, got %d peer request(s)", peer.infoHits.Load())
+	}
+}
+
+// TestPeerPinPassesARawRelayCallThrough: the gate refuses a moved pin and
+// nothing else. A matching pin leaves the passthrough exactly as it was.
+func TestPeerPinPassesARawRelayCallThrough(t *testing.T) {
+	setupSync(t)
+	peer := newFakePeer(t)
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: pinnedDID}
+	relayFlag = "prod"
+	defer func() { relayFlag = "" }()
+
+	stdout, _, err := runCapturing(t, newRelayCallCmd(), []string{"GET", "/.well-known/dfos-relay"})
+	if err != nil {
+		t.Fatalf("a matching pin must not refuse a raw call: %v", err)
+	}
+	if !strings.Contains(stdout, pinnedDID) {
+		t.Errorf("the peer's response must reach stdout, got:\n%s", stdout)
+	}
+}
+
+// TestServeVerifiesEveryConfiguredPeerPin is `serve`'s boot gate. The embedded
+// relay talks to peers for as long as the process lives, in every direction, so
+// a moved pin refuses the boot rather than starting a mesh node against a relay
+// this machine did not register.
+func TestServeVerifiesEveryConfiguredPeerPin(t *testing.T) {
+	setupSync(t)
+	peer := newFakePeer(t)
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: otherDID}
+
+	assertMismatch(t, verifyConfiguredPeerPins(), "prod", otherDID, pinnedDID)
+}
+
+// TestServeBootPinsAnUnpinnedPeer: the other half of the boot gate is TOFU, and
+// it lands in the same place `dfos sync` writes it — config.toml, announced. The
+// relay library never writes config, so if `serve` did not do this an entry
+// registered by hand would run forever unpinned.
+func TestServeBootPinsAnUnpinnedPeer(t *testing.T) {
+	setupSync(t)
+	peer := newFakePeer(t)
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL}
+
+	stderr := captureStderr(t, func() {
+		if err := verifyConfiguredPeerPins(); err != nil {
+			t.Fatalf("first contact must not refuse a boot: %v", err)
+		}
+	})
+	if r := cfg.Relays["prod"]; r.DID != pinnedDID {
+		t.Fatalf("boot must pin an unpinned peer, got %q", r.DID)
+	}
+	if !strings.Contains(stderr, "first contact") {
+		t.Errorf("the TOFU write must be announced, got:\n%s", stderr)
+	}
+}
+
+// TestPeerPinNotWrittenWhenThePeerNamesNoIdentity: a peer that answers its
+// well-known without a `did` has told this machine nothing about who it is. That
+// is the same fact as an unanswered fetch, arriving over a live connection —
+// pinning to "" would write a key indistinguishable from unpinned, re-announce
+// the trust decision on every invocation, and leave the entry permanently
+// unpinnable.
+func TestPeerPinNotWrittenWhenThePeerNamesNoIdentity(t *testing.T) {
+	setupSync(t)
+	peer := newFakePeer(t)
+	peer.did = ""
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL}
+
+	stderr := captureStderr(t, func() {
+		if _, _, err := getPeerClient("prod"); err != nil {
+			t.Fatalf("a peer that names no identity must not refuse: %v", err)
+		}
+	})
+	if r := cfg.Relays["prod"]; r.DID != "" {
+		t.Fatalf("nothing may be pinned from a peer that named no identity, got %q", r.DID)
+	}
+	if stderr != "" {
+		t.Errorf("no trust decision was made, so nothing may be announced, got:\n%s", stderr)
+	}
+}

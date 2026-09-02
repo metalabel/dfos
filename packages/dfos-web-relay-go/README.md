@@ -79,6 +79,21 @@ three peering behaviors specified in
 guidance for peered deployments is at
 [protocol.dfos.com/deploy](https://protocol.dfos.com/deploy).
 
+The object form also carries `did`, the peer's identity pin — the DID that peer
+must keep serving:
+
+```
+PEERS='[{"url":"http://relay-b:8080","did":"did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"}]'
+```
+
+Peer state is otherwise keyed by URL, and a URL is an address rather than an
+identity. A pinned peer is checked against its `/.well-known/dfos-relay` before
+each touch and re-checked on a short cadence; one that starts answering as a
+different relay is skipped in every direction — no log pulled, no operation
+pushed, no read-through miss answered, no blob fetched — and the refusal is
+reported at `stats.peerSync` in the well-known. A peer named by URL alone carries
+no pin and is not checked, and a peer that cannot be reached is not a mismatch.
+
 A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected: a bad peer config fails
 at boot rather than degrading into peers that error on every sync tick.

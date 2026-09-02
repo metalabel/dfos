@@ -146,6 +146,40 @@ func (c *HttpPeerClient) GetBlob(peerURL, contentID, ref string) ([]byte, error)
 	return data, nil
 }
 
+// maxWellKnownBytes caps the relay-descriptor read in GetPeerDID. The document
+// is a few hundred bytes of metadata in every real deployment; the cap exists
+// because a peer this relay is about to decide whether to trust is exactly the
+// wrong one to hand an unbounded read.
+const maxWellKnownBytes = 1 << 20 // 1 MB
+
+// GetPeerDID asks a peer which DID it serves, by reading the `did` member of the
+// relay descriptor every DFOS relay publishes at /.well-known/dfos-relay. This
+// is the HTTP half of IdentifyingPeerClient — the question PeerConfig.DID is
+// checked against.
+//
+// The descriptor lives at the relay ROOT, not under proofBasePath: it is what a
+// client reads before it knows anything else about the relay, including whether
+// it serves a proof plane at all. Every failure mode here — unreachable,
+// non-200, undecodable — returns an error, and peerPinned reads every one of
+// them as "not answered" rather than "answered differently".
+func (c *HttpPeerClient) GetPeerDID(peerURL string) (string, error) {
+	resp, err := c.client.Get(strings.TrimRight(peerURL, "/") + "/.well-known/dfos-relay")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("peer returned %d", resp.StatusCode)
+	}
+	var info struct {
+		DID string `json:"did"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxWellKnownBytes)).Decode(&info); err != nil {
+		return "", err
+	}
+	return info.DID, nil
+}
+
 func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error) {
 	u, err := url.Parse(peerURL + proofBasePath + "/log")
 	if err != nil {

@@ -63,6 +63,18 @@ func TestParsePeersForms(t *testing.T) {
 			},
 		},
 		{
+			// The identity pin. Only the object form can carry one — the other two
+			// spellings say nothing about a peer beyond its address — so a bare URL
+			// beside a pinned object stays unpinned, and the relay library reads
+			// that "" as unchecked rather than as a pin to nothing.
+			name:  "object form carries the identity pin",
+			input: `[{"url":"http://relay-b:8080","did":"did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"},"http://relay-c:8080"]`,
+			want: []relay.PeerConfig{
+				{URL: "http://relay-b:8080", DID: "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"},
+				{URL: "http://relay-c:8080"},
+			},
+		},
+		{
 			name:  "trailing slashes trimmed",
 			input: "https://relay.example.com/",
 			want:  []relay.PeerConfig{{URL: "https://relay.example.com"}},
@@ -82,6 +94,9 @@ func TestParsePeersForms(t *testing.T) {
 				if got[i].URL != tc.want[i].URL {
 					t.Errorf("peer %d url: got %q want %q", i, got[i].URL, tc.want[i].URL)
 				}
+				if got[i].DID != tc.want[i].DID {
+					t.Errorf("peer %d did: got %q want %q", i, got[i].DID, tc.want[i].DID)
+				}
 				assertFlag(t, i, "gossip", got[i].Gossip, tc.want[i].Gossip)
 				assertFlag(t, i, "readThrough", got[i].ReadThrough, tc.want[i].ReadThrough)
 				assertFlag(t, i, "sync", got[i].Sync, tc.want[i].Sync)
@@ -99,6 +114,10 @@ func TestParsePeersRejects(t *testing.T) {
 	}{
 		{"malformed json array", `[{"url":"https://relay.example.com",]`},
 		{"unknown per-peer field", `[{"url":"https://relay.example.com","gosip":false}]`},
+		// `did` is a peerSpec member, so a misspelling of it must fail at boot
+		// like any other — silently keeping the peer unpinned is exactly the
+		// unchecked-identity condition the field exists to close.
+		{"misspelled did field", `[{"url":"https://relay.example.com","dids":"did:dfos:x"}]`},
 		{"object without url", `[{"gossip":false}]`},
 		{"scheme-less url", "relay.example.com"},
 		{"non-http scheme", "ftp://relay.example.com"},

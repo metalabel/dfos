@@ -313,7 +313,18 @@ func (r *Relay) gossipOps(tokens []string) {
 			}
 			chunk := tokens[start:end]
 			peerURL := peer.URL
+			peerCfg := peer
 			go func() {
+				// The pin check runs INSIDE the goroutine on purpose. gossipOps is
+				// called on the ingest path, right after a write commits, and a cold
+				// verdict costs a well-known round-trip — checking synchronously
+				// would stall the submission that triggered it behind every
+				// configured peer in turn. Skipping here still means nothing leaves
+				// this relay for a peer whose identity moved, which is the property
+				// that matters: gossip is the direction that PUBLISHES.
+				if r.peerPinned(peerCfg) != nil {
+					return
+				}
 				err := r.submitGossip(peerURL, chunk)
 				if err == nil {
 					return

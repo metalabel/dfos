@@ -248,9 +248,17 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 // and bulk sync is additionally forced off for a peer this machine must not
 // poll — see config.BulkSyncDisabledReason. Exported so the `serve` banner can
 // report the same effective switches the sync loop is about to run on.
+//
+// The DID rides along too. Without it, `dfos serve` ran the relay library's peer
+// loop — sync pull, gossip push, read-through, blob materialization — against a
+// peer set identified by URL alone, so the pin the CLI's own commands refuse to
+// cross was simply absent from the long-running process that does the most peer
+// traffic of anything here. An entry with no pin carries "", which the library
+// reads as unchecked.
 func PeerConfigFor(r config.RelayConfig) relay.PeerConfig {
 	peer := relay.PeerConfig{
 		URL:         r.URL,
+		DID:         r.DID,
 		Gossip:      r.Gossip,
 		ReadThrough: r.ReadThrough,
 		Sync:        r.Sync,
@@ -337,6 +345,13 @@ func normalizePeerURL(url string) string {
 // carries flags (gossip / readThrough / sync) that a config.toml entry cannot
 // express, so keeping the config entry would silently discard the operator's
 // intent and leave every flag at its default.
+//
+// The DID pin is the one field that does NOT get dropped by a later definition
+// that omits it. Attaching a flag to a peer is the whole reason to name it twice,
+// and the object form of --peers has no obligation to restate an identity
+// config.toml already recorded — so letting the redefinition silently unpin the
+// peer would turn "I want gossip off here" into "and stop checking who this is".
+// An explicit `did` still wins outright; only an ABSENT one inherits.
 func mergePeerConfigs(configPeers, extraPeers []relay.PeerConfig, logger *slog.Logger) []relay.PeerConfig {
 	merged := make([]relay.PeerConfig, 0, len(configPeers)+len(extraPeers))
 	at := make(map[string]int, len(configPeers)+len(extraPeers))
@@ -353,6 +368,9 @@ func mergePeerConfigs(configPeers, extraPeers []relay.PeerConfig, logger *slog.L
 				"dropped", from[key],
 				"kept", source,
 			)
+			if peer.DID == "" {
+				peer.DID = merged[i].DID
+			}
 			merged[i] = peer
 			from[key] = source
 			return
