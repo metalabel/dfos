@@ -23,6 +23,19 @@ import (
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 )
 
+// Well-formed did:dfos identifiers no chain in these tests' local relay holds.
+//
+// The SHAPE is load-bearing, not decoration. A keystore account is read as
+// DID-scoped only when the half before the '#' is a valid identifier, so a
+// mnemonic-but-malformed placeholder like `did:dfos:vanished` exercises the
+// unrecognized path rather than the orphan path these fixtures exist to test.
+// Both are 31 characters of the protocol alphabet — what DeriveDID emits, minus
+// the derivation.
+const (
+	didWithNoChainHere = "did:dfos:3333333333333333333333333333333"
+	didOfAStrandedKey  = "did:dfos:4444444444444444444444444444444"
+)
+
 // createStandaloneIdentity mints an identity whose keys come from no vault.
 func createStandaloneIdentity(t *testing.T, name string, store *keystore.MemoryStore) string {
 	t.Helper()
@@ -94,15 +107,15 @@ func TestKeyLedgerFoldsEveryOriginClass(t *testing.T) {
 	// A create interrupted between minting and renaming.
 	plantKey(t, storeA, "pending:key_interrupted")
 	// A key whose identity chain this relay does not have.
-	plantKey(t, storeA, "did:dfos:notinthisrelay#key_gone")
+	plantKey(t, storeA, didWithNoChainHere+"#key_gone")
 	// This installation's sign-in client key.
 	loginPub := plantKey(t, storeA, loginClientAccount("key_login"))
 	writeLoginClientFile(t, "did:dfos:loginclient", "key_login")
 	// A vault-minted key whose chain is gone: the case where a written-down
 	// phrase still covers a key nothing declares.
-	strandedPub := plantKey(t, storeA, "did:dfos:vanished#key_stranded")
+	strandedPub := plantKey(t, storeA, didOfAStrandedKey+"#key_stranded")
 	if err := getVaults().Record("personal", vault.MintedKey{
-		Index: 9, DID: "did:dfos:vanished", KeyID: "key_stranded", Role: "auth", PublicKey: strandedPub,
+		Index: 9, DID: didOfAStrandedKey, KeyID: "key_stranded", Role: "auth", PublicKey: strandedPub,
 	}); err != nil {
 		t.Fatalf("record vault provenance: %v", err)
 	}
@@ -159,7 +172,7 @@ func TestKeyLedgerFoldsEveryOriginClass(t *testing.T) {
 	}
 
 	// Key of an identity this relay has never seen.
-	gone := entryFor(t, ledger, "did:dfos:notinthisrelay#key_gone")
+	gone := entryFor(t, ledger, didWithNoChainHere+"#key_gone")
 	if gone.Status != statusOrphan || !gone.Prunable || gone.Recoverable {
 		t.Fatalf("a key with no local chain came out %+v", gone)
 	}
@@ -174,7 +187,7 @@ func TestKeyLedgerFoldsEveryOriginClass(t *testing.T) {
 	}
 
 	// Vault-minted orphan: prunable, and recoverable, and the report says so.
-	stranded := entryFor(t, ledger, "did:dfos:vanished#key_stranded")
+	stranded := entryFor(t, ledger, didOfAStrandedKey+"#key_stranded")
 	if stranded.Status != statusOrphan || !stranded.Prunable {
 		t.Fatalf("a key with no local chain came out %q", stranded.Status)
 	}
@@ -219,7 +232,7 @@ func TestPruneIsADryRunUntilArmed(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	did := createStandaloneIdentity(t, "alice", storeA)
 	plantKey(t, storeA, "pending:key_interrupted")
-	plantKey(t, storeA, "did:dfos:notinthisrelay#key_gone")
+	plantKey(t, storeA, didWithNoChainHere+"#key_gone")
 	keys = storeA
 
 	dry := runPrune(t, false)
@@ -248,7 +261,7 @@ func TestPruneIsADryRunUntilArmed(t *testing.T) {
 	if armed.Removed != 2 || armed.Failed != 0 {
 		t.Fatalf("armed prune removed %d, failed %d; want 2 and 0", armed.Removed, armed.Failed)
 	}
-	for _, account := range []string{"pending:key_interrupted", "did:dfos:notinthisrelay#key_gone"} {
+	for _, account := range []string{"pending:key_interrupted", didWithNoChainHere + "#key_gone"} {
 		if storeA.HasKey(account) {
 			t.Fatalf("armed prune left orphan %s behind", account)
 		}
@@ -262,6 +275,115 @@ func TestPruneIsADryRunUntilArmed(t *testing.T) {
 	}
 	if again := runPrune(t, false); len(again.Orphans) != 0 {
 		t.Fatalf("orphans remain after an armed prune: %+v", again.Orphans)
+	}
+}
+
+// A '#' in an account name is not a DID URL, and reading it as one is how prune
+// came to delete key material it had never identified.
+//
+// The classifier used to take `strings.Contains(account, "#")` as the DID-scoped
+// arm. Any account with a '#' anywhere in it was therefore split, its left half
+// handed to the chain lookup AS a DID, and — since no chain exists for a DID
+// nobody minted — classified `orphan`, the one status `keys prune --yes`
+// deletes. The account shapes below are exactly the kind a person or another
+// tool writes into a shared keychain, and none of them is a shape this CLI ever
+// wrote. Uncertainty is not an orphan.
+func TestAccountsThatMerelyContainAHashAreNotReadAsDIDs(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createStandaloneIdentity(t, "alice", storeA)
+
+	// A hand-written backup, and a DID URL whose DID half is the right method and
+	// the wrong width.
+	shapes := []string{"backup#key_x", "did:dfos:short#k"}
+	for _, account := range shapes {
+		plantKey(t, storeA, account)
+	}
+	keys = storeA
+
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger: %v", err)
+	}
+	for _, account := range shapes {
+		e := entryFor(t, ledger, account)
+		if e.Status != statusUnrecognized {
+			t.Fatalf("%s came out %q, want %q", account, e.Status, statusUnrecognized)
+		}
+		if e.Prunable {
+			t.Fatalf("%s is prunable — prune would delete a key it never identified", account)
+		}
+		if !strings.Contains(e.Reason, "not an account shape this CLI writes") {
+			t.Fatalf("%s gave the reason %q, which does not say the shape is unknown", account, e.Reason)
+		}
+		if e.DID != "" {
+			t.Fatalf("%s was assigned the DID %q — the classifier invented an identity", account, e.DID)
+		}
+	}
+}
+
+// The same accounts through the command that does the deleting: an armed prune
+// leaves them in the backend and reports them as skipped, which is the surface
+// an operator actually reads.
+func TestPruneSkipsAccountsItCannotIdentify(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createStandaloneIdentity(t, "alice", storeA)
+	shapes := []string{"backup#key_x", "did:dfos:short#k"}
+	for _, account := range shapes {
+		plantKey(t, storeA, account)
+	}
+	keys = storeA
+
+	res := runPrune(t, true)
+	if res.Removed != 0 || res.Failed != 0 {
+		t.Fatalf("armed prune removed %d and failed %d against a keystore with no orphans", res.Removed, res.Failed)
+	}
+	if len(res.Orphans) != 0 {
+		t.Fatalf("prune called these orphans: %+v", res.Orphans)
+	}
+	for _, account := range shapes {
+		if !storeA.HasKey(account) {
+			t.Fatalf("armed prune deleted %s — key material it never identified", account)
+		}
+		skipped := false
+		for _, s := range res.Skipped {
+			if s.Account == account {
+				skipped = true
+			}
+		}
+		if !skipped {
+			t.Fatalf("%s is not in the skipped list; prune reported %+v", account, res.Skipped)
+		}
+	}
+}
+
+// The other direction of the same fix. Requiring the full DID-scoped shape must
+// not turn a REAL orphan into an unrecognized one: a legacy account naming a
+// well-formed DID whose chain is not in this relay is still nothing this machine
+// can place, and still prune's business.
+func TestAWellFormedDIDWithNoChainIsStillAnOrphan(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createStandaloneIdentity(t, "alice", storeA)
+	account := didWithNoChainHere + "#key_x"
+	plantKey(t, storeA, account)
+	keys = storeA
+
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger: %v", err)
+	}
+	e := entryFor(t, ledger, account)
+	if e.Status != statusOrphan || !e.Prunable {
+		t.Fatalf("a legacy account with a well-formed DID and no chain came out %q (prunable=%v)", e.Status, e.Prunable)
+	}
+	if e.DID != didWithNoChainHere || e.KeyID != "key_x" {
+		t.Fatalf("the DID-scoped account did not carry its own name: DID=%q keyID=%q", e.DID, e.KeyID)
+	}
+
+	if res := runPrune(t, true); res.Removed != 1 {
+		t.Fatalf("armed prune removed %d, want the one orphan", res.Removed)
+	}
+	if storeA.HasKey(account) {
+		t.Fatal("armed prune left a real orphan behind")
 	}
 }
 
@@ -818,7 +940,7 @@ func TestKeysRemoveTakesOneOrphanAndLeavesTheOthers(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	did := createStandaloneIdentity(t, "alice", storeA)
 	plantKey(t, storeA, "pending:key_interrupted")
-	plantKey(t, storeA, "did:dfos:notinthisrelay#key_gone")
+	plantKey(t, storeA, didWithNoChainHere+"#key_gone")
 	keys = storeA
 
 	// Named by its key id, which is what an operator reads off `keys list`.
@@ -829,7 +951,7 @@ func TestKeysRemoveTakesOneOrphanAndLeavesTheOthers(t *testing.T) {
 	if storeA.HasKey("pending:key_interrupted") {
 		t.Fatal("'remove --yes' left the named orphan behind")
 	}
-	if !storeA.HasKey("did:dfos:notinthisrelay#key_gone") {
+	if !storeA.HasKey(didWithNoChainHere + "#key_gone") {
 		t.Fatal("remove took an orphan it was not named")
 	}
 	chain, _ := localRelayInstance.Relay.GetIdentity(did)

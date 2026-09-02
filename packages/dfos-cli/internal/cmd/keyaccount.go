@@ -29,6 +29,8 @@ package cmd
 //     account is already reconstructible without a chain.
 
 import (
+	"strings"
+
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 )
@@ -174,4 +176,24 @@ func keyAccountsFor(did, keyID, publicKeyMultibase string) []string {
 		out = append(out, legacyKeyAccount(did, keyID))
 	}
 	return out
+}
+
+// didScopedAccount reports whether account has the shape this CLI writes for a
+// DID-scoped key: a well-formed did:dfos identifier, one '#', and a non-empty
+// key id. It is the read-side counterpart to legacyKeyAccount, which is the only
+// thing that ever wrote that shape.
+//
+// A '#' is not a shape. Testing for one read ANY account containing one as a DID
+// URL, split it, and handed the left half to a chain lookup as if it were a DID
+// — so an account like `backup#key_x` resolved to the "DID" `backup`, found no
+// chain for it, and came out an ORPHAN, which is the one status `keys prune
+// --yes` deletes. An account this CLI never wrote is an account whose status
+// cannot be established, and uncertainty is not an orphan: failing this check
+// falls to `unrecognized`, which prune skips and `keys remove` refuses.
+func didScopedAccount(account string) bool {
+	did, keyID, found := strings.Cut(account, "#")
+	if !found || keyID == "" || strings.Contains(keyID, "#") {
+		return false
+	}
+	return protocol.IsValidDID(did)
 }

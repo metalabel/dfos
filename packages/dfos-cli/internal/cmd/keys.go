@@ -467,7 +467,7 @@ func buildKeyLedger() (*keyLedger, error) {
 			continue
 		}
 		switch {
-		case strings.Contains(h.account, "#"):
+		case didScopedAccount(h.account):
 			if err := lookupDID(didFromKid(h.account)); err != nil {
 				return nil, err
 			}
@@ -796,11 +796,16 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		} else {
 			entry.Reason = "a sign-in client key; " + loginClientFileName + " names a different one"
 		}
-	case strings.HasPrefix(account, keyAccountPrefix), strings.Contains(account, "#"):
+	case strings.HasPrefix(account, keyAccountPrefix), didScopedAccount(account):
 		// Two addressings, one classification. A DID-scoped account carries its
 		// DID and key id in the name; a content-addressed one carries its public
 		// key, and the DID and key id are whatever a chain or a provenance record
 		// says. Everything after this point reads the same fields either way.
+		//
+		// The DID-scoped arm requires the FULL shape, not merely a '#'. Parsing a
+		// DID out of an account this CLI never wrote invents an identity, and an
+		// invented identity has no chain, and no chain is the orphan verdict prune
+		// deletes on. See didScopedAccount.
 		if pub, ok := publicKeyFromAccount(account); ok {
 			entry.PublicKey = pub
 			entry.DID = firstNonEmpty(in.accountDID[account], in.mintedDID[account])
