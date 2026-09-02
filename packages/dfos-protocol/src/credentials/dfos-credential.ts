@@ -20,6 +20,7 @@
 import { decodeMultikey } from '../chain/multikey';
 import type { VerifiedIdentity } from '../chain/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
+import { markDependencyMissing } from '../dependency';
 import { DFOSCredentialPayload, MAX_CREDENTIAL_SIZE, type Attenuation } from './schemas';
 
 // -----------------------------------------------------------------------------
@@ -103,7 +104,12 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
   const allKeys = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
   const key = allKeys.find((k) => k.id === keyId);
   if (!key) {
-    throw new CredentialVerificationError(`key ${keyId} not found on identity ${identity.did}`);
+    // MARKED: the caller's resolver produced this identity but not this key, so
+    // the answer can change once a fuller chain arrives. Not a verdict on the
+    // credential — see `markDependencyMissing`.
+    throw markDependencyMissing(
+      new CredentialVerificationError(`key ${keyId} not found on identity ${identity.did}`),
+    );
   }
 
   const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
@@ -228,7 +234,11 @@ export const verifyDFOSCredential = async (
   // resolve issuer identity and find signing key
   const identity = await options.resolveIdentity(payload.iss);
   if (!identity) {
-    throw new CredentialVerificationError(`issuer identity not found: ${payload.iss}`);
+    // MARKED: the caller's resolver does not hold the issuer's chain. A relay
+    // keeps such an operation pending; the issuer may still be syncing.
+    throw markDependencyMissing(
+      new CredentialVerificationError(`issuer identity not found: ${payload.iss}`),
+    );
   }
   if (identity.isDeleted) {
     throw new CredentialVerificationError(`issuer identity is deleted: ${payload.iss}`);

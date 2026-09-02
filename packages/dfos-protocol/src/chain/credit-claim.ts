@@ -36,6 +36,7 @@
 */
 
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
+import { markDependencyMissing } from '../dependency';
 import { decodeMultikey } from './multikey';
 import { CreditClaimPayload, MAX_CREDIT_CLAIM_SIZE } from './schemas';
 import type { Signer, VerifiedIdentity } from './schemas';
@@ -140,7 +141,10 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
   const allKeys = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
   const key = allKeys.find((k) => k.id === keyId);
   if (!key) {
-    throw invalid(`key ${keyId} not found on identity ${identity.did}`);
+    // MARKED: the resolver produced this identity but not this key. A resolver
+    // that returns only current-state keys reports this for every claim signed
+    // before a rotation, so the answer changes with what the caller holds.
+    throw markDependencyMissing(invalid(`key ${keyId} not found on identity ${identity.did}`));
   }
 
   const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
@@ -368,7 +372,9 @@ export const verifyCreditClaim = async (
     throw unverifiable(`could not resolve claimant identity ${payload.did}: ${detail}`);
   }
   if (!identity) {
-    throw unverifiable(`claimant identity not found: ${payload.did}`);
+    // MARKED: same fact as the credential path's missing issuer — the caller's
+    // resolver does not hold this chain, which is not a verdict on the claim.
+    throw markDependencyMissing(unverifiable(`claimant identity not found: ${payload.did}`));
   }
   const publicKey = resolveKeyFromIdentity(identity, kid);
 

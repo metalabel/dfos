@@ -307,7 +307,7 @@ func verifyCreditClaimCore(jwsToken string, resolveKey KeyResolver, expectedCont
 	// KeyResolver note at the top of this file for why it cannot be narrowed.
 	publicKey, err := resolveKey(kid)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to resolve credit claim key: %s", ErrCreditClaimUnverifiable, err)
+		return nil, fmt.Errorf("%w: failed to resolve credit claim key: %w", ErrCreditClaimUnverifiable, err)
 	}
 	if _, _, err := VerifyJWS(jwsToken, publicKey); err != nil {
 		return nil, fmt.Errorf("%w: invalid credit claim signature", ErrCreditClaimInvalid)

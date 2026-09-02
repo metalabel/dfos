@@ -2,6 +2,7 @@ package relay
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,44 +15,53 @@ import (
 // temporal guard
 // ---------------------------------------------------------------------------
 
-// dependencyFailureSubstrings mark a verify-time failure as a missing
-// dependency (the signing identity / key has not synced yet). These are the
-// only thrown-error cases that are retryable rather than permanent.
+// ErrDependencyMissing marks a verification failure as a MISSING DEPENDENCY:
+// the identity chain or key the operation references is not in this store yet,
+// so the operation may verify once sync or gossip delivers it. The sequencer
+// keeps such an op pending; every other rejection is permanent and DELETES the
+// raw op (MarkOpRejected), which is unrecoverable.
 //
-// This list is the UNION across both relay implementations and MUST stay
-// byte-identical to the TS twin's DEPENDENCY_FAILURE_SUBSTRINGS in ingest.ts.
-// The two lists had drifted (Go carried the two content-chain entries, TS
-// carried the two credential entries in a second, separately-applied
-// predicate), which meant the same op could be permanently rejected by one twin
-// and kept retryable by the other. Since a permanent rejection DELETES the raw
-// op (MarkOpRejected), a misclassification is unrecoverable — so the union is
-// the correct reconciliation: strictly more retries, never more deletions.
+// CLASSIFICATION IS A TYPED FACT, NEVER A SPELLING. Only a resolver knows that
+// a lookup missed — "this identity is not here" and "this kid is malformed" are
+// the same error type at that seam — so the resolvers below wrap this sentinel
+// and every classifier reads it with errors.Is.
 //
-// Every entry is a real, greppable producer:
+// The previous mechanism was a list of substrings matched against the error
+// TEXT, and that text quotes submitter-controlled input verbatim: a kid reaches
+// dfos.ValidateDID's "malformed did:dfos identifier: %q", a credential's
+// audience reaches "credential audience %s does not match operation signer %s",
+// a typ reaches "invalid typ: %s". Spelling any of the listed phrases inside
+// one of those fields made a PERMANENT rejection classify as retryable, so the
+// relay kept the op and re-verified it on every sequencer cycle — and varying
+// one byte to mint a fresh CID grew the raw-op store without bound. A submitter
+// chose the relay's control flow by choosing a string.
 //
-//   - "unknown identity:"          — CreateKeyResolver (ingest.go) / TS
-//     createKeyResolver: identity chain not synced
-//   - "unknown key "               — CreateKeyResolver: key not on the (synced)
-//     identity ("unknown key <id> on identity <did>")
-//   - "unknown previous operation" — content/identity chain dependency, surfaced
-//     directly or through a wrapped verify error
-//   - "content chain not found:"   — same, for the content chain lookup (the
-//     trailing colon keeps it off the relays' bare 404 body of the same words)
-//   - "issuer identity not found:" — dfos-protocol (TS) dfos-credential.ts:
-//     credential issuer chain not synced
-//   - " not found on identity "    — dfos-protocol (TS) dfos-credential.ts /
-//     credit-claim.ts: "key <id> not found on identity <did>"
+// The two twins MUST classify identically, and now do so structurally rather
+// than by keeping two string lists in sync: the TS twin's marker is
+// isDependencyMissing/markDependencyMissing in @metalabel/dfos-protocol, wrapped
+// at the same resolver miss sites (ingest.ts).
+var ErrDependencyMissing = errors.New("dependency missing")
+
+// dependencyMissingError carries ErrDependencyMissing WITHOUT altering the
+// human-readable message.
 //
-// The last two have no producer in dfos-protocol-go today (it emits no
-// "not found" text at all); they are carried here so the twins classify
-// identically if a Go verifier ever grows the same message.
-var dependencyFailureSubstrings = []string{
-	"unknown identity:",
-	"unknown key ",
-	"unknown previous operation",
-	"content chain not found:",
-	"issuer identity not found:",
-	" not found on identity ",
+// The message has to stay byte-identical to the TS twin's: the conformance
+// parity suite compares the two relays' /proof/v1/operations response bodies
+// verbatim, and the TS marker is a property hung on the error object, which
+// touches no text at all. A `fmt.Errorf("%w: ...", ErrDependencyMissing, ...)`
+// would prefix every miss with "dependency missing: " on the Go side only and
+// split the twins on the exact surface the classification was meant to unify.
+type dependencyMissingError struct{ msg string }
+
+func (e dependencyMissingError) Error() string { return e.msg }
+
+// Unwrap is what makes errors.Is find the sentinel, including through the %w
+// wraps the protocol library applies on the way back up.
+func (e dependencyMissingError) Unwrap() error { return ErrDependencyMissing }
+
+// dependencyMissingf builds a miss with a formatted message.
+func dependencyMissingf(format string, a ...any) error {
+	return dependencyMissingError{msg: fmt.Sprintf(format, a...)}
 }
 
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
@@ -63,17 +73,6 @@ const (
 	currentAdmission admissionMode = iota
 	historicalAdmission
 )
-
-// isKeyResolutionFailure reports whether a thrown verification error indicates a
-// missing dependency (retryable) rather than a permanent rejection.
-func isKeyResolutionFailure(msg string) bool {
-	for _, s := range dependencyFailureSubstrings {
-		if strings.Contains(msg, s) {
-			return true
-		}
-	}
-	return false
-}
 
 // maxFutureTimestamp is the maximum allowed clock skew for operation timestamps (24 hours).
 const maxFutureTimestamp = 24 * time.Hour
@@ -275,6 +274,13 @@ func findKeyInKeyState(state dfos.DeclaredKeyState, keyID string) (dfos.Multikey
 //
 // No fast/slow split remains either: has-ever-proved is a superset of effective,
 // so one search over ProvedKeys answers both.
+//
+// WHICH FAILURES ARE DEPENDENCY MISSES. Exactly two: the identity chain is not
+// in this store, and the identity is here but has never proved that key id.
+// Both may be answered differently once sync delivers more of the graph, so
+// both wrap ErrDependencyMissing. The malformed-kid and malformed-DID failures
+// do NOT: no amount of syncing makes a kid that is not a DID URL into one, so
+// they stay permanent and the op is durably rejected.
 func CreateKeyResolver(store Store) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -293,14 +299,14 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 			return nil, err
 		}
 		if identity == nil {
-			return nil, fmt.Errorf("unknown identity: %s", did)
+			return nil, dependencyMissingf("unknown identity: %s", did)
 		}
 
 		if k, ok := findKeyInKeyState(provedKeyState(identity.State), keyID); ok {
 			return dfos.DecodeMultikey(k.PublicKeyMultibase)
 		}
 
-		return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
+		return nil, dependencyMissingf("unknown key %s on identity %s", keyID, did)
 	}
 }
 
@@ -312,6 +318,10 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 // key is absent from them, so it never authenticates. No change was needed here
 // beyond saying so — the possession fold made the arrays correct for this
 // surface for free.
+//
+// Only the unknown-identity failure is a dependency miss here. A DELETED
+// identity and a key that is merely no longer current are both verdicts this
+// store is already entitled to reach, and re-asking later cannot change them.
 func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -330,7 +340,7 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 			return nil, err
 		}
 		if identity == nil {
-			return nil, fmt.Errorf("unknown identity: %s", did)
+			return nil, dependencyMissingf("unknown identity: %s", did)
 		}
 		if identity.State.IsDeleted {
 			return nil, fmt.Errorf("signing identity is deleted")
@@ -531,7 +541,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 	if isGenesis {
 		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 		}
 		createdAt, _ := payload["createdAt"].(string)
 		chain := StoredContentChain{
@@ -587,7 +597,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		// linear extension (fast path)
 		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 		}
 		updated := StoredContentChain{
 			ContentID:     chain.ContentID,
@@ -625,7 +635,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 
 	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 	}
 
 	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
@@ -665,7 +675,7 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admis
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 	}
 
 	cid := result.CountersignCID
@@ -744,7 +754,7 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool, mode admissio
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 	}
 
 	cid := result.ArtifactCID
@@ -784,7 +794,7 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 
 	result, err := dfos.VerifyRevocation(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 	}
 
 	cid := result.RevocationCID
@@ -930,7 +940,7 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	resolveKey := CreateKeyResolver(store)
 	publicKey, err := resolveKey(kid)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err), DependencyMissing: isKeyResolutionFailure(err.Error())}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
 	}
 
 	credential, err := dfos.VerifyCredential(jwsToken, publicKey, "", "")
