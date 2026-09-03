@@ -2064,6 +2064,69 @@ describe('index v0', () => {
     expect(operations.operations[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it('orders credential pages by author or receipt recency without changing wire rows', async () => {
+    const issuer = await createIdentity();
+    const now = Math.floor(Date.now() / 1000);
+    const credentials = await Promise.all(
+      [now - 10, now - 20].map((iat, index) =>
+        createDFOSCredential({
+          issuerDID: issuer.did,
+          audienceDID: '*',
+          att: [{ resource: 'chain:*', action: index === 0 ? 'read' : 'write' }],
+          exp: now + 3600,
+          signer: issuer.authKey.signer,
+          keyId: issuer.authKey.keyId,
+          iat,
+        }),
+      ),
+    );
+    for (const [index, credential] of credentials.entries()) {
+      expect((await json(await postOps([credential]))).results[0].status).toBe('new');
+      if (index === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    const cids = credentials.map(
+      (credential) => decodeDFOSCredentialUnsafe(credential)!.header.cid as string,
+    );
+    for (const cid of cids) {
+      expect((await store.getPublicCredentialByCID(cid))?.ingestedAt).toBe(
+        (await store.getIndexOperationRow(cid))?.ingestedAt,
+      );
+    }
+
+    const walk = async (order?: 'createdAt.desc' | 'ingestedAt.desc') => {
+      const seen: string[] = [];
+      let after: string | null = null;
+      for (let pages = 0; pages < 10; pages += 1) {
+        const page = await json(
+          await req(
+            `/index/v0/credentials?issuer=${encodeURIComponent(issuer.did)}&limit=1` +
+              `${order ? `&order=${order}` : ''}` +
+              `${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+          ),
+        );
+        seen.push(...page.credentials.map((row: { cid: string }) => row.cid));
+        if (page.next === null) return seen;
+        after = page.next;
+      }
+      throw new Error('credential cursor walk exceeded 10 pages');
+    };
+
+    expect(await walk()).toEqual([...cids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+    expect(await walk('createdAt.desc')).toEqual([cids[0], cids[1]]);
+    expect(await walk('ingestedAt.desc')).toEqual([cids[1], cids[0]]);
+
+    const ordered = await json(await req('/index/v0/credentials?order=createdAt.desc&limit=1'));
+    expect(ordered.credentials[0]).not.toHaveProperty('createdAt');
+    expect(ordered.credentials[0]).not.toHaveProperty('ingestedAt');
+
+    const badOrder = await req('/index/v0/credentials?order=bogus');
+    expect(badOrder.status).toBe(400);
+    expect(await json(badOrder)).toEqual({ error: 'invalid order' });
+    const badCursor = await req('/index/v0/credentials?order=createdAt.desc&after=not-a-cursor');
+    expect(badCursor.status).toBe(400);
+    expect(await json(badCursor)).toEqual({ error: 'invalid cursor' });
+  });
+
   // ---------------------------------------------------------------------------
   // materialized projection: keyset cursor + recompute-on-change
   // ---------------------------------------------------------------------------

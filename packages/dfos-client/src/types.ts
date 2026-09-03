@@ -422,6 +422,7 @@ export interface Client {
       issuer?: string;
       resource?: string;
       action?: string;
+      order?: IndexRecencyOrder;
       after?: string;
       limit?: number;
     },

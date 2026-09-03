@@ -117,7 +117,9 @@ CREATE TABLE IF NOT EXISTS public_credentials (
 	issuer_did TEXT NOT NULL,
 	att JSON NOT NULL,
 	exp INTEGER NOT NULL,
-	jws_token TEXT NOT NULL
+	jws_token TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ingested_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
@@ -409,6 +411,8 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		{"countersignatures", "ingested_at"},
 		{"index_countersign", "created_at"},
 		{"index_countersign", "ingested_at"},
+		{"public_credentials", "created_at"},
+		{"public_credentials", "ingested_at"},
 	} {
 		if err := ensureColumn(writeDB, column.table, column.name, "TEXT"); err != nil {
 			writeDB.Close()
@@ -445,6 +449,8 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_created ON index_countersign(witness_did, created_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_ingested ON index_countersign(witness_did, ingested_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_relation ON index_countersign(witness_did, relation, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_public_credentials_created ON public_credentials(created_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_public_credentials_ingested ON public_credentials(ingested_at, cid)",
 	} {
 		if _, err := writeDB.Exec(statement); err != nil {
 			writeDB.Close()
@@ -623,6 +629,51 @@ func backfillIndexTimestamps(db *sql.DB) error {
 			ingestedAt = rawOpIngestedAt(db, cid)
 		}
 		if _, err := db.Exec("UPDATE countersignatures SET created_at = ?, ingested_at = ? WHERE rowid = ?", createdAt, ingestedAt, row.rowID); err != nil {
+			return err
+		}
+	}
+
+	type credentialBackfill struct {
+		rowID      int64
+		cid        string
+		jwsToken   string
+		createdAt  sql.NullString
+		ingestedAt sql.NullString
+	}
+	rows, err = db.Query("SELECT rowid, cid, jws_token, created_at, ingested_at FROM public_credentials WHERE created_at IS NULL OR ingested_at IS NULL")
+	if err != nil {
+		return err
+	}
+	credentials := []credentialBackfill{}
+	for rows.Next() {
+		var row credentialBackfill
+		if err := rows.Scan(&row.rowID, &row.cid, &row.jwsToken, &row.createdAt, &row.ingestedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		credentials = append(credentials, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range credentials {
+		createdAt := row.createdAt.String
+		if !row.createdAt.Valid {
+			if _, payload, err := dfos.DecodeJWSUnsafe(row.jwsToken); err == nil && payload != nil {
+				if value, ok := payload["iat"].(float64); ok {
+					createdAt = credentialCreatedAt(int64(value))
+				} else if value, ok := payload["iat"].(int64); ok {
+					createdAt = credentialCreatedAt(value)
+				}
+			}
+		}
+		ingestedAt := row.ingestedAt.String
+		if !row.ingestedAt.Valid {
+			if err := db.QueryRow("SELECT ingested_at FROM operations WHERE cid = ? LIMIT 1", row.cid).Scan(&ingestedAt); err != nil {
+				ingestedAt = rawOpIngestedAt(db, row.cid)
+			}
+		}
+		if _, err := db.Exec("UPDATE public_credentials SET created_at = ?, ingested_at = ? WHERE rowid = ?", createdAt, ingestedAt, row.rowID); err != nil {
 			return err
 		}
 	}
@@ -1674,15 +1725,29 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 		)`)
 		args = append(args, *q.Action)
 	}
-	if q.After != "" {
+	if q.Order == "" && q.After != "" {
 		where = append(where, "cid > ?")
 		args = append(args, q.After)
 	}
-	query := "SELECT cid, issuer_did, att, exp, jws_token FROM public_credentials"
+	if q.Order != "" && q.OrderedAfter != nil {
+		column := "ingested_at"
+		if q.Order == "createdAt.desc" {
+			column = "created_at"
+		}
+		where = append(where, "("+column+" < ? OR ("+column+" = ? AND cid > ?))")
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
+	}
+	query := "SELECT cid, issuer_did, att, exp, jws_token, created_at, ingested_at FROM public_credentials"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY cid LIMIT ?"
+	if q.Order == "createdAt.desc" {
+		query += " ORDER BY created_at DESC, cid ASC LIMIT ?"
+	} else if q.Order == "ingestedAt.desc" {
+		query += " ORDER BY ingested_at DESC, cid ASC LIMIT ?"
+	} else {
+		query += " ORDER BY cid LIMIT ?"
+	}
 	args = append(args, q.Limit)
 
 	rows, err := s.readerDB().Query(query, args...)
@@ -1694,7 +1759,7 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 	for rows.Next() {
 		var row indexCredentialRow
 		var attJSON string
-		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken); err != nil {
+		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
 		}
 		row.Aud = "*"
@@ -2453,9 +2518,9 @@ func (s *SQLiteStore) GetPublicCredentialByCID(cid string) (*StoredPublicCredent
 	var credential StoredPublicCredential
 	var attJSON string
 	err := s.readerDB().QueryRow(
-		"SELECT cid, issuer_did, att, exp, jws_token FROM public_credentials WHERE cid = ?",
+		"SELECT cid, issuer_did, att, exp, jws_token, created_at, ingested_at FROM public_credentials WHERE cid = ?",
 		cid,
-	).Scan(&credential.CID, &credential.IssuerDID, &attJSON, &credential.Exp, &credential.JWSToken)
+	).Scan(&credential.CID, &credential.IssuerDID, &attJSON, &credential.Exp, &credential.JWSToken, &credential.CreatedAt, &credential.IngestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2474,8 +2539,8 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 		return err
 	}
 	if _, err = s.writerDB().Exec(
-		"INSERT OR IGNORE INTO public_credentials (cid, issuer_did, att, exp, jws_token) VALUES (?, ?, ?, ?, ?)",
-		credential.CID, credential.IssuerDID, attJSON, credential.Exp, credential.JWSToken,
+		"INSERT OR IGNORE INTO public_credentials (cid, issuer_did, att, exp, jws_token, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		credential.CID, credential.IssuerDID, attJSON, credential.Exp, credential.JWSToken, credential.CreatedAt, credential.IngestedAt,
 	); err != nil {
 		return err
 	}

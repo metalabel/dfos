@@ -1128,18 +1128,34 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     const resource = c.req.query('resource');
     const action = c.req.query('action');
+    const order = parseIndexRecencyOrder(c.req.query('order'));
+    if (order === null) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
+    const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
+    if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexCredentials({
       ...(issuer ? { issuer } : {}),
       ...(resource !== undefined ? { resource } : {}),
       ...(action !== undefined ? { action } : {}),
-      ...(after ? { after } : {}),
+      ...(order ? { order } : {}),
+      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
       limit,
     });
-    const next = rows.length === limit ? rows[rows.length - 1]!.cid : null;
+    const next =
+      rows.length === limit
+        ? order
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+              rows[rows.length - 1]!.cid,
+            )
+          : rows[rows.length - 1]!.cid
+        : null;
+    const credentials = rows.map(
+      ({ createdAt: _createdAt, ingestedAt: _ingestedAt, ...row }) => row,
+    );
 
-    return c.json({ credentials: rows, next });
+    return c.json({ credentials, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/operations`, async (c) => {

@@ -140,12 +140,14 @@ describe('index (v0) client seam', () => {
       issuer: 'did:dfos:x',
       resource: 'chain:c1',
       action: 'read',
+      order: 'createdAt.desc',
     });
     expect(page.credentials).toHaveLength(1);
     expect(seen?.pathname).toBe('/index/v0/credentials');
     expect(seen?.searchParams.get('issuer')).toBe('did:dfos:x');
     expect(seen?.searchParams.get('resource')).toBe('chain:c1');
     expect(seen?.searchParams.get('action')).toBe('read');
+    expect(seen?.searchParams.get('order')).toBe('createdAt.desc');
   });
 
   it('credentials returns a genuine 200-empty page normally (no throw)', async () => {

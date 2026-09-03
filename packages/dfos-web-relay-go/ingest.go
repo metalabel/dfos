@@ -960,18 +960,21 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		action, _ := am["action"].(string)
 		att = append(att, AttenuationPair{Resource: resource, Action: action})
 	}
+	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
 	if perr := persistError(cid, store.AddPublicCredential(StoredPublicCredential{
-		CID:       cid,
-		IssuerDID: credential.Iss,
-		Att:       att,
-		Exp:       credential.Exp,
-		JWSToken:  jwsToken,
+		CID:        cid,
+		IssuerDID:  credential.Iss,
+		Att:        att,
+		Exp:        credential.Exp,
+		JWSToken:   jwsToken,
+		CreatedAt:  credentialCreatedAt(credential.Iat),
+		IngestedAt: ingestedAt,
 	})); perr != nil {
 		return *perr
 	}
 
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID})); perr != nil {
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID, IngestedAt: ingestedAt})); perr != nil {
 		return *perr
 	}
 	if logEnabled {

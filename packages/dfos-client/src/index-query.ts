@@ -173,6 +173,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       issuer?: string;
       resource?: string;
       action?: string;
+      order?: IndexRecencyOrder;
       after?: string;
       limit?: number;
     },
@@ -186,6 +187,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         setParam(url, 'issuer', params?.issuer);
         setParam(url, 'resource', params?.resource);
         setParam(url, 'action', params?.action);
+        setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;

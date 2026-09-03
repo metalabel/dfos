@@ -5,8 +5,10 @@
 package conformance
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -702,6 +704,79 @@ func TestIndexCredentialsKeysetPagination(t *testing.T) {
 	for cid, found := range created {
 		if !found {
 			t.Fatalf("credential keyset walk did not include created credential %s", cid)
+		}
+	}
+}
+
+func TestIndexCredentialsOrderedPaginationAndBadInputs(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	now := time.Now().Unix()
+	kid := issuer.did + "#" + issuer.auth.keyID
+	tokens := []string{
+		createPublicCredentialAt(t, issuer.did, kid, "read", "*", 5*time.Minute, now-10, issuer.auth.priv),
+		createPublicCredentialAt(t, issuer.did, kid, "write", "*", 5*time.Minute, now-20, issuer.auth.priv),
+	}
+	cids := make([]string, 0, len(tokens))
+	for i, token := range tokens {
+		cids = append(cids, postPublicCredential(t, base, token))
+		if i == 0 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	walked := []string{}
+	after := ""
+	for page := 0; page < 10; page++ {
+		route := base + "/index/v0/credentials?issuer=" + url.QueryEscape(issuer.did) + "&order=createdAt.desc&limit=1"
+		if after != "" {
+			route += "&after=" + url.QueryEscape(after)
+		}
+		var body struct {
+			Credentials []indexCredentialTestRow `json:"credentials"`
+			Next        *string                  `json:"next"`
+		}
+		resp := getJSON(t, route, &body)
+		skipIndex501(t, resp.StatusCode)
+		if resp.StatusCode != 200 {
+			t.Fatalf("ordered credentials page: status %d", resp.StatusCode)
+		}
+		for _, row := range body.Credentials {
+			walked = append(walked, row.CID)
+		}
+		if body.Next == nil {
+			break
+		}
+		after = *body.Next
+	}
+	wantOrdered := []string{cids[0], cids[1]}
+	if !reflect.DeepEqual(walked, wantOrdered) {
+		t.Fatalf("ordered credential walk = %v, want %v", walked, wantOrdered)
+	}
+
+	for _, route := range []string{
+		"/index/v0/credentials?order=bogus",
+		"/index/v0/credentials?order=createdAt.desc&after=not-a-cursor",
+	} {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		resp := getJSON(t, base+route, &errBody)
+		if resp.StatusCode != 400 {
+			t.Fatalf("%s: status %d, want 400", route, resp.StatusCode)
+		}
+	}
+
+	canonical := base64.RawURLEncoding.EncodeToString([]byte("2026-01-01T00:00:00Z~conformance"))
+	for _, variant := range []string{canonical + "=", canonical + "\n", canonical + " "} {
+		var errBody struct {
+			Error string `json:"error"`
+		}
+		route := base + "/index/v0/credentials?order=createdAt.desc&after=" + url.QueryEscape(variant)
+		resp := getJSON(t, route, &errBody)
+		if resp.StatusCode != 400 || errBody.Error != "invalid cursor" {
+			t.Fatalf("non-canonical cursor %q: status %d error %q, want 400 invalid cursor", variant, resp.StatusCode, errBody.Error)
 		}
 	}
 }

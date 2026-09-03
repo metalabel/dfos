@@ -321,11 +321,13 @@ type StoredCountersignature struct {
 
 // StoredPublicCredential represents a public credential (standing authorization).
 type StoredPublicCredential struct {
-	CID       string            `json:"cid"`
-	IssuerDID string            `json:"issuerDID"`
-	Att       []AttenuationPair `json:"att"`
-	Exp       int64             `json:"exp"`
-	JWSToken  string            `json:"jwsToken"`
+	CID        string            `json:"cid"`
+	IssuerDID  string            `json:"issuerDID"`
+	Att        []AttenuationPair `json:"att"`
+	Exp        int64             `json:"exp"`
+	JWSToken   string            `json:"jwsToken"`
+	CreatedAt  string            `json:"createdAt"`
+	IngestedAt string            `json:"ingestedAt"`
 }
 
 // StoredSignRequest is ephemeral signing-mailbox courier state.
@@ -667,9 +669,9 @@ type Store interface {
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
 	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
 	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error)
-	// QueryIndexCredentials pages held public credentials ascending by cid,
-	// cid > After, length <= Limit, filtered by issuer, resource, and/or action
-	// exact match. For chain resources, the chain:* bucket is unioned.
+	// QueryIndexCredentials pages held public credentials by lexical cid or the
+	// selected recency composite, filtered by issuer, resource, and/or action exact
+	// match. For chain resources, the chain:* bucket is unioned.
 	QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error)
 	// QueryIndexOperations pages the accepted operation log by relay or author recency.
 	QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error)
@@ -772,11 +774,13 @@ type IndexCountersignatureQuery struct {
 
 // IndexCredentialQuery is the keyset-paged filter for held public credentials.
 type IndexCredentialQuery struct {
-	Issuer   string
-	Resource *string // nil = no filter
-	Action   *string // nil = no filter
-	After    string
-	Limit    int
+	Issuer       string
+	Resource     *string // nil = no filter
+	Action       *string // nil = no filter
+	After        string
+	OrderedAfter *indexOrderedCursor
+	Order        string
+	Limit        int
 }
 
 // IndexOperationQuery is the always-time-ordered filter over accepted operations.

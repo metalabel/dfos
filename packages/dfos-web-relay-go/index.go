@@ -140,12 +140,14 @@ type indexCountersignaturePage struct {
 }
 
 type indexCredentialRow struct {
-	CID       string            `json:"cid"`
-	IssuerDID string            `json:"issuerDID"`
-	Aud       string            `json:"aud"`
-	Att       []AttenuationPair `json:"att"`
-	Exp       int64             `json:"exp"`
-	JWSToken  string            `json:"jwsToken"`
+	CID        string            `json:"cid"`
+	IssuerDID  string            `json:"issuerDID"`
+	Aud        string            `json:"aud"`
+	Att        []AttenuationPair `json:"att"`
+	Exp        int64             `json:"exp"`
+	JWSToken   string            `json:"jwsToken"`
+	CreatedAt  string            `json:"-"`
+	IngestedAt string            `json:"-"`
 }
 
 type indexOperationRow struct {
@@ -513,18 +515,40 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 	if value, ok := firstQueryValue(query, "action"); ok {
 		action = &value
 	}
+	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "")
+	if !validOrder {
+		writeError(w, 400, "invalid order")
+		return
+	}
+	var orderedAfter *indexOrderedCursor
+	if order != "" && query.Get("after") != "" {
+		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
+		if !ok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		orderedAfter = cursor
+	}
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexCredentials(IndexCredentialQuery{
-		Issuer:   issuer,
-		Resource: resource,
-		Action:   action,
-		After:    query.Get("after"),
-		Limit:    limit,
+		Issuer:       issuer,
+		Resource:     resource,
+		Action:       action,
+		After:        query.Get("after"),
+		OrderedAfter: orderedAfter,
+		Order:        order,
+		Limit:        limit,
 	})
 	if storeErr(w, err) {
 		return
 	}
-	writeJSON(w, 200, indexCredentialPage{Credentials: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
+	writeJSON(w, 200, indexCredentialPage{Credentials: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
+		row := rows[len(rows)-1]
+		if order == "createdAt.desc" {
+			return row.CreatedAt, row.CID
+		}
+		return row.IngestedAt, row.CID
+	})})
 }
 
 func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) {
@@ -952,6 +976,14 @@ func createdAtOf(log []string) string {
 	return ""
 }
 
+// credentialCreatedAt normalizes a credential's verified iat to the index wire
+// timestamp. It reads nothing else: a createdAt claim in a credential payload is
+// issuer-controlled and outside the verified credential shape, so it never
+// decides where the credential sorts.
+func credentialCreatedAt(iat int64) string {
+	return time.Unix(iat, 0).UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
 // operationCreatedAt normalizes the operation's author clock to the index wire
 // timestamp. Protocol operations carry createdAt; credentials carry numeric iat.
 func operationCreatedAt(jwsToken string) string {
@@ -963,10 +995,10 @@ func operationCreatedAt(jwsToken string) string {
 		return value
 	}
 	if value, ok := payload["iat"].(float64); ok {
-		return time.Unix(int64(value), 0).UTC().Format("2006-01-02T15:04:05.000Z")
+		return credentialCreatedAt(int64(value))
 	}
 	if value, ok := payload["iat"].(int64); ok {
-		return time.Unix(value, 0).UTC().Format("2006-01-02T15:04:05.000Z")
+		return credentialCreatedAt(value)
 	}
 	return ""
 }

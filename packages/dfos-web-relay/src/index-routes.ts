@@ -115,6 +115,11 @@ export interface IndexCredentialRow {
   jwsToken: string;
 }
 
+export interface IndexCredentialQueryRow extends IndexCredentialRow {
+  createdAt: string;
+  ingestedAt: string;
+}
+
 export const parseBooleanQuery = (raw: string | undefined): boolean | undefined | null => {
   if (raw === undefined) return undefined;
   if (raw === 'true') return true;
