@@ -1071,19 +1071,25 @@ const ingestPublicCredential = async (
     return { cid, status: 'rejected', error: 'credential is revoked' };
   }
 
-  // store as standing authorization
+  await store.putOperation({ cid, jwsToken, chainType: 'credential', chainId: verified.iss });
+  if (logEnabled) {
+    await store.appendToLog({ cid, jwsToken, kind: 'credential', chainId: verified.iss });
+  }
+
+  // Source the receipt stamp from the operation log so /index/v0/credentials
+  // and /index/v0/operations agree on one receipt time for the same op (mirrors
+  // the Go twin); wall clock only as fallback when the log/accessor is absent.
+  const ingestedAt =
+    (await store.getIndexOperationRow?.(cid))?.ingestedAt ?? new Date().toISOString();
   await store.addPublicCredential({
     cid,
     issuerDID: verified.iss,
     att: verified.att,
     exp: verified.exp,
     jwsToken,
+    createdAt: new Date(verified.iat * 1000).toISOString(),
+    ingestedAt,
   });
-
-  await store.putOperation({ cid, jwsToken, chainType: 'credential', chainId: verified.iss });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'credential', chainId: verified.iss });
-  }
   return { cid, status: 'new', kind: 'credential', chainId: verified.iss };
 };
 

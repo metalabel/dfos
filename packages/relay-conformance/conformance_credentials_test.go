@@ -70,6 +70,10 @@ func createRevocation(t *testing.T, issuerDID, credentialCID string, kp keypair)
 
 // createPublicCredential creates a public credential (aud: "*") for a content chain.
 func createPublicCredential(t *testing.T, issuerDID, kid string, action string, contentID string, ttl time.Duration, privateKey ed25519.PrivateKey) string {
+	return createPublicCredentialAt(t, issuerDID, kid, action, contentID, ttl, time.Now().Unix(), privateKey)
+}
+
+func createPublicCredentialAt(t *testing.T, issuerDID, kid, action, contentID string, ttl time.Duration, iat int64, privateKey ed25519.PrivateKey) string {
 	t.Helper()
 
 	now := time.Now().Unix()
@@ -90,7 +94,7 @@ func createPublicCredential(t *testing.T, issuerDID, kid string, action string, 
 		"att":     att,
 		"prf":     []string{},
 		"exp":     exp,
-		"iat":     now,
+		"iat":     iat,
 	}
 
 	_, _, cidStr, err := dfos.DagCborCID(payload)

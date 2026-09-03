@@ -429,6 +429,7 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 		"/index/v0/credentials?resource=chain:*&limit=1000",
+		"/index/v0/credentials?resource=chain:*&order=createdAt.desc&limit=1000",
 		identityKeyRoute,
 		identityRotatedKeyRoute,
 		identityVoidKeyRoute,
@@ -887,6 +888,7 @@ func TestDualRelayParity(t *testing.T) {
 			"/index/v0/identities?order=genesisAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
 			"/index/v0/artifacts?order=createdAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
 			"/index/v0/countersignatures?witness=" + url.QueryEscape(fix.QueryRevocationIssuerDID) + "&order=createdAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/credentials?order=createdAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
 			"/index/v0/operations?after=" + url.QueryEscape(orderedCanonical+suffix),
 			"/index/v0/credits?after=" + url.QueryEscape(creditCanonical+suffix),
 		}

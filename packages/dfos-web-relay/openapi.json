@@ -1805,13 +1805,26 @@
             "description": "Exact match against an att[].action"
           },
           {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "createdAt.desc",
+                "ingestedAt.desc"
+              ]
+            },
+            "description": "Optional recency ordering; ordered cursors are opaque"
+          },
+          {
             "name": "after",
             "in": "query",
             "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Keyset cursor — returns rows with credential `cid` strictly greater than this value (from a prior page's next)."
+            "description": "CID keyset cursor in lexical mode or opaque cursor in ordered mode"
           },
           {
             "name": "limit",
@@ -1901,7 +1914,7 @@
             }
           },
           "400": {
-            "description": "Malformed issuer DID",
+            "description": "Malformed issuer DID, order, or cursor",
             "content": {
               "application/json": {
                 "schema": {

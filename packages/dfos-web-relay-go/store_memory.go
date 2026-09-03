@@ -673,13 +673,23 @@ func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 			}
 		}
 		rows = append(rows, indexCredentialRow{
-			CID:       cred.CID,
-			IssuerDID: cred.IssuerDID,
-			Aud:       "*",
-			Att:       cred.Att,
-			Exp:       cred.Exp,
-			JWSToken:  cred.JWSToken,
+			CID:        cred.CID,
+			IssuerDID:  cred.IssuerDID,
+			Aud:        "*",
+			Att:        cred.Att,
+			Exp:        cred.Exp,
+			JWSToken:   cred.JWSToken,
+			CreatedAt:  cred.CreatedAt,
+			IngestedAt: cred.IngestedAt,
 		})
+	}
+	if q.Order != "" {
+		return pageOrderedIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, func(row indexCredentialRow) string {
+			if q.Order == "createdAt.desc" {
+				return row.CreatedAt
+			}
+			return row.IngestedAt
+		}, q.OrderedAfter, q.Limit), nil
 	}
 	return pageIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, q.After, q.Limit), nil
 }

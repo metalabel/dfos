@@ -18,7 +18,7 @@ import type {
   IndexArtifactRow,
   IndexContentRow,
   IndexCountersignatureQueryRow,
-  IndexCredentialRow,
+  IndexCredentialQueryRow,
   IndexCreditCursor,
   IndexCreditRow,
   IndexIdentityRow,
@@ -490,6 +490,8 @@ export interface StoredPublicCredential {
   att: Attenuation[];
   exp: number;
   jwsToken: string;
+  createdAt: string;
+  ingestedAt: string;
 }
 
 export interface StoredCountersignature {
@@ -806,17 +808,19 @@ export interface RelayStore {
     limit: number;
   }): Promise<IndexCountersignatureQueryRow[]>;
   /**
-   * Page held public credentials ascending by cid, `cid > after`, length <=
-   * limit, filtered by issuer, resource, and/or action exact match. For chain
-   * resources, the `chain:*` bucket is unioned as an amber discovery hint.
+   * Page held public credentials by lexical cid or the selected recency
+   * composite, filtered by issuer, resource, and/or action exact match. For
+   * chain resources, the `chain:*` bucket is unioned as an amber discovery hint.
    */
   queryIndexCredentials(q: {
     issuer?: string;
     resource?: string;
     action?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
     limit: number;
-  }): Promise<IndexCredentialRow[]>;
+  }): Promise<IndexCredentialQueryRow[]>;
 
   /**
    * Page relay-held operations in non-authoritative recency order.

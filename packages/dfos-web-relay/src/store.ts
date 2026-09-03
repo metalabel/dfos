@@ -17,7 +17,7 @@ import type {
   IndexArtifactRow,
   IndexContentRow,
   IndexCountersignatureQueryRow,
-  IndexCredentialRow,
+  IndexCredentialQueryRow,
   IndexCreditCursor,
   IndexCreditRow,
   IndexIdentityRow,
@@ -585,8 +585,10 @@ export class MemoryRelayStore implements RelayStore {
     resource?: string;
     action?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
     limit: number;
-  }): Promise<IndexCredentialRow[]> {
+  }): Promise<IndexCredentialQueryRow[]> {
     const rows = [...this.publicCredentials.values()]
       .filter((cred) => {
         if (q.issuer !== undefined && cred.issuerDID !== q.issuer) return false;
@@ -615,7 +617,18 @@ export class MemoryRelayStore implements RelayStore {
         att: cred.att.map((a) => ({ resource: a.resource, action: a.action })),
         exp: cred.exp,
         jwsToken: cred.jwsToken,
+        createdAt: cred.createdAt,
+        ingestedAt: cred.ingestedAt,
       }));
+    if (q.order) {
+      return pageOrderedRows(
+        rows,
+        (row) => row.cid,
+        (row) => row[q.order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+        q.orderedAfter,
+        q.limit,
+      );
+    }
     return pageRows(rows, (row) => row.cid, q.after, q.limit);
   }
 
