@@ -20,14 +20,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// contentReconcileIntervalMultiple sets the content-follow backstop cadence as a
-// multiple of the sync interval. Per-tick materialization/GC is event-driven (the
-// sequencer marks dirty contentIDs; trigger-kicks drain them), so this whole-corpus
-// reconcile is only defense-in-depth against a missed mark — it runs deliberately
-// slowly so a steady-state follower stays idle between real changes instead of
-// re-scanning every chain and re-verifying every grant on each tick.
-const contentReconcileIntervalMultiple = 60
-
 func newServeCmd() *cobra.Command {
 	var port string
 	var syncInterval string
@@ -37,7 +29,6 @@ func newServeCmd() *cobra.Command {
 	var resync bool
 	var noWrite bool
 	var noIndex bool
-	var contentFollow string
 	var authority string
 	var ingestion string
 	var gossipProof bool
@@ -56,7 +47,7 @@ declare and is never read off a request.
 
 All flags support environment variable fallbacks for container deployment:
   PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, NO_SYNC, SYNC_INTERVAL,
-  CONTENT_FOLLOW, INDEX, WRITE, AUTHORITY, INGESTION, GOSSIP_PROOF`,
+  INDEX, WRITE, AUTHORITY, INGESTION, GOSSIP_PROOF`,
 		// A long-lived daemon must not hold the process-wide state lock (it
 		// would block every other dfos invocation for its entire run).
 		Annotations: map[string]string{annNoStateLock: "true"},
@@ -90,11 +81,6 @@ All flags support environment variable fallbacks for container deployment:
 			if !cmd.Flags().Changed("sync-interval") {
 				if v := os.Getenv("SYNC_INTERVAL"); v != "" {
 					syncInterval = v
-				}
-			}
-			if !cmd.Flags().Changed("content-follow") {
-				if v := os.Getenv("CONTENT_FOLLOW"); v != "" {
-					contentFollow = v
 				}
 			}
 			if !cmd.Flags().Changed("no-index") {
@@ -145,14 +131,6 @@ All flags support environment variable fallbacks for container deployment:
 				return fmt.Errorf("invalid --ingestion %q (expected: open|proof-required|closed)", ingestion)
 			}
 
-			// content-follow accepts none|eager today ("lazy" is reserved). Reject
-			// anything else loudly rather than silently disabling on a typo.
-			switch contentFollow {
-			case "", "none", "eager":
-			default:
-				return fmt.Errorf("invalid --content-follow %q (expected: none|eager)", contentFollow)
-			}
-
 			// parse extra peers from flag/env (comma-separated URLs, a JSON array
 			// of URLs, or a JSON array of per-peer objects)
 			extraPeers, err := parsePeers(peers)
@@ -167,12 +145,11 @@ All flags support environment variable fallbacks for container deployment:
 
 			// open relay with serve-specific options
 			opts := &localrelay.Options{
-				DBPath:        dbPath,
-				ProfileName:   relayName,
-				ExtraPeers:    extraPeers,
-				ContentFollow: contentFollow,
-				Authority:     authority,
-				Ingestion:     ingestion,
+				DBPath:      dbPath,
+				ProfileName: relayName,
+				ExtraPeers:  extraPeers,
+				Authority:   authority,
+				Ingestion:   ingestion,
 				// The one command that gossips. `serve` is the mesh participant:
 				// relaying what it sequences is what makes it a node rather than a
 				// private store, so here each peer's own `gossip` switch decides.
@@ -320,50 +297,6 @@ All flags support environment variable fallbacks for container deployment:
 				}
 			}()
 
-			if contentFollow == "eager" {
-				// Fast drain (eager mode only): every tick, drain whatever the
-				// sequencer marked dirty. The sweeps are near-instant no-ops when the
-				// queues are empty (a TryLock + empty-queue check, never a corpus
-				// scan), so running them every tick is cheap AND robust — it drains
-				// marks made by ANY sequencing path: a peer pull, a gossip-push receive,
-				// or a direct client write. A sequence-count-gated trigger missed the
-				// last two because those ops are already sequenced before the next tick.
-				go func() {
-					ticker := time.NewTicker(interval)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case <-ticker.C:
-							lr.Relay.MaterializeFollowedContent()
-							lr.Relay.GCRevokedContent()
-						}
-					}
-				}()
-
-				// Convergent backstop: a boot pass catches up every grant/revocation
-				// already synced before the process started, then a slow periodic full
-				// reconcile (contentReconcileIntervalMultiple) guarantees convergence
-				// regardless of which dirty marks the fast path recorded. Deliberately
-				// slow defense-in-depth — a steady-state follower stays idle between
-				// real changes. Sequencer-independent: it only acts on chains already in
-				// local state, so op-ingest ordering can't race it.
-				go func() {
-					lr.Relay.ReconcileFollowedContent()
-					ticker := time.NewTicker(interval * contentReconcileIntervalMultiple)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case <-ticker.C:
-							lr.Relay.ReconcileFollowedContent()
-						}
-					}
-				}()
-			}
-
 			srv := &http.Server{
 				Addr:    ":" + port,
 				Handler: lr.Relay.Handler(),
@@ -402,7 +335,6 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().BoolVar(&noSync, "no-sync", false, "Do not pull any peer's log: serve and ingest, but boot local-only (env: NO_SYNC=true)")
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only (env: WRITE=false)")
 	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
-	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
 	cmd.Flags().StringVar(&authority, "authority", "", "This relay's own host[:port] — the host identity proofs bind (env: AUTHORITY; unset: authenticated routes answer 503)")
 	cmd.Flags().StringVar(&ingestion, "ingestion", "", "Admission mode for POST /operations: open|proof-required|closed (env: INGESTION, default: open, or closed with --no-write)")
 	cmd.Flags().BoolVar(&gossipProof, "gossip-proof", false, "Sign gossip-out pushes with this relay's identity proof (env: GOSSIP_PROOF)")

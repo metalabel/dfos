@@ -35,20 +35,19 @@ You should get back a JSON object with the relay's DID and profile.
 All configuration is via environment variables on the `relay` service in
 `docker-compose.yml`.
 
-| Variable         | Default            | Description                                                                                               |
-| ---------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| `PORT`           | `8080`             | HTTP listen port inside the container                                                                     |
-| `RELAY_NAME`     | `DFOS Relay`       | Human-readable relay profile name                                                                         |
-| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated, JSON array, or per-peer objects)                           |
-| `SYNC_INTERVAL`  | `30s`              | How often to pull from peers and run the sequencer                                                        |
-| `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                             |
-| `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                            |
-| `CONTENT_FOLLOW` | `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below)       |
-| `AUTHORITY`      | _(none)_           | This relay's own `host[:port]` — the host identity proofs bind (see below)                                |
-| `INGESTION`      | `open`             | Admission for `POST /proof/v1/operations`: `open`, `proof-required`, or `closed`                          |
-| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                |
-| `WRITE`          | _(enabled)_        | `false` makes this a LITE pull-only node — writes answer 501 and the well-known advertises `write: false` |
-| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's own identity proof                                       |
+| Variable        | Default            | Description                                                                                               |
+| --------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `PORT`          | `8080`             | HTTP listen port inside the container                                                                     |
+| `RELAY_NAME`    | `DFOS Relay`       | Human-readable relay profile name                                                                         |
+| `PEERS`         | _(none)_           | Peer relay URLs to sync from (comma-separated, JSON array, or per-peer objects)                           |
+| `SYNC_INTERVAL` | `30s`              | How often to pull from peers and run the sequencer                                                        |
+| `SQLITE_PATH`   | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                             |
+| `RESYNC`        | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                            |
+| `AUTHORITY`     | _(none)_           | This relay's own `host[:port]` — the host identity proofs bind (see below)                                |
+| `INGESTION`     | `open`             | Admission for `POST /proof/v1/operations`: `open`, `proof-required`, or `closed`                          |
+| `INDEX`         | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                |
+| `WRITE`         | _(enabled)_        | `false` makes this a LITE pull-only node — writes answer 501 and the well-known advertises `write: false` |
+| `GOSSIP_PROOF`  | `false`            | `true` signs gossip-out pushes with this relay's own identity proof                                       |
 
 ## Authenticated routes
 
@@ -106,31 +105,11 @@ removes existing data.
 
 ## Content following
 
-By default a relay syncs the **proof plane** -- identity chains, content chains,
+A relay syncs the **proof plane** -- identity chains, content chains,
 credentials, and revocations all ride the operation log and gossip between peers.
 The **content plane** (the actual document _bytes_ a content chain commits to) is
-_not_ gossiped: it's content-addressed and pulled on demand, gated by a grant.
-
-Set `CONTENT_FOLLOW=eager` to make this relay a **content follower**: it pulls the
-document bytes of any content chain it holds a standing public-read grant for,
-verifying each blob against the `documentCID` the chain committed before storing
-it. Materialization is event-driven — a newly synced grant or content commit is
-pulled within a sync tick — backed by a periodic convergent reconcile that
-guarantees consistency regardless of op ordering. A steady-state follower with
-nothing new to pull sits idle.
-
-```yaml
-environment:
-  PEERS: 'https://relay-a.example.com'
-  CONTENT_FOLLOW: 'eager'
-```
-
-The result is a relay that can serve public content **independently of its
-origin** -- a real edge cache, not just a proof mirror. Following is safe to turn
-on or off at any time: bytes are only ever pulled for chains you're already
-authorized to read, every blob is content-address-verified, and a revoked grant
-stops the chain from being served (cached bytes simply become unreachable). The
-default (`none`) leaves the relay byte-identical to a proof-only node.
+_not_ gossiped: bytes are uploaded to the relay that holds the chain, and served
+from there to authorized readers.
 
 ## Persistence
 

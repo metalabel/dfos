@@ -76,15 +76,14 @@ import (
 // corpus that never saw an older binary — re-verifies nothing, writes nothing,
 // and logs nothing. Signature verification is paid only for rows that are
 // genuinely stale, and only once.
-func backfillProvedKeyState(store Store, logger *slog.Logger) error {
+func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
 	chains, err := store.ListIdentityChains()
 	if err != nil {
 		return fmt.Errorf("list identity chains: %w", err)
 	}
 
 	// Collect first, write second. The scan is the common case and it must not
-	// hold a write transaction open across a corpus that turns out to need
-	// nothing; the batch below is opened only once there is known work.
+	// pay for a write path across a corpus that turns out to need nothing.
 	stale := make([]StoredIdentityChain, 0)
 	for _, chain := range chains {
 		// An empty log is nothing to re-walk — there is no authoritative record
@@ -101,17 +100,10 @@ func backfillProvedKeyState(store Store, logger *slog.Logger) error {
 	logger.Info("identity state: backfilling has-ever-proved keys",
 		"stale", len(stale), "examined", len(chains))
 
-	// One transaction when the store offers one: the rewrites are independent of
-	// each other, but a crash midway through leaving half the corpus repaired is
-	// a state no operator can tell apart from a partial upgrade, and the next
-	// boot re-walks whatever is still zero either way.
-	batchable, hasBatch := store.(BatchableStore)
-	if hasBatch {
-		if err := batchable.BeginWriteBatch(); err != nil {
-			return fmt.Errorf("begin write batch: %w", err)
-		}
-	}
-
+	// Row by row, and that is fine: the rewrites are independent of each other,
+	// and a boot interrupted midway leaves the unrepaired rows still zero, which
+	// is exactly the predicate the next boot re-walks on. Idempotent by
+	// construction rather than by transaction.
 	rewritten, failed := 0, 0
 	for _, chain := range stale {
 		result, err := dfos.VerifyIdentityChain(chain.Log)
@@ -130,19 +122,10 @@ func backfillProvedKeyState(store Store, logger *slog.Logger) error {
 		// different readings of the log is a worse row than either.
 		chain.HeadCID = result.HeadCID
 		chain.LastCreatedAt = result.LastCreatedAt
-		if err := store.PutIdentityChain(chain); err != nil {
-			if hasBatch {
-				_ = batchable.RollbackWriteBatch()
-			}
+		if err := store.RewriteIdentityChainState(chain); err != nil {
 			return fmt.Errorf("rewrite identity chain %s: %w", chain.DID, err)
 		}
 		rewritten++
-	}
-
-	if hasBatch {
-		if err := batchable.CommitWriteBatch(); err != nil {
-			return fmt.Errorf("commit write batch: %w", err)
-		}
 	}
 
 	logger.Info("identity state: backfill complete",

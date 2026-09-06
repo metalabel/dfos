@@ -19,19 +19,24 @@ type SequenceResult struct {
 // RunSequencer acquires the ingest mutex and runs the sequencer loop.
 // Called by the background ticker and SyncFromPeers.
 func (r *Relay) RunSequencer() ([]string, SequenceResult) {
+	// A relay whose store keeps no writer state has no pending set to drain and
+	// nothing to write it back to.
+	if r.writerState == nil || r.writeStore == nil {
+		return nil, SequenceResult{}
+	}
 	r.ingestMu.Lock()
 	defer r.ingestMu.Unlock()
 	return r.runSequencerLocked()
 }
 
-// sequencerBatchOps bounds how many pending ops share one write batch.
+// sequencerBatchOps bounds how many pending ops one pass hands to
+// IngestOperations at a time.
 //
-// A single pass can drain up to GetUnsequencedOps' limit (10k). Committing that
-// as one transaction would hold a write transaction open across the verify+apply
-// of every one of those ops, and would make a single failed commit discard the
-// whole pass. One batch per chunk keeps the atomic unit small enough that a
-// failure costs one chunk of re-ingest work, while still being large enough that
-// the per-transaction overhead is amortized away.
+// A single pass can drain up to GetUnsequencedOps' limit (10k), and that whole
+// set is classified, dependency-sorted, and held in memory together. Chunking
+// bounds that working set and the latency of one turn; it is NOT a transaction
+// boundary — the atomic unit is one operation, owned by the store (see
+// RelayWriteStore.Commit).
 const sequencerBatchOps = 1000
 
 // runSequencerLocked is the sequencer inner loop. Caller must hold ingestMu.
@@ -46,7 +51,7 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 
 	prevPending := -1
 	for {
-		pendingOps, err := r.store.GetUnsequencedOps(10000)
+		pendingOps, err := r.writerState.GetUnsequencedOps(10000)
 		if err != nil || len(pendingOps) == 0 {
 			break
 		}
@@ -106,7 +111,7 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 		// ~100% CPU holding ingestMu. With the drain keyed on the storage CID
 		// above, progress now implies a real drain, so a flat (or growing) count
 		// is a genuine dead-end, not a transient. The next sequencer tick retries.
-		pending, cerr := r.store.CountUnsequenced()
+		pending, cerr := r.writerState.CountUnsequenced()
 		if cerr == nil {
 			if prevPending >= 0 && pending >= prevPending {
 				r.logger.Error("sequencer: progress claimed but pending set did not shrink — backing off",
@@ -122,56 +127,25 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 }
 
 // sequenceChunkLocked ingests one chunk of pending raw ops and drains their
-// raw_ops rows inside a SINGLE write batch. Caller must hold ingestMu.
+// raw_ops rows. Caller must hold ingestMu.
 //
-// The batch is what makes an accepted op atomic. Admitting one op writes its
-// chain state, its operation row, and its /proof/v1/log append as separate
-// statements. Outside a transaction each of those commits on its own, so a
-// failure after the operation row but before the log append leaves an operation
-// that every per-chain route serves but that the proof log has never heard of —
-// and leaves it that way permanently, because the idempotency check at the top
-// of each ingest path finds the stored operation and returns "duplicate" before
-// the missing append is ever retried. Re-ingesting the op cannot repair it and
-// nothing reports it: the log is simply short one entry, and opCount is derived
-// from the log itself. Inside one batch the three writes land together or not
-// at all, so the window does not exist.
+// THE ATOMIC UNIT IS ONE OPERATION, AND THE STORE OWNS IT. Admitting one
+// operation writes its chain state, its operation row, and its /proof/v1/log
+// append, and RelayWriteStore.Commit persists all three or none. The relay used
+// to orchestrate that itself — open a transaction around a chunk, watch for a
+// half-applied op, roll back — which meant the relay had to detect a partial
+// write from the outside and the ops in the chunk shared each other's fate. Now
+// a failed op is just a store fault on that op: it stays pending, the rest of the
+// chunk is unaffected, and nothing is half-held.
 //
-// Extends the contract Ingest already holds for its own batch: a batch that is
-// not fully held is rolled back and must neither be gossiped nor reported as
-// landed. Returns the tokens to gossip, this chunk's counts, whether the chunk
-// drained any raw op, and ok=false when the chunk was discarded — in which case
-// the first three returns are all empty, because the relay holds none of it.
-// The discarded chunk's raw ops stay 'pending' (their drain was part of the same
-// batch), so the next pass re-ingests them cleanly.
-//
-// Stores that do not implement BatchableStore keep the previous per-statement
-// behavior; there is no transaction to roll back and nothing to wrap.
+// Returns the tokens to gossip, this chunk's counts, whether the chunk drained
+// any raw op, and ok=false when the pass must back off.
 func (r *Relay) sequenceChunkLocked(tokens []string, opts []IngestOption) ([]string, SequenceResult, bool, bool) {
 	var newOps []string
 	var result SequenceResult
 	progress := false
 
-	batchable, hasBatch := r.store.(BatchableStore)
-	if hasBatch {
-		if err := batchable.BeginWriteBatch(); err != nil {
-			r.logger.Error("sequencer: failed to begin write batch — falling back to unbatched writes", "error", err)
-			hasBatch = false
-		}
-	}
-
-	results := IngestOperations(tokens, r.store, opts...)
-
-	// A half-applied op poisons its own retry: the writes that DID land make
-	// every later attempt short-circuit as a "duplicate", so the writes that
-	// failed — the log append, last of the three — are never made up. Discarding
-	// the batch is what keeps the op whole and re-ingestable.
-	if hasBatch && batchPersistFailed(results) {
-		r.logger.Error("sequencer: a write failed mid-batch — chunk rolled back, not gossiped",
-			"ops", len(tokens),
-		)
-		_ = batchable.RollbackWriteBatch()
-		return nil, SequenceResult{}, false, false
-	}
+	results := IngestOperations(tokens, r.writeStore, opts...)
 
 	var sequencedCIDs []string
 	for i, res := range results {
@@ -200,7 +174,6 @@ func (r *Relay) sequenceChunkLocked(tokens []string, opts []IngestOption) ([]str
 			newOps = append(newOps, tokens[i])
 			result.Sequenced++
 			progress = true
-			r.markContentFollowDirty(res, tokens[i])
 		case res.Status == "duplicate":
 			sequencedCIDs = append(sequencedCIDs, rawCID)
 			progress = true
@@ -220,47 +193,29 @@ func (r *Relay) sequenceChunkLocked(tokens []string, opts []IngestOption) ([]str
 			// the marginal write is small next to the work it reports — and a
 			// silent drop is the failure mode that actually goes undiagnosed.
 			r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
-			r.store.MarkOpRejected(rawCID, res.Error)
+			r.writerState.MarkOpRejected(rawCID, res.Error)
 			result.Rejected++
 			progress = true
 		default:
+			// Retryable: a missing dependency, or a store fault. Either way the raw
+			// op stays pending and a later pass re-ingests it.
 			result.Pending++
 		}
 	}
 
 	if len(sequencedCIDs) > 0 {
-		if err := r.store.MarkOpsSequenced(sequencedCIDs); err != nil {
-			// The sequenced status was never persisted. Do NOT gossip these ops
-			// (local state is inconsistent with what we'd advertise) and abandon
-			// the chunk — leaving the rows pending while continuing would spin
-			// here forever (re-verify → "duplicate" → progress) at 100% CPU
-			// holding ingestMu. The next sequencer tick retries.
-			r.logger.Error("sequencer: failed to mark ops sequenced — rolling back and backing off",
+		if err := r.writerState.MarkOpsSequenced(sequencedCIDs); err != nil {
+			// The ops themselves ARE held — each one committed atomically — so
+			// they are still reported and gossiped. What failed is the bookkeeping
+			// that stops them being re-ingested, and re-ingesting them would
+			// re-verify to "duplicate", claim progress, and spin here at 100% CPU
+			// holding ingestMu. Back off; the next sequencer tick retries the drain
+			// against a healthy store.
+			r.logger.Error("sequencer: failed to mark ops sequenced — backing off",
 				"count", len(sequencedCIDs),
 				"error", err,
 			)
-			if hasBatch {
-				// Roll back rather than commit a batch whose bookkeeping half is
-				// missing — and never leave the transaction open, or every later
-				// write on this store would join a batch nobody commits.
-				_ = batchable.RollbackWriteBatch()
-			}
-			return nil, SequenceResult{}, false, false
-		}
-	}
-
-	if hasBatch {
-		if err := batchable.CommitWriteBatch(); err != nil {
-			// The chunk's writes are GONE. Nothing it claimed to land is held, so
-			// none of it may be gossiped or counted. The raw ops were staged
-			// before the batch opened and their drain was inside it, so they are
-			// still 'pending' and the next pass re-ingests them from scratch.
-			r.logger.Error("sequencer: failed to commit write batch — chunk rolled back, not gossiped",
-				"error", err,
-				"ops", len(tokens),
-			)
-			_ = batchable.RollbackWriteBatch()
-			return nil, SequenceResult{}, false, false
+			return newOps, result, progress, false
 		}
 	}
 
@@ -410,44 +365,6 @@ const persistErrorPrefix = "persistence failed: "
 // keeps the two twins byte-identical for the human-readable error.
 const ForkPointStateErrorPrefix = "failed to compute state at fork point: "
 
-// persistError wraps a store write error in a retryable rejection result. The
-// caller's CID is preserved so the op can be located in the raw store, and the
-// structured DependencyMissing flag is set so the sequencer keeps it pending
-// (the transient-store-retry path is Go-only — TS's in-memory store has no
-// analogue — and is flag-gated, NOT a string pattern the TS classifier must
-// mirror). Returns nil if err is nil (no persistence failure).
-func persistError(cid string, err error) *IngestionResult {
-	if err == nil {
-		return nil
-	}
-	return &IngestionResult{
-		CID:               cid,
-		Status:            "rejected",
-		Error:             persistErrorPrefix + err.Error(),
-		DependencyMissing: true,
-		PersistFailed:     true,
-	}
-}
-
-// errPartialWriteRolledBack is the error a batch's surviving results are
-// rewritten with when the batch is discarded because one of its ops could not
-// be fully written. The op that failed already carries its own store error;
-// this one explains to every OTHER op in the batch why a result it had earned
-// is being taken back.
-var errPartialWriteRolledBack = errors.New("a write in this batch failed and the batch was rolled back")
-
-// batchPersistFailed reports whether any op in the batch left a half-applied
-// write behind. Branches on the structured PersistFailed flag, never on the
-// human-readable error string.
-func batchPersistFailed(results []IngestionResult) bool {
-	for _, res := range results {
-		if res.PersistFailed {
-			return true
-		}
-	}
-	return false
-}
-
 // storeReadErrorPrefix marks a rejection caused by a store READ failing at an
 // authorization gate (revocation lookup, deleted-identity lookup). Distinct from
 // persistErrorPrefix so the two transient-store failure modes are separable in
@@ -456,33 +373,18 @@ func batchPersistFailed(results []IngestionResult) bool {
 // being durably rejected.
 const storeReadErrorPrefix = "storage read failed: "
 
-// storeReadError wraps a store read error at an authorization gate in a
-// retryable rejection. The alternative — treating a failed lookup as
-// "not revoked" / "not deleted" — fails OPEN and admits an operation the relay
-// has no evidence is authorized. Returns nil if err is nil.
-func storeReadError(cid string, err error) *IngestionResult {
-	if err == nil {
-		return nil
-	}
-	return &IngestionResult{
-		CID:               cid,
-		Status:            "rejected",
-		Error:             storeReadErrorPrefix + err.Error(),
-		DependencyMissing: true,
-	}
+// isRetryableRejection reports whether a rejection may be answered differently
+// later — a dependency that sync or gossip may deliver, or a store fault that
+// decided nothing at all. Branches on the STRUCTURED flags the ingest producer
+// sets, never on substring matching of the Error string. Mirrors the TS twin's
+// discriminator.
+func isRetryableRejection(res IngestionResult) bool {
+	return res.DependencyMissing || res.StoreFault
 }
 
-// isDependencyFailure returns true if a rejection is retryable — a missing
-// dependency that may arrive later via sync or gossip, OR a transient storage
-// write failure. Branches on the STRUCTURED DependencyMissing flag set by the
-// ingest producer, not on substring matching of the Error string. Mirrors the
-// TS twin's structured discriminator.
-func isDependencyFailure(res IngestionResult) bool {
-	return res.DependencyMissing
-}
-
-// isPermanentRejection returns true if a rejection is permanent and should not
-// be retried. The inverse of isDependencyFailure.
+// isPermanentRejection is the inverse: a verdict re-asking cannot change, which
+// DELETES the raw op. Everything that is not provably retryable would be
+// permanent under this rule, which is why a store fault carries its own flag.
 func isPermanentRejection(res IngestionResult) bool {
-	return !res.DependencyMissing
+	return !isRetryableRejection(res)
 }

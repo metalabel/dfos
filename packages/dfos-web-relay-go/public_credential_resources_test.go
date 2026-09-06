@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -15,7 +14,7 @@ import (
 
 // testCredIssuer is the DID every addCred credential is issued by, and therefore
 // the DID an eviction of one must be scoped to.
-var testCredIssuer = "did:dfos:" + strings.Repeat("a", 23)
+const testCredIssuer = "did:dfos:aaaaaaaaaaaaaaaaaaaaaaa"
 
 func addCred(t *testing.T, store *SQLiteStore, cid string, resources ...string) {
 	t.Helper()
@@ -28,14 +27,18 @@ func addCredAs(t *testing.T, store *SQLiteStore, issuerDID, cid string, resource
 	for _, resource := range resources {
 		att = append(att, AttenuationPair{Resource: resource, Action: "read"})
 	}
-	if err := store.AddPublicCredential(StoredPublicCredential{
+	credential := StoredPublicCredential{
 		CID:       cid,
 		IssuerDID: issuerDID,
 		Att:       att,
 		Exp:       0,
 		JWSToken:  "token-" + cid,
-	}); err != nil {
-		t.Fatalf("AddPublicCredential(%s): %v", cid, err)
+	}
+	if _, err := store.Commit(CommitBatch{Operation: &OperationCommit{
+		Operation:        StoredOperation{CID: cid, JWSToken: credential.JWSToken, ChainType: "credential", ChainID: credential.IssuerDID},
+		PublicCredential: &credential,
+	}}); err != nil {
+		t.Fatalf("commit credential %s: %v", cid, err)
 	}
 }
 
@@ -101,8 +104,11 @@ func TestPublicCredentialRemoveClearsResources(t *testing.T) {
 
 	addCred(t, store, "cid-one", "chain:content-a")
 	addCred(t, store, "cid-two", "chain:content-a")
-	if err := store.RemovePublicCredential(testCredIssuer, "cid-one"); err != nil {
-		t.Fatalf("RemovePublicCredential: %v", err)
+	if err := seedRevocation(t, store, StoredRevocation{
+		CID: "rev-one", IssuerDID: testCredIssuer, CredentialCID: "cid-one",
+		JWSToken: "token-rev-one", CreatedAt: "2026-01-01T00:00:00.000Z",
+	}); err != nil {
+		t.Fatalf("revoke cid-one: %v", err)
 	}
 
 	assertTokens(t, "after remove", credsFor(t, store, "chain:content-a"),

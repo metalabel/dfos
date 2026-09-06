@@ -16,13 +16,13 @@ type ProfileConfig struct {
 
 // BootstrapRelayIdentity generates a JIT relay identity and profile artifact,
 // ingests both into the store, and returns the relay identity.
-func BootstrapRelayIdentity(store Store) (*RelayIdentity, error) {
+func BootstrapRelayIdentity(store RelayWriteStore) (*RelayIdentity, error) {
 	return bootstrapRelay(store, nil, nil, ProfileConfig{})
 }
 
 // BootstrapRelayIdentityWithProfile generates a JIT relay identity with a
 // custom profile, ingests both into the store, and returns the relay identity.
-func BootstrapRelayIdentityWithProfile(store Store, profile ProfileConfig) (*RelayIdentity, error) {
+func BootstrapRelayIdentityWithProfile(store RelayWriteStore, profile ProfileConfig) (*RelayIdentity, error) {
 	return bootstrapRelay(store, nil, nil, profile)
 }
 
@@ -30,7 +30,7 @@ func BootstrapRelayIdentityWithProfile(store Store, profile ProfileConfig) (*Rel
 // private key and key ID, signs a profile artifact, ingests both, and returns
 // the relay identity. Used for persistent bootstrap where keys are loaded from
 // storage.
-func BootstrapRelayIdentityFromKey(store Store, priv ed25519.PrivateKey, keyID string, profile ProfileConfig) (*RelayIdentity, error) {
+func BootstrapRelayIdentityFromKey(store RelayWriteStore, priv ed25519.PrivateKey, keyID string, profile ProfileConfig) (*RelayIdentity, error) {
 	pub := priv.Public().(ed25519.PublicKey)
 	return bootstrapRelay(store, priv, &keyMaterial{pub: pub, keyID: keyID}, profile)
 }
@@ -38,7 +38,7 @@ func BootstrapRelayIdentityFromKey(store Store, priv ed25519.PrivateKey, keyID s
 // RebootstrapProfile signs a fresh profile artifact for an existing relay
 // identity. The identity chain is already in the store — this only produces a
 // new profile artifact (e.g. after RELAY_NAME changes between restarts).
-func RebootstrapProfile(store Store, priv ed25519.PrivateKey, keyID, did string, profile ProfileConfig) (*RelayIdentity, error) {
+func RebootstrapProfile(store RelayWriteStore, priv ed25519.PrivateKey, keyID, did string, profile ProfileConfig) (*RelayIdentity, error) {
 	kid := did + "#" + keyID
 	content := map[string]any{
 		"$schema": "https://schemas.dfos.com/profile/v1",
@@ -79,7 +79,7 @@ type keyMaterial struct {
 	keyID string
 }
 
-func bootstrapRelay(store Store, priv ed25519.PrivateKey, existing *keyMaterial, profile ProfileConfig) (*RelayIdentity, error) {
+func bootstrapRelay(store RelayWriteStore, priv ed25519.PrivateKey, existing *keyMaterial, profile ProfileConfig) (*RelayIdentity, error) {
 	var pub ed25519.PublicKey
 	var keyID string
 	var err error

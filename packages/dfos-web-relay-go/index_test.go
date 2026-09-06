@@ -41,14 +41,19 @@ func indexRelay(t *testing.T) (*Relay, *MemoryStore) {
 	return r, store
 }
 
+// indexCountingStore records which content rows the projection recomputed, which
+// is how the sweep-narrowing tests below measure fan-out: the assertion is about
+// how much work a trigger caused, not about the row values it produced.
 type indexCountingStore struct {
 	*MemoryStore
 	contentRowPuts []string
 }
 
-func (s *indexCountingStore) PutIndexContentRow(row indexContentRow) error {
-	s.contentRowPuts = append(s.contentRowPuts, row.ContentID)
-	return s.MemoryStore.PutIndexContentRow(row)
+func (s *indexCountingStore) ApplyIndexRows(rows IndexRowBatch) error {
+	for _, row := range rows.Content {
+		s.contentRowPuts = append(s.contentRowPuts, row.ContentID)
+	}
+	return s.MemoryStore.ApplyIndexRows(rows)
 }
 
 func countingIndexRelay(t *testing.T) (*Relay, *indexCountingStore) {
@@ -141,7 +146,7 @@ func createIndexedContent(t *testing.T, r *Relay, store *MemoryStore, id testIde
 	}
 	if holdBlob {
 		bytes, _ := json.Marshal(document)
-		if err := store.PutBlob(BlobKey{CreatorDID: id.did, DocumentCID: documentCID}, bytes); err != nil {
+		if err := putBlob(store, BlobKey{CreatorDID: id.did, DocumentCID: documentCID}, bytes); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,8 +212,8 @@ func revokeGrant(t *testing.T, r *Relay, id testIdentity, credentialCID string) 
 }
 
 // uploadBlobViaRoute PUTs a document blob through the relay's content-plane route
-// (authenticated as the content creator), which fires maintainIndexAfterBlob —
-// unlike a direct store.PutBlob, this exercises the late-arrival recompute hook.
+// (authenticated as the content creator), which fires projectIndexAfterBlob —
+// unlike a direct blob commit, this exercises the late-arrival recompute hook.
 var indexBlobJti int
 
 func uploadBlobViaRoute(t *testing.T, r *Relay, id testIdentity, c testContent) {
@@ -679,7 +684,7 @@ func TestIndexArtifactsProjectionFiltersAndOrderedPagination(t *testing.T) {
 func TestIndexReceiptStampIsSingleSourced(t *testing.T) {
 	for _, backing := range []string{"memory", "sqlite"} {
 		t.Run(backing, func(t *testing.T) {
-			var store Store
+			var store referenceStore
 			if backing == "memory" {
 				store = NewMemoryStore()
 			} else {
@@ -1090,7 +1095,7 @@ func TestIndexIdentitiesOrderedEnumeration(t *testing.T) {
 	tieB := "did:dfos:identity-tie-b"
 	ts := "2999-01-01T00:00:00.000Z"
 	for _, did := range []string{tieB, tieA} {
-		if err := store.PutIndexIdentityRow(indexIdentityRow{DID: did, HeadCID: "h", GenesisAt: ts, HeadAt: ts}); err != nil {
+		if err := putIndexIdentityRow(store, indexIdentityRow{DID: did, HeadCID: "h", GenesisAt: ts, HeadAt: ts}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1212,7 +1217,7 @@ func TestIndexOrderedTieBreaksByKey(t *testing.T) {
 	b := "2346789acdefhknrtvz2346789acdee"
 	ts := "2026-01-01T00:00:00.000Z"
 	for _, id := range []string{a, b} {
-		if err := store.PutIndexContentRow(indexContentRow{ContentID: id, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(), GenesisAt: ts, HeadAt: ts}); err != nil {
+		if err := putIndexContentRow(store, indexContentRow{ContentID: id, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(), GenesisAt: ts, HeadAt: ts}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1700,7 +1705,15 @@ func TestIndexWildcardGrantRevocationFallsBackToPublicSweep(t *testing.T) {
 	}
 }
 
-func TestIndexUnresolvableRevocationFallsBackToPublicSweep(t *testing.T) {
+// TestIndexUnresolvableRevocationSweepsNothing is the #266 narrowing.
+//
+// A revocation for a credential this relay never held used to fall back to a
+// full sweep of the currently-public corpus. That trigger was free to mint,
+// unlimited in number, and reachable by an anonymous POST — an unbounded corpus
+// sweep behind an unauthenticated request. It is now an O(1) miss: the grant is
+// resolved through the credential's own operation, and a credential the relay
+// does not hold names nothing, so nothing is dirtied.
+func TestIndexUnresolvableRevocationSweepsNothing(t *testing.T) {
 	r, store := countingIndexRelay(t)
 	handler := r.Handler()
 	creator := ingestIdentity(t, r)
@@ -1716,8 +1729,31 @@ func TestIndexUnresolvableRevocationFallsBackToPublicSweep(t *testing.T) {
 	if indexContentRowByID(t, handler, contentA.contentID)["publicRead"] != true || indexContentRowByID(t, handler, contentB.contentID)["publicRead"] != true {
 		t.Fatalf("unresolvable revocation changed public-read values")
 	}
-	if !contentRowPutsEqual(store.contentRowPuts, contentA.contentID, contentB.contentID) {
-		t.Fatalf("content row recomputes = %v, want both content rows", store.contentRowPuts)
+	if !contentRowPutsEqual(store.contentRowPuts) {
+		t.Fatalf("an unresolvable revocation must sweep nothing, recomputed %v", store.contentRowPuts)
+	}
+}
+
+// TestIndexRevocationBySomeoneOtherThanTheIssuerSweepsNothing is the other half
+// of the narrowing. Revocation is only meaningful from a credential's own
+// issuer, so a revocation naming someone else's credential CID resolves to that
+// credential and then stops: it dirties nothing, and it removes nothing.
+func TestIndexRevocationBySomeoneOtherThanTheIssuerSweepsNothing(t *testing.T) {
+	r, store := countingIndexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	stranger := ingestIdentity(t, r)
+	content := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "a"}, false)
+	credentialCID := addPublicRead(t, r, creator, content.contentID)
+	store.contentRowPuts = nil
+
+	revokeGrant(t, r, stranger, credentialCID)
+
+	if indexContentRowByID(t, handler, content.contentID)["publicRead"] != true {
+		t.Fatalf("a stranger's revocation un-published content it has no authority over")
+	}
+	if !contentRowPutsEqual(store.contentRowPuts) {
+		t.Fatalf("a stranger's revocation must sweep nothing, recomputed %v", store.contentRowPuts)
 	}
 }
 
@@ -1960,7 +1996,7 @@ func TestSQLiteIndexPointAndDeletedFilters(t *testing.T) {
 		{ContentID: "active", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: active},
 		{ContentID: "deleted", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: deleted},
 	} {
-		if err := store.PutIndexContentRow(row); err != nil {
+		if err := putIndexContentRow(store, row); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1995,7 +2031,7 @@ func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
 			n := name
 			profile = &indexProfile{Anchor: "anchor-" + did, PublicRead: publicRead, Name: &n}
 		}
-		if err := store.PutIndexIdentityRow(indexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
+		if err := putIndexIdentityRow(store, indexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
 			t.Fatalf("PutIndexIdentityRow(%s): %v", did, err)
 		}
 	}
@@ -2130,7 +2166,7 @@ func TestIndexServeTimeRedactsStaleNonPublicRow(t *testing.T) {
 
 	name := "stale"
 	did := "did:dfos:" + strings.Repeat("2", 31)
-	if err := store.PutIndexIdentityRow(indexIdentityRow{
+	if err := putIndexIdentityRow(store, indexIdentityRow{
 		DID: did, HeadCID: "h",
 		Profile: &indexProfile{Anchor: strings.Repeat("3", 31), PublicRead: false, Name: &name},
 	}); err != nil {
@@ -2138,7 +2174,7 @@ func TestIndexServeTimeRedactsStaleNonPublicRow(t *testing.T) {
 	}
 	title := "stale-title"
 	cid := "2346789acdefhknrtvz2346789acdef"
-	if err := store.PutIndexContentRow(indexContentRow{
+	if err := putIndexContentRow(store, indexContentRow{
 		ContentID: cid, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(),
 		PublicRead: false, Title: &title,
 	}); err != nil {

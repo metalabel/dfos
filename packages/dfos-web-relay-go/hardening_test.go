@@ -154,19 +154,19 @@ func TestSyncSkipsUndecodableToken(t *testing.T) {
 // WP-11(b): ignored store write errors
 // ===================================================================
 
-// faultyStore embeds a MemoryStore and injects a write failure on the first
-// PutIdentityChain call. Used to verify that a persistence failure does not
+// faultyStore embeds a MemoryStore and refuses to commit an operation that
+// carries an identity chain. Used to verify that a persistence failure does not
 // cause the relay to report "new", mark the op sequenced, or gossip it.
 type faultyStore struct {
 	*MemoryStore
 	failPutIdentity bool
 }
 
-func (f *faultyStore) PutIdentityChain(chain StoredIdentityChain) error {
-	if f.failPutIdentity {
-		return fmt.Errorf("injected disk failure")
+func (f *faultyStore) Commit(batch CommitBatch) (CommitResult, error) {
+	if f.failPutIdentity && batch.Operation != nil && batch.Operation.IdentityChain != nil {
+		return "", fmt.Errorf("injected disk failure")
 	}
-	return f.MemoryStore.PutIdentityChain(chain)
+	return f.MemoryStore.Commit(batch)
 }
 
 // gossipRecorderPeerClient records SubmitOperations calls.

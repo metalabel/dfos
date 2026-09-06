@@ -53,7 +53,7 @@ func main() {
 
 	// SQLite store (file-backed — matches the production Go twin). NewRelay
 	// auto-derives the WAL read pool for *SQLiteStore.
-	var store relay.Store
+	var store relay.RelayReadStore
 	if dbPath != "" {
 		s, err := relay.NewSQLiteStore(dbPath)
 		if err != nil {

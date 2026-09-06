@@ -66,7 +66,7 @@ func submitOps(t *testing.T, r *Relay, operations []string, signer *testIdentity
 	return w
 }
 
-func admissionRelay(t *testing.T, opts RelayOptions) (*Relay, Store) {
+func admissionRelay(t *testing.T, opts RelayOptions) (*Relay, RelayReadStore) {
 	t.Helper()
 	store := opts.Store
 	if store == nil {

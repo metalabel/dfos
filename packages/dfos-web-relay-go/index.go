@@ -226,7 +226,7 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
+	rows, err := r.indexRead.QueryIndexIdentities(IndexIdentityQuery{
 		DID:              did,
 		Key:              key,
 		HasPublicProfile: hasPublicProfile,
@@ -315,7 +315,7 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	}
 	limit := parseLimit(req, 100, 1000)
 
-	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
+	rows, err := r.indexRead.QueryIndexContent(IndexContentQuery{
 		ContentID:     contentID,
 		Creator:       creator,
 		Signer:        signer,
@@ -377,7 +377,7 @@ func (r *Relay) handleIndexCredits(w http.ResponseWriter, req *http.Request) {
 		after = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCredits(IndexCreditQuery{
+	rows, err := r.indexRead.QueryIndexCredits(IndexCreditQuery{
 		DID: did, ContentID: contentID, Role: role, After: after, Limit: limit,
 	})
 	if storeErr(w, err) {
@@ -426,7 +426,7 @@ func (r *Relay) handleIndexArtifacts(w http.ResponseWriter, req *http.Request) {
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexArtifacts(IndexArtifactQuery{
+	rows, err := r.indexRead.QueryIndexArtifacts(IndexArtifactQuery{
 		CID: cid, Signer: signer, DocSchema: docSchema, After: query.Get("after"),
 		OrderedAfter: orderedAfter, Order: order, Limit: limit,
 	})
@@ -474,7 +474,7 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCountersignatures(IndexCountersignatureQuery{
+	rows, err := r.indexRead.QueryIndexCountersignatures(IndexCountersignatureQuery{
 		Witness:      witness,
 		Relation:     relation,
 		After:        query.Get("after"),
@@ -530,7 +530,7 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCredentials(IndexCredentialQuery{
+	rows, err := r.indexRead.QueryIndexCredentials(IndexCredentialQuery{
 		Issuer:       issuer,
 		Resource:     resource,
 		Action:       action,
@@ -590,7 +590,7 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexOperations(IndexOperationQuery{
+	rows, err := r.indexRead.QueryIndexOperations(IndexOperationQuery{
 		Kind:         kind,
 		ChainID:      chainID,
 		SignerKey:    signerKey,
@@ -640,7 +640,7 @@ func nextIndexCursor(rowCount, limit int, order string, last func() (string, str
 // the HTTP read store. Byte-identical to the TS twins in index-routes.ts.
 // ---------------------------------------------------------------------------
 
-func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
+func identityIndexRow(chain StoredIdentityChain, store RelayReadStore) indexIdentityRow {
 	return indexIdentityRow{
 		DID:       chain.DID,
 		HeadCID:   chain.HeadCID,
@@ -765,7 +765,7 @@ func artifactIndexRow(cid, jwsToken, ingestedAt string) *indexArtifactRow {
 	return &indexArtifactRow{CID: cid, SignerDID: signerDID, CreatedAt: createdAt, IngestedAt: ingestedAt, DocSchema: docSchema}
 }
 
-func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
+func profileProjection(chain StoredIdentityChain, store RelayReadStore) *indexProfile {
 	candidates := make([]dfos.ServiceEntry, 0)
 	for _, service := range chain.State.Services {
 		if service["type"] != "ContentAnchor" {
@@ -818,7 +818,7 @@ func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
 	}
 }
 
-func headDocumentProjection(chain StoredContentChain, store Store) (map[string]any, *string) {
+func headDocumentProjection(chain StoredContentChain, store RelayReadStore) (map[string]any, *string) {
 	documentCID := chain.State.CurrentDocumentCID
 	if documentCID == nil {
 		return nil, nil
@@ -858,7 +858,7 @@ type contentProjection struct {
 	publicRead bool
 }
 
-func contentProjectionSources(chain StoredContentChain, store Store) contentProjection {
+func contentProjectionSources(chain StoredContentChain, store RelayReadStore) contentProjection {
 	doc, docSchema := headDocumentProjection(chain, store)
 	return contentProjection{
 		doc:        doc,

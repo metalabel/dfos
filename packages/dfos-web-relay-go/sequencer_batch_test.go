@@ -11,27 +11,26 @@ import (
 // store test double
 // ===================================================================
 
-// faultyBatchStore wraps a REAL SQLiteStore so its transaction semantics are
-// real: a rolled-back batch actually reverts. That is the whole point here —
-// these tests are about what survives a failure mid-batch, which a store with a
-// simulated rollback cannot answer.
+// faultyCommitStore wraps a REAL SQLiteStore so its transaction semantics are
+// real: a Commit that fails actually leaves nothing behind. That is the whole
+// point here — these tests are about what survives a failed write, which a store
+// with a simulated rollback cannot answer.
 //
-// The Store interface is embedded (not *SQLiteStore) for the same reason
-// fail_closed_test.go's doubles do it: only Store's own methods are promoted, so
-// the double cannot accidentally satisfy an optional capability interface and
-// change which relay code paths run. BatchableStore is then re-exposed
-// explicitly, delegating to the wrapped store.
-type faultyBatchStore struct {
-	Store
-	batch BatchableStore
-	// failAppend makes AppendToLog fail — the last of the three writes an
-	// accepted op performs, and therefore the crash window under test.
-	failAppend bool
-	// failCommit makes the batch fail to commit, with a real rollback behind it.
+// The referenceStore INTERFACE is embedded (not *SQLiteStore) for the same
+// reason fail_closed_test.go's doubles do it: only that interface's methods are
+// promoted, so the double cannot accidentally satisfy an optional capability
+// interface and change which relay code paths run.
+type faultyCommitStore struct {
+	referenceStore
+	// failCommit makes every operation Commit fail.
 	failCommit bool
+	// failLogEntryCommit fails only a commit that carries a global-log append —
+	// the crash window this file exists for, since the log append is the last of
+	// the three writes an accepted operation performs.
+	failLogEntryCommit bool
 }
 
-func newFaultyBatchStore(t *testing.T, name string) *faultyBatchStore {
+func newFaultyCommitStore(t *testing.T, name string) *faultyCommitStore {
 	t.Helper()
 	// File-backed, not :memory: — NewSQLiteStore opens separate reader and
 	// writer pools, and :memory: would give each its own empty database.
@@ -40,32 +39,21 @@ func newFaultyBatchStore(t *testing.T, name string) *faultyBatchStore {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	return &faultyBatchStore{Store: store, batch: store}
+	return &faultyCommitStore{referenceStore: store}
 }
 
-func (s *faultyBatchStore) AppendToLog(entry LogEntry) error {
-	if s.failAppend {
-		return errInjectedStore
-	}
-	return s.Store.AppendToLog(entry)
-}
-
-func (s *faultyBatchStore) BeginWriteBatch() error { return s.batch.BeginWriteBatch() }
-
-func (s *faultyBatchStore) CommitWriteBatch() error {
+func (s *faultyCommitStore) Commit(batch CommitBatch) (CommitResult, error) {
 	if s.failCommit {
-		// Roll the real transaction back so the store is left usable, then
-		// report the failure the relay must react to.
-		_ = s.batch.RollbackWriteBatch()
-		return errInjectedStore
+		return "", errInjectedStore
 	}
-	return s.batch.CommitWriteBatch()
+	if s.failLogEntryCommit && batch.Operation != nil && batch.Operation.LogEntry != nil {
+		return "", errInjectedStore
+	}
+	return s.referenceStore.Commit(batch)
 }
-
-func (s *faultyBatchStore) RollbackWriteBatch() error { return s.batch.RollbackWriteBatch() }
 
 // logHasCID reports whether the proof log carries an entry for cid.
-func logHasCID(t *testing.T, store Store, cid string) bool {
+func logHasCID(t *testing.T, store RelayReadStore, cid string) bool {
 	t.Helper()
 	entries, _, err := store.ReadLog("", 1000)
 	if err != nil {
@@ -81,7 +69,7 @@ func logHasCID(t *testing.T, store Store, cid string) bool {
 
 // stagePendingOp stages a token as a pending raw op, exactly as Ingest and
 // SyncFromPeers do, without sequencing it.
-func stagePendingOp(t *testing.T, store Store, token string) string {
+func stagePendingOp(t *testing.T, store RelayWriterState, token string) string {
 	t.Helper()
 	cid := computeOpCID(token)
 	if cid == "" {
@@ -93,7 +81,7 @@ func stagePendingOp(t *testing.T, store Store, token string) string {
 	return cid
 }
 
-func pendingCount(t *testing.T, store Store) int {
+func pendingCount(t *testing.T, store RelayWriterState) int {
 	t.Helper()
 	n, err := store.CountUnsequenced()
 	if err != nil {
@@ -110,19 +98,19 @@ func pendingCount(t *testing.T, store Store) int {
 // this file exists for.
 //
 // Admitting an operation writes its chain state, its operation row, and its
-// /proof/v1/log append. Run unbatched, each of those commits on its own, so a
-// failure after the operation row but before the log append leaves the operation
-// stored — and therefore served on every per-chain route — while the proof log
-// has no record of it. It stays that way forever: the idempotency check at the
-// top of each ingest path finds the stored operation and returns "duplicate"
-// before the append is retried, so the log entry is never written. Nothing
-// reports it, because opCount is derived from the log itself.
+// /proof/v1/log append. Written independently, each of those commits on its own,
+// so a failure after the operation row but before the log append leaves the
+// operation stored — and therefore served on every per-chain route — while the
+// proof log has no record of it. It stays that way forever: the idempotency
+// check at the top of each ingest path finds the stored operation and returns
+// "duplicate" before the append is retried, so the log entry is never written.
+// Nothing reports it, because opCount is derived from the log itself.
 //
-// The test drives exactly that sequence: fail the log append, then heal the
-// store and re-run the sequencer. The op must end up in the log. Against the
-// unbatched sequencer it does not — the second pass sees a "duplicate".
+// The test drives exactly that sequence: fail the commit that carries the log
+// append, then heal the store and re-run the sequencer. The op must end up in
+// the log, whole.
 func TestSequencerOpNeverLandsWithoutItsLogEntry(t *testing.T) {
-	store := newFaultyBatchStore(t, "crash-window.db")
+	store := newFaultyCommitStore(t, "crash-window.db")
 	relay, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -131,23 +119,23 @@ func TestSequencerOpNeverLandsWithoutItsLogEntry(t *testing.T) {
 	token := createTestIdentity(t).token
 	cid := stagePendingOp(t, store, token)
 
-	// Pass 1: the log append fails partway through applying the op.
-	store.failAppend = true
+	// Pass 1: the write that carries the log append fails.
+	store.failLogEntryCommit = true
 	relay.RunSequencer()
 
 	if logHasCID(t, store, cid) {
-		t.Fatal("the failed append must not have produced a log entry")
+		t.Fatal("the failed commit must not have produced a log entry")
 	}
 	if n := pendingCount(t, store); n != 1 {
 		t.Fatalf("the op must stay pending and re-ingestable, got %d pending raw op(s)", n)
 	}
 	if op, _ := store.GetOperation(cid); op != nil {
-		t.Fatal("the operation row must have been rolled back with the failed append — " +
+		t.Fatal("the operation row must not survive the failed commit — " +
 			"a stored operation makes every retry a no-op 'duplicate', stranding the log entry forever")
 	}
 
 	// Pass 2: the store is healthy again. The op must now land in full.
-	store.failAppend = false
+	store.failLogEntryCommit = false
 	relay.RunSequencer()
 
 	if !logHasCID(t, store, cid) {
@@ -167,12 +155,11 @@ func TestSequencerOpNeverLandsWithoutItsLogEntry(t *testing.T) {
 // ===================================================================
 
 // TestSequencerCommitFailureDoesNotGossipOrStrand is the sequencer analog of
-// TestCommitFailureDoesNotGossipOrReportLanded, which pins the same contract for
-// the ingest path's batch: a batch that could not be committed is not held, so
-// it must not be advertised — and, on this path, its raw ops must remain pending
-// so the next pass can ingest them.
+// TestCommitFailureDoesNotGossipOrReportLanded: an operation the store refused
+// is not held, so it must not be advertised — and its raw op must remain pending
+// so the next pass can ingest it.
 func TestSequencerCommitFailureDoesNotGossipOrStrand(t *testing.T) {
-	store := newFaultyBatchStore(t, "commit-failure.db")
+	store := newFaultyCommitStore(t, "commit-failure.db")
 	mock := newMockPeerClient(NewMemoryStore(), 0)
 	relay, err := NewRelay(RelayOptions{
 		Store:      store,
@@ -190,19 +177,19 @@ func TestSequencerCommitFailureDoesNotGossipOrStrand(t *testing.T) {
 	result := relay.RunSequencerAndGossip()
 
 	if calls := mock.drainSubmits(100 * time.Millisecond); len(calls) != 0 {
-		t.Fatalf("a rolled-back chunk must not be gossiped, got %d gossip call(s)", len(calls))
+		t.Fatalf("a refused op must not be gossiped, got %d gossip call(s)", len(calls))
 	}
 	if result.Sequenced != 0 {
-		t.Fatalf("a rolled-back chunk must not be reported as sequenced, got %d", result.Sequenced)
+		t.Fatalf("a refused op must not be reported as sequenced, got %d", result.Sequenced)
 	}
 	if op, _ := store.GetOperation(cid); op != nil {
-		t.Fatal("the rolled-back chunk's writes must not survive the rollback")
+		t.Fatal("a refused commit must leave nothing behind")
 	}
 	if n := pendingCount(t, store); n != 1 {
-		t.Fatalf("the rolled-back chunk's raw ops must stay pending, got %d", n)
+		t.Fatalf("a refused op's raw row must stay pending, got %d", n)
 	}
 
-	// The next pass, against a healthy store, ingests them cleanly.
+	// The next pass, against a healthy store, ingests it cleanly.
 	store.failCommit = false
 	result = relay.RunSequencerAndGossip()
 
@@ -221,20 +208,21 @@ func TestSequencerCommitFailureDoesNotGossipOrStrand(t *testing.T) {
 }
 
 // ===================================================================
-// 3. the unique cid index: a double append cannot duplicate a log row
+// 3. the unique cid index: a double commit cannot duplicate a log row
 // ===================================================================
 
-// TestAppendToLogIsIdempotentPerCID pins the structural half of the fix. The
-// batch closes the window that produced double appends; the unique index makes
-// the duplicate row impossible regardless of how the append is reached.
-func TestAppendToLogIsIdempotentPerCID(t *testing.T) {
+// TestCommitIsIdempotentPerCID pins the structural half of the fix. Commit is
+// the race backstop — a second commit of a held CID answers "duplicate" and
+// writes nothing — and the unique index makes a duplicate log row impossible
+// regardless of how the append is reached.
+func TestCommitIsIdempotentPerCID(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		store func(t *testing.T) Store
+		store func(t *testing.T) referenceStore
 	}{
 		{
 			name: "sqlite",
-			store: func(t *testing.T) Store {
+			store: func(t *testing.T) referenceStore {
 				s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "append.db"))
 				if err != nil {
 					t.Fatalf("NewSQLiteStore: %v", err)
@@ -245,18 +233,32 @@ func TestAppendToLogIsIdempotentPerCID(t *testing.T) {
 		},
 		{
 			name:  "memory",
-			store: func(t *testing.T) Store { return NewMemoryStore() },
+			store: func(t *testing.T) referenceStore { return NewMemoryStore() },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := tc.store(t)
 			token := createTestIdentity(t).token
-			entry := LogEntry{CID: computeOpCID(token), JWSToken: token, Kind: "identity-op", ChainID: "did:dfos:test"}
+			cid := computeOpCID(token)
+			entry := LogEntry{CID: cid, JWSToken: token, Kind: "identity-op", ChainID: "did:dfos:test"}
+			commit := CommitBatch{Operation: &OperationCommit{
+				Operation: StoredOperation{CID: cid, JWSToken: token, ChainType: "identity", ChainID: "did:dfos:test"},
+				LogEntry:  &entry,
+			}}
 
-			for i := 0; i < 2; i++ {
-				if err := store.AppendToLog(entry); err != nil {
-					t.Fatalf("append %d: %v", i+1, err)
-				}
+			first, err := store.Commit(commit)
+			if err != nil {
+				t.Fatalf("first commit: %v", err)
+			}
+			if first != CommitNew {
+				t.Fatalf("first commit: got %q, want %q", first, CommitNew)
+			}
+			second, err := store.Commit(commit)
+			if err != nil {
+				t.Fatalf("second commit: %v", err)
+			}
+			if second != CommitDuplicate {
+				t.Fatalf("second commit of a held CID: got %q, want %q", second, CommitDuplicate)
 			}
 
 			entries, _, err := store.ReadLog("", 100)
@@ -270,7 +272,7 @@ func TestAppendToLogIsIdempotentPerCID(t *testing.T) {
 				}
 			}
 			if count != 1 {
-				t.Fatalf("a repeated append must leave exactly one log row, got %d", count)
+				t.Fatalf("a repeated commit must leave exactly one log row, got %d", count)
 			}
 		})
 	}
@@ -339,9 +341,15 @@ func TestOperationLogCIDIndexUpgrade(t *testing.T) {
 		}
 	}
 
-	// And the index is now unique, so the duplicate cannot come back.
-	if err := store.AppendToLog(LogEntry{CID: "bafyduplicate", JWSToken: "third-receipt", Kind: "identity-op", ChainID: "did:dfos:test"}); err != nil {
-		t.Fatalf("AppendToLog after upgrade: %v", err)
+	// And the index is now unique, so a second append for the same cid cannot
+	// come back — reached here through a commit for a CID the operations table
+	// does not hold, which is exactly the legacy shape.
+	entry := LogEntry{CID: "bafyduplicate", JWSToken: "third-receipt", Kind: "identity-op", ChainID: "did:dfos:test"}
+	if _, err := store.Commit(CommitBatch{Operation: &OperationCommit{
+		Operation: StoredOperation{CID: "bafyduplicate", JWSToken: "third-receipt", ChainType: "identity", ChainID: "did:dfos:test"},
+		LogEntry:  &entry,
+	}}); err != nil {
+		t.Fatalf("commit after upgrade: %v", err)
 	}
 	entries, _, err = store.ReadLog("", 100)
 	if err != nil {

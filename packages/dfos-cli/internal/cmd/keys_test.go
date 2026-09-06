@@ -597,9 +597,6 @@ const syntheticChains = 5000
 // the JSON decode a real one does.
 func seedSyncedIdentities(t *testing.T, lr *localrelay.LocalRelay, n int) {
 	t.Helper()
-	if err := lr.Store.BeginWriteBatch(); err != nil {
-		t.Fatalf("begin write batch: %v", err)
-	}
 	for i := 0; i < n; i++ {
 		did := fmt.Sprintf("did:dfos:z%027d", i)
 		key := func(role string) protocol.MultikeyPublicKey {
@@ -625,13 +622,9 @@ func seedSyncedIdentities(t *testing.T, lr *localrelay.LocalRelay, n int) {
 				AssertKeys:     []protocol.MultikeyPublicKey{key("assert")},
 			},
 		}
-		if err := lr.Store.PutIdentityChain(chain); err != nil {
-			_ = lr.Store.RollbackWriteBatch()
+		if err := lr.Store.RewriteIdentityChainState(chain); err != nil {
 			t.Fatalf("seed identity %d: %v", i, err)
 		}
-	}
-	if err := lr.Store.CommitWriteBatch(); err != nil {
-		t.Fatalf("commit seeded identities: %v", err)
 	}
 }
 

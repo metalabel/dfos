@@ -9,7 +9,7 @@ import (
 )
 
 // liteRelay builds a write:false (LITE pull-only) relay over a fresh store.
-func liteRelay(t *testing.T, store Store, peers []PeerConfig, pc PeerClient) *Relay {
+func liteRelay(t *testing.T, store referenceStore, peers []PeerConfig, pc PeerClient) *Relay {
 	t.Helper()
 	writeDisabled := false
 	r, err := NewRelay(RelayOptions{

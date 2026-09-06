@@ -67,9 +67,27 @@ const (
 // authentication scheme.
 type AdmissionPolicy func(principal string) (bool, error)
 
+// IndexProjectionMode selects who drives the index projection worker.
+//
+//   - "inline"   the relay drains the projection after an ingest batch, on its
+//     own goroutine and OUTSIDE the ingest mutex (default)
+//   - "external" the relay never runs the worker; the operator calls
+//     Relay.ProjectIndex from a timer or another process
+type IndexProjectionMode = string
+
+const (
+	IndexProjectionInline   IndexProjectionMode = "inline"
+	IndexProjectionExternal IndexProjectionMode = "external"
+)
+
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
-	Store       Store
+	// Store is at minimum a RelayReadStore. NewRelay type-asserts the further
+	// contracts (RelayWriteStore, IndexReadStore, IndexWriteStore, SigningStore,
+	// RelayWriterState) ONCE at construction and derives the advertised
+	// capabilities from what it finds; nothing in this package probes a member
+	// per call.
+	Store       RelayReadStore
 	Identity    *RelayIdentity
 	Content     *bool // nil or true = enabled (default), false = disabled
 	Log         *bool // nil or true = enabled (default), false = disabled
@@ -147,15 +165,13 @@ type RelayOptions struct {
 	// produces; without one the flag is inert and gossip stays anonymous.
 	// Sync-in and read-through are READS and stay public — nothing to sign.
 	GossipIdentityProof *bool
-	// ContentFollow controls whether this relay eagerly materializes the document
-	// BYTES of content chains it holds a standing public-read grant for. The op
-	// log federates the authz plane (grants are pushed + gossiped); the bytes are
-	// NOT gossiped — a follower pulls them, content-addressed, behind the grant.
-	// "" or "none" = off (default; byte-identical to today). "eager" = a periodic
-	// convergent sweep pulls any missing granted blobs from peers. An origin (an
-	// authoritative store) already holds its bytes and never follows; a follower
-	// (a cache store, e.g. an edge SQLite node) opts in. See MaterializeFollowedContent.
-	ContentFollow string
+	// IndexProjection selects who drives the index projection worker. Empty =
+	// "inline". Either way the worker runs OUTSIDE the ingest mutex, on a
+	// persisted log cursor, with a per-run budget.
+	IndexProjection IndexProjectionMode
+	// IndexProjectionBudget caps log entries projected and content rows swept per
+	// projection run. Zero = DefaultIndexProjectionBudget.
+	IndexProjectionBudget int
 }
 
 // PeerConfig configures a single peer relay.
@@ -383,18 +399,16 @@ type LogEntry struct {
 	JWSToken string `json:"jwsToken"`
 	Kind     string `json:"kind"`
 	ChainID  string `json:"chainId"`
-	// SignerKey is the multibase public key this operation's signature verified
-	// against, resolved at ingest by appendOperationToLog and persisted on the
-	// operation-log row as the substrate for /index/v0/operations?signerKey=.
+	// IngestedAt is the relay's receipt stamp for this operation, in the
+	// well-known's timestamp grammar.
 	//
 	// json:"-" ON PURPOSE: the proof-plane /proof/v1/log entry shape is a wire
-	// contract both reference relays serve byte-identically, and the signer key
-	// is index metadata, not proof — the JWS in the same entry already carries
-	// the kid a reader can resolve itself. A peer's log page therefore decodes
-	// with SignerKey empty, and the receiving relay re-resolves it against its
-	// own store when it ingests, which is the correct behavior anyway: the value
-	// is what THIS relay's verification computed.
-	SignerKey string `json:"-"`
+	// contract both reference relays serve byte-identically, and the receipt time
+	// is store state, not proof. It is carried here because the index projection
+	// reads the log and needs it — an artifact row and a countersignature row both
+	// report when the relay accepted the operation, and re-reading the wall clock
+	// at projection time would date them by when the worker ran.
+	IngestedAt string `json:"-"`
 }
 
 // RelayStats is optional operational telemetry a store MAY compute for the well-known.
@@ -405,12 +419,6 @@ type RelayStats struct {
 	CountsByKind map[string]int `json:"countsByKind"`
 	OldestOpAt   *string        `json:"oldestOpAt"`
 	HeadCID      *string        `json:"headCid"`
-}
-
-// StatsProvider is an OPTIONAL store capability (type-asserted like BatchableStore).
-// A store implementing it lets the well-known report opCount/countsByKind/oldestOpAt/headCid.
-type StatsProvider interface {
-	RelayStats() (*RelayStats, error)
 }
 
 // PeerSyncStatus is one peer's view of this process's sync loop — OPTIONAL
@@ -496,20 +504,16 @@ type IngestionResult struct {
 	// twin's IngestionResult.dependencyMissing.
 	DependencyMissing bool `json:"dependencyMissing,omitempty"`
 
-	// PersistFailed narrows DependencyMissing to its one destructive case: a
-	// store WRITE that failed partway through applying an op, leaving that op's
-	// writes half-landed. Set only by persistError, its single producer.
+	// StoreFault is the structured store-fault signal. When true, the rejection
+	// is not a verdict about the operation at all: a store call failed, so
+	// nothing was decided and — because Commit is atomic — nothing was
+	// persisted. Retryable for the same reason as a missing dependency and with
+	// more urgency, since a permanent rejection DELETES the raw op and a
+	// momentary store fault must never be able to destroy a valid operation.
 	//
-	// It needs its own flag because the recovery differs. Every other retryable
-	// rejection (an unknown parent, an authorization gate whose read failed)
-	// wrote nothing, so retrying it later is free. A half-applied op is not:
-	// whatever DID land makes the idempotency check at the top of each ingest
-	// path answer "duplicate" on every retry, so the writes that failed are
-	// never completed and the op stays permanently inconsistent. The batch owner
-	// therefore rolls the whole batch back rather than committing the half — see
-	// sequenceChunkLocked. Relay-internal, so it stays off the wire; the Go-only
-	// transient-store-retry path has no TS twin to mirror.
-	PersistFailed bool `json:"-"`
+	// Relay-internal, so it stays off the wire. Mirrors the TS twin's
+	// IngestionResult.storeFault.
+	StoreFault bool `json:"-"`
 }
 
 // OpOrigin records whether a raw operation first arrived directly or through
@@ -527,83 +531,91 @@ type PendingOp struct {
 	Origin   OpOrigin
 }
 
-// SigningStore is the optional ephemeral signing-mailbox courier store.
-type SigningStore interface {
-	PruneExpiredSignRequests(now time.Time) error
-	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
-	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
-	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
-	PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error)
-	DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error)
-}
+// -----------------------------------------------------------------------------
+// relay store contracts
+// -----------------------------------------------------------------------------
 
-// Store is the storage backend for a DFOS web relay.
-type Store interface {
-	// operations
+/*
+
+  SIX CONTRACTS, NOT ONE, AND NO OPTIONAL MEMBERS.
+
+  RelayReadStore is every read a route performs. RelayWriteStore adds ONE method
+  — Commit — and is what a relay that accepts operations needs. IndexReadStore /
+  IndexWriteStore are the optional index profile: the query side and the
+  projection side, split because a store can serve one without the other (a
+  store whose index is maintained by an external worker implements the queries
+  and not the writes). SigningStore is the optional mailbox. RelayWriterState is
+  bookkeeping this package keeps for itself.
+
+  The split exists because the single 53-member interface was not implementable.
+  Its only production consumer serves the reads for real, answers the nine index
+  queries for real, and satisfies ~22 write members by throwing — which is not
+  an implementation, it is a runtime promise that those members are never
+  called. A contract you satisfy by throwing tells you nothing at construction
+  time.
+
+  With the split, what a store can do is a fact about its TYPE. NewRelay type-
+  asserts each further contract ONCE and holds the narrowed reference; the
+  advertised capabilities are derived from those assertions plus config. No
+  route probes a member.
+
+*/
+
+// RelayReadStore is EVERY READ A ROUTE PERFORMS. The base contract: implement
+// this and the relay serves the whole proof plane, the content plane, the log,
+// and the revocation routes — read-only.
+//
+// FAIL CLOSED. A read that cannot be answered returns an ERROR. It never
+// returns a nil result to mean "the store is unwell": absence and failure are
+// different answers, and ingestion classifies them differently — absence is a
+// verdict, an error is retryable (see storeReadError in ingest.go).
+//
+// Concurrency contract: a durable implementation enforces optimistic
+// concurrency (compare-and-swap on the chain head CID) or pessimistic locking
+// so two concurrent extensions of one chain cannot overwrite each other.
+type RelayReadStore interface {
+	// --- operations ---
+
 	GetOperation(cid string) (*StoredOperation, error)
-	PutOperation(op StoredOperation) error
 
-	// identity chains
+	// --- chains ---
+
 	GetIdentityChain(did string) (*StoredIdentityChain, error)
-	PutIdentityChain(chain StoredIdentityChain) error
-
-	// content chains
 	GetContentChain(contentID string) (*StoredContentChain, error)
-	PutContentChain(chain StoredContentChain) error
 
-	// blobs (content plane)
-	GetBlob(key BlobKey) ([]byte, error)
-	PutBlob(key BlobKey, data []byte) error
-	// DeleteBlob removes a stored document blob. A missing key is a no-op (nil
-	// error) — deletion is idempotent. Used by the follower GC sweep to reclaim
-	// bytes whose chain is no longer publicly readable (revoked or deleted).
-	DeleteBlob(key BlobKey) error
-
-	// countersignatures — implementations MUST dedup by witness DID per target CID
-	GetCountersignatures(operationCID string) ([]string, error)
-	AddCountersignature(operationCID string, jwsToken string) error
-	// ListCountersignatures enumerates every stored countersignature (all
-	// witnesses). Used ONLY by the index-projection rebuild path — the serving
-	// hot path reads the materialized index_countersign projection instead.
-	ListCountersignatures() ([]StoredCountersignature, error)
-
-	// operation log — global append-only, CID-based cursor pagination
-	AppendToLog(entry LogEntry) error
-	ReadLog(after string, limit int) (entries []LogEntry, cursor string, err error)
-
-	// chain state at arbitrary CID (snapshot-backed)
+	// GetIdentityStateAtCID returns materialized identity state at a specific
+	// operation CID, or nil when the CID is not in this chain's log. Fork
+	// verification needs state at the fork point to check signer authority and
+	// createdAt ordering. Implementations decide how: replay from genesis, or
+	// replay from the nearest snapshot.
 	GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error)
+	// GetContentStateAtCID is the same for content chains.
 	GetContentStateAtCID(contentID, cid string) (*ContentStateAtCID, error)
 
-	// peer sync state
-	GetPeerCursor(peerURL string) (string, error)
-	SetPeerCursor(peerURL string, cursor string) error
+	// --- blobs (content plane) ---
 
-	// raw ops — content-addressed store for all received operations.
-	// PutRawOp is put-if-absent. It reports whether the row was NEWLY inserted;
-	// false means the CID was already stored, which is not an error. Peer sync
-	// re-reads the same ops constantly (a partial final page is re-fetched every
-	// cycle, and the anti-entropy scrub re-walks the log by design), so a caller
-	// that counts received entries instead of inserted rows overstates the work
-	// it did by an unbounded margin.
-	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) (inserted bool, err error)
-	GetUnsequencedOps(limit int) ([]PendingOp, error) // returns JWS tokens + origins where status = 'pending'
-	MarkOpsSequenced(cids []string) error
-	MarkOpRejected(cid string, reason string) error
-	CountUnsequenced() (int, error)
+	GetBlob(key BlobKey) ([]byte, error)
 
-	// revocations
+	// --- countersignatures ---
 
-	GetRevocations(issuerDID string) ([]string, error)
-	// AddRevocation stores a revocation for a (issuerDID, credentialCID) pair.
-	// When the pair already has one, implementations MUST keep whichever has the
-	// EARLIEST as-of boundary — an absent/unparseable boundary being the earliest
-	// of all — with the artifact CID as tiebreak. Otherwise the validity boundary
-	// for all of history would depend on gossip arrival order, and a later
-	// re-revocation of the same credential could retroactively RE-VALIDATE
-	// operations an earlier revocation had already invalidated. See
-	// revocationSupersedes.
-	AddRevocation(revocation StoredRevocation) error
+	// GetCountersignatures returns the accepted countersignatures over one
+	// operation, deduped one per witness.
+	GetCountersignatures(operationCID string) ([]string, error)
+
+	// --- operation log ---
+
+	// ReadLog pages the global append-only log by relay-local cursor. Cursors
+	// are the relay's own ingestion order, so a cursor this log never issued
+	// returns ErrUnknownLogCursor — the route maps that to 400, never a silently
+	// empty page.
+	ReadLog(after string, limit int) (entries []LogEntry, cursor string, err error)
+
+	// RelayStats reports operational statistics over the global log, for the
+	// well-known response.
+	RelayStats() (*RelayStats, error)
+
+	// --- revocations ---
+
 	// IsCredentialRevoked reports whether a credential CID has been revoked by a
 	// specific issuer.
 	//
@@ -611,8 +623,7 @@ type Store interface {
 	// right now" — which is what acceptance gates (ingest, live read-path
 	// authorization) ask. asOfUnix > 0 is the VALIDITY answer: true only if the
 	// revocation's own signed createdAt is at or before asOfUnix, which is what
-	// verifying already-committed history asks. See CREDENTIALS.md "Revocation
-	// Scope".
+	// verifying already-committed history asks.
 	//
 	// 0 is the in-band timeless sentinel, so "as of epoch 0" is not expressible;
 	// the whole non-positive range is timeless in the TS twin too, so an operation
@@ -629,42 +640,157 @@ type Store interface {
 	// order, deterministic across stores and twins).
 	GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error)
 
-	// public credentials (standing authorization)
-	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
+	// --- public credentials (standing authorization) ---
+
+	// GetPublicCredentials returns the held public credentials covering a
+	// resource, as JWS tokens. A chain:* grant covers every chain: resource and
+	// is returned for any of them.
+	GetPublicCredentials(resource string) ([]string, error)
+	// GetPublicCredentialByCID returns one held public credential by CID.
 	GetPublicCredentialByCID(cid string) (*StoredPublicCredential, error)
-	AddPublicCredential(credential StoredPublicCredential) error
-	// RemovePublicCredential evicts a standing public credential, scoped to the
-	// DID that issued it. The scope is the whole point: revocation is
-	// issuer-only (CREDENTIALS.md "Relay Enforcement"), so an eviction keyed on
-	// the CID alone would let any DID that can sign a syntactically valid
-	// revocation destroy a grant it did not issue — permanently, since
-	// re-presenting the credential lands on the duplicate-by-CID branch. A
-	// (issuerDID, credentialCID) pair that names no held credential removes
-	// nothing and is not an error.
-	RemovePublicCredential(issuerDID string, credentialCID string) error
+}
 
-	// listing — enumerate all chains in the store
-	ListIdentityChains() ([]StoredIdentityChain, error)
-	ListContentChains() ([]StoredContentChain, error)
-	ListArtifactOperations() ([]StoredOperation, error)
+// CountersignatureCommit adds one countersignature to a target's set (one per
+// witness per target).
+type CountersignatureCommit struct {
+	TargetCID string
+	JWSToken  string
+}
 
-	// --- index (v0) materialized projection ---
-	//
-	// The /index/v0 query family is served from materialized projection rows that
-	// the ingestion pipeline maintains incrementally (see index_maintenance.go).
-	// Queries push their filters and keyset cursor into the store so a page costs
-	// O(page), never O(corpus): rows come back ascending by natural key, strictly
-	// greater than After (bytewise), and capped at Limit. The route layer computes
-	// next = len(rows) == limit ? key(last) : null. Row VALUES are a pure function
-	// of chain state + held blobs + standing credentials, so a recompute always
-	// converges to the same row regardless of when it runs — that is what makes
-	// incremental maintenance and a full rebuild interchangeable.
+// PublicCredentialRemoval drops a held standing grant, ISSUER-SCOPED: the store
+// removes the credential only when the held row's issuerDID equals IssuerDID.
+//
+// Scoping is the whole point. Revocation is only meaningful from a credential's
+// own issuer (IsCredentialRevoked is keyed on the pair), but the removal used to
+// be keyed on the credential CID alone — so any identity could sign a revocation
+// naming someone else's credential CID and the relay would drop the held grant,
+// un-publishing public content it had no authority over. The store enforces the
+// pairing.
+type PublicCredentialRemoval struct {
+	IssuerDID     string
+	CredentialCID string
+}
 
+// OperationCommit is ONE ACCEPTED OPERATION, AND EVERYTHING IT IMPLIES.
+//
+// The write contract used to be 14 put/add/remove members that ingestion called
+// in sequence, so "an operation was accepted" was a shape a store had to infer
+// from a run of unrelated calls it could not see the end of — and a fault
+// halfway through left the store holding half an operation with no way to know
+// it. This describes the whole effect up front so a store persists it in one
+// transaction or not at all.
+//
+// Exactly one operation per commit. The members present are a function of the
+// operation's kind:
+//
+//   - identity op   → Operation, IdentityChain, LogEntry
+//   - content op    → Operation, ContentChain, LogEntry
+//   - artifact      → Operation, LogEntry
+//   - countersign   → Operation, Countersignature, LogEntry
+//   - credential    → Operation, PublicCredential, LogEntry
+//   - revocation    → Operation, Revocation, RemovePublicCredential, LogEntry
+//
+// LogEntry is nil when the relay runs with the global log disabled.
+type OperationCommit struct {
+	// Operation is the operation row. Its CID is the commit's idempotency key.
+	Operation StoredOperation
+	// LogEntry is the global-log append. Nil when the relay's log is disabled.
+	LogEntry *LogEntry
+	// IdentityChain is the identity chain's new head, log and state, whole.
+	IdentityChain *StoredIdentityChain
+	// ContentChain is the content chain's new head, log and state, whole.
+	ContentChain *StoredContentChain
+	// Countersignature adds this countersignature to the target's set.
+	Countersignature *CountersignatureCommit
+	// Revocation adds this revocation to the revocation set (earliest boundary
+	// wins — see revocationSupersedes).
+	Revocation *StoredRevocation
+	// PublicCredential adds this credential as standing public authorization.
+	PublicCredential *StoredPublicCredential
+	// RemovePublicCredential drops a held standing grant, issuer-scoped.
+	RemovePublicCredential *PublicCredentialRemoval
+}
+
+// BlobCommit is a document blob landing on the content plane, out of band from
+// its operation.
+type BlobCommit struct {
+	Key   BlobKey
+	Bytes []byte
+}
+
+// CommitBatch is one atomic unit of relay write. Exactly one member is set: the
+// content plane accepts bytes that no single operation carries, because a
+// document blob arrives on its own route, often after the operation that
+// referenced it.
+type CommitBatch struct {
+	Operation *OperationCommit
+	Blob      *BlobCommit
+}
+
+// CommitResult is "new" when the batch was persisted, "duplicate" when this
+// operation CID was already held and NOTHING was written.
+//
+// The duplicate answer is the race backstop, not the primary check: ingestion
+// still reads for an existing operation before it verifies, because it must
+// distinguish "same op" from "same CID, different signature". A store that
+// cannot detect the race may always answer "new", and idempotent writes make
+// that correct — but a store that CAN detect it makes concurrent submission of
+// one operation safe without a relay-wide lock. A blob commit always answers
+// "new": blob bytes are content-addressed, so a rewrite is a no-op.
+type CommitResult string
+
+const (
+	CommitNew       CommitResult = "new"
+	CommitDuplicate CommitResult = "duplicate"
+)
+
+// RelayWriteStore is a store that accepts writes. ONE method: the relay
+// describes an accepted operation, the store persists all of it or none of it.
+//
+// ATOMICITY IS THE CONTRACT, and it is what makes the relay fail closed. A
+// partial commit is a corrupt relay: an operation in the operations table but
+// not in the log is invisible to every puller forever, and a chain head advanced
+// without its operation row breaks fork verification. Worse, the half that DID
+// land makes the idempotency check at the top of each ingest path answer
+// "duplicate" on every retry, so the half that failed is never made up.
+//
+// If Commit returns an error, the store MUST have persisted nothing. The relay
+// classifies the error as a retryable store fault, leaves the raw operation
+// pending, and re-ingests it on a later pass.
+//
+// This subsumes the transaction envelope the relay used to open around a chunk
+// of operations (BeginWriteBatch / CommitWriteBatch / RollbackWriteBatch): the
+// atomic unit is one operation, owned by the store, rather than a batch whose
+// rollback the relay had to orchestrate from the outside.
+type RelayWriteStore interface {
+	RelayReadStore
+	Commit(batch CommitBatch) (CommitResult, error)
+}
+
+// -----------------------------------------------------------------------------
+// index profile (optional)
+// -----------------------------------------------------------------------------
+
+// IndexReadStore is THE QUERY SIDE of the index profile: the nine reads behind
+// /index/v0.
+//
+// Queries push their filters and keyset cursor into the store so a page costs
+// O(page), never O(corpus): rows come back ascending by natural key, strictly
+// greater than After (bytewise), and capped at Limit. The route layer computes
+// next = len(rows) == limit ? key(last) : null. Row VALUES are a pure function
+// of chain state + held blobs + standing credentials, so a recompute always
+// converges to the same row regardless of when it runs — that is what makes
+// incremental projection and a full rebuild interchangeable.
+//
+// A store implementing this and NOT IndexWriteStore serves the index from rows
+// some other process maintains. That is a supported shape, and the relay does no
+// projection work for it.
+type IndexReadStore interface {
 	// QueryIndexIdentities pages identity projection rows ascending by DID,
 	// did > After, length <= Limit. HasPublicProfile (≡ profile != nil &&
 	// profile.publicRead) filters to identities exposing a public profile; DID is
 	// an exact point lookup; Key keeps identities that have EVER PROVED that
-	// public key (see PutIndexIdentityKey).
+	// public key.
 	QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error)
 	// QueryIndexContent pages content projection rows ascending by contentId,
 	// contentId > After, length <= Limit, filtered by any provided
@@ -683,32 +809,6 @@ type Store interface {
 	QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error)
 	// QueryIndexOperations pages the accepted operation log by relay or author recency.
 	QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error)
-
-	// PutIndexIdentityRow upserts an identity projection row by DID.
-	PutIndexIdentityRow(row indexIdentityRow) error
-	// PutIndexContentRow upserts a content projection row by contentId.
-	PutIndexContentRow(row indexContentRow) error
-	// PutIndexCreditRows replaces one chain's complete public-head credit set.
-	PutIndexCreditRows(contentID string, rows []indexCreditRow) error
-	PutIndexArtifactRow(row indexArtifactRow) error
-	// PutIndexContentSigner adds one accepted content-operation signer to a
-	// chain's signer set. The set is branch-inclusive and includes genesis.
-	PutIndexContentSigner(contentID string, did string) error
-	// PutIndexIdentityKey adds one public key a POSSESSION PROOF admitted into an
-	// identity chain to that identity's has-ever-proved key set — the reverse
-	// index behind `key=`, and the one-key-one-DID oracle a holder consults before
-	// signing a key proof. Rows are (publicKey, did, keyID) and are never removed:
-	// an update replaces the chain's key arrays, so has-ever-proved has to be
-	// captured per op rather than diffed from head state. A key a chain merely
-	// DECLARED never lands here — see putIndexIdentityProvedKeys for why indexing
-	// declarations would let a stranger burn a key they do not hold. publicKey is
-	// the multibase string verbatim, matched as opaque bytes.
-	PutIndexIdentityKey(did string, keyID string, publicKey string) error
-	// PutIndexCountersignatureRow upserts a countersignature projection row by
-	// cid. The WitnessDID column is stored (never echoed in the wire row) so
-	// witness-scoped queries stay O(page).
-	PutIndexCountersignatureRow(row storedIndexCountersignature) error
-
 	// GetIndexIdentityDIDsByProfileAnchor is the reverse lookup for the "content
 	// changed → recompute the identities anchored on it" cascade: DIDs of
 	// identity projection rows whose profile.anchor equals contentID.
@@ -717,10 +817,191 @@ type Store interface {
 	// → recompute the content rows that project that document" cascade: contentIds
 	// of content projection rows whose currentDocumentCID equals documentCID.
 	GetIndexContentIDsByDocumentCID(documentCID string) ([]string, error)
+}
 
-	// admin
-	ResetPeerCursors() error
+// IndexCreditRowSet is one chain's COMPLETE public-head credit set. Applying it
+// REPLACES that chain's credit rows.
+type IndexCreditRowSet struct {
+	ContentID string
+	Rows      []indexCreditRow
+}
+
+// IndexIdentityKeyRow is one has-ever-proved reverse row: the multibase public
+// key an accepted identity operation left PROVED, with the DID and key id it was
+// proved into.
+//
+// UPSERTED, NEVER DELETED. A rotation removes nothing and a deleted identity
+// keeps its rows. Append-only plus a monotonic ProvedKeys is what makes the
+// accumulated table equal head state's ProvedKeys, so incremental projection and
+// a full rebuild agree. A key an operation merely DECLARED is never recorded: no
+// possession proof admitted it, so recording it would let a stranger burn a key
+// they do not hold.
+type IndexIdentityKeyRow struct {
+	DID       string
+	KeyID     string
+	PublicKey string
+}
+
+// IndexContentSignerRow is one accepted content-operation signer, added to a
+// chain's branch-inclusive signer set.
+type IndexContentSignerRow struct {
+	ContentID string
+	DID       string
+}
+
+// IndexOperationSignerKey is the multibase public key one accepted operation's
+// signature verified against, stamped onto its operation-log row as the
+// substrate for /index/v0/operations?signerKey=.
+//
+// The operation log is the authoritative record, never a projection table, so
+// this column is filled IN PLACE and survives ClearIndexProjection. A key that
+// does not resolve is never stamped: the row stays NULL, an equality predicate
+// never matches NULL, and the filter's honest answer for a key no chain proved
+// is an empty page.
+type IndexOperationSignerKey struct {
+	CID       string
+	PublicKey string
+}
+
+// IndexRowBatch is one projection run's recomputed rows, applied together.
+type IndexRowBatch struct {
+	Identities          []indexIdentityRow
+	Content             []indexContentRow
+	Credits             []IndexCreditRowSet
+	Artifacts           []indexArtifactRow
+	Countersignatures   []storedIndexCountersignature
+	IdentityKeys        []IndexIdentityKeyRow
+	ContentSigners      []IndexContentSignerRow
+	OperationSignerKeys []IndexOperationSignerKey
+}
+
+// IndexSweepScope names which content rows an outstanding sweep enumerates.
+type IndexSweepScope string
+
+const (
+	// IndexSweepAll enumerates every content row: what a chain:* grant or an
+	// identity restore reaches (a suspended row is not in the public subset, so
+	// nothing narrower would find it).
+	IndexSweepAll IndexSweepScope = "all"
+	// IndexSweepPublic enumerates only currently-public-read rows: the affected
+	// superset for a visibility revocation or an identity delete.
+	IndexSweepPublic IndexSweepScope = "public"
+)
+
+// IndexSweepState is a resumable full-corpus sweep. After is the last contentId
+// recomputed, "" at the start.
+type IndexSweepState struct {
+	Scope IndexSweepScope `json:"scope"`
+	After string          `json:"after"`
+}
+
+// IndexCursor is where the projection worker got to. Persisted, so a run resumes
+// rather than restarts.
+//
+// LogCursor is the CID of the last operation-log entry projected, "" before the
+// first run. Sweep is a full-corpus recompute in progress: some operations (a
+// chain:* grant, an identity delete or restore) change the visibility of rows
+// they never name, and draining that in one pass is the unbounded stall this
+// cursor exists to break up.
+type IndexCursor struct {
+	LogCursor string           `json:"logCursor"`
+	Sweep     *IndexSweepState `json:"sweep"`
+}
+
+// IndexWriteStore is THE PROJECTION SIDE of the index profile. A store
+// implementing it lets this package run the projection worker (see
+// projectIndex); a store that omits it keeps its index current some other way.
+//
+// ApplyIndexRows applies one run's rows; implementations that can SHOULD apply
+// them in a single transaction, so a failed run leaves the cursor and the rows
+// consistent with each other.
+type IndexWriteStore interface {
+	ApplyIndexRows(rows IndexRowBatch) error
+	GetIndexCursor() (IndexCursor, error)
+	SetIndexCursor(cursor IndexCursor) error
+}
+
+// -----------------------------------------------------------------------------
+// signing profile (optional)
+// -----------------------------------------------------------------------------
+
+// SigningStore is the optional ephemeral signing-mailbox courier store.
+type SigningStore interface {
+	PruneExpiredSignRequests(now time.Time) error
+	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
+	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
+	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
+	PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error)
+	DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error)
+}
+
+// -----------------------------------------------------------------------------
+// writer-internal state
+// -----------------------------------------------------------------------------
+
+// RelayWriterState is INTERNAL TO A RELAY THAT WRITES. It is not part of the
+// contract a store implementor reads: raw-op durability, the sequencer's pending
+// set, and peer sync cursors are bookkeeping this package keeps for itself, and
+// a store that never accepts writes and configures no peers has nothing to keep.
+//
+// Both reference stores implement it because the reference relay both writes and
+// peers. It is exported so an embedder building a durable writing relay can
+// implement it deliberately, not because a store needs it to be useful.
+type RelayWriterState interface {
+	// PutRawOp is put-if-absent. It reports whether the row was NEWLY inserted;
+	// false means the CID was already stored, which is not an error. Peer sync
+	// re-reads the same ops constantly (a partial final page is re-fetched every
+	// cycle, and the anti-entropy scrub re-walks the log by design), so a caller
+	// that counts received entries instead of inserted rows overstates the work
+	// it did by an unbounded margin.
+	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) (inserted bool, err error)
+	// GetUnsequencedOps returns JWS tokens + origins where status = 'pending'.
+	GetUnsequencedOps(limit int) ([]PendingOp, error)
+	MarkOpsSequenced(cids []string) error
+	MarkOpRejected(cid string, reason string) error
+	CountUnsequenced() (int, error)
+	// ResetSequencer resets all non-rejected raw ops to pending.
 	ResetSequencer() error
+	GetPeerCursor(peerURL string) (string, error)
+	SetPeerCursor(peerURL string, cursor string) error
+	ResetPeerCursors() error
+}
+
+// -----------------------------------------------------------------------------
+// durable-store maintenance (optional)
+// -----------------------------------------------------------------------------
+
+// MigratableStore is an OPTIONAL durable-store maintenance profile: the two
+// members the boot-time identity-state repair needs, and nothing else.
+//
+// It is NOT a general write contract. RewriteIdentityChainState replaces a row's
+// materialized state with a fresh walk of the same log it already holds — it
+// admits nothing, changes no chain's history, and is only ever called by
+// backfillProvedKeyState. An ephemeral store has nothing persisted by an older
+// binary, and a read-only store has nothing to migrate; both simply omit it and
+// the repair is a no-op.
+type MigratableStore interface {
+	ListIdentityChains() ([]StoredIdentityChain, error)
+	RewriteIdentityChainState(chain StoredIdentityChain) error
+}
+
+// RebuildableIndexStore is an OPTIONAL durable-store maintenance profile for the
+// index projection: the version stamp that says which projection schema the rows
+// on disk were built under, and the truncate that lets a rebuild start clean.
+//
+// A rebuild is just "clear the rows, reset the cursor, and let the projection
+// worker re-walk the log" — the log is the authoritative record every row is
+// derived from, so there is no separate corpus enumeration to keep in sync with
+// the incremental path.
+type RebuildableIndexStore interface {
+	// GetIndexProjectionVersion returns the projection_version stamped in the
+	// store's index_meta, or 0 when never stamped (a fresh or pre-projection DB).
+	GetIndexProjectionVersion() (int, error)
+	// SetIndexProjectionVersion stamps the projection_version after a rebuild.
+	SetIndexProjectionVersion(v int) error
+	// ClearIndexProjection truncates all projection rows so a rebuild starts from
+	// a clean slate (a schema change may have altered row shape).
+	ClearIndexProjection() error
 }
 
 // IndexIdentityQuery is the keyset-paged filter for identity projection rows.
@@ -817,28 +1098,4 @@ type storedIndexCountersignature struct {
 	WitnessDID string
 	CreatedAt  string
 	IngestedAt string
-}
-
-// RebuildableIndexStore is an OPTIONAL store capability (type-asserted like
-// BatchableStore). A durable store implements it so the relay can detect a
-// projection-schema version bump on boot and rebuild all projection rows from the
-// authoritative chain/countersign tables before serving.
-type RebuildableIndexStore interface {
-	// GetIndexProjectionVersion returns the projection_version stamped in the
-	// store's index_meta, or 0 when never stamped (a fresh or pre-projection DB).
-	GetIndexProjectionVersion() (int, error)
-	// SetIndexProjectionVersion stamps the projection_version after a rebuild.
-	SetIndexProjectionVersion(v int) error
-	// ClearIndexProjection truncates all projection rows so a rebuild starts from
-	// a clean slate (a schema change may have altered row shape).
-	ClearIndexProjection() error
-	// ListOperationLogEntriesMissingSignerKey returns the operation-log rows that
-	// carry no resolved signer key, as (CID, JWSToken) pairs — the backfill input
-	// for /index/v0/operations?signerKey= on a corpus ingested before the column
-	// existed. NOT part of ClearIndexProjection: the operation log is the
-	// authoritative record a rebuild reads FROM, never a projection table it
-	// truncates, so the signer key is filled in place on rows that lack it.
-	ListOperationLogEntriesMissingSignerKey() ([]LogEntry, error)
-	// SetOperationLogSignerKey stamps one operation-log row's resolved signer key.
-	SetOperationLogSignerKey(cid string, signerKey string) error
 }

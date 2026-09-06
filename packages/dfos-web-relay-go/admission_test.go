@@ -195,7 +195,7 @@ func TestCommittedOldKeyHistorySurvivesRotationAndPeerSync(t *testing.T) {
 	if err := peer.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
-	peerChain, err := peer.store.GetContentChain(contentID)
+	peerChain, err := peer.readStore.GetContentChain(contentID)
 	if err != nil || peerChain == nil || peerChain.State.HeadCID != contentCID {
 		t.Fatalf("peer did not accept committed old-key history: chain=%+v err=%v", peerChain, err)
 	}
@@ -337,9 +337,9 @@ func TestPendingOpAdmissionProvenance(t *testing.T) {
 		_, rotation := rotateExistingTestIdentity(t, source, id)
 
 		peerStore := NewMemoryStore()
-		if err := peerStore.AppendToLog(LogEntry{
+		if err := seedLogEntry(t, peerStore, LogEntry{
 			CID: artifactCID, JWSToken: committedArtifact, Kind: "artifact", ChainID: id.did,
-		}); err != nil {
+		}, "artifact"); err != nil {
 			t.Fatal(err)
 		}
 		store := NewMemoryStore()
