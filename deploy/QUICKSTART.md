@@ -53,7 +53,7 @@ All configuration is via environment variables on the `relay` service in
 ## Authenticated routes
 
 Blob upload, non-public blob download, and the signing mailbox poll require an
-[API-AUTH](https://protocol.dfos.com/api-auth) identity proof, and a proof binds the
+[identity proof](https://protocol.dfos.com/integrations#the-identity-proof), and a proof binds the
 host the caller reached. Set `AUTHORITY` to the public `host[:port]` your relay answers
 at — behind Caddy on 443 that is the bare hostname:
 

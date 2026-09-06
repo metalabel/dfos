@@ -32,32 +32,24 @@ This repository contains the protocol specification, reference implementations i
 - [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
 - [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types and verifiable attribution
 - [Credentials](https://protocol.dfos.com/credentials) — UCAN-style authorization, linear delegation, revocation
-- [Sign In With DFOS](https://protocol.dfos.com/siwd) — cryptographic identity verification for third-party applications
-- [Signing](https://protocol.dfos.com/signing) — transport-agnostic requests for DFOS signatures
-- [API Authentication](https://protocol.dfos.com/api-auth) — proof-of-possession authentication for credential-gated HTTP APIs
-- [Origin Binding](https://protocol.dfos.com/origin-binding) — bidirectional binding between a `did:dfos` and a web domain
-- [Relay Contract](https://protocol.dfos.com/relay-contract) — the frozen relay wire surface: routes, shapes, pagination
-- [Web Relay](https://protocol.dfos.com/web-relay) — reference relay behavior: ingestion, peering, and the content plane
-- [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the trustless-proof / honest-host split
+- [Integrations](https://protocol.dfos.com/integrations) — sign in, API authentication, origin binding, and key ceremonies
+- [Relay](https://protocol.dfos.com/relay) — the relay HTTP surface: read and write contracts, ingestion, profiles, the content plane
+- [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the verifiable-proof / honest-host split
 - [Conformance](https://protocol.dfos.com/conformance) — tiered conformance definition and self-certification
 - [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
 
 ## Specifications
 
-| Spec                                        | What it covers                                                                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [PROTOCOL](./specs/PROTOCOL.md)             | Encoding and CIDs, identity and content chains, key possession, the time basis, credentials, services, the extension registry, test vectors |
-| [DID-METHOD](./specs/DID-METHOD.md)         | The W3C `did:dfos` method registration: identifier syntax, DID Document, resolution                                                         |
-| [CONTENT-MODEL](./specs/CONTENT-MODEL.md)   | Document schemas, the canonical fold, and verifiable attribution via credit claims                                                          |
-| [CREDENTIALS](./specs/CREDENTIALS.md)       | Delegated authorization, attenuation, and revocation                                                                                        |
-| [RELAY-CONTRACT](./specs/RELAY-CONTRACT.md) | The relay wire surface: routes, shapes, and the pagination envelope                                                                         |
-| [WEB-RELAY](./specs/WEB-RELAY.md)           | Reference relay behavior: ingestion, peering, index, and the content plane                                                                  |
-| [SIGNING](./specs/SIGNING.md)               | Sign-request envelopes, signer obligations, and relay-hosted mailboxes                                                                      |
-| [SIWD](./specs/SIWD.md)                     | Sign In With DFOS: identity verification for third-party applications                                                                       |
-| [API-AUTH](./specs/API-AUTH.md)             | Proof-of-possession authentication for credential-gated HTTP APIs                                                                           |
-| [ORIGIN-BINDING](./specs/ORIGIN-BINDING.md) | Bidirectional binding between a `did:dfos` and a web domain                                                                                 |
-| [THREAT-MODEL](./specs/THREAT-MODEL.md)     | The adversary model and trust boundaries assembled from the specs above                                                                     |
-| [CONFORMANCE](./specs/CONFORMANCE.md)       | Conformance tiers and the executable suites that prove them                                                                                 |
+| Spec                                      | What it covers                                                                                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [PROTOCOL](./specs/PROTOCOL.md)           | Encoding and CIDs, identity and content chains, key possession, the time basis, credentials, services, the extension registry, test vectors |
+| [DID-METHOD](./specs/DID-METHOD.md)       | The W3C `did:dfos` method registration: identifier syntax, DID Document, resolution                                                         |
+| [CONTENT-MODEL](./specs/CONTENT-MODEL.md) | Document schemas, the canonical fold, and verifiable attribution via credit claims                                                          |
+| [CREDENTIALS](./specs/CREDENTIALS.md)     | Delegated authorization, attenuation, and revocation                                                                                        |
+| [RELAY](./specs/RELAY.md)                 | The relay HTTP surface: read and write contracts, ingestion, index, signing mailbox, peering, content plane                                 |
+| [INTEGRATIONS](./specs/INTEGRATIONS.md)   | Sign in, API authentication, origin binding, and key ceremonies                                                                             |
+| [THREAT-MODEL](./specs/THREAT-MODEL.md)   | The adversary model and trust boundaries assembled from the specs above                                                                     |
+| [CONFORMANCE](./specs/CONFORMANCE.md)     | Conformance tiers and the executable suites that prove them                                                                                 |
 
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [Chain explorer](https://explore.dfos.com) — client-side, verify-in-tab

@@ -43,22 +43,22 @@ between a family that reads as part of the corpus and one that reads as bolted o
    clamp above max) + `after` + `next`, keyset where the cursor is the sort key,
    opaque tokens where the key is composite, and the relay-local/400 rule where the
    order is positional
-   ([RELAY-CONTRACT.md → Pagination Envelope](specs/RELAY-CONTRACT.md#pagination-envelope)). No new shapes.
+   ([RELAY.md → Pagination envelope](specs/RELAY.md#pagination-envelope)). No new shapes.
 4. **Capability discipline.** Optional families are gated by a `capabilities.<name>`
    flag; absent reads `false` only for opt-in families; unsupported routes return
    **501, never 404**, with the gate firing before auth, body parsing, or store
    lookups
-   ([WEB-RELAY.md → Well-Known Endpoint](specs/WEB-RELAY.md#well-known-endpoint-get-well-knowndfos-relay)).
+   ([RELAY.md → The well-known document](specs/RELAY.md#the-well-known-document)).
 5. **Uniform error body.** `{ "error": "<prose>" }`; callers branch on status codes.
    Exceptions require their own contract (the DIF resolver envelope is the only one)
-   ([RELAY-CONTRACT.md → Error Body](specs/RELAY-CONTRACT.md#error-body)).
+   ([RELAY.md → Error body](specs/RELAY.md#error-body)).
 6. **Verdicts, not prose.** Verification failures split structurally into
    `invalid` vs `unverifiable` (typed reason / `errors.Is` sentinels) — never
    string-matched messages
    ([CONFORMANCE.md → Conformance Tiers](specs/CONFORMANCE.md#conformance-tiers)).
 7. **Sync the derivative docs.** CONFORMANCE.md (doc list + the tier bullets your
-   MUST sets belong to), THREAT-MODEL.md (any new residual risk), WEB-RELAY.md's
-   route/auth quick-start table, and the OpenAPI document — including its 501
+   MUST sets belong to), THREAT-MODEL.md (any new residual risk), RELAY.md's
+   full route surface table, and the OpenAPI document — including its 501
    responses. Enforcement for every spec PR (not just new families): see the
    derivative-docs rule in [`AGENTS.md`](AGENTS.md) — sync these docs or state in
    the PR body why there is no derivative impact.

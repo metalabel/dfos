@@ -201,7 +201,7 @@ A relay keeps its own identity log linear by first-seen admission: it admits the
 
 A resolver that needs one answer picks one relay; an identity's `DfosRelay` service entries name relays that serve it. A resolver reading several relays sees the divergence and can present both views.
 
-The chain itself is transport-agnostic: any source that delivers the ordered JWS tokens is a valid one, including an HTTP relay, a peer exchange, a local file, or an exported bundle. A relay serving the DIF Universal Resolver binding answers at `GET /1.0/identifiers/:did`; the route contract is in [WEB-RELAY.md](https://protocol.dfos.com/web-relay).
+The chain itself is transport-agnostic: any source that delivers the ordered JWS tokens is a valid one, including an HTTP relay, a peer exchange, a local file, or an exported bundle. A relay serving the DIF Universal Resolver binding answers at `GET /1.0/identifiers/:did`; the route contract is in [RELAY.md](https://protocol.dfos.com/relay#the-read-contract).
 
 ### 5.3 Update
 

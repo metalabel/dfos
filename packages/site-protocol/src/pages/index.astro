@@ -6,9 +6,8 @@ import { navLinks, primaryNav, headerLabel } from '../data/nav';
 // The spec wall, grouped by the registry's tier taxonomy. Reading order is the
 // order here; within a tier, tiles keep the registry's canonical array order.
 const specTiers = [
-  { grid: 'core', label: 'Frozen core' },
-  { grid: 'auth', label: 'Auth & sign-in' },
-  { grid: 'reference', label: 'Reference behavior' },
+  { grid: 'core', label: 'Core' },
+  { grid: 'reference', label: 'Relay and integrations' },
   { grid: 'companions', label: 'Companions' },
 ] as const;
 ---
@@ -106,12 +105,12 @@ const specTiers = [
         </div>
 
         <div class="concept-card">
-          <h2>Trustless distribution</h2>
+          <h2>Verifiable distribution</h2>
           <p>
-            <a href="/web-relay">Web relays</a> independently verify every operation
-            on ingestion. No trust between relays. No hierarchy.
-            Topology is emergent. Three peering behaviors compose the network:
-            gossip, read-through, and sync.
+            <a href="/relay">Relays</a> independently verify every operation on ingestion.
+            Authorship is verifiable without trusting any server. Which view of an identity
+            you follow is a choice of relay. No hierarchy, topology is emergent, and three
+            peering behaviors compose the network: gossip, read-through, and sync.
           </p>
         </div>
       </div>

@@ -14,8 +14,8 @@ is a spec change that lies by omission.
 
 Every PR touching `specs/*.md` MUST, for **each** derivative surface —
 `specs/THREAT-MODEL.md`, `specs/CONFORMANCE.md`, and any other derivative
-surface named by CONTRIBUTING.md item 7 that the change reaches (WEB-RELAY.md's
-route/auth quick-start table, the OpenAPI document) — do one of:
+surface named by CONTRIBUTING.md item 7 that the change reaches (RELAY.md's
+full route surface table, the OpenAPI document) — do one of:
 
 1. **Sync it** — update that derivative in the same PR, or
 2. **State the waiver** — include one explicit sentence in the PR body saying

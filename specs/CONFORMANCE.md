@@ -8,13 +8,9 @@ points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [CONTENT-MODEL.md](https://protocol.dfos.com/content-model),
-[RELAY-CONTRACT.md](https://protocol.dfos.com/relay-contract),
-[WEB-RELAY.md](https://protocol.dfos.com/web-relay),
-[DID-METHOD.md](https://protocol.dfos.com/did-method),
-[SIGNING.md](https://protocol.dfos.com/signing) (`0.x`),
-[SIWD.md](https://protocol.dfos.com/siwd) (`0.x`),
-[API-AUTH.md](https://protocol.dfos.com/api-auth) (`0.x`), and
-[ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding) (`0.x`), and binds each tier to the tests
+[RELAY.md](https://protocol.dfos.com/relay),
+[DID-METHOD.md](https://protocol.dfos.com/did-method), and
+[INTEGRATIONS.md](https://protocol.dfos.com/integrations), and binds each tier to the tests
 that exercise it.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
@@ -76,13 +72,13 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   is history, authorization is standing), and the **`invalid` vs `unverifiable`** verdicts
   MUST stay distinct, with neither rendered as `unclaimed` (CONTENT-MODEL.md "Verification
   algorithm" / "Verification states" / "The bind", `specs/CONTENT-MODEL.md`).
-- **Sign-request envelope verification** (if it consumes sign requests; SIGNING `0.x`) —
+- **Sign-request envelope verification** (if it consumes sign requests) —
   the 8192-byte token cap checked before any decode, the profile header gates, `typ`
   exactly `did:dfos:sign-request`, payload schema, unpadded-base64url target bytes
   (non-empty, ≤ 4096), `kid`-DID equal to payload `did`, **current-state** requester
   resolution (the live-authentication rule, not the credential rule — deliberate), signature, CID
   integrity, the ≤ 7-day temporal window, and the same structural `invalid` vs
-  `unverifiable` verdict split (SIGNING.md "Verification Algorithm", `specs/SIGNING.md`).
+  `unverifiable` verdict split (RELAY.md "Envelope verification", `specs/RELAY.md`).
 - **Key-proof presentation verification** (if it operates key-proof ceremonies) —
   the 4 KiB cap before any decode, the profile header gates with a registered purpose
   `typ` and **no `kid`**, the closed seven-member payload schema **over canonical bytes**
@@ -116,7 +112,7 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
   `specs/PROTOCOL.md`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
   credentials, revocations, credit claims, and sign-request envelopes; absent on
-  API-AUTH's request and identity proofs (PROTOCOL.md "`cid` Header",
+  the request and identity proofs (PROTOCOL.md "`cid` Header",
   `specs/PROTOCOL.md`).
 - **Credit-claim emission** (if it signs attribution) — derive `kid` from the claimant DID
   so a `kid`↔`did` mismatch is unrepresentable, bind to the chain's 31-char `contentId`
@@ -126,11 +122,11 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
   Canonicalization", `specs/PROTOCOL.md`, `specs/PROTOCOL.md`, `specs/PROTOCOL.md`).
-- **WYSIWYS signer obligations** (if it signs on request; SIGNING `0.x`) — the heaviest
+- **WYSIWYS signer obligations** (if it signs on request) — the heaviest
   signer MUST set in the corpus: subject-is-self, refuse unimplemented `payloadTyp`s,
   strict target-schema validation with **no unknown fields**, re-canonicalize-and-
   byte-compare against the decoded input, render only from the validated parse, sign the
-  **original** bytes (SIGNING.md "Signer Obligations (WYSIWYS)", `specs/SIGNING.md`).
+  **original** bytes (RELAY.md "Signer obligations", `specs/RELAY.md`).
   The adversarial canonicalization vector set shipped with the reference packages
   (duplicate keys, non-shortest numbers, permuted order, whitespace, unicode escapes,
   unknown fields, sub-second timestamps) is the proving corpus; an independent signer
@@ -141,8 +137,8 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 A relay ingests, sequences, and serves. It implements:
 
 - **Ingestion** — single `POST /proof/v1/operations` endpoint, `typ`-based classification,
-  dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
-  "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
+  dependency sort, per-type verification, store-then-verify convergence (RELAY.md
+  "The write contract" / "Buffering and sequencing", `specs/RELAY.md`).
 - **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
   selection, identity-chain admission (a relay keeps its own log linear by admitting the
   first successor it sees for a chain position and permanently refusing later ones; the
@@ -151,22 +147,22 @@ A relay ingests, sequences, and serves. It implements:
   "Views", `specs/PROTOCOL.md`), possession-blind admission (door two: an identity
   operation's key-proof status never gates log membership; void memberships are excluded
   from every served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
-  WEB-RELAY.md "Identity Linearity and Admission", `specs/WEB-RELAY.md`),
-  ingestion statuses (RELAY-CONTRACT.md "Submission",
-  `specs/RELAY-CONTRACT.md`), deletion + restore semantics (WEB-RELAY.md
-  "Fork Acceptance" / "Deletion Semantics", `specs/WEB-RELAY.md`).
+  RELAY.md "Identity linearity and admission", `specs/RELAY.md`),
+  ingestion statuses (RELAY.md "Submission",
+  `specs/RELAY.md`), deletion + restore semantics (RELAY.md
+  "Content-chain forks and head selection" / "Deletion and restore", `specs/RELAY.md`).
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
   capabilities; unsupported optional features return **501 Not Implemented** (not 404)
-  (WEB-RELAY.md "Well-Known Endpoint", `specs/WEB-RELAY.md`; "Two Planes",
-  `specs/WEB-RELAY.md`). The `revocations` gate is currently proven by in-package unit
-  tests in both reference relays; no disabled-mode live serve variant exists yet (the
+  (RELAY.md "The well-known document", `specs/RELAY.md`; "Two planes",
+  `specs/RELAY.md`). The `revocations` gate is currently proven by in-package unit
+  tests in both reference relays; there is no disabled-mode live serve variant (the
   conformance suite's disabled tests self-skip unless a relay advertises `false`).
 - **Index (`/index/v0`)** (if served) — the optional, non-authoritative identity,
   content, countersignature, credential, credit, artifact, and operation projections;
   actor/name/public-read filters; deterministic ordering; complete keyset/ordered-cursor
   walks; and cursor canonicality (non-canonical base64 encodings of a well-formed
-  cursor are rejected) live in the relay tier on the index family's own `0.x` clock
-  (WEB-RELAY.md "Index (v0)", `specs/WEB-RELAY.md`). Two rules bound what a row and
+  cursor are rejected) live in the relay tier
+  (RELAY.md "Index", `specs/RELAY.md`). Two rules bound what a row and
   a listing may claim. **Discovery and resolution differ for deleted identities**:
   a relay MAY omit `isDeleted: true` identities from the DISCOVERY shapes of
   `/index/v0/identities` (the unfiltered listing, the keyset and ordered walks,
@@ -194,22 +190,22 @@ A relay ingests, sequences, and serves. It implements:
   cursor pages.
 - **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
   `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
-  keyset / opaque token) as specified per route (RELAY-CONTRACT.md "Error Body" /
-  "Pagination Envelope", `specs/RELAY-CONTRACT.md`, and each route's section).
+  keyset / opaque token) as specified per route (RELAY.md "Error body" /
+  "Pagination envelope", `specs/RELAY.md`, and each route's section).
 
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
-all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
-`specs/WEB-RELAY.md`). Proof-plane-only is a fully conformant relay. The content plane is
-the [content plane / document gateway](https://protocol.dfos.com/web-relay#content-plane--document-gateway), an optional surface on
-its own `0.x` clock — outside the v1 conformance tiers.
+all content-plane routes return 501 (RELAY.md "The well-known document",
+`specs/RELAY.md`). Proof-plane-only is a fully conformant relay. The
+[content plane](https://protocol.dfos.com/relay#content-plane-capability-content) is an
+optional surface behind its own capability flag.
 
 **Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
 `capabilities.write: false`, in which case every write route returns **501 Not
 Implemented** — `POST /proof/v1/operations` and the content-plane blob upload
 `PUT /content/{contentId}/blob/{ref}` — while read routes on both planes remain
 conformant; the node stays current
-by pulling peers' logs (WEB-RELAY.md "Lite (pull-only) node"). So a conformant proof node
+by pulling peers' logs (RELAY.md "Write-disabled relays"). So a conformant proof node
 need not accept writes — only serve and verify them. A read-only node cannot be seeded by
 the suite (its POSTs 501), so the write-disabled variant verifies it by **recomputing from
 the log**: it pulls a served chain's log and independently re-derives the head and state,
@@ -240,7 +236,7 @@ each suite actually exercises.
   `packages/protocol-verify/README.md`.
 - **`packages/dfos-protocol/tests`** — the TypeScript reference test suite.
 - **Deterministic reference artifacts** — PROTOCOL.md "Reference vectors"
-  (`specs/PROTOCOL.md`) and the "Verification Checklist for Independent Implementers"
+  (`specs/PROTOCOL.md`) and "Independent verification"
   (`specs/PROTOCOL.md`) provide every value an implementer needs to self-check, derived
   from `SHA-256("dfos-protocol-reference-key-N")`.
 
@@ -273,17 +269,9 @@ core is unambiguous across languages.
   (`scripts/run-index-disabled.sh` — 501 on every `/index/v0/*` route with adjacent
   surfaces unaffected), and the signing pair — enabled-behavior tests that run only when
   `capabilities.signing: true` (`scripts/run-signing.sh`), and a disabled suite asserting
-  501 on every `/signing/v0/*` route when the flag is `false` or absent (SIGNING.md). The
+  501 on every `/signing/v0/*` route when the flag is `false` or absent. The
   dual-relay parity harness (`scripts/run-parity.sh`) additionally compares index filter,
   ordered-query, and full multi-page cursor responses over the same fixture.
-- **Content following** is inherently a **two-relay** behavior (a follower materializing an
-  origin's bytes), so it is exercised in the Go relay library's race-tested in-package suite
-  rather than the single-endpoint conformance corpus. An origin and an eager follower are
-  wired over loopback HTTP; the suite asserts the full lifecycle —
-  authorized-but-not-yet-materialized (blob `404`), then eventual
-  materialization of content-address-verified bytes, then revoke (the serve gate denies
-  while bytes are still cached), then GC reclamation — over the real `HttpPeerClient` and
-  content-plane HTTP routes. See WEB-RELAY.md "Content Following".
 
 ---
 
@@ -294,7 +282,7 @@ authority grants conformance — the proofs are reproducible and the claim is se
 mirroring the protocol's own trust model.
 
 1. **Verifier / signer.** Implement the Tier-1/Tier-2 MUST sets using your own crypto stack.
-   Reproduce the deterministic reference artifacts (PROTOCOL.md "Verification Checklist",
+   Reproduce the deterministic reference artifacts (PROTOCOL.md "Reference vectors",
    `specs/PROTOCOL.md`) and, ideally, add a suite to `packages/protocol-verify`
    following its "Adding a New Language" steps — hardcoding the same reference constants
    inline so the suite is standalone. Agreement across suites is the proof; divergence

@@ -1,6 +1,6 @@
 # DFOS CLI
 
-The sovereign actor in the DFOS architecture. Generates keys, signs operations, stores chains locally, decides what to publish and when. Relays are dumb pipes — the CLI holds the keys.
+The sovereign actor in the DFOS architecture. Generates keys, signs operations, stores chains locally, decides what to publish and when. Authorship is verifiable without trusting any server, and the CLI holds the keys.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
@@ -71,7 +71,7 @@ dfos serve
 
 The DFOS protocol defines signed chain primitives — identity and content chains, credentials, countersignatures — but says nothing about how a user manages keys or communicates with relays. The CLI is the user-side agent that bridges this gap.
 
-Relays are dumb pipes that verify and store. The CLI is the sovereign actor: it generates keys, signs operations, decides what to publish and when, and independently verifies what relays serve back. Private key material never leaves the local machine.
+Relays verify and store; authorship is verifiable without trusting any server, and which view of an identity you follow is a choice of relay. The CLI is the sovereign actor: it generates keys, signs operations, decides what to publish and when, and independently verifies what relays serve back. Private key material never leaves the local machine.
 
 The CLI is designed for both human operators and AI agents. Every command that produces output supports `--json` for structured machine-readable responses. Every interactive prompt has a flag equivalent. Stdin is accepted wherever a file is expected.
 
@@ -1127,7 +1127,7 @@ Two types are structurally recognized:
 - **`DfosRelay`** — `{id, type, endpoint}`, a transport endpoint where this identity's chains can be fetched.
 - **`ContentAnchor`** — `{id, type, label, anchor}`, a stable pointer to a content chain (31-char content id) or an artifact (CIDv1 `baf…`), addressable by `label` (e.g. `profile`, `avatar`).
 
-Extensions ride the same open namespace — `DfosOrigin` (see **Origin Binding** below) is one, written by `identity bind-domain` and given meaning by a spec outside the frozen core rather than by a core verifier. `DfosAuthorizationServer` is a second: `{id, type, endpoint}`, the authorize origin that speaks for this DID — where a client holding only the DID finds the sign-in server its person authenticates to. It is registered by [SIWD.md](https://protocol.dfos.com/siwd), not by the core.
+Extensions ride the same open namespace — `DfosOrigin` (see **Origin Binding** below) is one, written by `identity bind-domain` and given meaning by a spec outside the frozen core rather than by a core verifier. `DfosAuthorizationServer` is a second: `{id, type, endpoint}`, the authorize origin that speaks for this DID — where a client holding only the DID finds the sign-in server its person authenticates to. It is registered by [INTEGRATIONS.md](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint), not by the core.
 
 Bounds (enforced at sign time by the protocol layer): at most 256 entries, unique ids, non-empty `id`/`type`, and a 32768-byte cap on the encoded services array. Individual field lengths are not separately capped — the aggregate byte cap is the single bound.
 
@@ -1172,7 +1172,7 @@ Carriage is limited to 100 operations; longer chains must be published to a rela
 
 ## Origin Binding (bind a domain)
 
-An identity can claim a **domain** — a `DfosOrigin` services entry, `{id, type, domain}`, signed into the chain by a controller key — and the domain attests the DID back by publishing it. Each half alone is a claim anyone could make; together they prove one party controls both, and any consumer can check the pair with a chain resolution plus one HTTPS or DNS lookup. No DFOS server is in the loop. The normative spec is [ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding); the `DfosOrigin` type is an extension the core carries verbatim and never structurally validates, so all of its rules live in consumers like this CLI.
+An identity can claim a **domain** — a `DfosOrigin` services entry, `{id, type, domain}`, signed into the chain by a controller key — and the domain attests the DID back by publishing it. Each half alone is a claim anyone could make; together they prove one party controls both, and any consumer can check the pair with a chain resolution plus one HTTPS or DNS lookup. No DFOS server is in the loop. The normative spec is [INTEGRATIONS.md](https://protocol.dfos.com/integrations#origin-binding); the `DfosOrigin` type is an extension the core carries verbatim and never structurally validates, so all of its rules live in consumers like this CLI.
 
 ```bash
 # claim the domain in the chain, and print what the domain must serve
@@ -1213,7 +1213,7 @@ Exit `1` is also the CLI's generic error status (unresolvable target, chain not 
 
 ## Login (Sign In With DFOS)
 
-`dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. It runs the [SIWD](https://protocol.dfos.com/siwd) loopback flow: the CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before anything is stored.
+`dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. It runs the [sign-in](https://protocol.dfos.com/integrations#sign-in) loopback flow: the CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before anything is stored.
 
 ```bash
 # sign in as the resolved identity
@@ -1242,7 +1242,7 @@ dfos login alice --authorize-url https://app.example.com
 
 **Where the authorize endpoint comes from.** The subject's identity chain is fetched from the configured peer as an operation log, re-verified locally, and read for a `DfosAuthorizationServer` service entry — `{id, type, endpoint}`, where `endpoint` is the canonical authorize _origin_. The `/authorize` surface is appended to it, so a base path is kept and extended (`https://x.example/base` → `https://x.example/base/authorize`). **One entry, or none:** zero entries, more than one, an endpoint that is empty or not an absolute `http(s)` URL, and an endpoint that is not a bare origin (it carries a query, a fragment, or userinfo) all name nothing, and the CLI falls back to `--authorize-url`; with no fallback it errors and names both the missing entry and the flag. Ambiguity degrades to the fallback, never to a choice.
 
-**Choosing what to ask for.** Without `--host`, the scope is whatever you typed — an opaque string handed to the authorize host verbatim. `--host` names the API the credential is for, by registered name or by host, and reads that API's OpenAPI document for the actions it advertises: the catalog on its request-proof scheme (action token → description, per [API-AUTH](https://protocol.dfos.com/api-auth)) unioned with every token an operation requires. A registered name resolves against the local registry and reads the cached document; a bare host runs the same discovery `api add` runs — the well-known probe, then `/openapi.json` — and offers to keep what it found under a local name.
+**Choosing what to ask for.** Without `--host`, the scope is whatever you typed — an opaque string handed to the authorize host verbatim. `--host` names the API the credential is for, by registered name or by host, and reads that API's OpenAPI document for the actions it advertises: the catalog on its request-proof scheme (action token → description, per [INTEGRATIONS](https://protocol.dfos.com/integrations#api-authentication)) unioned with every token an operation requires. A registered name resolves against the local registry and reads the cached document; a bare host runs the same discovery `api add` runs — the well-known probe, then `/openapi.json` — and offers to keep what it found under a local name.
 
 The listed actions are then yours to pick from, by number or by token, with enter taking all of them. Three rules bound that ask: an explicit `--scope` is an instruction and is used exactly as typed, `--all-scopes` takes the whole catalog without prompting, and a run with no terminal and no explicit scope **errors and prints the choices** rather than choosing for you — a scope picked on your behalf is a grant you never made. Tokens stay opaque throughout: they are copied from document to prompt to scope string to credential unchanged, and the descriptions are display text nothing decides from.
 
@@ -1336,7 +1336,7 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 
 ## Calling an API
 
-`dfos api` is a generic client for any host that advertises the [API-AUTH OpenAPI convention](https://protocol.dfos.com/api-auth#advertising-in-openapi). Register the API under a local name, then call its operations by name; the document says which authentication artifact each route needs, and the CLI signs that one. Nothing here is specific to the canonical deployment — a fork or a self-hosted API registers and calls exactly the same way.
+`dfos api` is a generic client for any host that advertises the [OpenAPI convention](https://protocol.dfos.com/integrations#advertising-in-openapi). Register the API under a local name, then call its operations by name; the document says which authentication artifact each route needs, and the CLI signs that one. Nothing here is specific to the canonical deployment — a fork or a self-hosted API registers and calls exactly the same way.
 
 ```bash
 # register by host — the document is discovered
@@ -1363,7 +1363,7 @@ dfos api rm mine
 
 ### Registration is discovery
 
-A bare host — or a scheme and host with no path — is discovered: the host's `/.well-known/dfos-relay` is read for an `openapi` member (absolute or root-relative, per [WEB-RELAY.md](https://protocol.dfos.com/web-relay)), and `/openapi.json` is assumed when it advertises none. A URL carrying a path names the document outright. `--file` reads one from disk and makes no request at all.
+A bare host — or a scheme and host with no path — is discovered: the host's `/.well-known/dfos-relay` is read for an `openapi` member (absolute or root-relative, per [RELAY.md](https://protocol.dfos.com/relay#the-well-known-document)), and `/openapi.json` is assumed when it advertises none. A URL carrying a path names the document outright. `--file` reads one from disk and makes no request at all.
 
 The document is fetched, parsed, and validated at registration, so a source that is not an OpenAPI 3.x document fails there rather than on some later call. A document larger than 16 MiB is refused by size, named as its size. `api list` reports which of the three routes found it (`well-known`, `conventional`, `direct`, `file`).
 

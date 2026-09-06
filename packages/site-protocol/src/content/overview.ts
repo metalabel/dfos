@@ -24,7 +24,7 @@ The protocol commits to content via an unsalted \`dag-cbor\` → SHA-256 CID —
 
 ## What the Protocol Is
 
-The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit content, and produce proofs. It defines [self-certifying identifiers](https://protocol.dfos.com/did-method) (\`did:dfos\`) derived from genesis operations, [content-addressed commitments](https://protocol.dfos.com/content-model) via CID, and a [relay network](https://protocol.dfos.com/web-relay) of verifying HTTP endpoints that distribute proofs without trusting each other.
+The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit content, and produce proofs. It defines [self-certifying identifiers](https://protocol.dfos.com/did-method) (\`did:dfos\`) derived from genesis operations, [content-addressed commitments](https://protocol.dfos.com/content-model) via CID, and a [relay network](https://protocol.dfos.com/relay) of verifying HTTP endpoints that each re-verify what they distribute. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.
 
 Identity chains carry an optional discovery vocabulary — controller-signed \`services\` that say where to reach an identity and what stable content it anchors, projected into verified identity state alongside its keys. Witnesses can attach a standalone countersignature to any CID-addressable operation, carrying an optional open-namespace \`relation\` tag (\`endorses\`, \`coauthors\`, \`witnessed\`) that names the nature of the attestation.
 
@@ -55,7 +55,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 ## Status
 
-The protocol's v1 surface is **feature-complete and frozen** — the core wire (chain mechanics, DAG-CBOR encoding, identifier derivation, validity bounds) is settled and will not change in shape, while independent implementation experience accrues; the reference packages remain on their own \`0.x\` release line. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production. The specification has not been submitted to any formal standards body.
+The corpus is one version, released with the reference packages: the specification describes what is implemented, and the executable suites in [\`packages/protocol-verify\`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify) and [\`packages/relay-conformance\`](https://github.com/metalabel/dfos/tree/main/packages/relay-conformance) are its conformance definition. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production. The specification has not been submitted to any formal standards body.
 
 Discussion happens in the [DFOS](https://nce.dfos.com) space. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;

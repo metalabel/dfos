@@ -8,7 +8,7 @@ package relay
 // /proof/v1/identities/{did}. Byte/semantically identical to the TS reference in
 // packages/dfos-web-relay/src/did-document.ts — keep the two in lockstep.
 //
-// The mapping is NORMATIVELY specified and FROZEN in specs/DID-METHOD.md §4:
+// The mapping is NORMATIVELY specified in specs/DID-METHOD.md §4:
 //   - §4.1 document structure + @context
 //   - §4.2 verification-method mapping (authKeys→authentication,
 //     assertKeys→assertionMethod, controllerKeys→capabilityInvocation),

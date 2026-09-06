@@ -7,7 +7,7 @@
 export const CLI_PLATFORMS = 'Linux, macOS, and Windows (x64 and arm64)';
 
 export interface SpecEntry {
-  /** Route slug with leading slash: '/siwd'. */
+  /** Route slug with leading slash: '/relay'. */
   slug: string;
   /** Page title and tile title. */
   title: string;
@@ -25,7 +25,7 @@ export interface SpecEntry {
    */
   source?: string;
   /** Landing-grid tier; null = not on the grid. */
-  grid: 'core' | 'auth' | 'reference' | 'companions' | 'use' | null;
+  grid: 'core' | 'reference' | 'companions' | 'use' | null;
   /** Per-tile status chip on the landing grid; absent = no chip. */
   chip?: string;
   /** llms.txt grouping. */
@@ -45,7 +45,6 @@ export const specs: SpecEntry[] = [
       'Complete DFOS protocol specification — Ed25519 signed chain primitives, services, credentials, countersignatures, identity and content verification, with worked examples and test vectors.',
     source: '../../specs/PROTOCOL.md',
     grid: 'core',
-    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { shortLabel: 'Spec', tier: 'primary' },
   },
@@ -59,7 +58,6 @@ export const specs: SpecEntry[] = [
       'W3C DID Method specification for did:dfos — self-certifying, transport-agnostic decentralized identifiers built on Ed25519 identity chains.',
     source: '../../specs/DID-METHOD.md',
     grid: 'core',
-    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { label: 'DID Method', tier: 'secondary' },
   },
@@ -72,20 +70,6 @@ export const specs: SpecEntry[] = [
       'DFOS Credentials — UCAN-style authorization tokens for delegated content access, revocation, and standing authorization.',
     source: '../../specs/CREDENTIALS.md',
     grid: 'core',
-    chip: 'frozen v1',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/relay-contract',
-    title: 'Relay Contract',
-    tile: 'The frozen relay wire surface &mdash; routes, shapes, and the pagination envelope',
-    llms: 'The frozen relay wire surface — the /proof/v1 and /revocations/v1 routes, their request/response shapes, and the pagination envelope a client may hardcode against any conformant relay',
-    metaDescription:
-      'DFOS Relay Contract — the frozen wire surface of a DFOS relay: proof-plane and revocation-status routes, request/response shapes, and the pagination envelope.',
-    source: '../../specs/RELAY-CONTRACT.md',
-    grid: 'core',
-    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
   },
@@ -98,74 +82,32 @@ export const specs: SpecEntry[] = [
       'DFOS Content Model — standard JSON Schema content types (post, profile) committed via content-addressed CIDs.',
     source: '../../specs/CONTENT-MODEL.md',
     grid: 'core',
-    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
   },
   {
-    slug: '/siwd',
-    title: 'Sign In With DFOS',
-    tile: 'Identity verification, consent scopes, and credential issuance for third-party applications',
-    llms: 'Cryptographic identity verification for third-party applications — one challenge artifact, two couriers (hosted web redirect, sign-request mailbox), verification with no DFOS server in the loop',
+    slug: '/relay',
+    title: 'Relay',
+    tile: 'The relay HTTP surface &mdash; read and write contracts, ingestion, profiles, content plane',
+    llms: 'The relay HTTP surface — the read contract and its routes, the write contract and its ingestion rules, the index / signing-mailbox / peering profiles, and the content plane',
     metaDescription:
-      'Sign In With DFOS (SIWD) — identity verification, consent scopes, and credential issuance for third-party applications on DFOS identities.',
-    source: '../../specs/SIWD.md',
-    grid: 'auth',
-    chip: '0.x',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/api-auth',
-    title: 'API Authentication',
-    tile: 'Proof-of-possession request signing for credential-gated HTTP APIs',
-    llms: 'Proof-of-possession authentication for HTTP APIs — the request-proof and identity-proof envelopes and the api:<host> credential resource',
-    metaDescription:
-      'DFOS API authentication — request-proof and identity-proof envelopes, proof-of-possession verification, and the api:<host> credential resource.',
-    source: '../../specs/API-AUTH.md',
-    grid: 'auth',
-    chip: '0.x',
-    llmsSection: 'specifications',
-    nav: { label: 'API Auth', tier: 'secondary' },
-  },
-  {
-    slug: '/origin-binding',
-    title: 'Origin Binding',
-    tile: 'Bidirectional identity&harr;domain binding &mdash; chain-signed claim, domain attest-back',
-    llms: 'Bidirectional binding between a DFOS identity and a web domain — the DfosOrigin service entry, HTTPS/DNS attest-back, and the bound/stale/broken verification verdicts',
-    metaDescription:
-      'DFOS Origin Binding — bidirectional identity-to-domain binding via a chain-signed DfosOrigin service entry and HTTPS well-known or DNS TXT attestation, with three-state verification.',
-    source: '../../specs/ORIGIN-BINDING.md',
-    grid: 'auth',
-    chip: '0.x',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/signing',
-    title: 'Signing',
-    tile: 'Sign-request envelopes, signer obligations, and relay-hosted mailboxes',
-    llms: 'Sign-request envelopes, signer obligations, and relay-hosted mailbox transport',
-    metaDescription:
-      'DFOS SIGNING — sign-request envelopes, signer obligations, and relay-hosted mailbox transport.',
-    source: '../../specs/SIGNING.md',
-    grid: 'auth',
-    chip: '0.x',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/web-relay',
-    title: 'Web Relay',
-    tile: 'Verifying HTTP relay with gossip, read-through, and sync peering',
-    llms: 'Verifying HTTP relay for identity chains, content chains, services, countersignatures, and content blobs',
-    metaDescription:
-      'DFOS Web Relay — verifying HTTP relay for identity chains, content chains, services, countersignatures, and content blobs.',
-    source: '../../specs/WEB-RELAY.md',
+      'DFOS Relay — the HTTP wire and ingest rules for a DFOS relay: read and write contracts, capability-gated profiles, peering, and the content plane.',
+    source: '../../specs/RELAY.md',
     grid: 'reference',
-    chip: '0.x',
-    llmsSection: 'implementation',
+    llmsSection: 'specifications',
     nav: { shortLabel: 'Relay', tier: 'primary' },
+  },
+  {
+    slug: '/integrations',
+    title: 'Integrations',
+    tile: 'Sign in, API authentication, origin binding, and key ceremonies',
+    llms: 'Integrating with DFOS — sign in (SIWD), proof-of-possession API authentication, bidirectional origin binding, and the key-possession ceremony surface',
+    metaDescription:
+      'DFOS Integrations — sign in with DFOS, proof-of-possession API request authentication, identity-to-domain origin binding, and key ceremonies.',
+    source: '../../specs/INTEGRATIONS.md',
+    grid: 'reference',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
   },
   {
     slug: '/conformance',

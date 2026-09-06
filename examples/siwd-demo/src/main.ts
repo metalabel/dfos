@@ -69,9 +69,9 @@ const REPO = 'https://github.com/metalabel/dfos/blob/main';
  * README says how the two subpaths this demo uses are meant to be wired.
  */
 const DOCS = {
-  siwd: 'https://protocol.dfos.com/siwd',
-  replayPrevention: 'https://protocol.dfos.com/siwd#replay-prevention',
-  apiAuth: 'https://protocol.dfos.com/api-auth',
+  siwd: 'https://protocol.dfos.com/integrations#sign-in',
+  replayPrevention: 'https://protocol.dfos.com/integrations#replay-prevention',
+  apiAuth: 'https://protocol.dfos.com/integrations#api-authentication',
   credentials: 'https://protocol.dfos.com/credentials',
   clientSiwd: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientsiwd`,
   clientApiAuth: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientapi-auth`,

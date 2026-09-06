@@ -38,15 +38,14 @@ import { signKeyProof, verifyKeyProof } from '@metalabel/dfos-protocol/key-proof
 
 ## Specifications
 
-| Document                                         | Description                                                                       |
-| ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, key possession, verification, test vectors    |
-| [DID-METHOD.md](../../specs/DID-METHOD.md)       | W3C DID method specification for `did:dfos`                                       |
-| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile) and verifiable attribution               |
-| [CREDENTIALS.md](../../specs/CREDENTIALS.md)     | UCAN-style authorization credentials for the DFOS protocol                        |
-| [SIGNING.md](../../specs/SIGNING.md)             | A transport-agnostic way for one party to ask another to produce a DFOS signature |
-| [SIWD.md](../../specs/SIWD.md)                   | Sign In With DFOS — cryptographic identity verification for third-party apps      |
-| [API-AUTH.md](../../specs/API-AUTH.md)           | Proof-of-possession authentication for credential-gated HTTP APIs                 |
+| Document                                         | Description                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, key possession, verification, test vectors  |
+| [DID-METHOD.md](../../specs/DID-METHOD.md)       | W3C DID method specification for `did:dfos`                                     |
+| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile) and verifiable attribution             |
+| [CREDENTIALS.md](../../specs/CREDENTIALS.md)     | UCAN-style authorization credentials for the DFOS protocol                      |
+| [RELAY.md](../../specs/RELAY.md)                 | The relay HTTP surface, including the sign-request envelope and signing mailbox |
+| [INTEGRATIONS.md](../../specs/INTEGRATIONS.md)   | Sign in, API authentication, origin binding, and key ceremonies                 |
 
 Release history lives at https://github.com/metalabel/dfos/releases.
 
