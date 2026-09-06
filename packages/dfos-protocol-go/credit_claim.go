@@ -303,9 +303,11 @@ func verifyCreditClaimCore(jwsToken string, resolveKey KeyResolver, expectedCont
 		return nil, fmt.Errorf("%w: credit claim kid DID does not match payload did", ErrCreditClaimInvalid)
 	}
 
-	// verify signature. A resolver failure is "could not check" — see the
-	// KeyResolver note at the top of this file for why it cannot be narrowed.
-	publicKey, err := resolveKey(kid)
+	// Verify the signature. A credit claim is the one carve-out from the time
+	// basis — it runs no temporal check, so it passes the empty basis and the
+	// resolver it is handed MUST answer has-ever-proved (see the KeyResolver note
+	// at the top of this file). A resolver failure is "could not check".
+	publicKey, err := resolveKey(kid, "")
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to resolve credit claim key: %w", ErrCreditClaimUnverifiable, err)
 	}

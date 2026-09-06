@@ -350,15 +350,31 @@ export const signIdentityOperation = async (input: {
  * Verify a log of JWS identity operations and derive the identity
  *
  * Walks the chain from genesis, verifying signatures and chain integrity, and
- * folds the possession proofs alongside. Returns the final verified identity
- * state: EFFECTIVE key arrays, with the declared arrays and the void memberships
+ * folds the possession proofs alongside. Returns the verified identity state:
+ * EFFECTIVE key arrays, with the declared arrays and the void memberships
  * beside them.
+ *
+ * THE BASIS SELECTS WHICH STATE COMES BACK, never how much of the log is
+ * verified. With `asOf` set, the whole log is walked and validated exactly as
+ * without it, and the state returned is the one the last operation dated at or
+ * before the basis folds to — the identity's state as of that instant
+ * (PROTOCOL, Time basis). The comparison is byte-wise on the `createdAt`
+ * strings, per PROTOCOL's Comparison basis. A basis earlier than genesis has no
+ * state to name and throws, and so does an empty basis.
  */
 export const verifyIdentityChain = async (input: {
   didPrefix: string;
   log: string[];
+  /**
+   * Basis time, in the `createdAt` grammar. Omitted = the chain head, which is
+   * the state as of now.
+   */
+  asOf?: string;
 }): Promise<VerifiedIdentity> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
+  // An empty basis names no instant. Walking it would report "no state as of"
+  // for every chain, which reads as a verdict about the identity.
+  if (input.asOf === '') throw new Error('basis must not be empty');
 
   const state = {
     did: undefined as string | undefined,
@@ -375,6 +391,11 @@ export const verifyIdentityChain = async (input: {
     services: [] as ServiceEntry[],
     seenKeys: new Map<string, MultikeyPublicKey>(),
   };
+
+  // The state as of the basis, captured on the way through. Operations carry
+  // strictly increasing `createdAt`, so the last capture is the answer and no
+  // second pass is needed.
+  let asOfState: VerifiedIdentity | undefined;
 
   for (const [idx, jwsToken] of input.log.entries()) {
     // decode JWS
@@ -582,9 +603,29 @@ export const verifyIdentityChain = async (input: {
         state.isDeleted = false;
         break;
     }
+
+    if (input.asOf !== undefined && op.createdAt <= input.asOf) {
+      asOfState = {
+        did,
+        isDeleted: state.isDeleted,
+        authKeys: state.effective.authKeys,
+        assertKeys: state.effective.assertKeys,
+        controllerKeys: state.effective.controllerKeys,
+        services: state.services,
+        declared: state.declared,
+        voidKeys: state.voidKeys,
+        provedKeys: state.provedKeys,
+        seenKeys: [...state.seenKeys.values()],
+      };
+    }
   }
 
   if (!state.did) throw new Error('did is not set');
+
+  if (input.asOf !== undefined) {
+    if (!asOfState) throw new Error(`identity has no state as of ${input.asOf}`);
+    return asOfState;
+  }
 
   return {
     did: state.did,

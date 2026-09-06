@@ -58,7 +58,10 @@ const createIdentity = async () => {
     authKeys: [controller.key],
     assertKeys: [controller.key],
     controllerKeys: [controller.key],
-    createdAt: ts(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: ts(-60),
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation: createOp,

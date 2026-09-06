@@ -13,7 +13,7 @@ import (
 // Acceptance is a freshness decision; verification of committed history is a
 // validity decision. A timeless revocation check conflates the two: it makes
 // revoking a credential today retroactively invalidate every operation it ever
-// authorized, contradicting CREDENTIALS.md "Revocation Scope" ("does not
+// authorized, contradicting CREDENTIALS.md "Revocation against the basis" ("does not
 // retroactively invalidate operations already committed to the content chain").
 //
 // These tests pin the fold side: the verifier calls the RevocationChecker with
@@ -90,7 +90,7 @@ func buildAsOfFixtureAt(t *testing.T, depth int, genesisOffset, opOffset time.Du
 	creatorKid := creatorDID + "#" + creatorKeyID
 	middleKid := middleDID + "#" + middleKeyID
 	delegateKid := delegateDID + "#" + delegateKeyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		switch k {
 		case creatorKid:
 			return creatorPub, nil

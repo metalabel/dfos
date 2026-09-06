@@ -55,7 +55,7 @@ func apiAuthVectorKey() ed25519.PrivateKey {
 
 func apiAuthVectorResolver(privateKey ed25519.PrivateKey) KeyResolver {
 	public := privateKey.Public().(ed25519.PublicKey)
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		if kid != apiAuthVectorKid {
 			return nil, errors.New("unknown kid")
 		}
@@ -359,7 +359,7 @@ func TestVerifyRequestProofEnvelopeGates(t *testing.T) {
 
 	// An unresolvable presenter is UNVERIFIABLE, never invalid — a transient
 	// resolution failure is the server's condition, not the caller's.
-	unresolvable := func(string) (ed25519.PublicKey, error) { return nil, errors.New("relays unreachable") }
+	unresolvable := func(string, string) (ed25519.PublicKey, error) { return nil, errors.New("relays unreachable") }
 	if _, err := VerifyRequestProof(apiAuthVectorJWS, ok, unresolvable, fresh); !errors.Is(err, ErrRequestProofUnverifiable) {
 		t.Errorf("unresolvable presenter: got %v", err)
 	}
@@ -617,7 +617,7 @@ func TestVerifyIdentityProofAdversarialVectors(t *testing.T) {
 
 	// An unresolvable presenter is UNVERIFIABLE, never invalid — and there is no
 	// 403 tier here to confuse it with.
-	unresolvable := func(string) (ed25519.PublicKey, error) { return nil, errors.New("relays unreachable") }
+	unresolvable := func(string, string) (ed25519.PublicKey, error) { return nil, errors.New("relays unreachable") }
 	if _, err := VerifyIdentityProof(apiAuthIdentityJWS, ok, unresolvable, fresh); !errors.Is(err, ErrIdentityProofUnverifiable) {
 		t.Errorf("unresolvable presenter: got %v", err)
 	}
@@ -719,7 +719,7 @@ func TestVerifyIdentityProofReportsConfigBeforeTokenSize(t *testing.T) {
 		Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
 		WindowSeconds: Int64Ptr(240), SkewSeconds: Int64Ptr(61),
 	}
-	unresolvable := func(string) (ed25519.PublicKey, error) { return nil, errors.New("unused") }
+	unresolvable := func(string, string) (ed25519.PublicKey, error) { return nil, errors.New("unused") }
 	_, err := VerifyIdentityProof(oversized, expect, unresolvable, time.Unix(apiAuthVectorIat, 0))
 	if !errors.Is(err, ErrIdentityProofConfig) {
 		t.Fatalf("bad config + oversized token: got %v, want the config verdict", err)

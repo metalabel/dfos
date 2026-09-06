@@ -141,41 +141,27 @@ const opMeta = (jws: string): { cid: string; createdAt: string } => {
 };
 
 // -----------------------------------------------------------------------------
-// key extraction (mirrors the relay's createKeyResolver / historical resolver,
-// but sourced from a cached, verified log instead of a RelayStore)
+// key extraction (mirrors the relay's as-of resolver, but sourced from a cached,
+// verified log instead of a RelayStore)
 // -----------------------------------------------------------------------------
 
 /**
- * HAS-EVER-PROVED, as the chain walk already computed it.
+ * HAS-EVER-PROVED, as the chain walk already computed it. One surface takes it:
+ * a credit claim, which runs no temporal check and so resolves the claimant's
+ * key against every key that chain has ever held (PROTOCOL, Time basis). Every
+ * other surface has a basis and resolves against the effective state as of it.
  *
- * WHAT THIS REPLACED, AND WHY IT HAD TO GO. Both helpers below used to re-walk
- * the raw log and take every key any `create` or `update` DECLARED. That rule is
- * now wrong in both directions at once:
- *
- *  - A DECLARATION IS NOT A DEMONSTRATION. Anyone can write anyone's public key
- *    into their own chain; only a possession proof admits it. Resolving against
- *    declarations would let a stranger have clients verify signatures against a
- *    key they do not hold, simply by naming it.
- *  - A PROVED KEY STAYS RESOLVABLE FOREVER. Credential validity persists across
- *    rotations — revocation, not rotation, is the invalidation mechanism — so
- *    dropping to current effective state alone would silently un-verify every
- *    artifact signed before a rotation.
- *
- * `verifyIdentityChain` folds exactly that set onto `provedKeys`. Re-deriving it
- * here meant maintaining a second answer to the same question under a rule that
- * quietly disagreed with the chain's, which is the drift this package exists to
- * avoid — the relay's twin of this code went the same way.
+ * HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. Anyone can write anyone's public key
+ * into their own chain; only a possession proof admits it. Resolving against
+ * declarations would let a stranger have clients verify signatures against a key
+ * they do not hold, simply by naming it. `verifyIdentityChain` folds exactly the
+ * proved set onto `provedKeys`, so nothing here re-walks the raw log.
  *
  * An absent `provedKeys` reads as current effective state: exactly right for any
  * chain with no void memberships, and the only reading available for a cached
  * state that predates the member.
  */
-const provedKeys = (state: VerifiedIdentity): MultikeyPublicKey[] => {
-  const proved = state.provedKeys ?? state;
-  return [...proved.authKeys, ...proved.assertKeys, ...proved.controllerKeys];
-};
-
-/** The identity as long-lived artifacts must see it: every key ever proved. */
+/** The identity as a credit claim must see it: every key ever proved. */
 const historicalIdentity = (state: VerifiedIdentity): VerifiedIdentity => ({
   ...state,
   ...(state.provedKeys ?? {
@@ -186,7 +172,9 @@ const historicalIdentity = (state: VerifiedIdentity): VerifiedIdentity => ({
 });
 
 const keyBytesFor = (state: VerifiedIdentity, keyId: string): Uint8Array | null => {
-  const key = provedKeys(state).find((k) => k.id === keyId);
+  const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
+    (k) => k.id === keyId,
+  );
   return key ? decodeMultikey(key.publicKeyMultibase).keyBytes : null;
 };
 
@@ -340,8 +328,53 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     };
   };
 
+  /**
+   * The identity's state AS OF `basis` (PROTOCOL, Time basis). Head state when
+   * the chain's last operation is dated at or before the basis, or when there is
+   * no basis at all; otherwise the log is re-verified to fold the prefix the
+   * basis names. Deletion reads head state either way, because a deleted issuer
+   * is invalid retroactively.
+   */
+  const stateAsOf = async (
+    resolution: { state: VerifiedIdentity; log: string[] },
+    basis?: string,
+  ): Promise<VerifiedIdentity> => {
+    const { state, log } = resolution;
+    const last = log[log.length - 1];
+    if (basis === undefined || last === undefined || opMeta(last).createdAt <= basis) return state;
+    const asOf = await verifyIdentityChain({ didPrefix: DID_PREFIX, log, asOf: basis });
+    return { ...asOf, isDeleted: state.isDeleted };
+  };
+
   // the bound protocol-lib callbacks — the trunk product
-  const resolveIdentity = async (did: string): Promise<VerifiedIdentity | undefined> => {
+  const resolveIdentity = async (
+    did: string,
+    basis?: string,
+  ): Promise<VerifiedIdentity | undefined> => {
+    try {
+      return await stateAsOf(await getIdentityChain(did), basis);
+    } catch {
+      return undefined;
+    }
+  };
+
+  const resolveKey = async (kid: string, basis?: string): Promise<Uint8Array> => {
+    const hashIdx = kid.indexOf('#');
+    if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
+    const did = kid.substring(0, hashIdx);
+    const keyId = kid.substring(hashIdx + 1);
+    const state = await stateAsOf(await getIdentityChain(did), basis);
+    const bytes = keyBytesFor(state, keyId);
+    if (!bytes) throw new Error(`unknown key ${keyId} on identity ${did}`);
+    return bytes;
+  };
+
+  /**
+   * The claimant's identity with every key it has ever proved — the credit-claim
+   * carve-out. A claim runs no temporal check, so it has no basis and binds a
+   * chain rather than a moment (PROTOCOL, Time basis).
+   */
+  const resolveClaimantIdentity = async (did: string): Promise<VerifiedIdentity | undefined> => {
     try {
       const { state } = await getIdentityChain(did);
       return historicalIdentity(state);
@@ -350,20 +383,10 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     }
   };
 
-  const resolveKey = async (kid: string): Promise<Uint8Array> => {
-    const hashIdx = kid.indexOf('#');
-    if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
-    const did = kid.substring(0, hashIdx);
-    const keyId = kid.substring(hashIdx + 1);
-    const { state } = await getIdentityChain(did);
-    const bytes = keyBytesFor(state, keyId);
-    if (!bytes) throw new Error(`unknown key ${keyId} on identity ${did}`);
-    return bytes;
-  };
-
   const callbacks = (): Callbacks => ({
     resolveKey,
     resolveIdentity,
+    resolveClaimantIdentity,
     isRevoked: deps.isRevoked,
   });
 

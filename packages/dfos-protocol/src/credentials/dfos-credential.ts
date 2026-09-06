@@ -46,6 +46,25 @@ export interface VerifiedDFOSCredential {
   signerKeyId: string;
 }
 
+/**
+ * The identity a resolver answers with, plus the one fact about that answer only
+ * the resolver knows: whether it is FINAL for the basis it was asked about.
+ *
+ * A resolver whose copy of the chain runs past the basis answers determinately,
+ * and a key missing from that state is a verdict. A resolver answering from a
+ * copy that ends at or before the basis does not: an operation dated at or
+ * before the basis can still arrive and add the key, so the miss is a dependency
+ * miss the caller retries. Absent is the retryable reading, which is the safe
+ * default: only a resolver that can say its answer is final gets a verdict.
+ */
+export type ResolvedIdentity = VerifiedIdentity & {
+  /**
+   * True when no operation dated at or before the basis can still arrive and
+   * change this key state.
+   */
+  basisDeterminate?: boolean;
+};
+
 export interface VerifiedDelegationChain {
   /** The leaf credential */
   credential: VerifiedDFOSCredential;
@@ -59,8 +78,8 @@ export interface VerifiedDelegationChain {
  * Check whether a credential (leaf or any parent) has been revoked.
  *
  * `asOfUnix` selects WHICH question is being asked, and the two are different
- * decisions: **acceptance is a freshness decision; verification of committed
- * history is a validity decision.**
+ * decisions: **acceptance is a freshness decision; verification at a basis is a
+ * validity decision.**
  *
  * - **Omitted, or `<= 0` (timeless)** — "is this credential revoked as far as you
  *   know right now?". The freshness question. Used by acceptance gates: relay
@@ -71,10 +90,10 @@ export interface VerifiedDelegationChain {
  *   1970) therefore gets the stricter answer in both languages.
  * - **Positive (as-of)** — "was this credential already revoked at `asOfUnix`?".
  *   The validity question. Return true only if a revocation exists AND its
- *   signed `createdAt` is ≤ `asOfUnix`. Used when verifying operations already
- *   committed to a chain, where `asOfUnix` is the operation's own `createdAt`.
- *   A revocation signed AFTER an operation does not invalidate it — see
- *   CREDENTIALS.md "Revocation Scope".
+ *   signed `createdAt` is ≤ `asOfUnix`. Used when verifying an artifact against
+ *   a basis, where `asOfUnix` is the basis in integer Unix seconds. A revocation
+ *   signed AFTER the basis does not invalidate the artifact — see CREDENTIALS.md
+ *   "Revocation against the basis".
  *
  * An implementation that ignores `asOfUnix` degrades to the timeless answer,
  * which is always the stricter (safe) direction — it can only reject history
@@ -93,10 +112,22 @@ export type RevocationChecker = (
 /**
  * Resolve a public key from a VerifiedIdentity by kid (DID URL)
  *
- * Searches across all key roles (auth, assert, controller). Returns the raw
- * Ed25519 public key bytes.
+ * Searches the identity's EFFECTIVE key arrays across all three roles (auth,
+ * assert, controller) and returns the raw Ed25519 public key bytes.
+ *
+ * THE CALLER OWNS THE BASIS, THIS FUNCTION OWNS THE SEARCH. The single time
+ * basis is satisfied by handing this the identity's state AS OF the basis, so
+ * `provedKeys` — the has-ever-proved union — is never consulted here: a key
+ * effective at the basis is in these arrays, and a key rotated out before it is
+ * not. Widening the search to has-ever would re-open forward issuance by a key
+ * the identity has already retired.
  */
-const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8Array => {
+const resolveKeyFromIdentity = (
+  identity: VerifiedIdentity,
+  kid: string,
+  /** True when the resolver's answer is final for the basis it was asked about. */
+  determinate: boolean,
+): Uint8Array => {
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new CredentialVerificationError('kid must be a DID URL');
   const keyId = kid.substring(hashIdx + 1);
@@ -104,16 +135,35 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
   const allKeys = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
   const key = allKeys.find((k) => k.id === keyId);
   if (!key) {
-    // MARKED: the caller's resolver produced this identity but not this key, so
-    // the answer can change once a fuller chain arrives. Not a verdict on the
-    // credential — see `markDependencyMissing`.
-    throw markDependencyMissing(
-      new CredentialVerificationError(`key ${keyId} not found on identity ${identity.did}`),
+    // ONE TEXT ACROSS THE TWINS for one condition: the Go library returns its
+    // resolver's miss bare, and both relays' resolvers word it this way.
+    const miss = new CredentialVerificationError(
+      `unknown key ${keyId} on identity ${identity.did}`,
     );
+    // A determinate answer makes the miss a verdict. An indeterminate one is a
+    // retryable dependency miss: a fuller chain can still change it, and a
+    // verdict deletes the operation that carries the credential — see
+    // `markDependencyMissing`.
+    throw determinate ? miss : markDependencyMissing(miss);
   }
 
   const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
   return keyBytes;
+};
+
+/**
+ * The basis in integer Unix seconds — the form `exp` and revocation compare
+ * against.
+ *
+ * TRUNCATES, never rounds (PROTOCOL, Time basis). Rounding up would push an
+ * operation's basis into the second after the one it was signed in, and two
+ * implementations disagreeing by one second on the `exp` boundary fork
+ * authorization.
+ */
+const basisUnixSeconds = (basis: string): number => {
+  const ms = Date.parse(basis);
+  if (Number.isNaN(ms)) throw new CredentialVerificationError(`invalid basis time: ${basis}`);
+  return Math.floor(ms / 1000);
 };
 
 // -----------------------------------------------------------------------------
@@ -183,15 +233,37 @@ export const createDFOSCredential = async (options: {
 /**
  * Verify a DFOS credential — signature, schema, expiry, CID integrity
  *
+ * Every check runs against ONE basis time (PROTOCOL, Time basis): the issuer's
+ * key must be effective in the identity's state as of the basis, and `exp` must
+ * be strictly greater than the basis in integer Unix seconds. `iat` is
+ * informational and gates nothing.
+ *
  * Does NOT verify the delegation chain. Use `verifyDelegationChain` for full
  * chain verification including attenuation enforcement.
  */
 export const verifyDFOSCredential = async (
   jwsToken: string,
   options: {
-    resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
-    /** Current time in seconds (defaults to Date.now() / 1000) */
-    now?: number;
+    /**
+     * Resolve a DID to its verified identity state AS OF `basis`. Called with
+     * the basis this verification runs at, or with none when the presentation is
+     * ephemeral and the answer is head state. A resolver that knows its answer
+     * is final for the basis says so on the result (`ResolvedIdentity`).
+     */
+    resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
+    /**
+     * The basis time, in the `createdAt` grammar — the operation's own
+     * `createdAt` for a credential carried inline in a committed operation.
+     * Omitted for an ephemeral presentation, where the basis is now.
+     */
+    basis?: string;
+    /**
+     * The ephemeral clock in integer Unix seconds, for a caller that carries its
+     * own. It reaches `exp` and nothing else: key resolution on the ephemeral
+     * path is head state, which is what "the basis is now" means. Ignored when
+     * `basis` is present, and defaults to `floor(Date.now() / 1000)`.
+     */
+    nowUnix?: number;
   },
 ): Promise<VerifiedDFOSCredential> => {
   // bound credential size — the credential's analog of MAX_OPERATION_SIZE. The
@@ -231,8 +303,8 @@ export const verifyDFOSCredential = async (
     throw new CredentialVerificationError('credential kid DID does not match iss');
   }
 
-  // resolve issuer identity and find signing key
-  const identity = await options.resolveIdentity(payload.iss);
+  // resolve the issuer identity as of the basis and find the signing key
+  const identity = await options.resolveIdentity(payload.iss, options.basis);
   if (!identity) {
     // MARKED: the caller's resolver does not hold the issuer's chain. A relay
     // keeps such an operation pending; the issuer may still be syncing.
@@ -240,11 +312,15 @@ export const verifyDFOSCredential = async (
       new CredentialVerificationError(`issuer identity not found: ${payload.iss}`),
     );
   }
+  // Deletion is the one credential rule that does not run against the basis: a
+  // deleted issuer authorizes nothing, retroactively (CREDENTIALS, Deleted
+  // issuers). The resolver reports head deletion state whatever basis it was
+  // asked for.
   if (identity.isDeleted) {
     throw new CredentialVerificationError(`issuer identity is deleted: ${payload.iss}`);
   }
 
-  const publicKey = resolveKeyFromIdentity(identity, kid);
+  const publicKey = resolveKeyFromIdentity(identity, kid, identity.basisDeterminate === true);
 
   // verify JWS signature
   try {
@@ -263,12 +339,14 @@ export const verifyDFOSCredential = async (
     throw new CredentialVerificationError('credential cid mismatch');
   }
 
-  // temporal validity
-  const now = options.now ?? Math.floor(Date.now() / 1000);
-  if (payload.iat > now) {
-    throw new CredentialVerificationError('credential not yet valid (iat is in the future)');
-  }
-  if (payload.exp <= now) {
+  // Temporal validity against the one basis. `iat` is informational: a
+  // credential dated after the basis is not a rejection, because the basis, not
+  // the issuer's clock, decides when authority applies.
+  const basisSeconds =
+    options.basis !== undefined
+      ? basisUnixSeconds(options.basis)
+      : (options.nowUnix ?? Math.floor(Date.now() / 1000));
+  if (payload.exp <= basisSeconds) {
     throw new CredentialVerificationError('credential expired');
   }
 
@@ -299,28 +377,35 @@ export const verifyDFOSCredential = async (
  *
  * The chain terminates when a credential has `prf: []` (root credential). The
  * root credential's `iss` must equal `rootDID`.
+ *
+ * ONE BASIS FOR THE WHOLE WALK. Every hop — each parent's signing key, each
+ * `exp`, each revocation — resolves against the same basis the leaf did, so a
+ * chain either held at that instant or it did not.
  */
 export const verifyDelegationChain = async (
   credential: VerifiedDFOSCredential,
   options: {
-    resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+    /** Resolve a DID to its verified identity state as of `basis`. */
+    resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
     /** The expected root authority DID (e.g., content chain creator) */
     rootDID: string;
-    /** Current time in seconds (defaults to Date.now() / 1000) */
-    now?: number;
     /** Check if a credential has been revoked (checked at every level of the chain) */
     isRevoked?: RevocationChecker;
     /**
-     * As-of basis for the revocation check, unix seconds. Kept SEPARATE from
-     * `now` (the expiry basis) on purpose: expiry and revocation are two
-     * different decisions, and a caller evaluating expiry against a deterministic
-     * basis does not automatically want history-relative revocation. Omitted =
-     * timeless revocation (current knowledge). See `RevocationChecker`.
+     * The basis time, in the `createdAt` grammar. Omitted for an ephemeral
+     * presentation: `exp` runs against the wall clock and revocation is asked
+     * timelessly, which is the stricter direction (see `RevocationChecker`).
      */
-    asOfUnix?: number;
+    basis?: string;
+    /**
+     * The ephemeral clock in integer Unix seconds, threaded to every hop's `exp`
+     * and nothing else. Ignored when `basis` is present.
+     */
+    nowUnix?: number;
   },
 ): Promise<VerifiedDelegationChain> => {
   const chain: VerifiedDFOSCredential[] = [credential];
+  const revocationBasis = options.basis !== undefined ? basisUnixSeconds(options.basis) : undefined;
 
   let current = credential;
   const maxDepth = 16;
@@ -351,15 +436,16 @@ export const verifyDelegationChain = async (
     // verify the single parent credential
     const parent = await verifyDFOSCredential(current.prf[0]!, {
       resolveIdentity: options.resolveIdentity,
-      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.basis !== undefined ? { basis: options.basis } : {}),
+      ...(options.nowUnix !== undefined ? { nowUnix: options.nowUnix } : {}),
     });
 
-    // check revocation at every level of the chain, on the SAME as-of basis as
-    // the leaf (a parent revoked after the operation was signed must not
-    // retroactively invalidate it either — the whole chain is evaluated at one
-    // point in time). MUST stay in sync with the Go twin (delegation.go).
+    // Revocation at every level of the chain, on the SAME basis as the leaf: a
+    // parent revoked after the basis does not reach back past it, and the whole
+    // chain is evaluated at one instant. MUST stay in sync with the Go twin
+    // (delegation.go).
     if (options.isRevoked) {
-      const revoked = await options.isRevoked(parent.iss, parent.credentialCID, options.asOfUnix);
+      const revoked = await options.isRevoked(parent.iss, parent.credentialCID, revocationBasis);
       if (revoked) {
         throw new CredentialVerificationError('parent credential in delegation chain is revoked');
       }

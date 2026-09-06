@@ -80,32 +80,25 @@ func keyFromState(state dfos.IdentityState, keyID string) (ed25519.PublicKey, er
 	return nil, fmt.Errorf("unknown key %s", keyID)
 }
 
-func signingBundleKey(identity bundledSigningIdentity, kid string, historical bool) (ed25519.PublicKey, error) {
+func signingBundleKey(identity bundledSigningIdentity, kid string) (ed25519.PublicKey, error) {
 	hash := strings.Index(kid, "#")
 	if hash < 0 || kid[:hash] != identity.state.DID {
 		return nil, fmt.Errorf("invalid kid")
 	}
-	keyID := kid[hash+1:]
-	if key, err := keyFromState(identity.state, keyID); err == nil {
-		return key, nil
-	}
-	// Historical resolution is HAS-EVER-PROVED, matching CreateKeyResolver on the
-	// local path: a rotated-out key that possession once admitted still verifies
-	// what it signed, while a key the bundle's chain merely declared never does.
-	// The bundle's state came from dfos.VerifyIdentityChain, so ProvedKeys is the
-	// walk's own union and no log scan is needed.
-	if historical {
-		if key, ok := findKeyInKeyState(provedKeyState(identity.state), keyID); ok {
-			return dfos.DecodeMultikey(key.PublicKeyMultibase)
-		}
-	}
-	return nil, fmt.Errorf("unknown key %s", keyID)
+	return keyFromState(identity.state, kid[hash+1:])
 }
 
-func signingResolvers(store RelayReadStore, bundle map[string]bundledSigningIdentity) (dfos.KeyResolver, dfos.KeyResolver) {
+// signingResolvers returns the ONE resolver every question on the mailbox
+// deposit path takes.
+//
+// A deposit is an ephemeral presentation and carries no committed basis, so the
+// basis is now and the answer is head effective state (PROTOCOL, Time basis):
+// the request's signer, the deposit credential's issuer, and every parent in its
+// delegation chain all resolve there. The carried bundle stands in for a chain
+// this relay does not hold, at its own head.
+func signingResolvers(store RelayReadStore, bundle map[string]bundledSigningIdentity) dfos.KeyResolver {
 	localCurrent := CreateCurrentKeyResolver(store)
-	localHistorical := CreateKeyResolver(store)
-	current := func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
 		hash := strings.Index(kid, "#")
 		if hash < 0 {
 			return nil, fmt.Errorf("invalid kid")
@@ -114,29 +107,14 @@ func signingResolvers(store RelayReadStore, bundle map[string]bundledSigningIden
 			if local.State.IsDeleted {
 				return nil, fmt.Errorf("identity deleted")
 			}
-			return localCurrent(kid)
+			return localCurrent(kid, basis)
 		}
 		identity, ok := bundle[kid[:hash]]
 		if !ok || identity.state.IsDeleted {
 			return nil, fmt.Errorf("identity unavailable")
 		}
-		return signingBundleKey(identity, kid, false)
+		return signingBundleKey(identity, kid)
 	}
-	historical := func(kid string) (ed25519.PublicKey, error) {
-		hash := strings.Index(kid, "#")
-		if hash < 0 {
-			return nil, fmt.Errorf("invalid kid")
-		}
-		if local, _ := store.GetIdentityChain(kid[:hash]); local != nil {
-			return localHistorical(kid)
-		}
-		identity, ok := bundle[kid[:hash]]
-		if !ok || identity.state.IsDeleted {
-			return nil, fmt.Errorf("identity unavailable")
-		}
-		return signingBundleKey(identity, kid, true)
-	}
-	return current, historical
 }
 
 func mailboxDepositCovered(att []dfos.AttEntry, subject string) bool {
@@ -162,7 +140,7 @@ func (r *Relay) verifySigningCredential(token string, request *dfos.VerifiedSign
 	if identity, ok := bundle[issuer]; ok && identity.state.IsDeleted {
 		return fmt.Errorf("issuer deleted")
 	}
-	key, err := resolveKey(header.Kid)
+	key, err := resolveKey(header.Kid, "")
 	if err != nil {
 		return err
 	}
@@ -191,7 +169,7 @@ func (r *Relay) verifySigningCredential(token string, request *dfos.VerifiedSign
 		identity, ok := bundle[did]
 		return ok && identity.state.IsDeleted, nil
 	}
-	if err := dfos.VerifyDelegationChain(token, verified, att, prf, resolveKey, request.Subject, isRevoked, isDeleted, 0); err != nil {
+	if err := dfos.VerifyDelegationChain(token, verified, att, prf, resolveKey, request.Subject, isRevoked, isDeleted, ""); err != nil {
 		return err
 	}
 	if verified.Aud != "*" && verified.Aud != request.DID {
@@ -237,8 +215,8 @@ func (r *Relay) handleSigningDeposit(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid identity chain bundle")
 		return
 	}
-	current, historical := signingResolvers(r.readStore, bundle)
-	verified, err := dfos.VerifySignRequest(body.Request, current, time.Now())
+	resolveKey := signingResolvers(r.readStore, bundle)
+	verified, err := dfos.VerifySignRequest(body.Request, resolveKey, time.Now())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid sign request")
 		return
@@ -251,7 +229,7 @@ func (r *Relay) handleSigningDeposit(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "subject identity not found")
 		return
 	}
-	if err := r.verifySigningCredential(body.Credential, verified, historical, bundle); err != nil {
+	if err := r.verifySigningCredential(body.Credential, verified, resolveKey, bundle); err != nil {
 		writeError(w, http.StatusForbidden, "deposit credential rejected")
 		return
 	}
@@ -366,7 +344,10 @@ func (r *Relay) verifySigningResponse(token string, request *StoredSignRequest) 
 	if !bytes.Equal(payload, request.PayloadBytes) {
 		return fmt.Errorf("response payload mismatch")
 	}
-	key, err := CreateKeyResolver(r.readStore)(header.Kid)
+	// A mailbox response is an ephemeral presentation, so the basis is now: the
+	// subject signs with a key effective at the head. A key the subject rotated
+	// out between depositing the request and answering it does not complete it.
+	key, err := CreateCurrentKeyResolver(r.readStore)(header.Kid, "")
 	if err != nil {
 		return err
 	}

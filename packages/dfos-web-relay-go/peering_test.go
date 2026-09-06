@@ -217,6 +217,34 @@ func newTestKeypair() testKeypair {
 	return testKeypair{mk: mk, keyID: keyID, priv: priv}
 }
 
+// createBackdatedTestIdentity builds a genesis identity op with a caller-chosen
+// createdAt, mirroring SignIdentityCreate's exact payload shape. Every
+// verification with a committed basis resolves the signer in the state as of
+// that basis, so a fixture whose content ops are backdated needs an identity
+// that already existed then.
+func createBackdatedTestIdentity(t *testing.T, createdAt time.Time) testIdentity {
+	t.Helper()
+	key := newTestKeypair()
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{key.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{key.mk},
+		"controllerKeys": []dfos.MultikeyPublicKey{key.mk},
+		"createdAt":      createdAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+	_, cidBytes, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID(identity genesis): %v", err)
+	}
+	header := dfos.JWSHeader{Alg: "EdDSA", Typ: "did:dfos:identity-op", Kid: key.keyID, CID: cidStr}
+	token, err := dfos.CreateJWS(header, payload, key.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS(identity genesis): %v", err)
+	}
+	return testIdentity{token: token, did: dfos.DeriveDID(cidBytes), opCID: cidStr, controller: key, auth: key}
+}
+
 func createTestIdentity(t *testing.T) testIdentity {
 	t.Helper()
 	key := newTestKeypair()

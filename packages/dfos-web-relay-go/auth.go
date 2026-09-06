@@ -59,7 +59,9 @@ const (
 // or a failed store read are things it could NOT check, so they stay bare and
 // surface as 503 — the server's condition, never a judgment on the caller.
 func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	// An identity proof is an ephemeral presentation, so the basis is now: this
+	// resolver answers about head state and ignores the basis it is handed.
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		hash := strings.Index(kid, "#")
 		if hash < 0 {
 			return nil, fmt.Errorf("%w: kid must be a DID URL", dfos.ErrProofPresenterInvalid)
@@ -294,10 +296,13 @@ func originFormTarget(req *http.Request) string {
 // store)): the HTTP read path passes r.readStore (never races on the ingestion
 // tx); ingest-time index maintenance passes the ingestion store so the recompute
 // sees the same within-batch uncommitted writes the op just made.
+// A read-time credential check is an ephemeral presentation, so the basis is now
+// (PROTOCOL, Time basis): keys come from head effective state, exp runs against
+// the wall clock, and revocation is asked timelessly.
 func hasPublicStandingAuth(contentID string, action string, store RelayReadStore) bool {
 	resource := "chain:" + contentID
 	publicCreds, _ := store.GetPublicCredentials(resource)
-	resolveKey := CreateKeyResolver(store)
+	resolveKey := CreateAsOfKeyResolver(store)
 
 	chain, _ := store.GetContentChain(contentID)
 	if chain == nil {
@@ -336,8 +341,10 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 	}
 
 	// readStore: key resolution runs on the HTTP read path, never races on tx.
+	// Every credential here is an ephemeral presentation, so the basis is now: a
+	// key the issuer has rotated out grants nothing at read time.
 	store := r.readStore
-	resolveKey := CreateKeyResolver(store)
+	resolveKey := CreateAsOfKeyResolver(store)
 
 	// 2. check stored public credentials — standing public (aud "*") grants,
 	// skipped for a non-head request.
@@ -394,8 +401,9 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		return fmt.Errorf("credential issuer identity is deleted")
 	}
 
-	// resolve signing key and verify credential signature + structure
-	publicKey, err := resolveKey(kid)
+	// Resolve the signing key at the ephemeral basis — head state — and verify
+	// the credential signature + structure.
+	publicKey, err := resolveKey(kid, "")
 	if err != nil {
 		return fmt.Errorf("failed to resolve credential key: %v", err)
 	}
@@ -450,11 +458,10 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	// asOf = 0 (timeless) at every hop: a read is a live, ephemeral decision that
-	// never enters the replicated log, so it asks the FRESHNESS question — "is this
-	// credential revoked as far as we know right now?" — exactly as before. The
-	// as-of basis belongs to verification of committed history, not to read-path
-	// authorization.
+	// The empty basis at every hop: a read is a live, ephemeral decision that
+	// never enters the replicated log, so it asks the FRESHNESS question — "is
+	// this credential revoked as far as we know right now?" — and resolves keys
+	// at the head.
 	//
 	// Both closures PROPAGATE store errors rather than answering "not revoked" /
 	// "not deleted" — VerifyDelegationChain turns a callback error into a chain
@@ -470,7 +477,7 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		}
 		return idc != nil && idc.State.IsDeleted, nil
 	}
-	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted, 0); err != nil {
+	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted, ""); err != nil {
 		return err
 	}
 

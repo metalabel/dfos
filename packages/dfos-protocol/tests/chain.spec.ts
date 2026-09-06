@@ -1696,7 +1696,7 @@ describe('delegated content chain', () => {
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
-  it('should reject delegated update with future-issued VC (iat > op.createdAt)', async () => {
+  it('accepts a delegated update whose VC was issued after the op (iat > basis)', async () => {
     const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
       await createGenesisChain();
     const delegate = makeIdentity();
@@ -1731,22 +1731,22 @@ describe('delegated content chain', () => {
       kid: delegate.kid,
     });
 
-    await expect(
-      verifyContentChain({
-        log: [createJws, updateJws],
-        resolveKey,
-        enforceAuthorization: true,
-        resolveIdentity,
-      }),
-    ).rejects.toThrow(/authorization verification failed/i);
+    // `iat` is informational and gates nothing: the basis is the operation's own
+    // createdAt, and the credential's `exp` clears it.
+    const result = await verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+    });
+    expect(result.length).toBe(2);
   });
 
-  // --- exact temporal boundaries (see CREDENTIALS.md "Time Basis Conversion
-  //     and Boundaries"): the ingest interval is half-open [iat, exp) over
-  //     now_s = floor(op.createdAt_ms / 1000). exp is closed-rejecting
-  //     (exp == now_s is expired); iat is open-accepting (iat == now_s is
-  //     valid). These four pin the exact byte boundaries the coarse
-  //     future/past tests above do not. ---
+  // --- exact temporal boundaries (see PROTOCOL.md "Time basis"): every check
+  //     runs against now_s = floor(op.createdAt_ms / 1000). `exp` is
+  //     closed-rejecting (exp == now_s is expired) and `iat` is not a gate at
+  //     all. These three pin the exact byte boundaries the coarse tests above
+  //     do not. ---
 
   // helper: build + verify a delegated update at a FIXED createdAt, with a
   // credential whose iat/exp are derived from that op's floor via the supplied
@@ -1823,10 +1823,12 @@ describe('delegated content chain', () => {
     expect(result.length).toBe(2);
   });
 
-  it('iat just past boundary: iat == floor(op.createdAt_s) + 1 MUST be rejected (not yet valid)', async () => {
-    await expect(
-      verifyAtBoundary(boundaryCreatedAt(), (n) => ({ iat: n + 1, exp: n + 3600 })),
-    ).rejects.toThrow(/authorization verification failed/i);
+  it('iat just past boundary: iat == floor(op.createdAt_s) + 1 MUST be accepted', async () => {
+    const result = await verifyAtBoundary(boundaryCreatedAt(), (n) => ({
+      iat: n + 1,
+      exp: n + 3600,
+    }));
+    expect(result.length).toBe(2);
   });
 
   it('should reject delegated update with wrong contentId narrowing', async () => {

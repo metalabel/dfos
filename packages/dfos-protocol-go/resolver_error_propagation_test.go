@@ -37,7 +37,7 @@ var errTestDependencyMiss = errors.New("test: referenced identity is not held he
 // missingKeyResolver fails every lookup with the sentinel wrapped in a message,
 // the shape a real store-backed resolver produces.
 func missingKeyResolver() KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("%w: %s", errTestDependencyMiss, kid)
 	}
 }
@@ -46,11 +46,11 @@ func missingKeyResolver() KeyResolver {
 // which fails with the sentinel — so a single hop of a delegation walk can be
 // the failing one.
 func missingForKid(base KeyResolver, absent string) KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
 		if kid == absent {
 			return nil, fmt.Errorf("%w: %s", errTestDependencyMiss, kid)
 		}
-		return base(kid)
+		return base(kid, basis)
 	}
 }
 
@@ -83,7 +83,7 @@ func buildDelegatedContentFixture(t *testing.T, depth int) delegatedContentFixtu
 	creatorKid := creatorDID + "#" + creatorKeyID
 	middleKid := middleDID + "#" + middleKeyID
 	delegateKid := delegateDID + "#" + delegateKeyID
-	resolve := func(kid string) (ed25519.PublicKey, error) {
+	resolve := func(kid string, _ string) (ed25519.PublicKey, error) {
 		switch kid {
 		case creatorKid:
 			return creatorPub, nil

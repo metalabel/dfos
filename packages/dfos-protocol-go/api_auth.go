@@ -729,7 +729,9 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	// valid signature is the gate to the credential work the TS twin performs;
 	// nothing unbounded or network-touching may run before it. For the identity
 	// proof there is nothing after it — this IS the whole algorithm.
-	publicKey, resolveErr := resolveKey(header.Kid)
+	// The empty basis is the ephemeral one: a proof is presented now, so it
+	// resolves against head state.
+	publicKey, resolveErr := resolveKey(header.Kid, "")
 	if resolveErr != nil {
 		// A resolver that already CHECKED and rejected keeps its verdict; anything
 		// else is a resolution failure, which is the server's condition.

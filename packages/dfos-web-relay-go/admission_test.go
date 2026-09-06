@@ -201,7 +201,12 @@ func TestCommittedOldKeyHistorySurvivesRotationAndPeerSync(t *testing.T) {
 	}
 }
 
-func TestDelegatedContentUsesCurrentSignerAndHistoricalCredentialIssuer(t *testing.T) {
+// TestForwardIssuanceClosesAtTheOperationBasis pins the consequence of the
+// single time basis on the write path: a credential resolves its issuer's key as
+// of the operation's own createdAt, so a key rotated out BEFORE that instant
+// authorizes nothing there. History committed before the rotation keeps
+// verifying; new writes after it do not.
+func TestForwardIssuanceClosesAtTheOperationBasis(t *testing.T) {
 	store := NewMemoryStore()
 	r, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
@@ -221,22 +226,51 @@ func TestDelegatedContentUsesCurrentSignerAndHistoricalCredentialIssuer(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotateExistingTestIdentity(t, r, creator)
 
+	// Before the rotation the credential's issuer key is effective at the op's
+	// basis, so the delegated write lands.
 	time.Sleep(2 * time.Millisecond)
-	delegated, delegatedCID, err := dfos.SignContentUpdateWithOptions(delegate.did, contentCID,
-		newDocCID(t, "delegated"), delegate.did+"#"+delegate.auth.keyID, delegate.auth.priv,
+	early, earlyCID, err := dfos.SignContentUpdateWithOptions(delegate.did, contentCID,
+		newDocCID(t, "before the rotation"), delegate.did+"#"+delegate.auth.keyID, delegate.auth.priv,
 		dfos.ContentUpdateOptions{Authorization: credential})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := r.Ingest([]string{delegated})[0]; result.Status != "new" {
-		t.Fatalf("current signer with old-key credential issuer: %s (%s)", result.Status, result.Error)
+	if result := r.Ingest([]string{early})[0]; result.Status != "new" {
+		t.Fatalf("delegated write before the rotation: %s (%s)", result.Status, result.Error)
 	}
 
+	rotateExistingTestIdentity(t, r, creator)
+
+	// After it, the same credential authorizes nothing: its issuer key is no
+	// longer effective at the new op's basis. The refusal is RETRYABLE, because
+	// the issuer's stored chain ends at or before that basis and the relay cannot
+	// rule out an operation the basis names still arriving.
+	time.Sleep(2 * time.Millisecond)
+	late, _, err := dfos.SignContentUpdateWithOptions(delegate.did, earlyCID,
+		newDocCID(t, "after the rotation"), delegate.did+"#"+delegate.auth.keyID, delegate.auth.priv,
+		dfos.ContentUpdateOptions{Authorization: credential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := r.Ingest([]string{late})[0]
+	if result.Status != "rejected" {
+		t.Fatalf("delegated write after the rotation: %s (%s)", result.Status, result.Error)
+	}
+	if !result.DependencyMissing {
+		t.Fatalf("a key miss under head state must stay retryable, got %+v", result)
+	}
+
+	// The committed early write still verifies on replay, at its own basis.
+	replayed, err := store.GetContentStateAtCID(contentID, earlyCID)
+	if err != nil || replayed == nil || replayed.State.HeadCID != earlyCID {
+		t.Fatalf("committed pre-rotation write must still replay: state=%+v err=%v", replayed, err)
+	}
+
+	// And a signer whose own key rotated out cannot author a fresh op at all.
 	rotateExistingTestIdentity(t, r, delegate)
 	time.Sleep(2 * time.Millisecond)
-	staleSigner, _, err := dfos.SignContentUpdateWithOptions(delegate.did, delegatedCID,
+	staleSigner, _, err := dfos.SignContentUpdateWithOptions(delegate.did, earlyCID,
 		newDocCID(t, "stale signer"), delegate.did+"#"+delegate.auth.keyID, delegate.auth.priv,
 		dfos.ContentUpdateOptions{Authorization: credential})
 	if err != nil {
@@ -245,30 +279,49 @@ func TestDelegatedContentUsesCurrentSignerAndHistoricalCredentialIssuer(t *testi
 	assertPermanentNoncurrentRejection(t, r.Ingest([]string{staleSigner})[0])
 }
 
-func TestRevocationAndCredentialAdmissionRemainHistorical(t *testing.T) {
+// TestStandaloneCredentialAndRevocationAdmissionAreEphemeral pins the read-side
+// half: a standalone public credential is an ephemeral presentation, so it is
+// admitted only while the key that signed it is effective at the head. A
+// revocation, being a committed statement, resolves at its own createdAt.
+func TestStandaloneCredentialAndRevocationAdmissionAreEphemeral(t *testing.T) {
 	r, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated := ingestAndRotateTestIdentity(t, r)
-	oldKid := rotated.identity.did + "#" + rotated.identity.auth.keyID
-	credential, err := dfos.CreateCredential(rotated.identity.did, "*", oldKid,
-		"chain:*", "read", time.Hour, rotated.identity.auth.priv)
+	id := createTestIdentity(t)
+	if result := r.Ingest([]string{id.token})[0]; result.Status != "new" {
+		t.Fatalf("seed identity: %s (%s)", result.Status, result.Error)
+	}
+	kid := id.did + "#" + id.auth.keyID
+	credential, err := dfos.CreateCredential(id.did, "*", kid, "chain:*", "read", time.Hour, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	credentialResult := r.Ingest([]string{credential})[0]
 	if credentialResult.Status != "new" {
-		t.Fatalf("old-key credential: %s (%s)", credentialResult.Status, credentialResult.Error)
+		t.Fatalf("credential under the current key: %s (%s)", credentialResult.Status, credentialResult.Error)
 	}
 
-	revocation, _, err := dfos.SignRevocation(rotated.identity.did, credentialResult.CID,
-		oldKid, rotated.identity.auth.priv)
+	// A revocation the same key signs while it is still effective is admitted.
+	revocation, _, err := dfos.SignRevocation(id.did, credentialResult.CID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result := r.Ingest([]string{revocation})[0]; result.Status != "new" {
-		t.Fatalf("old-key revocation: %s (%s)", result.Status, result.Error)
+		t.Fatalf("revocation under the current key: %s (%s)", result.Status, result.Error)
+	}
+
+	// After a rotation the old key grants nothing new: a standalone credential it
+	// signs is refused, because a read-time presentation resolves at the head.
+	rotated := ingestAndRotateTestIdentity(t, r)
+	oldKid := rotated.identity.did + "#" + rotated.identity.auth.keyID
+	stale, err := dfos.CreateCredential(rotated.identity.did, "*", oldKid,
+		"chain:*", "read", time.Hour, rotated.identity.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := r.Ingest([]string{stale})[0]; result.Status != "rejected" {
+		t.Fatalf("credential under a rotated-out key must be refused, got %s", result.Status)
 	}
 }
 

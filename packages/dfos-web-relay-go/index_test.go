@@ -1654,6 +1654,44 @@ func TestIndexPublicReadFlipCascade(t *testing.T) {
 	}
 }
 
+// An identity update can change the effective key set, and a standing grant
+// signed by a rotated-out key stops granting at read time. The projection
+// follows, or the index keeps serving a title the read path denies.
+// Twin of the TS "recomputes publicRead and the title when the granting identity
+// rotates its key".
+func TestIndexPublicReadFollowsAKeyRotation(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	subject := ingestIdentity(t, r)
+	document := map[string]any{"$schema": testPostSchema, "title": "granted by K1"}
+	content := createIndexedContent(t, r, store, subject, document, true)
+	addPublicRead(t, r, subject, content.contentID)
+	if row := indexContentRowByID(t, handler, content.contentID); row["publicRead"] != true || row["title"] != "granted by K1" {
+		t.Fatalf("post-grant row = %v, want publicRead true and the title", row)
+	}
+
+	k2, _ := rotateExistingTestIdentity(t, r, subject)
+
+	// The grant died with K1, so the row is private and its title is redacted.
+	if row := indexContentRowByID(t, handler, content.contentID); row["publicRead"] != false || row["title"] != nil {
+		t.Fatalf("post-rotation row = %v, want publicRead false and a redacted title", row)
+	}
+
+	// A fresh grant signed by K2 restores it. A credential payload carries no
+	// signer, so this one takes its own expiry to earn its own CID.
+	regrant, err := dfos.CreateCredential(subject.did, "*", subject.did+"#"+k2.keyID,
+		"chain:"+content.contentID, "read", 2*time.Hour, k2.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{regrant}); res[0].Status != "new" {
+		t.Fatalf("regrant: %+v", res[0])
+	}
+	if row := indexContentRowByID(t, handler, content.contentID); row["publicRead"] != true || row["title"] != "granted by K1" {
+		t.Fatalf("post-regrant row = %v, want publicRead true and the title", row)
+	}
+}
+
 func contentRowPutsEqual(got []string, want ...string) bool {
 	if len(got) != len(want) {
 		return false

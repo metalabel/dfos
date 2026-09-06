@@ -40,12 +40,12 @@ func deriveTestKey(seed string) (ed25519.PrivateKey, ed25519.PublicKey) {
 // resolverFor resolves any kid to the given key — the claim's kid↔did check is
 // what binds the key to the claimant, so the test resolver stays trivial.
 func resolverFor(pub ed25519.PublicKey) KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) { return pub, nil }
+	return func(kid string, _ string) (ed25519.PublicKey, error) { return pub, nil }
 }
 
 // failingResolver stands in for an unreachable relay.
 func failingResolver() KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		return nil, errors.New("relay unreachable")
 	}
 }

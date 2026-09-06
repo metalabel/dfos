@@ -515,7 +515,7 @@ describe('dfos credential', () => {
     );
   });
 
-  it('should reject credential not yet valid (iat in future)', async () => {
+  it('accepts a credential issued after the basis — iat gates nothing', async () => {
     const issuer = makeIdentity();
     identityMap.set(issuer.did, issuer.identity);
 
@@ -529,9 +529,13 @@ describe('dfos credential', () => {
       keyId: issuer.keyId,
     });
 
-    await expect(verifyDFOSCredential(token, { resolveIdentity, now: 10000 })).rejects.toThrow(
-      /not yet valid/i,
-    );
+    // basis 10000 < iat 15000 < exp 20000. `iat` is informational: the basis,
+    // not the issuer's clock, decides when authority applies.
+    const verified = await verifyDFOSCredential(token, {
+      resolveIdentity,
+      basis: new Date(10000 * 1000).toISOString(),
+    });
+    expect(verified.iat).toBe(15000);
   });
 
   // --- delegation chains ---

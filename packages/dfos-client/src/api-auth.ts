@@ -472,14 +472,20 @@ export const verifyApiRequest = async (
 
   // 8. Credential chain — verified IN FULL by the protocol's own verifier
   // (signatures, schema, CID integrity, linear delegation, depth, audience
-  // linkage, monotonic attenuation), with expiry on the wall clock (a read-path,
-  // at-read decision) and revocation checked at EVERY level.
+  // linkage, monotonic attenuation) against ONE basis. A presented credential is
+  // an ephemeral presentation, so that basis is NOW: keys from head state, exp
+  // on the envelope's verified clock, revocation checked at EVERY level.
+  //
+  // NO BASIS STRING. `now` is floored to whole seconds, so an ISO basis built
+  // from it names the START of that second and a genesis or rotation committed
+  // at .500 is missing from a check at .800. The ephemeral basis is the chain
+  // head (PROTOCOL, Time basis), which is what an absent basis resolves.
   const { isRevoked, resolveIdentity } = client.callbacks();
   const rootDID = discoverChainRoot(input.credential);
   let leaf: VerifiedDFOSCredential;
   let chain: VerifiedDFOSCredential[];
   try {
-    leaf = await verifyDFOSCredential(input.credential, { resolveIdentity, now });
+    leaf = await verifyDFOSCredential(input.credential, { resolveIdentity, nowUnix: now });
     // verifyDelegationChain checks PARENTS only, so the LEAF's revocation is an
     // explicit check here — without it "revocation is the user's lever" would be
     // false for the single-hop credential this surface actually issues.
@@ -489,7 +495,7 @@ export const verifyApiRequest = async (
     const verifiedChain = await verifyDelegationChain(leaf, {
       resolveIdentity,
       rootDID,
-      now,
+      nowUnix: now,
       isRevoked,
     });
     chain = verifiedChain.chain;

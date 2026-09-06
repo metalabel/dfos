@@ -31,7 +31,7 @@ import {
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { isValidDfosDid } from './did-document';
-import { createHistoricalIdentityResolver } from './ingest';
+import { createIdentityResolver } from './ingest';
 import type { RelayReadStore } from './types';
 
 /**
@@ -329,6 +329,10 @@ export interface AccessVerification {
  *
  * This is used at the route level to allow unauthenticated reads when public
  * credentials exist — matching the Go relay's `hasPublicStandingAuth`.
+ *
+ * A read-time credential check is an ephemeral presentation, so the basis is now
+ * (PROTOCOL, Time basis): no basis is passed, keys come from head effective
+ * state, `exp` runs against the wall clock, and revocation is asked timelessly.
  */
 export const hasPublicStandingAuth = async (
   contentId: string,
@@ -342,7 +346,7 @@ export const hasPublicStandingAuth = async (
   const chain = await store.getContentChain(contentId);
   if (!chain) return false;
 
-  const resolveIdentity = createHistoricalIdentityResolver(store);
+  const resolveIdentity = createIdentityResolver(store);
   const isRevoked = async (issuerDID: string, credentialCID: string) =>
     store.isCredentialRevoked(issuerDID, credentialCID);
 
@@ -382,6 +386,9 @@ export const hasPublicStandingAuth = async (
  * 2. Does a stored public credential cover this resource? → granted
  * 3. Does the per-request credential (Authorization header) cover this resource? → granted
  * 4. None → denied
+ *
+ * Every credential here is an ephemeral presentation, so the basis is now: a key
+ * the issuer has rotated out grants nothing at read time.
  */
 export const verifyContentAccess = async (options: {
   /** Per-request credential JWS (from X-Credential header) */
@@ -413,7 +420,7 @@ export const verifyContentAccess = async (options: {
   }
 
   // shared helpers for credential verification
-  const resolveIdentity = createHistoricalIdentityResolver(store);
+  const resolveIdentity = createIdentityResolver(store);
 
   const isRevoked = async (issuerDID: string, credentialCID: string) =>
     store.isCredentialRevoked(issuerDID, credentialCID);

@@ -140,7 +140,9 @@ export const createClient = (config: ClientConfig): Client => {
   const resolvers: Resolvers = createResolvers({ relays, quorum, store, peerClient, isRevoked });
   isRevokedImpl =
     config.isRevoked ??
-    createRevocationChecker(relays, fetchImpl, (kid) => resolvers.callbacks().resolveKey(kid));
+    createRevocationChecker(relays, fetchImpl, (kid, basis) =>
+      resolvers.callbacks().resolveKey(kid, basis),
+    );
 
   const relaysFor = (o?: CallOptions) => normalizeRelays(o?.relays ?? relays);
 
@@ -181,9 +183,14 @@ export const createClient = (config: ClientConfig): Client => {
     if (typeof iss !== 'string') throw new Error('credential payload missing iss');
 
     const issuer = await resolvers.getIdentityChain(iss, options);
+    // A read-time credential check is an ephemeral presentation: the basis is
+    // now, so the issuer resolves at head state and `exp` runs on this clock.
+    // The clock reaches `exp` alone; an ISO basis built from it would resolve
+    // the issuer at the start of the second and miss an operation committed
+    // inside it (PROTOCOL, Time basis).
     const verified = await verifyDFOSCredential(jws, {
       resolveIdentity: resolvers.callbacks().resolveIdentity,
-      now: Math.floor(nowMs() / 1000),
+      nowUnix: Math.floor(nowMs() / 1000),
     });
     const revoked = await isRevoked(verified.iss, verified.credentialCID);
 
@@ -239,9 +246,11 @@ export const createClient = (config: ClientConfig): Client => {
       const cb = resolvers.callbacks();
 
       if (typ === 'did:dfos:credential') {
+        // Ephemeral, exactly as `credential` above: head-state resolution, the
+        // clock on `exp` alone.
         const verified = await verifyDFOSCredential(jws, {
           resolveIdentity: cb.resolveIdentity,
-          now: Math.floor(nowMs() / 1000),
+          nowUnix: Math.floor(nowMs() / 1000),
         });
         const revoked = await isRevoked(verified.iss, verified.credentialCID);
         if (revoked) return { ok: false, error: 'credential revoked', value: verified };

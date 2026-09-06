@@ -32,7 +32,7 @@ func makeSignRequestParty(seed string) signRequestParty {
 }
 
 func signRequestResolver(party signRequestParty) KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		if kid != party.kid {
 			return nil, errors.New("current key not found")
 		}
@@ -41,7 +41,7 @@ func signRequestResolver(party signRequestParty) KeyResolver {
 }
 
 func failingSignRequestResolver() KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		return nil, errors.New("relay unreachable")
 	}
 }
@@ -263,7 +263,7 @@ func TestSignRequestRejectsEnvelopeIntegrityFailures(t *testing.T) {
 	requireSignRequestVerdict(t, err, ErrSignRequestInvalid)
 
 	good := signRequestSignRaw(t, requester, payload, nil)
-	_, err = VerifySignRequest(good, func(kid string) (ed25519.PublicKey, error) {
+	_, err = VerifySignRequest(good, func(kid string, _ string) (ed25519.PublicKey, error) {
 		return other.pub, nil
 	}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
 	requireSignRequestVerdict(t, err, ErrSignRequestInvalid)

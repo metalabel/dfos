@@ -131,8 +131,19 @@ export type RevChecker = (
  * `verifyDFOSCredential`, or any DFOS verifier. This is the trunk product.
  */
 export interface Callbacks {
-  resolveKey: (kid: string) => Promise<Uint8Array>;
-  resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /**
+   * Resolve a kid to key bytes in the signing identity's state as of `basis` —
+   * a committed artifact's own `createdAt`, or nothing for an ephemeral
+   * presentation, whose basis is now.
+   */
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
+  /** Resolve a DID to its verified identity state as of `basis`. */
+  resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+  /**
+   * Resolve a DID to its identity with every key it has ever proved — the
+   * credit-claim carve-out, which runs no temporal check and so has no basis.
+   */
+  resolveClaimantIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
   isRevoked: RevChecker;
 }
 

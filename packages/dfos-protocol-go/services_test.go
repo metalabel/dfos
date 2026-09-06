@@ -188,7 +188,7 @@ func TestCountersignRelation(t *testing.T) {
 	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 	kid := did + "#" + keyID
 	target := "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y"
-	resolver := func(k string) (ed25519.PublicKey, error) { return pub, nil }
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) { return pub, nil }
 
 	// tagged → relation projected; bare → empty; CID differs
 	bareJWS, bareCID, err := SignCountersign(did, target, kid, priv)

@@ -107,6 +107,7 @@ func rejected(cid string, err error) IngestionResult {
 }
 
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
+const signingKeyNotAtBasisError = "signing key is not in the identity's state as of the basis"
 const identityConflictingExtensionError = "identity chains are linear: conflicting extension refused"
 
 type admissionMode int
@@ -276,23 +277,27 @@ func classify(jwsToken string) classifiedOp {
 
 // THE THREE KEY STATES, AND WHICH SURFACE TAKES WHICH.
 //
-// dfos.IdentityState now carries three readings of an identity's keys, and every
+// dfos.IdentityState carries three readings of an identity's keys, and every
 // surface in this package must pick one deliberately:
 //
 //   - EFFECTIVE (State.AuthKeys / AssertKeys / ControllerKeys) — "what is true
-//     NOW". The memberships a possession proof admitted, at the head. Live auth,
-//     current-state admission, and the DID document's verification methods.
+//     at this basis". At the head that is "what is true NOW": live auth,
+//     current-state admission, and the DID document's verification methods. At
+//     an earlier basis it is the prefix that basis names, which is what
+//     ResolveIdentityAsOf computes and what every verification with a committed
+//     basis resolves against (PROTOCOL, Time basis).
 //   - HAS-EVER-PROVED (State.ProvedKeys) — "what was EVER true". The monotonic
 //     union of every effective state the chain has held: a key proved in and
 //     later rotated out stays forever, a key only ever declared never enters.
-//     Historical key resolution and the `key=` / `signerKey=` reverse indexes.
+//     Two surfaces take it: credit claims, which run no temporal check at all,
+//     and the `key=` / `signerKey=` reverse indexes.
 //   - DECLARED (State.Declared) — "what the chain SAYS", void memberships
 //     included. Exactly one surface needs it, SIGNER ADMISSION, and that surface
 //     lives in the protocol library's chain walk, not here. Nothing in this
 //     package reads it.
 
 // effectiveKeyState flattens the head EFFECTIVE arrays into a key state, so the
-// current-state and has-ever-proved lookups can share one search.
+// key lookups can share one search.
 func effectiveKeyState(state dfos.IdentityState) dfos.DeclaredKeyState {
 	return dfos.DeclaredKeyState{
 		AuthKeys:       state.AuthKeys,
@@ -306,10 +311,10 @@ func effectiveKeyState(state dfos.IdentityState) dfos.DeclaredKeyState {
 // An absent has-ever-proved history reads as "what is effective now was proved"
 // — the same reading dfos.VerifyIdentityExtension applies, exactly true for any
 // chain that never voided a membership, and the only reading available for a
-// state persisted before the member existed. A relay holding such rows resolves
-// and indexes a narrower set than the chain walk would (rotated-out keys are
-// lost until the row is rewritten), which is the safe direction: it under-claims
-// rather than admitting a key nothing proved.
+// state persisted before the member existed. A relay holding such rows indexes a
+// narrower set than the chain walk would (rotated-out keys are lost until the row
+// is rewritten), which is the safe direction: it under-claims rather than
+// admitting a key nothing proved.
 func provedKeyState(state dfos.IdentityState) dfos.DeclaredKeyState {
 	if state.ProvedKeys.IsZero() {
 		return effectiveKeyState(state)
@@ -338,31 +343,65 @@ func findKeyInKeyState(state dfos.DeclaredKeyState, keyID string) (dfos.Multikey
 	return dfos.MultikeyPublicKey{}, false
 }
 
-// CreateKeyResolver returns a KeyResolver that resolves every key an identity
-// chain has EVER PROVED — rotated-out keys included. Used for protocol
-// verification during ingestion, where a long-lived artifact signed by a key
-// that has since rotated away must still verify.
+// ResolveIdentityAsOf returns an identity's verified state AS OF basis, from
+// this store's copy of its chain (PROTOCOL, Time basis), and whether that answer
+// is DETERMINATE for the basis.
 //
-// HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. A declared-but-unproved membership is
-// VOID: no possession proof ever admitted it, so nothing it signed was ever
-// authorized, and resolving it would let a chain that merely LISTS a stranger's
-// key speak with it. The chain walk already folds this union onto
-// State.ProvedKeys, so there is no log re-scan here — a hand-rolled scan would
-// have to restate the possession rule and would quietly disagree with the walk
-// that produced the effective arrays beside it.
+// TWO BRANCHES, ONE ANSWER. When the stored chain's last operation is dated at
+// or before the basis, head state IS the state as of the basis for the log this
+// store holds, and no walk runs. Otherwise the log is re-verified with the
+// basis, which folds the prefix the basis names. Both branches return the same
+// key set for the same basis. An empty basis is ephemeral and takes head state.
 //
-// No fast/slow split remains either: has-ever-proved is a superset of effective,
-// so one search over ProvedKeys answers both.
+// ONLY THE RE-WALK BRANCH IS DETERMINATE, and the second return says which one
+// answered. A stored operation dated after the basis proves this store holds
+// every operation the basis names: the chain is linear and its createdAt
+// strictly increases, so anything still to arrive is dated after the stored
+// head. A chain that ends at or before the basis proves nothing of the sort,
+// because the next operation to arrive can still be dated at or before the basis
+// and add a key. A key missing from an indeterminate answer is a dependency miss
+// rather than a verdict.
 //
-// THREE FAILURE CLASSES, AND THE STORE IS ITS OWN. A missing chain and an
-// unknown key id may be answered differently once sync delivers more of the
-// graph, so both wrap ErrDependencyMissing. A store error decided nothing at all
-// and wraps ErrStoreFault — without that marker a momentary "database is locked"
-// during signature verification classified as permanent and DELETED a valid
-// operation. The malformed-kid and malformed-DID failures wrap neither: no amount
-// of syncing makes a kid that is not a DID URL into one, so they stay permanent.
-func CreateKeyResolver(store RelayReadStore) dfos.KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+// DELETION READS HEAD STATE, never the as-of state: a deleted issuer's
+// credentials are invalid retroactively, so the deletion a later operation
+// recorded reaches back past the basis (CREDENTIALS, Deleted issuers).
+//
+// A nil chain with a nil error means this store does not hold it.
+func ResolveIdentityAsOf(store RelayReadStore, did string, basis string) (state *dfos.IdentityState, determinate bool, err error) {
+	identity, err := store.GetIdentityChain(did)
+	if err != nil {
+		return nil, false, storeFault(err)
+	}
+	if identity == nil {
+		return nil, false, nil
+	}
+	if basis == "" || identity.LastCreatedAt <= basis {
+		head := identity.State
+		return &head, false, nil
+	}
+	result, err := dfos.VerifyIdentityChainAsOf(identity.Log, basis)
+	if err != nil {
+		return nil, false, err
+	}
+	asOf := result.State
+	asOf.IsDeleted = identity.State.IsDeleted
+	return &asOf, true, nil
+}
+
+// CreateAsOfKeyResolver returns a KeyResolver that resolves a kid in the
+// identity's EFFECTIVE state as of the basis it is handed — the state that held
+// when the artifact was signed. An empty basis is ephemeral and takes head
+// state.
+//
+// A key absent from that state is a VERDICT only when the answer is determinate:
+// the stored chain runs past the basis, so no operation the basis names can
+// still arrive. Otherwise the miss is retryable, because sync may still deliver
+// the operation that adds the key, and a verdict DELETES the raw op. An unknown
+// chain stays retryable for the same reason, and a store error is a store fault,
+// because it decided nothing. The message is one string either way, so the
+// classification never shows up on the wire.
+func CreateAsOfKeyResolver(store RelayReadStore) dfos.KeyResolver {
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
 		if hashIdx < 0 {
 			return nil, fmt.Errorf("kid must be a DID URL: %s", kid)
@@ -374,37 +413,40 @@ func CreateKeyResolver(store RelayReadStore) dfos.KeyResolver {
 			return nil, err
 		}
 
-		identity, err := store.GetIdentityChain(did)
+		state, determinate, err := ResolveIdentityAsOf(store, did, basis)
 		if err != nil {
-			return nil, storeFault(err)
+			return nil, err
 		}
-		if identity == nil {
+		if state == nil {
 			return nil, dependencyMissingf("unknown identity: %s", did)
 		}
 
-		if k, ok := findKeyInKeyState(provedKeyState(identity.State), keyID); ok {
+		if k, ok := findKeyInKeyState(effectiveKeyState(*state), keyID); ok {
 			return dfos.DecodeMultikey(k.PublicKeyMultibase)
 		}
 
+		if determinate {
+			return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
+		}
 		return nil, dependencyMissingf("unknown key %s on identity %s", keyID, did)
 	}
 }
 
 // CreateCurrentKeyResolver returns a KeyResolver that only resolves
-// current-state keys. Used for live auth and first admission — rotated-out keys
-// are rejected but remain resolvable for committed history.
+// current-state keys. Used for live auth and first admission — the freshness
+// question the relay asks of a NEW operation (RELAY, "Ingest asks freshness").
+// The basis is accepted and ignored: this resolver answers about head state by
+// construction.
 //
-// EFFECTIVE state, which is what the head arrays now mean: a declared-but-void
-// key is absent from them, so it never authenticates. No change was needed here
-// beyond saying so — the possession fold made the arrays correct for this
-// surface for free.
+// EFFECTIVE state, which is what the head arrays mean: a declared-but-void key
+// is absent from them, so it never authenticates.
 //
 // Only the unknown-identity failure is a dependency miss here, and only a store
 // error is a store fault. A DELETED identity and a key that is merely no longer
 // current are both verdicts this store is already entitled to reach, and
 // re-asking later cannot change them.
 func CreateCurrentKeyResolver(store RelayReadStore) dfos.KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
 		if hashIdx < 0 {
 			return nil, fmt.Errorf("kid must be a DID URL: %s", kid)
@@ -435,11 +477,86 @@ func CreateCurrentKeyResolver(store RelayReadStore) dfos.KeyResolver {
 	}
 }
 
+// createFirstAdmissionKeyResolver returns the FIRST-ADMISSION signer resolver:
+// the key must be effective at the head AND effective in the identity's state as
+// of the operation's own createdAt.
+//
+// Freshness alone admits an operation nobody else accepts. A key introduced by a
+// rotation, signing an operation dated before that rotation, passes the head
+// check and then fails peer ingest, fork replay, and every client verifier, all
+// of which resolve at the basis (PROTOCOL, Time basis).
+//
+// The as-of check runs only where it can reach a verdict. When the stored chain
+// ends at or before the basis, head state IS the state as of the basis (the
+// answer is indeterminate) and the head check has already answered.
+func createFirstAdmissionKeyResolver(store RelayReadStore) dfos.KeyResolver {
+	current := CreateCurrentKeyResolver(store)
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
+		key, err := current(kid, basis)
+		if err != nil || basis == "" {
+			return key, err
+		}
+
+		// current already rejected a kid with no fragment, so the split is safe.
+		hashIdx := strings.Index(kid, "#")
+		did := kid[:hashIdx]
+		keyID := kid[hashIdx+1:]
+
+		state, determinate, err := ResolveIdentityAsOf(store, did, basis)
+		if err != nil {
+			return nil, err
+		}
+		if state == nil || !determinate {
+			return key, nil
+		}
+		if _, ok := findKeyInKeyState(effectiveKeyState(*state), keyID); !ok {
+			return nil, fmt.Errorf("%s", signingKeyNotAtBasisError)
+		}
+		return key, nil
+	}
+}
+
+// admissionKeyResolver is the signer resolver for one admission mode.
+//
+// First admission of a NEW operation asks freshness, so the signer must be
+// effective at the head, and asks the basis too, so the operation the relay
+// commits is one every other verifier accepts. Replay and peer ingest of
+// committed history ask the basis alone, because the head has moved on (RELAY,
+// "Ingest asks freshness; re-verification asks the basis").
 func admissionKeyResolver(store RelayReadStore, mode admissionMode) dfos.KeyResolver {
 	if mode == historicalAdmission {
-		return CreateKeyResolver(store)
+		return CreateAsOfKeyResolver(store)
 	}
-	return CreateCurrentKeyResolver(store)
+	return createFirstAdmissionKeyResolver(store)
+}
+
+// admissionRevocationChecker is the revocation checker for one admission mode.
+//
+// First admission of a NEW operation asks freshness, so the answer comes from
+// the relay's CURRENT knowledge and the basis is ignored (asOfUnix 0 = timeless):
+// backdating buys a revoked delegate no write window. Replay and peer ingest of
+// committed history ask the basis, so a revocation dated after the operation
+// leaves it standing (RELAY, "Ingest asks freshness; re-verification asks the
+// basis"; CREDENTIALS, "Revocation against the basis").
+//
+// A relay that rejected committed history on a later revocation would answer
+// differently from every relay that ingested the same log before that revocation
+// arrived.
+//
+// A store failure is marked a STORE FAULT rather than let through raw: an
+// unmarked error classifies as a permanent rejection, and a permanent rejection
+// deletes the raw op.
+func admissionRevocationChecker(store RelayReadStore, mode admissionMode) dfos.RevocationChecker {
+	return func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
+		if mode != historicalAdmission {
+			asOfUnix = 0
+		}
+		revoked, err := store.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
+		if err != nil {
+			return false, storeFault(err)
+		}
+		return revoked, nil
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -625,32 +742,18 @@ func ingestContentOp(jwsToken string, store RelayWriteStore, logEnabled bool, mo
 	}
 
 	resolveKey := admissionKeyResolver(store, mode)
-	resolveCredentialKey := CreateKeyResolver(store)
+	// A credential carried inline in a content operation is committed with it, so
+	// its issuer resolves as of the operation's own createdAt in BOTH admission
+	// modes. The protocol verifier passes that basis; this resolver answers at it.
+	resolveCredentialKey := CreateAsOfKeyResolver(store)
 	// WRITE-path hardening callbacks (mirror the relay READ path / the TS twin):
 	// revoked credentials and deleted issuers/parents no longer authorize writes.
+	// The mode picks freshness or the basis. Mirrors the TS twin (ingest.ts).
 	//
-	// ACCEPTANCE IS A FRESHNESS DECISION. The protocol verifier offers an as-of
-	// basis (the op's own createdAt) because verifying committed history is a
-	// validity decision — but admitting a NEW operation is not that question. This
-	// closure therefore DELIBERATELY IGNORES asOfUnix (passing 0 = timeless) and
-	// answers from the relay's current knowledge: a relay must never accept a new
-	// op authorized by a credential it already knows to be revoked, no matter how
-	// the op is dated. (Answering "revoked as of now" instead would be subtly
-	// weaker — it would admit an op under a revocation whose own createdAt is in
-	// the future. Current knowledge is strictly stronger and byte-identical to the
-	// pre-as-of behavior, so ingest verdicts do not change.) Mirrors the TS twin
-	// (ingest.ts).
-	//
-	// Both closures mark a store failure as a STORE FAULT rather than letting the
-	// raw error through: an unmarked error classifies as a permanent rejection,
-	// and a permanent rejection deletes the raw op.
-	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, _ int64) (bool, error) {
-		revoked, err := store.IsCredentialRevoked(issuerDID, credentialCID, 0)
-		if err != nil {
-			return false, storeFault(err)
-		}
-		return revoked, nil
-	})
+	// The deleted closure marks a store failure as a STORE FAULT rather than
+	// letting the raw error through: an unmarked error classifies as a permanent
+	// rejection, and a permanent rejection deletes the raw op.
+	isRevoked := dfos.WithRevocationChecker(admissionRevocationChecker(store, mode))
 	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {
@@ -907,7 +1010,9 @@ func ingestArtifact(jwsToken string, store RelayWriteStore, logEnabled bool, mod
 }
 
 func ingestRevocation(jwsToken string, store RelayWriteStore, logEnabled bool) IngestionResult {
-	resolveKey := CreateKeyResolver(store)
+	// A revocation is a committed statement: its signer resolves as of its own
+	// createdAt, which the protocol verifier passes.
+	resolveKey := CreateAsOfKeyResolver(store)
 
 	result, err := dfos.VerifyRevocation(jwsToken, resolveKey)
 	if err != nil {
@@ -1035,10 +1140,12 @@ func ingestPublicCredential(jwsToken string, store RelayWriteStore, logEnabled b
 		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
 	}
 
-	// resolve key and verify credential. An unresolved key means the issuer
-	// identity has not synced yet — retryable.
-	resolveKey := CreateKeyResolver(store)
-	publicKey, err := resolveKey(kid)
+	// A standalone public credential is an ephemeral presentation, so its basis
+	// is now: the signing key must be effective at the head, and exp runs against
+	// the wall clock. A key the issuer has rotated out grants nothing new. An
+	// unresolved identity means the issuer has not synced yet — retryable.
+	resolveKey := CreateAsOfKeyResolver(store)
+	publicKey, err := resolveKey(kid, "")
 	if err != nil {
 		return rejected(cid, fmt.Errorf("failed to resolve key: %w", err))
 	}

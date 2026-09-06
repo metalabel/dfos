@@ -14,9 +14,9 @@ func TestVerifyDelegationChainRejectsMultiParent(t *testing.T) {
 	childVC := &VerifiedCredential{Iss: "did:dfos:attacker"}
 	childAtt := []AttEntry{{Resource: "chain:victim", Action: "write"}}
 	childPrf := []string{"parent-token-0", "parent-token-1"}
-	resolveKey := func(kid string) (ed25519.PublicKey, error) { return nil, nil }
+	resolveKey := func(kid string, _ string) (ed25519.PublicKey, error) { return nil, nil }
 
-	err := verifyDelegationChain("child", childVC, childAtt, childPrf, resolveKey, "did:dfos:root", nil, nil, 0, 0)
+	err := verifyDelegationChain("child", childVC, childAtt, childPrf, resolveKey, "did:dfos:root", nil, nil, "", 0, 0)
 	if err == nil {
 		t.Fatal("expected multi-parent credential to be rejected, got nil")
 	}

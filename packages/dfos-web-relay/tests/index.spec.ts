@@ -57,7 +57,10 @@ const createIdentityOp = async (services?: ServiceEntry[]) => {
     assertKeys: [controller.key],
     controllerKeys: [controller.key],
     ...(services ? { services } : {}),
-    createdAt: ts(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: ts(-60),
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation: createOp,
@@ -874,7 +877,7 @@ describe('index v0', () => {
         authKeys: [controller.key],
         assertKeys: [controller.key],
         controllerKeys: [controller.key],
-        createdAt: ts(),
+        createdAt: ts(-60),
       };
       const { jwsToken, operationCID } = await signIdentityOperation({
         operation: createOp,
@@ -1475,9 +1478,22 @@ describe('index v0', () => {
       orderedBySignerSchema.content.map((row: { contentId: string }) => row.contentId),
     ).toEqual([c1.contentId]);
 
+    // Scoped to the three fixtures, the way the content assertion above is: the
+    // store also holds the relay's own bootstrapped identity, which is not one
+    // of them.
+    const identityGenesisDesc = await json(
+      await req('/index/v0/identities?order=genesisAt.desc&limit=1000'),
+    );
+    expect(
+      identityGenesisDesc.identities
+        .map((row: { did: string }) => row.did)
+        .filter((did: string) => [a.did, b.did, c.did].includes(did)),
+    ).toEqual([c.did, b.did, a.did]);
     const identityPage = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=1'));
     expect(identityPage.identities).toHaveLength(1);
-    expect(identityPage.identities[0].did).toBe(c.did);
+    // The first page is the first row of that ordering, whichever identity holds
+    // the position.
+    expect(identityPage.identities[0].did).toBe(identityGenesisDesc.identities[0].did);
     expect(identityPage.next).toEqual(expect.any(String));
 
     const allIdentities = await json(
@@ -1835,8 +1851,11 @@ describe('index v0', () => {
    * apart.
    */
   const signerKeyCorpus = async () => {
-    const author = await addProvedAuthKey(await createIdentity(), 5);
-    const witness = await addProvedAuthKey(await createIdentity(), 6);
+    // The auth keys are introduced BEFORE the revocation this corpus signs with
+    // one of them: a committed statement resolves its signer as of its own
+    // createdAt, so a key introduced later is not effective there.
+    const author = await addProvedAuthKey(await createIdentity(), -50);
+    const witness = await addProvedAuthKey(await createIdentity(), -49);
     const content = await createContent(author, { $schema: 'example/signer-key' }, 10);
     const artifact = await createArtifact(author, { $schema: 'example/signer-key-art' }, 11);
     const credentialCID = await grantPublicRead(author, content.contentId);
@@ -2294,6 +2313,70 @@ describe('index v0', () => {
         (row: { did: string }) => row.did,
       ),
     ).not.toContain(subject.did);
+  });
+
+  // An identity `update` can change the effective key set, and a standing grant
+  // signed by a rotated-out key stops granting at read time. The projection
+  // follows, or the index keeps serving a title the read path denies.
+  it('recomputes publicRead and the title when the granting identity rotates its key', async () => {
+    const subject = await createIdentity();
+    const doc = { $schema: POST_SCHEMA, title: 'granted by K1' };
+    const content = await createContent(subject, doc);
+    await uploadBlob(subject, content.contentId, content.operationCID, doc);
+    await grantPublicRead(subject, content.contentId);
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: true,
+      title: 'granted by K1',
+    });
+
+    const k2 = makeKey();
+    const rotationOp: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: subject.operationCID,
+      authKeys: [k2.key],
+      assertKeys: [k2.key],
+      controllerKeys: [k2.key],
+      createdAt: ts(2),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: k2.keypair.privateKey,
+          did: subject.did,
+          prevCID: subject.operationCID,
+        }),
+      ],
+    };
+    const rotation = await signIdentityOperation({
+      operation: rotationOp,
+      signer: subject.controller.signer,
+      keyId: subject.controller.keyId,
+      identityDID: subject.did,
+    });
+    expect((await postOps([rotation.jwsToken])).status).toBe(200);
+
+    // The grant died with K1, so the row is private and its title is redacted.
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: false,
+      title: null,
+    });
+
+    // A fresh grant signed by K2 restores it. A credential payload carries no
+    // signer, so this one takes its own expiry to earn its own CID.
+    const now = Math.floor(Date.now() / 1000);
+    const regrant = await createDFOSCredential({
+      issuerDID: subject.did,
+      audienceDID: '*',
+      att: [{ resource: `chain:${content.contentId}`, action: 'read' }],
+      exp: now + 7200,
+      signer: k2.signer,
+      keyId: k2.keyId,
+      iat: now,
+    });
+    expect((await postOps([regrant])).status).toBe(200);
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: true,
+      title: 'granted by K1',
+    });
   });
 
   it('narrows named grant revocation maintenance to its att-named chain', async () => {

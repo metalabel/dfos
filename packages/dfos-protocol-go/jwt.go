@@ -85,17 +85,48 @@ func CreateCredential(iss, aud, kid, resource, action string, ttl time.Duration,
 	return token, nil
 }
 
-// VerifyCredential verifies a DFOS credential token. It checks the signature,
-// expiration, payload structure, and optionally subject and expected action.
-// Pass empty string for subject or expectedAction to skip those checks.
+// VerifyCredential verifies a DFOS credential token against an ephemeral basis:
+// the wall clock. It checks the signature, expiration, payload structure, and
+// optionally subject and expected action. Pass empty string for subject or
+// expectedAction to skip those checks.
 func VerifyCredential(token string, publicKey ed25519.PublicKey, subject string, expectedAction string) (*VerifiedCredential, error) {
 	return verifyCredentialCore(token, publicKey, subject, expectedAction, time.Now().Unix())
 }
 
-// VerifyCredentialAt is like VerifyCredential but accepts a custom current
-// time (unix seconds) for testing temporal checks.
+// VerifyCredentialAt is like VerifyCredential but takes the basis directly as
+// integer Unix seconds.
 func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
 	return verifyCredentialCore(token, publicKey, subject, expectedAction, currentTime)
+}
+
+// VerifyCredentialAtBasis is VerifyCredentialAt taking the basis in the
+// createdAt grammar, which is the form a committed artifact carries. An empty
+// basis is ephemeral and falls to the wall clock.
+//
+// The conversion truncates to whole seconds and never rounds (PROTOCOL, Time
+// basis): rounding up would move the basis into the second after the one the
+// operation was signed in, and two implementations disagreeing by one second on
+// the exp boundary fork authorization.
+func VerifyCredentialAtBasis(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, basis string) (*VerifiedCredential, error) {
+	if basis == "" {
+		return VerifyCredential(token, publicKey, subject, expectedAction)
+	}
+	seconds, err := BasisUnixSeconds(basis)
+	if err != nil {
+		return nil, err
+	}
+	return verifyCredentialCore(token, publicKey, subject, expectedAction, seconds)
+}
+
+// BasisUnixSeconds converts a basis in the createdAt grammar to the integer Unix
+// seconds that exp and revocation compare against, truncating the millisecond
+// remainder.
+func BasisUnixSeconds(basis string) (int64, error) {
+	parsed, err := time.Parse(protocolTimeFormat, basis)
+	if err != nil {
+		return 0, fmt.Errorf("invalid basis time: %w", err)
+	}
+	return parsed.Unix(), nil
 }
 
 // verifyCredentialCore is the shared implementation for DFOS credential
@@ -220,10 +251,9 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("credential kid DID does not match iss")
 	}
 
-	// verify temporal validity
-	if claims.Iat > currentTime {
-		return nil, fmt.Errorf("credential not yet valid (iat is in the future)")
-	}
+	// Temporal validity against the one basis. iat is informational: a credential
+	// dated after the basis is not a rejection, because the basis, not the
+	// issuer's clock, decides when authority applies.
 	if claims.Exp <= currentTime {
 		return nil, fmt.Errorf("credential expired")
 	}

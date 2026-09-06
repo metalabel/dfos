@@ -48,7 +48,7 @@ interface CredentialStatusBody {
 export const createRevocationChecker = (
   relays: string[],
   fetchImpl: typeof fetch,
-  resolveKey: (kid: string) => Promise<Uint8Array>,
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>,
 ): RevChecker => {
   const relaySet = normalizeRelays(relays);
   return async (issuerDID: string, credentialCID: string, asOfUnix?: number): Promise<boolean> => {

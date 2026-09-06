@@ -34,7 +34,7 @@ func sizedProofServer(t *testing.T, key ed25519.PublicKey, kid string) (*httptes
 	var verifiedSizes []int
 	var authority string
 
-	resolve := protocol.KeyResolver(func(gotKid string) (ed25519.PublicKey, error) {
+	resolve := protocol.KeyResolver(func(gotKid string, _ string) (ed25519.PublicKey, error) {
 		if gotKid != kid {
 			t.Errorf("proof kid = %q, want %q", gotKid, kid)
 		}

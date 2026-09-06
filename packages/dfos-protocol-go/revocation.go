@@ -108,8 +108,8 @@ func verifyRevocationCore(jwsToken string, resolveKey KeyResolver) (*VerifiedRev
 		return nil, fmt.Errorf("revocation kid DID does not match payload did")
 	}
 
-	// verify signature
-	publicKey, err := resolveKey(kid)
+	// A committed statement resolves its signer as of its own createdAt.
+	publicKey, err := resolveKey(kid, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve revocation key: %w", err)
 	}

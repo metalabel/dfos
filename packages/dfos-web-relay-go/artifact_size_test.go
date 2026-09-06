@@ -3,9 +3,16 @@ package relay
 import (
 	"strings"
 	"testing"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+// artifactSizeCreatedAt dates the size fixtures inside the seeded identity's
+// life. First admission resolves the signer as of the artifact's own createdAt,
+// and an identity has no state before its own genesis. The width is fixed, so
+// the byte targets below are unaffected.
+var artifactSizeCreatedAt = time.Now().Add(time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
 
 // Relay-tier boundary coverage for the 16384-byte artifact payload cap.
 //
@@ -30,7 +37,7 @@ func artifactPayloadCBORLen(t *testing.T, did string, content map[string]any) in
 		"type":      "artifact",
 		"did":       did,
 		"content":   content,
-		"createdAt": "2026-01-01T00:00:00.000Z",
+		"createdAt": artifactSizeCreatedAt,
 	}
 	cbor, _, _, err := dfos.DagCborCID(payload)
 	if err != nil {
@@ -72,7 +79,7 @@ func signArtifactRaw(t *testing.T, did, kid string, priv []byte, content map[str
 		"type":      "artifact",
 		"did":       did,
 		"content":   content,
-		"createdAt": "2026-01-01T00:00:00.000Z",
+		"createdAt": artifactSizeCreatedAt,
 	}
 	_, _, cid, err := dfos.DagCborCID(payload)
 	if err != nil {

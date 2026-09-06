@@ -339,9 +339,9 @@ func TestVoidKeyNeverEntersTheDidDocument(t *testing.T) {
 	}
 }
 
-// A void key must not resolve for verification either — not on the historical
-// resolver (has-ever-proved) and not on the current one (effective).
-func TestVoidKeyResolvesOnNeitherResolver(t *testing.T) {
+// A void key must not resolve for verification either — not in the
+// has-ever-proved state the `key=` index reads, and not on the current resolver.
+func TestVoidKeyResolvesOnNeitherReading(t *testing.T) {
 	store := NewMemoryStore()
 	r, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
@@ -354,28 +354,26 @@ func TestVoidKeyResolvesOnNeitherResolver(t *testing.T) {
 	added := newTestKeypair()
 	introduceKeyWithoutProof(t, r, id, added.mk)
 
-	voidKid := id.did + "#" + added.keyID
-	if _, err := CreateKeyResolver(store)(voidKid); err == nil {
-		t.Fatal("the historical resolver resolved a key no proof ever admitted")
+	if provedKeyIndexed(t, store, id.did, added.keyID) {
+		t.Fatal("the has-ever-proved state carries a key no proof ever admitted")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(voidKid); err == nil {
+	if _, err := CreateCurrentKeyResolver(store)(id.did+"#"+added.keyID, ""); err == nil {
 		t.Fatal("the current resolver resolved a key no proof ever admitted")
 	}
-	// The genesis key still resolves on both — the refusal is possession and
+	// The genesis key still reads on both — the refusal is possession and
 	// nothing else.
-	livingKid := id.did + "#" + id.controller.keyID
-	if _, err := CreateKeyResolver(store)(livingKid); err != nil {
-		t.Fatalf("historical resolver on the genesis key: %v", err)
+	if !provedKeyIndexed(t, store, id.did, id.controller.keyID) {
+		t.Fatal("the has-ever-proved state dropped the genesis key")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(livingKid); err != nil {
+	if _, err := CreateCurrentKeyResolver(store)(id.did+"#"+id.controller.keyID, ""); err != nil {
 		t.Fatalf("current resolver on the genesis key: %v", err)
 	}
 }
 
-// The historical resolver is HAS-EVER-PROVED, not current-state: a key that was
-// proved into the chain and later rotated out still resolves, because possession
-// does not become untrue.
-func TestHistoricalResolverKeepsAProvedRotatedOutKey(t *testing.T) {
+// The has-ever-proved state is not current state: a key that was proved into the
+// chain and later rotated out stays in it, because possession does not become
+// untrue, and the `key=` index still finds the identity by it.
+func TestProvedKeyStateKeepsARotatedOutKey(t *testing.T) {
 	store := NewMemoryStore()
 	r, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
@@ -388,13 +386,13 @@ func TestHistoricalResolverKeepsAProvedRotatedOutKey(t *testing.T) {
 	rotated, _ := rotateExistingTestIdentity(t, r, id)
 
 	rotatedOutKid := id.did + "#" + id.auth.keyID
-	if _, err := CreateKeyResolver(store)(rotatedOutKid); err != nil {
-		t.Fatalf("historical resolver dropped a proved rotated-out key: %v", err)
+	if !provedKeyIndexed(t, store, id.did, id.auth.keyID) {
+		t.Fatal("the has-ever-proved state dropped a proved rotated-out key")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(rotatedOutKid); err == nil {
+	if _, err := CreateCurrentKeyResolver(store)(rotatedOutKid, ""); err == nil {
 		t.Fatal("the current resolver kept a rotated-out key")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(id.did + "#" + rotated.keyID); err != nil {
+	if _, err := CreateCurrentKeyResolver(store)(id.did+"#"+rotated.keyID, ""); err != nil {
 		t.Fatalf("current resolver on the rotated-in key: %v", err)
 	}
 }

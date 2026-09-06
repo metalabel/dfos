@@ -37,7 +37,7 @@ func proofServer(t *testing.T, key ed25519.PublicKey, kid string, respond http.H
 	var seen []signedRequest
 	var authority string
 
-	resolve := protocol.KeyResolver(func(gotKid string) (ed25519.PublicKey, error) {
+	resolve := protocol.KeyResolver(func(gotKid string, _ string) (ed25519.PublicKey, error) {
 		if gotKid != kid {
 			t.Fatalf("proof kid = %q, want %q", gotKid, kid)
 		}

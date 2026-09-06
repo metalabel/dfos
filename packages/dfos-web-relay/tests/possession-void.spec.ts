@@ -70,7 +70,10 @@ const genesis = async () => {
     authKeys: [key.key],
     assertKeys: [key.key],
     controllerKeys: [key.key],
-    createdAt: ts(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: ts(-60),
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation: createOp,
@@ -271,7 +274,7 @@ describe('void keys never reach a resolution surface', () => {
     expect(body.state.provedKeys?.authKeys.map((k) => k.id)).toEqual([root.key.keyId]);
   });
 
-  it('resolves a proved-then-rotated-out key historically, and a void key never', async () => {
+  it('resolves a proved key at its own basis, past the rotation and never a void key', async () => {
     const store = new MemoryRelayStore();
     const root = await genesis();
     expect((await ingestOperations([root.jwsToken], store))[0]!.status).toBe('new');
@@ -299,14 +302,36 @@ describe('void keys never reach a resolution surface', () => {
     });
     expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
 
-    // A key that was PROVED and later rotated out still resolves on the
-    // historical path — that is what verifying long-lived artifacts across a
-    // rotation means, and revocation, not rotation, is the invalidation.
+    // Historical admission resolves the signer AS OF the operation's own
+    // createdAt, so the key that signed `early` still verifies after the
+    // rotation. Replayed onto a FRESH store, which holds no copy of the
+    // operation and therefore re-verifies it instead of short-circuiting as a
+    // duplicate.
+    const replay = new MemoryRelayStore();
+    expect((await ingestOperations([root.jwsToken], replay))[0]!.status).toBe('new');
+    expect((await ingestOperations([rotation.jwsToken], replay))[0]!.status).toBe('new');
+    const [replayed] = await ingestOperations([early.jwsToken], replay, {
+      admissionMode: 'historical',
+    });
+    expect(replayed!.status).toBe('new');
+
+    // The same op refused on first admission: freshness asks the head, where the
+    // signing key is retired.
+    const fresh = new MemoryRelayStore();
+    expect((await ingestOperations([root.jwsToken], fresh))[0]!.status).toBe('new');
+    expect((await ingestOperations([rotation.jwsToken], fresh))[0]!.status).toBe('new');
+    expect((await ingestOperations([early.jwsToken], fresh))[0]!.status).toBe('rejected');
+
+    // A key rotated out at the basis resolves nowhere: an op dated after the
+    // rotation and signed by the retired key is refused on the historical path
+    // too. The refusal is retryable, because the stored chain ends at or before
+    // that basis and an operation the basis names can still arrive.
     const late = await contentGenesis(root.did, root.key, 'after the rotation', 3);
     const [historical] = await ingestOperations([late.jwsToken], store, {
       admissionMode: 'historical',
     });
-    expect(historical!.status).toBe('new');
+    expect(historical!.status).toBe('rejected');
+    expect(historical!.dependencyMissing).toBe(true);
 
     // A key nothing ever proved does not, even historically: it never spoke for
     // this identity, so there is nothing for its signature to have been.

@@ -232,7 +232,6 @@ export const Credential = (props: { cid: string }) => {
   const p = decoded.payload;
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const notYet = p.iat > nowSec;
   const expired = p.exp <= nowSec;
   const farFuture = p.exp - nowSec > 10 * 365 * 24 * 3600;
   const revoked = resolved?.value.revoked ?? false;
@@ -243,9 +242,7 @@ export const Credential = (props: { cid: string }) => {
     : verifyError
       ? /expired/i.test(verifyError)
         ? { state: 'warn' as const, text: 'expired' }
-        : /not yet/i.test(verifyError)
-          ? { state: 'warn' as const, text: 'not yet valid' }
-          : { state: 'bad' as const, text: 'verification failed' }
+        : { state: 'bad' as const, text: 'verification failed' }
       : !resolved || root === null
         ? { state: 'pending' as const, text: 'verifying locally…' }
         : root.state === 'bad'
@@ -336,8 +333,10 @@ export const Credential = (props: { cid: string }) => {
               </Check>
             </>
           ) : null}
-          <Check state={notYet ? 'bad' : 'ok'} note={fmtUnixDate(p.iat)}>
-            {notYet ? 'not yet valid — iat is in the future' : 'issued'}
+          {/* `iat` is informational and gates nothing: the basis, not the
+              issuer's clock, decides when authority applies. */}
+          <Check state="ok" note={fmtUnixDate(p.iat)}>
+            issued
           </Check>
           <Check state={expired ? 'bad' : 'ok'} note={`expires ${fmtUnixDate(p.exp)}`}>
             {expired ? 'expired' : 'within validity window'}
@@ -398,15 +397,7 @@ export const Credential = (props: { cid: string }) => {
             {farFuture ? <span class="muted"> — effectively non-expiring</span> : null}
           </div>
           <div class="k">now</div>
-          <div class="v">
-            {notYet ? (
-              <span class="err">not yet valid</span>
-            ) : expired ? (
-              <span class="err">expired</span>
-            ) : (
-              'active'
-            )}
-          </div>
+          <div class="v">{expired ? <span class="err">expired</span> : 'active'}</div>
         </div>
       </Panel>
 

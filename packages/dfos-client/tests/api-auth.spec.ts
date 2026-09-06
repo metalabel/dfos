@@ -12,6 +12,7 @@
 
 */
 
+import { signIdentityOperation, type IdentityOperation } from '@metalabel/dfos-protocol/chain';
 import {
   createDFOSCredential,
   MAX_CREDENTIAL_SIZE,
@@ -46,7 +47,7 @@ import {
 } from '../src/api-auth';
 import { createClient } from '../src/client';
 import type { RevChecker } from '../src/types';
-import { buildIdentity, cidOf, fakePeerClient, makeKey } from './fixtures';
+import { buildIdentity, cidOf, fakePeerClient, keyProofFor, makeKey } from './fixtures';
 
 const RELAY = 'https://relay.test';
 const encoder = new TextEncoder();
@@ -480,6 +481,67 @@ describe('verifyApiRequest', () => {
     expect(result.action).toBe('read:profile');
     expect(result.iat).toBe(NOW);
     expect(result.credentialCID).toBe(grant.credentialCID);
+  });
+
+  // A presentation's basis is NOW, and now is the chain head. The verified clock
+  // is floored to whole seconds, so an ISO basis built from it would name the
+  // start of that second and lose everything committed inside it.
+  it('accepts a credential signed by a key added in the same second as the request', async () => {
+    const user = await buildIdentity();
+    const rp = await buildIdentity();
+
+    const k2 = makeKey();
+    const update: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: user.headCID,
+      authKeys: [user.k.key, k2.key],
+      assertKeys: [user.k.key, k2.key],
+      controllerKeys: [user.k.key],
+      // Half a second into the request's own second.
+      createdAt: new Date(NOW * 1000 + 500).toISOString(),
+      keyProofs: [
+        await keyProofFor({
+          key: k2,
+          did: user.did,
+          prevCID: user.headCID,
+          roles: ['auth', 'assert'],
+        }),
+      ],
+    };
+    const extended = await signIdentityOperation({
+      operation: update,
+      signer: user.k.signer,
+      keyId: user.k.keyId,
+      identityDID: user.did,
+    });
+    const issuer = { ...user, log: [...user.log, extended.jwsToken] };
+
+    const credential = await createDFOSCredential({
+      issuerDID: user.did,
+      audienceDID: rp.did,
+      att: API_ATT,
+      exp: NOW + 86_400,
+      signer: k2.signer,
+      keyId: k2.keyId,
+      iat: NOW - 600,
+    });
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      credentialCID: cidOf(credential),
+      kid: rp.kid,
+      sign: rp.k.signer,
+      iat: NOW,
+    });
+
+    const result = await verifyApiRequest(clientFor([issuer, rp]), {
+      ...baseInput(),
+      proof,
+      credential,
+    });
+    expect(result.subjectDID).toBe(user.did);
   });
 
   it('binds a non-default port in both the proof host and the api: resource', async () => {
