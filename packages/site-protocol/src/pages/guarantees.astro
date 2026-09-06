@@ -3,13 +3,13 @@ import fs from 'node:fs';
 import { specEntry } from '../content/specs';
 import SpecPage from '../layouts/SpecPage.astro';
 
-const source = fs.readFileSync('../../specs/CONFORMANCE.md', 'utf-8');
-const entry = specEntry('/conformance');
+const source = fs.readFileSync('../../specs/GUARANTEES.md', 'utf-8');
+const entry = specEntry('/guarantees');
 ---
 
 <SpecPage
   title={entry.title}
   description={entry.metaDescription}
-  path="/conformance"
+  path="/guarantees"
   source={source}
 />

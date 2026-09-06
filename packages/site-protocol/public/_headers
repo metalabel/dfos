@@ -40,6 +40,8 @@
   Cache-Control: public, max-age=0, must-revalidate
 /content-model/
   Cache-Control: public, max-age=0, must-revalidate
+/guarantees/
+  Cache-Control: public, max-age=0, must-revalidate
 /cli/
   Cache-Control: public, max-age=0, must-revalidate
 /credentials/

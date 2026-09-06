@@ -7,15 +7,16 @@ been silently skipped before and are therefore written down.
 
 ## Derivative-docs rule (any PR touching `specs/*.md`)
 
-The specs are a corpus, not a pile of files: `specs/THREAT-MODEL.md` and
-`specs/CONFORMANCE.md` are **derivative documents** that restate the other
-specs' security posture and MUST surfaces. A spec change that leaves them stale
-is a spec change that lies by omission.
+The specs are a corpus, not a pile of files. `specs/GUARANTEES.md` is a
+**derivative document**: it states no rule of its own, and every line in it
+restates what a normative spec makes true. The OpenAPI document is the other
+derivative surface, restating RELAY's wire on the machine-readable side. A spec
+change that leaves either stale is a spec change that lies by omission.
 
 Every PR touching `specs/*.md` MUST, for **each** derivative surface —
-`specs/THREAT-MODEL.md`, `specs/CONFORMANCE.md`, and any other derivative
-surface named by CONTRIBUTING.md item 7 that the change reaches (RELAY.md's
-full route surface table, the OpenAPI document) — do one of:
+`specs/GUARANTEES.md`, the OpenAPI document, and any other derivative surface
+named by CONTRIBUTING.md item 7 that the change reaches (RELAY.md's full route
+surface table) — do one of:
 
 1. **Sync it** — update that derivative in the same PR, or
 2. **State the waiver** — include one explicit sentence in the PR body saying
@@ -27,6 +28,11 @@ full route surface table, the OpenAPI document) — do one of:
 The waiver sentence is the mechanism: it converts a silent omission into a
 challengeable claim a reviewer can see and contest. A spec PR with neither the
 sync nor the sentence is incomplete — do not merge it.
+
+GUARANTEES is derivative in one direction only. When it and the spec it points
+at disagree, the spec is right and GUARANTEES is the bug. Never fix a
+disagreement by inventing a rule in GUARANTEES: a MUST that exists nowhere else
+in the corpus does not belong on that page.
 
 ## Register rule (any prose served on protocol.dfos.com)
 

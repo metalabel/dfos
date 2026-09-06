@@ -1707,3 +1707,4 @@ The five-language cross-verification suites are
 - [Credentials](https://protocol.dfos.com/credentials): authorization credentials and revocation
 - [Relay](https://protocol.dfos.com/relay): the HTTP relay: read and write contracts, ingestion, profiles, and the content plane
 - [Integrations](https://protocol.dfos.com/integrations): sign-in, API authentication, origin binding, and key ceremonies
+- [Guarantees](https://protocol.dfos.com/guarantees): what holds without trusting a server, what is a chosen view, and what the operator can read

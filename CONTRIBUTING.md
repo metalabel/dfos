@@ -2,10 +2,10 @@
 
 This repo is the canonical source for the DFOS protocol specs (`specs/`) and the
 published packages (`@metalabel/dfos-protocol`, `@metalabel/dfos-web-relay`,
-`@metalabel/dfos-client`, the Go twins, and the verification/conformance corpora). The frozen surfaces — Protocol v1,
-the `/proof/v1` relay plane, the v1 credential machinery — change only by the rules in
-each spec's own status block: clarifications in place, additive capability beside them,
-breaks become a new major.
+`@metalabel/dfos-client`, the Go twins, and the verification/conformance corpora). The corpus
+iterates in place and carries the version of the release it ships with: one corpus version, one
+package version. Wire-visible surfaces (the `/proof/v1` relay plane, the v1 credential machinery)
+change by clarification in place or additive capability beside them; a break moves the path.
 
 ## Build & verify
 
@@ -29,9 +29,9 @@ Every extension family that has landed (credits, index, revocations, signing) pa
 same registration tax. Work through this list before review — it is the difference
 between a family that reads as part of the corpus and one that reads as bolted on:
 
-1. **Clock in the path.** An unfrozen (`0.x`) route family mounts at `v0`
-   (`/index/v0`, `/signing/v0`); `v1` in a path is a freeze declaration
-   (`/proof/v1`, `/revocations/v1`). The spec's status block and the path must agree.
+1. **Clock in the path.** A `0.x` route family mounts at `v0`
+   (`/index/v0`, `/signing/v0`); `v1` in a path is a stability declaration
+   (`/proof/v1`, `/revocations/v1`). The owning spec and the path must agree.
 2. **Register the name.** A new JWS envelope adds its row — `typ`, owner spec,
    `cid`-header carriage, one-sentence semantics — to the extension registry
    ([`specs/PROTOCOL.md` → Extension registry](specs/PROTOCOL.md#extension-registry)),
@@ -55,17 +55,18 @@ between a family that reads as part of the corpus and one that reads as bolted o
 6. **Verdicts, not prose.** Verification failures split structurally into
    `invalid` vs `unverifiable` (typed reason / `errors.Is` sentinels) — never
    string-matched messages
-   ([CONFORMANCE.md → Conformance Tiers](specs/CONFORMANCE.md#conformance-tiers)).
-7. **Sync the derivative docs.** CONFORMANCE.md (doc list + the tier bullets your
-   MUST sets belong to), THREAT-MODEL.md (any new residual risk), RELAY.md's
-   full route surface table, and the OpenAPI document — including its 501
-   responses. Enforcement for every spec PR (not just new families): see the
-   derivative-docs rule in [`AGENTS.md`](AGENTS.md) — sync these docs or state in
-   the PR body why there is no derivative impact.
+   ([CONTENT-MODEL.md → Verification states](specs/CONTENT-MODEL.md#verification-states)
+   is the model).
+7. **Sync the derivative docs.** GUARANTEES.md (any new residual risk, accepted
+   bound, or adversary the family reaches), RELAY.md's full route surface table,
+   and the OpenAPI document — including its 501 responses. Enforcement for every
+   spec PR (not just new families): see the derivative-docs rule in
+   [`AGENTS.md`](AGENTS.md) — sync these docs or state in the PR body why there is
+   no derivative impact.
 8. **Vectors are the spec's teeth.** Ship deterministic reference vectors with the
    reference implementations; adversarial vectors for any byte-contract (the WYSIWYS
-   canonicalization set is the model). The five-language sweep is required at freeze,
-   not at `0.x`.
+   canonicalization set is the model). A vector change lands in all five languages
+   together.
 
 ## Releases
 

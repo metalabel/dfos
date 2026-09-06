@@ -1300,8 +1300,6 @@ a.card:hover {
   padding-left: 2rem;
 }
 
-/* Flex so an optional .spec-chip rides the far end of the title row; a title
-   with no chip is a lone item and still sits flush left. */
 .spec-link-title {
   font-family: var(--font-heading);
   font-weight: 400;
@@ -1313,29 +1311,6 @@ a.card:hover {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.25rem;
-}
-
-/* Status chip from the spec's own status block — quiet, never competing with
-   the title it trails. */
-.spec-chip {
-  flex: none;
-  font-family: var(--font-body);
-  font-size: 0.65rem;
-  letter-spacing: 0.08em;
-  line-height: 1.4;
-  color: var(--teal-dim);
-  border: 1px solid var(--surface-border);
-  border-radius: 2px;
-  padding: 0.15em 0.5em;
-  white-space: nowrap;
-  transition:
-    color 0.2s,
-    border-color 0.2s;
-}
-
-.spec-link:hover .spec-chip {
-  color: var(--teal);
-  border-color: var(--teal-dim);
 }
 
 .spec-link-desc {
