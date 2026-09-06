@@ -931,8 +931,16 @@ export interface RelayStore {
   getPublicCredentialByCID(cid: string): Promise<StoredPublicCredential | undefined>;
   /** Add a public credential as standing authorization */
   addPublicCredential(credential: StoredPublicCredential): Promise<void>;
-  /** Remove a public credential (e.g., after revocation) */
-  removePublicCredential(credentialCID: string): Promise<void>;
+  /**
+   * Remove a public credential (e.g., after revocation), scoped to the DID that
+   * issued it. The scope is the whole point: revocation is issuer-only
+   * (CREDENTIALS.md "Relay Enforcement"), so an eviction keyed on the CID alone
+   * would let any DID that can sign a syntactically valid revocation destroy a
+   * grant it did not issue — permanently, since re-presenting the credential
+   * lands on the duplicate-by-CID branch. An (issuerDID, credentialCID) pair
+   * naming no held credential removes nothing and is not an error.
+   */
+  removePublicCredential(issuerDID: string, credentialCID: string): Promise<void>;
 
   // --- peer sync state ---
 

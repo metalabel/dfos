@@ -13,7 +13,16 @@ import (
 // these tests pin the two things a derived table can get wrong: the answers it
 // gives, and staying level with the column it derives from.
 
+// testCredIssuer is the DID every addCred credential is issued by, and therefore
+// the DID an eviction of one must be scoped to.
+var testCredIssuer = "did:dfos:" + strings.Repeat("a", 23)
+
 func addCred(t *testing.T, store *SQLiteStore, cid string, resources ...string) {
+	t.Helper()
+	addCredAs(t, store, testCredIssuer, cid, resources...)
+}
+
+func addCredAs(t *testing.T, store *SQLiteStore, issuerDID, cid string, resources ...string) {
 	t.Helper()
 	att := make([]AttenuationPair, 0, len(resources))
 	for _, resource := range resources {
@@ -21,7 +30,7 @@ func addCred(t *testing.T, store *SQLiteStore, cid string, resources ...string) 
 	}
 	if err := store.AddPublicCredential(StoredPublicCredential{
 		CID:       cid,
-		IssuerDID: "did:dfos:" + strings.Repeat("a", 23),
+		IssuerDID: issuerDID,
 		Att:       att,
 		Exp:       0,
 		JWSToken:  "token-" + cid,
@@ -92,7 +101,7 @@ func TestPublicCredentialRemoveClearsResources(t *testing.T) {
 
 	addCred(t, store, "cid-one", "chain:content-a")
 	addCred(t, store, "cid-two", "chain:content-a")
-	if err := store.RemovePublicCredential("cid-one"); err != nil {
+	if err := store.RemovePublicCredential(testCredIssuer, "cid-one"); err != nil {
 		t.Fatalf("RemovePublicCredential: %v", err)
 	}
 

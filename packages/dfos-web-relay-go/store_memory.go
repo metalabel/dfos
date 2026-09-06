@@ -1248,10 +1248,12 @@ func (s *MemoryStore) AddPublicCredential(credential StoredPublicCredential) err
 	return nil
 }
 
-func (s *MemoryStore) RemovePublicCredential(credentialCID string) error {
+func (s *MemoryStore) RemovePublicCredential(issuerDID string, credentialCID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.publicCredentials, credentialCID)
+	if credential, ok := s.publicCredentials[credentialCID]; ok && credential.IssuerDID == issuerDID {
+		delete(s.publicCredentials, credentialCID)
+	}
 	return nil
 }
 

@@ -633,7 +633,15 @@ type Store interface {
 	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
 	GetPublicCredentialByCID(cid string) (*StoredPublicCredential, error)
 	AddPublicCredential(credential StoredPublicCredential) error
-	RemovePublicCredential(credentialCID string) error
+	// RemovePublicCredential evicts a standing public credential, scoped to the
+	// DID that issued it. The scope is the whole point: revocation is
+	// issuer-only (CREDENTIALS.md "Relay Enforcement"), so an eviction keyed on
+	// the CID alone would let any DID that can sign a syntactically valid
+	// revocation destroy a grant it did not issue — permanently, since
+	// re-presenting the credential lands on the duplicate-by-CID branch. A
+	// (issuerDID, credentialCID) pair that names no held credential removes
+	// nothing and is not an error.
+	RemovePublicCredential(issuerDID string, credentialCID string) error
 
 	// listing — enumerate all chains in the store
 	ListIdentityChains() ([]StoredIdentityChain, error)
