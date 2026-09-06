@@ -1,6 +1,6 @@
 # Index — Worked Example
 
-This directory contains a worked example of the `index/v1` schema — an **index chain**, which is an LWW-Map folded via the [canonical fold](https://protocol.dfos.com/content-model#canonical-fold).
+This directory contains a worked example of the `index/v1` schema — an **index chain**, which is an LWW-Map folded via the [canonical fold](https://protocol.dfos.com/content-model#the-canonical-fold).
 
 ## Schema
 
@@ -17,7 +17,7 @@ See [`packages/dfos-protocol/schemas/index.v1.json`](../../packages/dfos-protoco
 
 ## Projection Rules
 
-The resolved index is the [canonical fold](https://protocol.dfos.com/content-model#canonical-fold) — the spec defines the linearization and its branch-inclusive convergence. What is `index/v1`-specific is the reduction: each document's `deltas` array is flattened in canonical order and folded as an LWW-Map — `set` writes, `remove` deletes, the last delta touching a key wins.
+The resolved index is the [canonical fold](https://protocol.dfos.com/content-model#the-canonical-fold) — the spec defines the linearization and its branch-inclusive convergence. What is `index/v1`-specific is the reduction: each document's `deltas` array is flattened in canonical order and folded as an LWW-Map — `set` writes, `remove` deletes, the last delta touching a key wins.
 
 ## Example Chain
 
