@@ -387,9 +387,16 @@ type keyProofFold struct {
 // correctly-headed envelope can still rescue it — void is a state a chain can
 // climb out of, not a mark.
 func foldEffectiveKeyState(in keyProofFold) (DeclaredKeyState, []VoidKeyMembership) {
+	// CARRIAGE IS THE SAME KEY, NOT THE SAME NAME. A membership carries forward
+	// only when the prior effective entry matches this one WHOLE — id, type and
+	// material. Matching on the id alone would let an operation keep a key id and
+	// swap the material under it, and carriage would wave the new material through
+	// with no envelope: the id would be a free pass to any key. A reused id
+	// carrying new material is not a carriage, it is an ordinary introduction, and
+	// it takes an envelope like every other one.
 	carried := func(role KeyRole, key MultikeyPublicKey) bool {
 		for _, prior := range declaredRoleKeys(in.priorEffective, role) {
-			if prior.ID == key.ID {
+			if prior.ID == key.ID && prior.Type == key.Type && prior.PublicKeyMultibase == key.PublicKeyMultibase {
 				return true
 			}
 		}
@@ -470,6 +477,66 @@ func foldEffectiveKeyState(in keyProofFold) (DeclaredKeyState, []VoidKeyMembersh
 		}
 	}
 	return effective, voidKeys
+}
+
+// keyMaterialIndex is THE KEY-MATERIAL CONSISTENCY RULE, in one place because
+// both verifiers apply it. A key id is bound to ONE Multikey for the life of a
+// chain: the id is a stable name that artifacts reference, so re-pointing it at
+// new material would silently re-aim every reference. Breaking the binding
+// REJECTS the operation — this is a validity rule, not a possession one, and
+// never a void.
+//
+// Insertion-ordered, so the index a verified state hands on serializes
+// identically in both reference languages.
+type keyMaterialIndex struct {
+	byID  map[string]MultikeyPublicKey
+	order []MultikeyPublicKey
+}
+
+// newKeyMaterialIndex builds a first-wins index over an already-verified key
+// list. The sources cannot disagree on a chain that verified, so first-wins is
+// a tie-break that never fires.
+func newKeyMaterialIndex(keys []MultikeyPublicKey) *keyMaterialIndex {
+	index := &keyMaterialIndex{byID: make(map[string]MultikeyPublicKey, len(keys))}
+	for _, key := range keys {
+		if _, found := index.byID[key.ID]; !found {
+			index.byID[key.ID] = key
+			index.order = append(index.order, key)
+		}
+	}
+	return index
+}
+
+// admit folds an operation's key arrays into the index, rejecting any id that
+// arrives bound to material other than the one it went in with.
+func (index *keyMaterialIndex) admit(keys []MultikeyPublicKey) error {
+	for _, key := range keys {
+		existing, found := index.byID[key.ID]
+		if !found {
+			index.byID[key.ID] = key
+			index.order = append(index.order, key)
+		} else if existing.PublicKeyMultibase != key.PublicKeyMultibase || existing.Type != key.Type {
+			return fmt.Errorf("key %s type or public key inconsistency", key.ID)
+		}
+	}
+	return nil
+}
+
+// keys returns the binding in first-seen order, always non-nil so it encodes as
+// [] and never as null.
+func (index *keyMaterialIndex) keys() []MultikeyPublicKey {
+	out := make([]MultikeyPublicKey, len(index.order))
+	copy(out, index.order)
+	return out
+}
+
+// flatKeys is a key state's three role arrays end to end, in role order.
+func flatKeys(state DeclaredKeyState) []MultikeyPublicKey {
+	out := make([]MultikeyPublicKey, 0, len(state.AuthKeys)+len(state.AssertKeys)+len(state.ControllerKeys))
+	out = append(out, state.AuthKeys...)
+	out = append(out, state.AssertKeys...)
+	out = append(out, state.ControllerKeys...)
+	return out
 }
 
 // assertSingleKeyGenesis applies THE SINGLE-KEY GENESIS RULE, structural. A
@@ -562,7 +629,9 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		provedKeys = emptyKeyState()
 		voidKeys   = []VoidKeyMembership{}
 		services   []ServiceEntry
-		seenKeys   = make(map[string]MultikeyPublicKey)
+		// seenKeys is the chain-wide key-id-to-material binding. Handed on in the
+		// verified state so an incremental extension enforces the identical rule.
+		seenKeys = newKeyMaterialIndex(nil)
 	)
 
 	for idx, jwsToken := range log {
@@ -678,21 +747,13 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		// DECLARED, not effective: key-material consistency is a property of what
 		// the chain wrote, and a void key still may not change its material later.
 		if opType == "create" || opType == "update" {
-			allKeys := make([]MultikeyPublicKey, 0)
-			allKeys = append(allKeys, declared.AuthKeys...)
-			allKeys = append(allKeys, declared.AssertKeys...)
-			allKeys = append(allKeys, declared.ControllerKeys...)
+			allKeys := flatKeys(declared)
 			allKeys = append(allKeys, opAuthKeys...)
 			allKeys = append(allKeys, opAssertKeys...)
 			allKeys = append(allKeys, opControllerKeys...)
 
-			for _, k := range allKeys {
-				existing, found := seenKeys[k.ID]
-				if !found {
-					seenKeys[k.ID] = k
-				} else if existing.PublicKeyMultibase != k.PublicKeyMultibase || existing.Type != k.Type {
-					return nil, fmt.Errorf("log[%d]: key %s type or public key inconsistency", idx, k.ID)
-				}
+			if err := seenKeys.admit(allKeys); err != nil {
+				return nil, fmt.Errorf("log[%d]: %w", idx, err)
 			}
 
 			// no duplicate key IDs within a usage section
@@ -822,6 +883,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			Declared:       declared,
 			VoidKeys:       voidKeys,
 			ProvedKeys:     provedKeys,
+			SeenKeys:       seenKeys.keys(),
 		},
 		HeadCID:       previousCID,
 		LastCreatedAt: lastCreatedAt,
@@ -839,6 +901,14 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 // before this member existed — the effective arrays stand in for it, which is
 // exactly correct for any chain with no void memberships and is the only reading
 // available for a state that never recorded the difference.
+//
+// KEY-ID CONSISTENCY IS CHECKED HERE, on the same terms as the full walk. The
+// trusted state carries SeenKeys — the id-to-material binding the walk already
+// enforced — so an operation that re-points an existing key id at new material is
+// REJECTED on this path exactly as a replay of the same two operations would
+// reject it. Without that the fast path would accept a chain its own
+// re-verification refuses, and a relay's linear path is the path almost every
+// operation takes.
 func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt, newOp string) (*VerifiedIdentityResult, error) {
 	priorEffective := DeclaredKeyState{
 		AuthKeys:       currentState.AuthKeys,
@@ -856,6 +926,15 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	if priorProved.IsZero() {
 		priorProved = priorEffective
 	}
+	// The id-to-material binding this chain has already committed to. Absent, it
+	// is read off declared plus has-ever-proved — complete for any chain that never
+	// dropped an unproved key id, and the only reading available for a state that
+	// did not record the binding.
+	priorSeen := currentState.SeenKeys
+	if len(priorSeen) == 0 {
+		priorSeen = append(flatKeys(priorDeclared), flatKeys(priorProved)...)
+	}
+	seenKeys := newKeyMaterialIndex(priorSeen)
 
 	header, payload, err := DecodeJWSUnsafe(newOp)
 	if err != nil {
@@ -969,6 +1048,12 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 		if err != nil {
 			return nil, err
 		}
+		// the chain-wide id-to-material binding, then duplicate key IDs within
+		// usage sections
+		allKeys := append(append(append([]MultikeyPublicKey{}, opAuthKeys...), opAssertKeys...), opControllerKeys...)
+		if err := seenKeys.admit(allKeys); err != nil {
+			return nil, err
+		}
 		for _, keys := range [][]MultikeyPublicKey{opAuthKeys, opAssertKeys, opControllerKeys} {
 			seen := make(map[string]bool)
 			for _, k := range keys {
@@ -1010,6 +1095,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 				Declared:       opDeclared,
 				VoidKeys:       foldedVoid,
 				ProvedKeys:     unionProvedKeyState(priorProved, foldedEffective),
+				SeenKeys:       seenKeys.keys(),
 			},
 			HeadCID:       operationCID,
 			LastCreatedAt: createdAt,
@@ -1033,6 +1119,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 			Declared:       priorDeclared,
 			VoidKeys:       voidKeys,
 			ProvedKeys:     priorProved,
+			SeenKeys:       seenKeys.keys(),
 		},
 		HeadCID:       operationCID,
 		LastCreatedAt: createdAt,

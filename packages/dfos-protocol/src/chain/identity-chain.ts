@@ -149,8 +149,20 @@ const foldEffectiveKeyState = (input: {
   /** The envelopes this operation carries. */
   keyProofs: string[];
 }): { effective: DeclaredKeyState; voidKeys: VoidKeyMembership[] } => {
+  // CARRIAGE IS THE SAME KEY, NOT THE SAME NAME. A membership carries forward
+  // only when the prior effective entry matches this one WHOLE — id, type and
+  // material. Matching on the id alone would let an operation keep a key id and
+  // swap the material under it, and carriage would wave the new material through
+  // with no envelope: the id would be a free pass to any key. A reused id
+  // carrying new material is not a carriage, it is an ordinary introduction, and
+  // it takes an envelope like every other one.
   const carried = (role: KeyRole, key: MultikeyPublicKey): boolean =>
-    input.priorEffective[ROLE_ARRAY[role]].some((prior) => prior.id === key.id);
+    input.priorEffective[ROLE_ARRAY[role]].some(
+      (prior) =>
+        prior.id === key.id &&
+        prior.type === key.type &&
+        prior.publicKeyMultibase === key.publicKeyMultibase,
+    );
 
   // The introductions, indexed by key MATERIAL. Material rather than key id
   // because an envelope binds a Multikey: two ids naming the same material are
@@ -208,6 +220,47 @@ const foldEffectiveKeyState = (input: {
   }
   return { effective, voidKeys };
 };
+
+/**
+ * THE KEY-MATERIAL CONSISTENCY RULE, in one place because both verifiers apply
+ * it. A key id is bound to ONE Multikey for the life of a chain: the id is a
+ * stable name that artifacts reference, so re-pointing it at new material would
+ * silently re-aim every reference. Breaking the binding REJECTS the operation —
+ * this is a validity rule, not a possession one, and never a void.
+ *
+ * Mutates the index as it admits keys, so a caller folds an operation's arrays
+ * in and carries the result forward. Insertion-ordered (Map), so the index a
+ * verified state hands on serializes identically in both reference languages.
+ */
+const admitKeyMaterial = (
+  index: Map<string, MultikeyPublicKey>,
+  keys: MultikeyPublicKey[],
+): void => {
+  for (const key of keys) {
+    const existing = index.get(key.id);
+    if (!existing) {
+      index.set(key.id, key);
+    } else if (
+      existing.publicKeyMultibase !== key.publicKeyMultibase ||
+      existing.type !== key.type
+    ) {
+      throw new Error(`key ${key.id} type or public key inconsistency`);
+    }
+  }
+};
+
+/** First-wins index over an already-verified key list. */
+const keyMaterialIndex = (keys: MultikeyPublicKey[]): Map<string, MultikeyPublicKey> => {
+  const index = new Map<string, MultikeyPublicKey>();
+  for (const key of keys) if (!index.has(key.id)) index.set(key.id, key);
+  return index;
+};
+
+const flatKeys = (state: DeclaredKeyState): MultikeyPublicKey[] => [
+  ...state.authKeys,
+  ...state.assertKeys,
+  ...state.controllerKeys,
+];
 
 /**
  * THE SINGLE-KEY GENESIS RULE, structural. A genesis operation declares exactly
@@ -396,24 +449,17 @@ export const verifyIdentityChain = async (input: {
 
     // key consistency check — same key ID must always have same key material
     if (op.type === 'create' || op.type === 'update') {
-      const incomingKeys = [...op.authKeys, ...op.assertKeys, ...op.controllerKeys];
       // DECLARED, not effective: key-material consistency is a property of what
       // the chain wrote, and a void key still may not change its material later.
-      const currentKeys = [
-        ...state.declared.authKeys,
-        ...state.declared.assertKeys,
-        ...state.declared.controllerKeys,
-      ];
-      for (const k of [...currentKeys, ...incomingKeys]) {
-        const existing = state.seenKeys.get(k.id);
-        if (!existing) {
-          state.seenKeys.set(k.id, k);
-        } else if (
-          existing.publicKeyMultibase !== k.publicKeyMultibase ||
-          existing.type !== k.type
-        ) {
-          throw new Error(`log[${idx}]: key ${k.id} type or public key inconsistency`);
-        }
+      try {
+        admitKeyMaterial(state.seenKeys, [
+          ...flatKeys(state.declared),
+          ...op.authKeys,
+          ...op.assertKeys,
+          ...op.controllerKeys,
+        ]);
+      } catch (e) {
+        throw new Error(`log[${idx}]: ${(e as Error).message}`);
       }
 
       // duplicate key check within usage sections
@@ -551,6 +597,9 @@ export const verifyIdentityChain = async (input: {
     declared: state.declared,
     voidKeys: state.voidKeys,
     provedKeys: state.provedKeys,
+    // The id-to-material binding the walk enforced, handed on so an incremental
+    // extension of this state can enforce the identical rule without the log.
+    seenKeys: [...state.seenKeys.values()],
   };
 };
 
@@ -566,10 +615,13 @@ export const verifyIdentityChain = async (input: {
  * verified genesis). This function performs one signature verification and one
  * state transition — constant time regardless of chain length.
  *
- * Note: key-ID consistency across the full chain history is NOT checked here.
- * That invariant is established during genesis verification and maintained by
- * the protocol's key consistency rules. Periodic full re-verification can
- * audit this property.
+ * KEY-ID CONSISTENCY IS CHECKED HERE, on the same terms as the full walk. The
+ * trusted state carries `seenKeys` — the id-to-material binding the walk already
+ * enforced — so an operation that re-points an existing key id at new material
+ * is REJECTED on this path exactly as a replay of the same two operations would
+ * reject it. Without that the fast path would accept a chain its own
+ * re-verification refuses, and a relay's linear path is the path almost every
+ * operation takes.
  *
  * THE POSSESSION FOLD RUNS HERE TOO, and it needs both halves of the trusted
  * state: the EFFECTIVE arrays (to know what an introduction is a transition out
@@ -600,6 +652,14 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
   // true for any chain that never voided a membership, and the only reading
   // available for a state that did not record the difference.
   const priorProved = currentState.provedKeys ?? priorEffective;
+  // The id-to-material binding this chain has already committed to. Absent, it
+  // is read off declared plus has-ever-proved — complete for any chain that
+  // never dropped an unproved key id, and the only reading available for a state
+  // that did not record the binding.
+  const seenKeys = keyMaterialIndex(
+    currentState.seenKeys ?? [...flatKeys(priorDeclared), ...flatKeys(priorProved)],
+  );
+  const priorSeenKeys = [...seenKeys.values()];
 
   // decode JWS
   const decoded = decodeJwsUnsafe(newOp);
@@ -682,8 +742,10 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
     throw new Error('invalid signature');
   }
 
-  // key consistency — check for duplicate key IDs within usage sections
+  // key consistency — the chain-wide id-to-material binding, then duplicate key
+  // IDs within usage sections
   if (op.type === 'update') {
+    admitKeyMaterial(seenKeys, [...op.authKeys, ...op.assertKeys, ...op.controllerKeys]);
     [op.authKeys, op.assertKeys, op.controllerKeys].forEach((keys) => {
       const set = new Set(keys.map((k) => k.id));
       if (set.size !== keys.length) {
@@ -716,6 +778,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           declared,
           voidKeys: folded.voidKeys,
           provedKeys: unionProved(priorProved, folded.effective),
+          seenKeys: [...seenKeys.values()],
         };
       }
       // delete and restore introduce nothing, so both key states — and the void
@@ -731,6 +794,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           declared: priorDeclared,
           voidKeys: currentState.voidKeys ?? [],
           provedKeys: priorProved,
+          seenKeys: priorSeenKeys,
         };
       case 'restore':
         return {
@@ -743,6 +807,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           declared: priorDeclared,
           voidKeys: currentState.voidKeys ?? [],
           provedKeys: priorProved,
+          seenKeys: priorSeenKeys,
         };
     }
   })();

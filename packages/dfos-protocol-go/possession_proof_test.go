@@ -811,3 +811,152 @@ func TestPossessionExtensionCarriesStateAcrossDeleteAndRestore(t *testing.T) {
 	expectVoid(t, afterRestore.State, added.mk, "auth")
 	expectProved(t, afterRestore.State, g.key.mk, KeyRoles...)
 }
+
+// -----------------------------------------------------------------------------
+// key-material consistency — the extension verifier returns the full walk verdict
+// -----------------------------------------------------------------------------
+//
+// Byte-twin of the same-named block in dfos-protocol/tests/possession-proof.spec.ts.
+//
+// A KEY ID IS BOUND TO ONE KEY FOR THE LIFE OF A CHAIN. The id is a stable name —
+// artifacts reference it, resolvers dereference it — so an operation that keeps
+// the id and swaps the material under it re-aims every reference at once. That is
+// a VALIDITY break, not a possession one: the full walk rejects the operation, and
+// the incremental verifier that relays run on the linear path has to reject it
+// identically, or a relay accepts and sequences a chain its own re-verification
+// would refuse.
+
+// impostorKey is a fresh keypair wearing somebody else's key id.
+func impostorKey(t *testing.T, id string) possessionKey {
+	t.Helper()
+	k := newPossessionKey(t)
+	k.mk.ID = id
+	return k
+}
+
+func expectSameSeenKeys(t *testing.T, got, want []MultikeyPublicKey) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("seenKeys: %d entries vs %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("seenKeys[%d]: %+v vs %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestKeyMaterialSwapRejectedOnBothPaths(t *testing.T) {
+	g := newPossessionGenesis(t)
+	impostor := impostorKey(t, g.key.mk.ID)
+	one := []MultikeyPublicKey{impostor.mk}
+	op, _ := testSignIdentityUpdate(t, g.did, one, one, one,
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+
+	// full replay: reject
+	if _, err := VerifyIdentityChain([]string{g.jws, op}); err == nil ||
+		!strings.Contains(err.Error(), "type or public key inconsistency") {
+		t.Fatalf("full replay: %v", err)
+	}
+	// the O(1) path: the SAME verdict, not a void membership and not an accept
+	if _, err := VerifyIdentityExtension(g.state, g.cid, g.createdAt, op); err == nil ||
+		!strings.Contains(err.Error(), "type or public key inconsistency") {
+		t.Fatalf("extension: %v", err)
+	}
+}
+
+// TestKeyMaterialSwapRejectedEvenWithAValidEnvelope: possession of the new
+// material is not the question. The chain already bound this name, and an
+// envelope cannot rename a key.
+func TestKeyMaterialSwapRejectedEvenWithAValidEnvelope(t *testing.T) {
+	g := newPossessionGenesis(t)
+	impostor := impostorKey(t, g.key.mk.ID)
+	one := []MultikeyPublicKey{impostor.mk}
+	op, _ := testSignIdentityUpdateWithProofs(t, g.did, one, one, one,
+		[]string{testKeyProof(t, impostor.priv, g.did, g.cid)},
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+
+	if _, err := VerifyIdentityChain([]string{g.jws, op}); err == nil ||
+		!strings.Contains(err.Error(), "type or public key inconsistency") {
+		t.Fatalf("full replay: %v", err)
+	}
+	if _, err := VerifyIdentityExtension(g.state, g.cid, g.createdAt, op); err == nil ||
+		!strings.Contains(err.Error(), "type or public key inconsistency") {
+		t.Fatalf("extension: %v", err)
+	}
+}
+
+// TestKeyMaterialSwapRejectedFromAStatePredatingTheBinding: a trusted state
+// persisted before SeenKeys existed, or hand-built by a caller. The binding is
+// read off declared plus has-ever-proved, and the verdict holds.
+func TestKeyMaterialSwapRejectedFromAStatePredatingTheBinding(t *testing.T) {
+	g := newPossessionGenesis(t)
+	legacy := g.state
+	legacy.SeenKeys = nil
+
+	impostor := impostorKey(t, g.key.mk.ID)
+	one := []MultikeyPublicKey{impostor.mk}
+	op, _ := testSignIdentityUpdate(t, g.did, one, one, one,
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+
+	if _, err := VerifyIdentityExtension(legacy, g.cid, g.createdAt, op); err == nil ||
+		!strings.Contains(err.Error(), "type or public key inconsistency") {
+		t.Fatalf("extension from legacy state: %v", err)
+	}
+}
+
+func TestKeyMaterialBindingIsHandedOnByAnOrdinaryKeyAdd(t *testing.T) {
+	g := newPossessionGenesis(t)
+	added := newPossessionKey(t)
+	op, _ := testSignIdentityUpdateWithProofs(t, g.did,
+		keysOf(g.key), keysOf(g.key, added), keysOf(g.key),
+		[]string{testKeyProof(t, added.priv, g.did, g.cid, "auth")},
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+
+	replayed := mustVerifyChain(t, g.jws, op)
+	extended, err := VerifyIdentityExtension(g.state, g.cid, g.createdAt, op)
+	if err != nil {
+		t.Fatalf("VerifyIdentityExtension: %v", err)
+	}
+	expectProved(t, extended.State, added.mk, "auth")
+	expectSameSeenKeys(t, extended.State.SeenKeys, replayed.SeenKeys)
+	expectSameSeenKeys(t, extended.State.SeenKeys, []MultikeyPublicKey{g.key.mk, added.mk})
+}
+
+// TestKeyMaterialBindingLetsAVoidMembershipClimbBackOut: re-declaring the SAME id
+// with the SAME material is not a rename, so the binding never fires — the
+// membership is introduced again and an envelope headed at the new head rescues it.
+func TestKeyMaterialBindingLetsAVoidMembershipClimbBackOut(t *testing.T) {
+	g := newPossessionGenesis(t)
+	unproved := newPossessionKey(t)
+	op1, _ := testSignIdentityUpdate(t, g.did,
+		keysOf(g.key), keysOf(g.key, unproved), keysOf(g.key),
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+	ext1, err := VerifyIdentityExtension(g.state, g.cid, g.createdAt, op1)
+	if err != nil {
+		t.Fatalf("first extension: %v", err)
+	}
+	expectVoid(t, ext1.State, unproved.mk, "auth")
+
+	op2, _ := testSignIdentityUpdateWithProofs(t, g.did,
+		keysOf(g.key), keysOf(g.key, unproved), keysOf(g.key),
+		[]string{testKeyProof(t, unproved.priv, g.did, ext1.HeadCID, "auth")},
+		g.key.keyID, g.key.priv, ext1.HeadCID, possessionTS(2))
+	ext2, err := VerifyIdentityExtension(ext1.State, ext1.HeadCID, ext1.LastCreatedAt, op2)
+	if err != nil {
+		t.Fatalf("second extension: %v", err)
+	}
+	expectProved(t, ext2.State, unproved.mk, "auth")
+
+	replayed := mustVerifyChain(t, g.jws, op1, op2)
+	expectSameKeyState(t, "effective", DeclaredKeyState{
+		AuthKeys:       ext2.State.AuthKeys,
+		AssertKeys:     ext2.State.AssertKeys,
+		ControllerKeys: ext2.State.ControllerKeys,
+	}, DeclaredKeyState{
+		AuthKeys:       replayed.AuthKeys,
+		AssertKeys:     replayed.AssertKeys,
+		ControllerKeys: replayed.ControllerKeys,
+	})
+	expectSameSeenKeys(t, ext2.State.SeenKeys, replayed.SeenKeys)
+}

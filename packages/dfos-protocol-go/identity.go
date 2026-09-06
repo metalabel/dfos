@@ -103,6 +103,28 @@ type IdentityState struct {
 	// re-deriving it from the raw log under a declared-state rule that quietly
 	// disagrees with this one.
 	ProvedKeys DeclaredKeyState `json:"provedKeys"`
+	// SeenKeys is HAS-EVER-BEEN-DECLARED, as a key-id-to-material binding: one
+	// entry per key id the chain has ever written, carrying the Multikey that id
+	// went in with, in the order the walk first saw it.
+	//
+	// A KEY ID IS BOUND TO ONE KEY FOR THE LIFE OF A CHAIN. The full walk enforces
+	// that chain-wide and rejects the operation that breaks it — the id is a stable
+	// name, so re-pointing it at new material would silently re-aim every artifact
+	// that ever referenced it. The incremental extension verifier has no log to
+	// re-scan, so it needs the binding handed to it, and this member is how it
+	// arrives: with it, the fast path returns the SAME verdict as a full replay on
+	// the same operation, which is the property that keeps a relay's linear path
+	// from accepting a chain its own re-verification would refuse.
+	//
+	// Broader than Declared and than ProvedKeys on purpose. The rule covers every
+	// id the chain wrote, including one declared into a void membership and later
+	// dropped — neither of the other two members remembers that id, and it is
+	// exactly the id an attacker would reuse.
+	//
+	// ALWAYS SERIALIZED, deliberately not omitempty, for the same parity reason
+	// VoidKeys is: both relays serve this struct verbatim on the same identity
+	// route, so the two must not disagree about whether the member is present.
+	SeenKeys []MultikeyPublicKey `json:"seenKeys"`
 }
 
 // NewMultikeyPublicKey creates a MultikeyPublicKey from an ed25519 public key.
