@@ -154,7 +154,7 @@ func TestRevocationStatus_IssuerUnknownCursorKeysetResumes(t *testing.T) {
 	prefix := "bafyrei" + strings.Repeat("a", 51)
 	cids := []string{prefix + "a", prefix + "b", prefix + "c"}
 	for _, cid := range cids {
-		if err := store.AddRevocation(StoredRevocation{
+		if err := seedRevocation(t, store, StoredRevocation{
 			CID: "rev-" + cid, IssuerDID: issuer, CredentialCID: cid, JWSToken: "token-" + cid,
 		}); err != nil {
 			t.Fatal(err)

@@ -12,18 +12,30 @@ import (
 	"time"
 )
 
-// BatchableStore is optionally implemented by stores that support wrapping
-// writes in a single transaction.
-type BatchableStore interface {
-	BeginWriteBatch() error
-	CommitWriteBatch() error
-	RollbackWriteBatch() error
-}
-
 // Relay is a DFOS web relay — the core verification and storage engine.
+//
+// WHAT A STORE CAN DO IS A FACT ABOUT ITS TYPE. NewRelay type-asserts each
+// further contract ONCE and holds the narrowed reference; the advertised
+// capabilities are derived from those assertions plus config. No route probes a
+// member, and no member is satisfied by throwing.
 type Relay struct {
-	store              Store // ingestion store — sees write transactions for within-batch reads
-	readStore          Store // HTTP read store — always uses WAL read pool, never races on tx
+	// readStore is the base contract every route reads through.
+	readStore RelayReadStore
+	// writeStore is nil when the store cannot accept operations. A nil here is
+	// what makes capabilities.write false and POST /proof/v1/operations answer
+	// 501 — not a config flag alone.
+	writeStore RelayWriteStore
+	// indexRead is nil when the store answers no /index/v0 query.
+	indexRead IndexReadStore
+	// projection is the store shape the index projection worker needs, nil when
+	// this relay does not maintain the projection (either the store keeps its
+	// index current some other way, or it has no index at all).
+	projection IndexProjectionStore
+	// signStore is nil unless the store implements the signing mailbox.
+	signStore SigningStore
+	// writerState is nil when the store keeps no writer-internal bookkeeping, in
+	// which case this relay cannot sequence raw ops or track peer cursors.
+	writerState        RelayWriterState
 	did                string
 	profileArtifactJWS string
 	contentEnabled     bool
@@ -32,7 +44,6 @@ type Relay struct {
 	indexEnabled       bool
 	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
 	signingEnabled     bool
-	contentFollow      string // "eager" = materialize granted public content blobs; else off
 	logger             *slog.Logger
 	peers              []PeerConfig
 	peerClient         PeerClient
@@ -63,6 +74,16 @@ type Relay struct {
 	keyID             string
 	gossipProofSigned bool
 	ingestMu          sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
+	// projectionMode selects who drives the index projection worker;
+	// projectionBudget caps one run's work. The worker NEVER runs under ingestMu:
+	// that is the structural fix for the fan-out sweeps that used to sit inside
+	// the accepting path.
+	projectionMode   IndexProjectionMode
+	projectionBudget int
+	// projectionMu coalesces projection drains. Both the post-ingest kick and an
+	// operator's timer call ProjectIndex, and a TryLock here makes a concurrent
+	// caller a no-op rather than a redundant second pass over the same cursor.
+	projectionMu sync.Mutex
 	// gossipDisabled holds peer URLs that rejected a gossip push as pull-only
 	// (HTTP 501, write-disabled). Pushing to them is guaranteed to 501, so once
 	// a peer rejects we suppress all further gossip to it for the process
@@ -98,25 +119,6 @@ type Relay struct {
 	// backlog that ends on an exact multiple of the cap is the case the
 	// caught-up logging has to get right) without minting thousands of ops.
 	maxOpsPerSyncCycle int
-	// materializeMu coalesces content-follow sweeps: both the timer sweep and the
-	// trigger-kicked sweep (fired when the sequencer makes progress) call
-	// MaterializeFollowedContent, and a TryLock here makes a concurrent caller a
-	// no-op rather than a redundant second pass. gcMu does the same for the GC sweep.
-	materializeMu sync.Mutex
-	gcMu          sync.Mutex
-	// materializeDirty / gcDirty are the event-driven work queues for content
-	// following. The sequencer records the contentIDs (or a full-scan request) that
-	// new ops make relevant; the sweeps drain them. This is what keeps a steady-
-	// state follower idle instead of re-scanning every chain and re-verifying every
-	// grant on each sync tick. nil unless ContentFollow == "eager".
-	materializeDirty *dirtyQueue
-	gcDirty          *dirtyQueue
-	// blobSourceCooldown is the per-peer circuit breaker for blob pulls: a peer
-	// that fails a fetch with a transport/5xx error (NOT a 404 — that's "ask
-	// elsewhere," not "down") is suppressed until the stored unix-nanos deadline,
-	// so a dead origin isn't hammered once per granted chain every sweep. Keyed by
-	// peer URL → int64 deadline; a sync.Map because sweeps fetch concurrently.
-	blobSourceCooldown sync.Map
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -126,46 +128,84 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		return nil, fmt.Errorf("store is required")
 	}
 
-	contentEnabled := opts.Content == nil || *opts.Content
-	logEnabled := opts.Log == nil || *opts.Log
-	revocationsEnabled := opts.Revocations == nil || *opts.Revocations
-	indexEnabled := opts.Index == nil || *opts.Index
-	writeEnabled := opts.Write == nil || *opts.Write
-	signingEnabled := opts.Signing != nil && *opts.Signing
-	identity := opts.Identity
-	if identity == nil {
-		var err error
-		identity, err = BootstrapRelayIdentity(opts.Store)
-		if err != nil {
-			return nil, fmt.Errorf("bootstrap relay identity: %w", err)
-		}
-	}
-
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	// If the store supports it, create a read-only view for HTTP handlers
-	// that never races on the write transaction. Falls back to the main store
-	// for non-SQLite backends (e.g. in-memory test store).
-	readStore := opts.Store
-	if sqlStore, ok := opts.Store.(*SQLiteStore); ok {
-		readStore = sqlStore.ReadStore()
+	// ONE NARROWING, AT CONSTRUCTION. Everything below reads a field, never a
+	// type assertion, and the capability block the well-known serves is derived
+	// from what these assertions found plus what config asked for.
+	store := opts.Store
+	writeStore, _ := store.(RelayWriteStore)
+	indexRead, _ := store.(IndexReadStore)
+	signStore, _ := store.(SigningStore)
+	writerState, _ := store.(RelayWriterState)
+
+	contentEnabled := opts.Content == nil || *opts.Content
+	logEnabled := opts.Log == nil || *opts.Log
+	revocationsEnabled := opts.Revocations == nil || *opts.Revocations
+	// A capability is what the store can do AND what the operator asked for. A
+	// store that cannot write makes this a pull-only proof node whatever the flag
+	// says, and a store with no index queries serves no /index/v0 whatever the
+	// flag says — advertising otherwise would be a promise the routes cannot keep.
+	//
+	// Two of these derive from more than the one obvious assertion:
+	//
+	//   - INDEX NEEDS THE LOG. The projection's only input is ReadLog, and a relay
+	//     that publishes no log appends nothing for it to read, so the rows would
+	//     stay empty forever. index: true beside log: false is a capability block
+	//     that lies.
+	//   - WRITE NEEDS THE WRITER STATE. Ingest also needs raw-op and sequencer
+	//     bookkeeping (RelayWriterState); a store with Commit but without it
+	//     rejects every submitted operation, so advertising write: true would
+	//     promise an endpoint that is 100% refusal.
+	indexEnabled := (opts.Index == nil || *opts.Index) && indexRead != nil && logEnabled
+	writeEnabled := (opts.Write == nil || *opts.Write) && writeStore != nil && writerState != nil
+	signingEnabled := opts.Signing != nil && *opts.Signing
+
+	if signingEnabled && signStore == nil {
+		return nil, fmt.Errorf("signing capability requires a store implementing SigningStore")
 	}
-	if signingEnabled {
-		if _, ok := opts.Store.(SigningStore); !ok {
-			return nil, fmt.Errorf("signing capability requires an ingestion store implementing SigningStore")
-		}
-		if _, ok := readStore.(SigningStore); !ok {
-			return nil, fmt.Errorf("signing capability requires a read store implementing SigningStore")
-		}
+	// An EXPLICIT ask that cannot hold is an error, the same way an explicit
+	// signing ask on a store without SigningStore is. Deriving it away silently is
+	// right when the flag was defaulted (index defaults on, so every operator who
+	// turns the log off would otherwise be refused boot); it is wrong when the
+	// operator wrote both flags down and they contradict each other.
+	if opts.Index != nil && *opts.Index && !logEnabled {
+		return nil, fmt.Errorf("index capability requires the operation log: the projection reads the log and has no other input")
 	}
 	// Retention is independent of the capability flag: sweep courier state at
 	// construction whenever the backing store supports signing.
-	if signingStore, ok := opts.Store.(SigningStore); ok {
-		if err := signingStore.PruneExpiredSignRequests(time.Now()); err != nil {
+	if signStore != nil {
+		if err := signStore.PruneExpiredSignRequests(time.Now()); err != nil {
 			return nil, fmt.Errorf("prune expired sign requests: %w", err)
+		}
+	}
+
+	// The projection worker needs all three contracts at once, asserted on the
+	// store ITSELF rather than assembled from the three narrowed references: a
+	// wrapper struct would satisfy the union while hiding the concrete type, and
+	// the boot-time rebuild still has to be able to ask whether this store is a
+	// RebuildableIndexStore. A store with the queries but not the writes serves an
+	// index some other process maintains, which is a supported shape — this relay
+	// simply does no projection work for it.
+	var projection IndexProjectionStore
+	if indexEnabled {
+		if p, ok := store.(IndexProjectionStore); ok {
+			projection = p
+		}
+	}
+
+	identity := opts.Identity
+	if identity == nil {
+		if writeStore == nil {
+			return nil, fmt.Errorf("a relay on a read-only store must be given an Identity: bootstrap writes its own chain")
+		}
+		var err error
+		identity, err = BootstrapRelayIdentity(writeStore)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap relay identity: %w", err)
 		}
 	}
 
@@ -205,6 +245,21 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		admissionPolicy = func(string) (bool, error) { return true, nil }
 	}
 
+	projectionMode := opts.IndexProjection
+	switch projectionMode {
+	case "", IndexProjectionInline, IndexProjectionExternal:
+	default:
+		return nil, fmt.Errorf("unknown index projection mode: %q (expected %s, %s)",
+			projectionMode, IndexProjectionInline, IndexProjectionExternal)
+	}
+	if projectionMode == "" {
+		projectionMode = IndexProjectionInline
+	}
+	projectionBudget := opts.IndexProjectionBudget
+	if projectionBudget <= 0 {
+		projectionBudget = DefaultIndexProjectionBudget
+	}
+
 	// Gossip-out can announce this relay as a NAMED peer by signing an identity
 	// proof of its own DID — OPT-IN, because a presented proof is not optional to
 	// the receiver: a peer that has never ingested this relay's identity chain
@@ -219,19 +274,31 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	// arrays — a proved-then-rotated-out key silently stops resolving. Re-walk
 	// those rows before serving. Runs UNCONDITIONALLY (the historical key
 	// resolver needs it whether or not the index is on) and BEFORE the projection
-	// rebuild below, so a rebuild triggered by the same upgrade materializes the
+	// reset below, so a rebuild triggered by the same upgrade materializes the
 	// `key=` index from repaired state rather than from the fallback.
-	if err := backfillProvedKeyState(opts.Store, logger); err != nil {
-		return nil, fmt.Errorf("backfill identity proved keys: %w", err)
+	if migratable, ok := store.(MigratableStore); ok {
+		if err := backfillProvedKeyState(migratable, logger); err != nil {
+			return nil, fmt.Errorf("backfill identity proved keys: %w", err)
+		}
 	}
 
-	// Index projection startup rebuild: when index is enabled and a durable store
-	// carries a stale (or unstamped) projection_version, rebuild all projection
-	// rows from the authoritative chain/countersign tables synchronously, before
-	// serving. Migrates a pre-existing corpus on redeploy with zero manual steps.
-	if indexEnabled {
-		if err := rebuildIndexProjection(opts.Store, logger); err != nil {
+	// Index projection startup rebuild: when a durable store carries a stale (or
+	// unstamped) projection_version, clear the rows and reset the cursor. Migrates
+	// a pre-existing corpus on redeploy with zero manual steps.
+	//
+	// The re-walk that follows is the ORDINARY projection worker, not a separate
+	// corpus enumeration — the operation log is the authoritative record every row
+	// derives from, so a rebuild and an incremental run are the same code. Under
+	// the default inline mode it is drained here so the first /index/v0 request
+	// sees a complete projection; under "external" the operator's schedule owns
+	// it, and a partially drained index is honestly incomplete rather than wrong.
+	// On a caught-up relay this is one empty log read.
+	if projection != nil {
+		if err := rebuildIndexProjection(projection, logger); err != nil {
 			return nil, fmt.Errorf("rebuild index projection: %w", err)
+		}
+		if projectionMode == IndexProjectionInline {
+			drainIndexProjection(projection, projectionBudget, 0, logger)
 		}
 	}
 
@@ -253,8 +320,12 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	}
 
 	return &Relay{
-		store:              opts.Store,
-		readStore:          readStore,
+		readStore:          store,
+		writeStore:         writeStore,
+		indexRead:          indexRead,
+		projection:         projection,
+		signStore:          signStore,
+		writerState:        writerState,
 		did:                identity.DID,
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
@@ -263,7 +334,6 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		indexEnabled:       indexEnabled,
 		writeEnabled:       writeEnabled,
 		signingEnabled:     signingEnabled,
-		contentFollow:      opts.ContentFollow,
 		logger:             logger,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,
@@ -273,6 +343,8 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		jtiCache:           jtiCache,
 		ingestionMode:      ingestionMode,
 		admissionPolicy:    admissionPolicy,
+		projectionMode:     projectionMode,
+		projectionBudget:   projectionBudget,
 		privateKey:         identity.PrivateKey,
 		keyID:              identity.KeyID,
 		gossipProofSigned:  gossipProofSigned,
@@ -280,8 +352,6 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		peerSync:           peerSync,
 		peerPins:           make(map[string]peerPinVerdict),
 		maxOpsPerSyncCycle: maxOpsPerSyncCycle,
-		materializeDirty:   newDirtyQueue(),
-		gcDirty:            newDirtyQueue(),
 	}, nil
 }
 
@@ -291,14 +361,72 @@ func (r *Relay) DID() string { return r.did }
 // ProfileArtifactJWS returns the relay's profile artifact JWS token.
 func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 
+// ProjectIndex advances the index projection until it is caught up or its budget
+// runs out, and reports what it did.
+//
+// EXPORTED BECAUSE THE SCHEDULE IS THE OPERATOR'S. Under the default inline mode
+// the relay kicks this itself after an ingest batch and after every sequencer
+// pass — synchronously, with ingestMu released. Inline means inline: the caller
+// pays the projection, and a read that follows an accepted write sees the rows
+// it implied. A deployment that would rather not pay that latency beside the
+// accepting path sets IndexProjection: "external" and calls this from a timer or
+// another process. Either way the work is the same budgeted, cursor-resumable
+// walk of the operation log, and a relay whose store maintains its index some
+// other way has nothing to do here.
+func (r *Relay) ProjectIndex() IndexProjectionRun {
+	if r.projection == nil {
+		return IndexProjectionRun{}
+	}
+	// Coalesce: a second caller arriving mid-drain would re-read the same cursor
+	// and redo the same work.
+	if !r.projectionMu.TryLock() {
+		return IndexProjectionRun{}
+	}
+	defer r.projectionMu.Unlock()
+	return drainIndexProjection(r.projection, r.projectionBudget, indexProjectionMaxRuns, r.logger)
+}
+
+// kickIndexProjection drains the projection after an accepted batch, unless the
+// operator drives it. Never called with ingestMu held, and never in a goroutine:
+// see ProjectIndex for why inline mode is synchronous.
+func (r *Relay) kickIndexProjection() {
+	if r.projection == nil || r.projectionMode != IndexProjectionInline {
+		return
+	}
+	r.ProjectIndex()
+}
+
+// projectIndexForBlob recomputes the rows a landed blob changes, under the SAME
+// mutex ProjectIndex holds.
+//
+// A blob upload is the one projection trigger the operation log does not carry,
+// which is exactly what makes the race permanent: an in-flight projection run
+// that read this content row BEFORE the blob landed applies its older snapshot
+// afterwards, and because no log entry names the upload, no later run repairs it
+// — the row keeps docSchema/title unknown until some unrelated operation touches
+// that chain. One lock removes the interleaving.
+func (r *Relay) projectIndexForBlob(documentCID string) {
+	if r.projection == nil {
+		return
+	}
+	r.projectionMu.Lock()
+	defer r.projectionMu.Unlock()
+	projectIndexAfterBlob(documentCID, r.projection, r.logger)
+}
+
 // Ingest stores raw ops, processes a batch for immediate results, and gossips.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	start := time.Now()
 
+	if r.writeStore == nil || r.writerState == nil {
+		results := make([]IngestionResult, len(tokens))
+		for i, token := range tokens {
+			results[i] = IngestionResult{CID: computeOpCID(token), Status: "rejected", Error: "this relay does not accept operations"}
+		}
+		return results
+	}
+
 	// process immediately — mutex serializes all chain-state mutations.
-	// Raw-op writes go through writerDB(), which aliases the active batch
-	// transaction, so they must also be serialized under ingestMu — otherwise
-	// a concurrent sequencer batch races on s.tx.
 	r.ingestMu.Lock()
 
 	// store all raw ops first — they can never be lost. Capture each row's
@@ -309,16 +437,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	for i, token := range tokens {
 		rawCIDs[i] = computeOpCID(token)
 		if rawCIDs[i] != "" {
-			r.store.PutRawOp(rawCIDs[i], token, OpOriginDirect)
-		}
-	}
-
-	// wrap in a transaction if the store supports it
-	batchable, hasBatch := r.store.(BatchableStore)
-	if hasBatch {
-		if err := batchable.BeginWriteBatch(); err != nil {
-			r.logger.Error("failed to begin write batch", "error", err)
-			hasBatch = false
+			r.writerState.PutRawOp(rawCIDs[i], token, OpOriginDirect)
 		}
 	}
 
@@ -326,7 +445,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
 	}
-	results := IngestOperations(tokens, r.store, opts...)
+	results := IngestOperations(tokens, r.writeStore, opts...)
 
 	// mark results in raw store
 	var newOps []string
@@ -347,20 +466,14 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			// Only gossip if the sequenced status was actually persisted —
 			// otherwise local state and what we'd advertise diverge. On failure
 			// the op stays pending and the sequencer retries it.
-			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {
+			if err := r.writerState.MarkOpsSequenced([]string{rawCID}); err != nil {
 				r.logger.Error("ingest: failed to mark op sequenced — skipping gossip", "cid", rawCID, "error", err)
 			} else {
 				newOps = append(newOps, tokens[i])
 				newCount++
-				// Mark content-follow work here too: ops arriving via gossip-push or a
-				// direct client write are sequenced in THIS immediate batch (not the
-				// runSequencerLocked pass below, which then sees them as duplicates), so
-				// without this an eager follower would only materialize them on the slow
-				// reconcile backstop. Mirrors the sequencer-loop marking.
-				r.markContentFollowDirty(res, tokens[i])
 			}
 		case res.Status == "duplicate":
-			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {
+			if err := r.writerState.MarkOpsSequenced([]string{rawCID}); err != nil {
 				r.logger.Error("ingest: failed to mark duplicate op sequenced", "cid", rawCID, "error", err)
 			}
 			dupCount++
@@ -369,49 +482,12 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			// MarkOpRejected deletes it and the reason is otherwise discarded.
 			// Same event string and fields as the TS twin and the sequencer site.
 			r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
-			r.store.MarkOpRejected(rawCID, res.Error)
+			r.writerState.MarkOpRejected(rawCID, res.Error)
 			rejCount++
 		}
 	}
 
-	if hasBatch {
-		// Two ways to end up holding nothing, with one outcome. Either a write
-		// inside the batch failed — leaving that op half-applied, which poisons
-		// its own retry, since the writes that DID land make every later attempt
-		// short-circuit as a "duplicate" and the ones that failed are never made
-		// up — or the commit itself failed. Both mean the batch must be
-		// discarded rather than half-kept.
-		err := errPartialWriteRolledBack
-		discard := batchPersistFailed(results)
-		if !discard {
-			err = batchable.CommitWriteBatch()
-			discard = err != nil
-		}
-		if discard {
-			// The batch's chain-state writes are GONE. Nothing this batch
-			// claimed to land is actually held, so the batch must neither be
-			// gossiped nor reported as landed — the same rule the per-op
-			// MarkOpsSequenced guard above enforces, applied to the whole batch.
-			// The raw ops were stored BEFORE the batch opened, so every op here
-			// stays pending and the sequencer retries it once the store is
-			// healthy; the results are rewritten to the retryable
-			// persistence-failure shape (persistError) to say exactly that.
-			// Permanent rejections are left alone: that verdict is a function of
-			// the op against the pre-batch state, which is the state a retry
-			// sees, so it remains true and claims nothing about what we hold.
-			r.logger.Error("write batch rolled back, not gossiped", "error", err, "ops", len(tokens))
-			batchable.RollbackWriteBatch()
-			newOps = nil
-			newCount, dupCount = 0, 0
-			for i, res := range results {
-				if res.Status == "new" || res.Status == "duplicate" {
-					results[i] = *persistError(res.CID, err)
-				}
-			}
-		}
-	}
-
-	// run sequencer after commit — reads must see the committed status updates
+	// run sequencer after the batch — reads must see the committed status updates
 	seqNewOps, _ := r.runSequencerLocked()
 
 	r.ingestMu.Unlock()
@@ -424,9 +500,10 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		"duration", time.Since(start),
 	)
 
-	// gossip outside the lock
+	// gossip and project outside the lock
 	r.gossipOps(newOps)
 	r.gossipOps(seqNewOps)
+	r.kickIndexProjection()
 
 	return results
 }
@@ -474,7 +551,9 @@ const (
 // the next cycle picks up where the cursor left off. Each cycle also advances a
 // bounded anti-entropy scrubber per peer (see reconcilePeer).
 func (r *Relay) SyncFromPeers() error {
-	if r.peerClient == nil {
+	// Pull sync stages raw ops and advances peer cursors, both of which are
+	// writer-internal state. A store that keeps none has nothing to sync into.
+	if r.peerClient == nil || r.writerState == nil || r.writeStore == nil {
 		return nil
 	}
 	for _, peer := range r.peers {
@@ -492,8 +571,7 @@ func (r *Relay) SyncFromPeers() error {
 		}
 		r.recordPeerPin(peer.URL, nil)
 		attemptAt := time.Now()
-		// readStore for the cursor read — never races on the ingestion tx.
-		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
+		cursor, _ := r.writerState.GetPeerCursor(peer.URL)
 		res := r.pullPeerOps(peer.URL, cursor, r.maxOpsPerSyncCycle, true)
 		// Caught up means the cycle ran to the end of the peer's log, which only
 		// a cycle that actually COMPLETED can claim: a failed pass and an
@@ -647,7 +725,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 					if page.Resume() != nil {
 						resume = *page.Resume()
 					}
-					if err := r.store.SetPeerCursor(peerURL, resume); err != nil {
+					if err := r.writerState.SetPeerCursor(peerURL, resume); err != nil {
 						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
 					} else {
 						resetPending = false
@@ -658,9 +736,11 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			}
 			break
 		}
-		// Raw-op + cursor writes go through the ingestion store's writerDB(),
-		// which aliases the active batch transaction. Hold ingestMu so these
-		// writes don't race on s.tx with a concurrent ingest/sequencer batch.
+		// Hold ingestMu across the page so raw ops cannot land between the
+		// sequencer's GetUnsequencedOps and its MarkOpsSequenced. Correctness no
+		// longer depends on it — every write here is a single statement and no
+		// transaction is shared with ingestion — but a page landing mid-drain
+		// would be sequenced on the next pass rather than this one, for no gain.
 		r.ingestMu.Lock()
 		pageStoreFailed := false
 		for _, e := range page.Entries {
@@ -678,7 +758,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				)
 				continue
 			}
-			isNew, err := r.store.PutRawOp(cid, e.JWSToken, OpOriginPeer)
+			isNew, err := r.writerState.PutRawOp(cid, e.JWSToken, OpOriginPeer)
 			if err != nil {
 				// Durability discipline (mirrors Ingest's "never advance past
 				// unpersisted work"): on a transient store failure, do NOT
@@ -729,7 +809,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			// via the bounded reconcile scrubber, which re-walks from the start.
 			if resetPending {
 				if persist {
-					if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
+					if err := r.writerState.SetPeerCursor(peerURL, ""); err != nil {
 						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
 					} else {
 						resetPending = false
@@ -746,7 +826,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			// Check the SetPeerCursor return — a silent failure here would let
 			// the high-water mark drift. On failure, stop without persisting
 			// further progress; the same page is re-fetched next cycle.
-			if err := r.store.SetPeerCursor(peerURL, cursor); err != nil {
+			if err := r.writerState.SetPeerCursor(peerURL, cursor); err != nil {
 				r.logger.Error("peer sync: failed to persist peer cursor — backing off",
 					"peer", peerURL,
 					"cursor", cursor,
@@ -791,7 +871,7 @@ func (r *Relay) reconcilePeer(peerURL, highWater string) {
 
 	sweptAt := time.Now()
 	rcKey := peerURL + reconcileCursorSuffix
-	anchor, _ := r.readStore.GetPeerCursor(rcKey)
+	anchor, _ := r.writerState.GetPeerCursor(rcKey)
 	res := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
 
 	// Advance the trailing cursor; lap back to the start once the scrub reaches
@@ -803,7 +883,7 @@ func (r *Relay) reconcilePeer(peerURL, highWater string) {
 	if lapped {
 		next = ""
 	}
-	if err := r.store.SetPeerCursor(rcKey, next); err != nil {
+	if err := r.writerState.SetPeerCursor(rcKey, next); err != nil {
 		r.logger.Error("peer reconcile: failed to persist scrub cursor",
 			"peer", peerURL,
 			"error", err,
@@ -891,22 +971,25 @@ func telemetryTime(t time.Time) *string {
 
 // ResetPeerCursors clears all sync cursors, forcing a full re-sync on next cycle.
 func (r *Relay) ResetPeerCursors() error {
-	return r.store.ResetPeerCursors()
+	if r.writerState == nil {
+		return nil
+	}
+	return r.writerState.ResetPeerCursors()
 }
 
 // GetIdentity returns a stored identity chain by DID, or nil.
 func (r *Relay) GetIdentity(did string) (*StoredIdentityChain, error) {
-	return r.store.GetIdentityChain(did)
+	return r.readStore.GetIdentityChain(did)
 }
 
 // GetContent returns a stored content chain by content ID, or nil.
 func (r *Relay) GetContent(contentID string) (*StoredContentChain, error) {
-	return r.store.GetContentChain(contentID)
+	return r.readStore.GetContentChain(contentID)
 }
 
 // GetOperation returns a stored operation by CID, or nil.
 func (r *Relay) GetOperation(cid string) (*StoredOperation, error) {
-	return r.store.GetOperation(cid)
+	return r.readStore.GetOperation(cid)
 }
 
 // Handler returns an http.Handler implementing the DFOS web relay HTTP API.

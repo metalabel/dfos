@@ -23,10 +23,10 @@ import (
 func TestReadLogCursorContract(t *testing.T) {
 	cases := []struct {
 		name  string
-		store func(t *testing.T) Store
+		store func(t *testing.T) referenceStore
 	}{
-		{"memory", func(t *testing.T) Store { return NewMemoryStore() }},
-		{"sqlite", func(t *testing.T) Store {
+		{"memory", func(t *testing.T) referenceStore { return NewMemoryStore() }},
+		{"sqlite", func(t *testing.T) referenceStore {
 			s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "readlog.db"))
 			if err != nil {
 				t.Fatalf("NewSQLiteStore: %v", err)

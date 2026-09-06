@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/base64"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -52,19 +53,22 @@ type MemoryStore struct {
 	publicCredentials map[string]StoredPublicCredential // key: credential CID
 	signRequests      map[string]StoredSignRequest      // key: request CID
 	// --- index (v0) materialized projection rows ---
-	indexIdentityRows    map[string]indexIdentityRow            // keyed by DID
-	indexContentRows     map[string]indexContentRow             // keyed by contentId
-	indexCreditRows      map[string][]indexCreditRow            // grouped by contentId
+	indexIdentityRows    map[string]IndexIdentityRow            // keyed by DID
+	indexContentRows     map[string]IndexContentRow             // keyed by contentId
+	indexCreditRows      map[string][]IndexCreditRow            // grouped by contentId
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
 	indexIdentityKeys    map[string]map[string]struct{}         // DID → has-ever-proved public key set
-	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
-	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
+	indexCountersignRows map[string]StoredIndexCountersignature // keyed by cid (carry witness_did)
+	indexOperationRows   map[string]IndexOperationRow           // keyed by operation cid
 	// operation cid → the multibase public key its signature verified against at
 	// ingest. Held beside the row rather than on it because the row IS the wire
 	// shape /index/v0/operations serves, and signerKey is a filter, never a field.
 	// A CID absent here never resolved, and matches no signerKey= value.
 	indexOperationSignerKeys map[string]string
-	indexArtifactRows        map[string]indexArtifactRow // keyed by artifact cid
+	indexArtifactRows        map[string]IndexArtifactRow // keyed by artifact cid
+	// indexCursor is the projection worker's persisted position (log cursor +
+	// any outstanding resumable sweep). Ephemeral like the rest of this store.
+	indexCursor IndexCursor
 }
 
 type rawOpEntry struct {
@@ -87,15 +91,15 @@ func NewMemoryStore() *MemoryStore {
 		publicCredentials: make(map[string]StoredPublicCredential),
 		signRequests:      make(map[string]StoredSignRequest),
 
-		indexIdentityRows:        make(map[string]indexIdentityRow),
-		indexContentRows:         make(map[string]indexContentRow),
-		indexCreditRows:          make(map[string][]indexCreditRow),
+		indexIdentityRows:        make(map[string]IndexIdentityRow),
+		indexContentRows:         make(map[string]IndexContentRow),
+		indexCreditRows:          make(map[string][]IndexCreditRow),
 		indexContentSigners:      make(map[string]map[string]struct{}),
 		indexIdentityKeys:        make(map[string]map[string]struct{}),
-		indexCountersignRows:     make(map[string]storedIndexCountersignature),
-		indexOperationRows:       make(map[string]indexOperationRow),
+		indexCountersignRows:     make(map[string]StoredIndexCountersignature),
+		indexOperationRows:       make(map[string]IndexOperationRow),
 		indexOperationSignerKeys: make(map[string]string),
-		indexArtifactRows:        make(map[string]indexArtifactRow),
+		indexArtifactRows:        make(map[string]IndexArtifactRow),
 	}
 }
 
@@ -242,27 +246,12 @@ func (s *MemoryStore) GetOperation(cid string) (*StoredOperation, error) {
 	return &op, nil
 }
 
-func (s *MemoryStore) PutOperation(op StoredOperation) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putOperationLocked(op StoredOperation) error {
 	if op.IngestedAt == "" {
 		op.IngestedAt = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	s.operations[op.CID] = op
 	return nil
-}
-
-func (s *MemoryStore) ListArtifactOperations() ([]StoredOperation, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rows := []StoredOperation{}
-	for _, op := range s.operations {
-		if op.ChainType == "artifact" {
-			rows = append(rows, op)
-		}
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].CID < rows[j].CID })
-	return rows, nil
 }
 
 func (s *MemoryStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
@@ -275,9 +264,7 @@ func (s *MemoryStore) GetIdentityChain(did string) (*StoredIdentityChain, error)
 	return &chain, nil
 }
 
-func (s *MemoryStore) PutIdentityChain(chain StoredIdentityChain) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIdentityChainLocked(chain StoredIdentityChain) error {
 	s.identityChains[chain.DID] = chain
 	return nil
 }
@@ -292,9 +279,7 @@ func (s *MemoryStore) GetContentChain(contentID string) (*StoredContentChain, er
 	return &chain, nil
 }
 
-func (s *MemoryStore) PutContentChain(chain StoredContentChain) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putContentChainLocked(chain StoredContentChain) error {
 	s.contentChains[chain.ContentID] = chain
 	return nil
 }
@@ -304,16 +289,6 @@ func (s *MemoryStore) ListIdentityChains() ([]StoredIdentityChain, error) {
 	defer s.mu.RUnlock()
 	chains := make([]StoredIdentityChain, 0, len(s.identityChains))
 	for _, chain := range s.identityChains {
-		chains = append(chains, chain)
-	}
-	return chains, nil
-}
-
-func (s *MemoryStore) ListContentChains() ([]StoredContentChain, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	chains := make([]StoredContentChain, 0, len(s.contentChains))
-	for _, chain := range s.contentChains {
 		chains = append(chains, chain)
 	}
 	return chains, nil
@@ -329,17 +304,8 @@ func (s *MemoryStore) GetBlob(key BlobKey) ([]byte, error) {
 	return data, nil
 }
 
-func (s *MemoryStore) PutBlob(key BlobKey, data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putBlobLocked(key BlobKey, data []byte) error {
 	s.blobs[blobKeyStr(key)] = data
-	return nil
-}
-
-func (s *MemoryStore) DeleteBlob(key BlobKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.blobs, blobKeyStr(key)) // idempotent: deleting a missing key is a no-op
 	return nil
 }
 
@@ -353,9 +319,7 @@ func (s *MemoryStore) GetCountersignatures(operationCID string) ([]string, error
 	return cs, nil
 }
 
-func (s *MemoryStore) AddCountersignature(operationCID string, jwsToken string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) addCountersignatureLocked(operationCID string, jwsToken string) error {
 	existing := s.countersignatures[operationCID]
 
 	// dedup by witness DID (kid DID prefix)
@@ -385,25 +349,6 @@ func (s *MemoryStore) AddCountersignature(operationCID string, jwsToken string) 
 	return nil
 }
 
-// ListCountersignatures enumerates every stored countersignature (all
-// witnesses), sorted by CID. Used ONLY by the index-projection rebuild path.
-func (s *MemoryStore) ListCountersignatures() ([]StoredCountersignature, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rows := []StoredCountersignature{}
-	for targetCID, tokens := range s.countersignatures {
-		for _, token := range tokens {
-			row := countersignatureFromToken(targetCID, token)
-			if row == nil {
-				continue
-			}
-			rows = append(rows, *row)
-		}
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].CID < rows[j].CID })
-	return rows, nil
-}
-
 // ---------------------------------------------------------------------------
 // index (v0) materialized projection
 // ---------------------------------------------------------------------------
@@ -427,7 +372,7 @@ func pageIndexRows[T any](rows []T, keyOf func(T) string, after string, limit in
 	return out
 }
 
-func pageOrderedIndexRows[T any](rows []T, keyOf func(T) string, timestampOf func(T) string, after *indexOrderedCursor, limit int) []T {
+func pageOrderedIndexRows[T any](rows []T, keyOf func(T) string, timestampOf func(T) string, after *IndexOrderedCursor, limit int) []T {
 	sort.Slice(rows, func(i, j int) bool {
 		its := timestampOf(rows[i])
 		jts := timestampOf(rows[j])
@@ -451,10 +396,10 @@ func pageOrderedIndexRows[T any](rows []T, keyOf func(T) string, timestampOf fun
 	return out
 }
 
-func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
+func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]IndexIdentityRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := make([]indexIdentityRow, 0, len(s.indexIdentityRows))
+	rows := make([]IndexIdentityRow, 0, len(s.indexIdentityRows))
 	for _, row := range s.indexIdentityRows {
 		if q.DID != "" && row.DID != q.DID {
 			continue
@@ -482,20 +427,20 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		rows = append(rows, row)
 	}
 	if q.Order != "" {
-		return pageOrderedIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, func(row indexIdentityRow) string {
+		return pageOrderedIndexRows(rows, func(row IndexIdentityRow) string { return row.DID }, func(row IndexIdentityRow) string {
 			if q.Order == "genesisAt.desc" {
 				return row.GenesisAt
 			}
 			return row.HeadAt
 		}, q.OrderedAfter, q.Limit), nil
 	}
-	return pageIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, q.After, q.Limit), nil
+	return pageIndexRows(rows, func(row IndexIdentityRow) string { return row.DID }, q.After, q.Limit), nil
 }
 
-func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
+func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]IndexContentRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := make([]indexContentRow, 0, len(s.indexContentRows))
+	rows := make([]IndexContentRow, 0, len(s.indexContentRows))
 	for _, row := range s.indexContentRows {
 		if q.ContentID != nil && row.ContentID != *q.ContentID {
 			continue
@@ -532,20 +477,20 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		rows = append(rows, row)
 	}
 	if q.Order != "" {
-		return pageOrderedIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, func(row indexContentRow) string {
+		return pageOrderedIndexRows(rows, func(row IndexContentRow) string { return row.ContentID }, func(row IndexContentRow) string {
 			if q.Order == "genesisAt.desc" {
 				return row.GenesisAt
 			}
 			return row.HeadAt
 		}, q.OrderedAfter, q.Limit), nil
 	}
-	return pageIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
+	return pageIndexRows(rows, func(row IndexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
 }
 
-func (s *MemoryStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error) {
+func (s *MemoryStore) QueryIndexCredits(q IndexCreditQuery) ([]IndexCreditRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := []indexCreditRow{}
+	rows := []IndexCreditRow{}
 	for _, contentRows := range s.indexCreditRows {
 		for _, row := range contentRows {
 			if q.DID != nil && row.DID != *q.DID {
@@ -576,10 +521,10 @@ func (s *MemoryStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, e
 	return rows, nil
 }
 
-func (s *MemoryStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
+func (s *MemoryStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]IndexArtifactRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := []indexArtifactRow{}
+	rows := []IndexArtifactRow{}
 	for _, row := range s.indexArtifactRows {
 		if q.CID != nil && row.CID != *q.CID {
 			continue
@@ -593,20 +538,20 @@ func (s *MemoryStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifact
 		rows = append(rows, row)
 	}
 	if q.Order != "" {
-		return pageOrderedIndexRows(rows, func(row indexArtifactRow) string { return row.CID }, func(row indexArtifactRow) string {
+		return pageOrderedIndexRows(rows, func(row IndexArtifactRow) string { return row.CID }, func(row IndexArtifactRow) string {
 			if q.Order == "createdAt.desc" {
 				return row.CreatedAt
 			}
 			return row.IngestedAt
 		}, q.OrderedAfter, q.Limit), nil
 	}
-	return pageIndexRows(rows, func(row indexArtifactRow) string { return row.CID }, q.After, q.Limit), nil
+	return pageIndexRows(rows, func(row IndexArtifactRow) string { return row.CID }, q.After, q.Limit), nil
 }
 
-func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
+func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]IndexCountersignatureRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := []indexCountersignatureRow{}
+	rows := []IndexCountersignatureRow{}
 	for _, row := range s.indexCountersignRows {
 		if row.WitnessDID != q.Witness {
 			continue
@@ -616,7 +561,7 @@ func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 		}
 		// Strip the witness_did column — the wire row never carries it (the witness
 		// is echoed at the response top level).
-		rows = append(rows, indexCountersignatureRow{
+		rows = append(rows, IndexCountersignatureRow{
 			CID:        row.CID,
 			TargetCID:  row.TargetCID,
 			Relation:   row.Relation,
@@ -626,20 +571,20 @@ func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 		})
 	}
 	if q.Order != "" {
-		return pageOrderedIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, func(row indexCountersignatureRow) string {
+		return pageOrderedIndexRows(rows, func(row IndexCountersignatureRow) string { return row.CID }, func(row IndexCountersignatureRow) string {
 			if q.Order == "createdAt.desc" {
 				return row.CreatedAt
 			}
 			return row.IngestedAt
 		}, q.OrderedAfter, q.Limit), nil
 	}
-	return pageIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, q.After, q.Limit), nil
+	return pageIndexRows(rows, func(row IndexCountersignatureRow) string { return row.CID }, q.After, q.Limit), nil
 }
 
-func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error) {
+func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]IndexCredentialRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := []indexCredentialRow{}
+	rows := []IndexCredentialRow{}
 	for _, cred := range s.publicCredentials {
 		if q.Issuer != "" && cred.IssuerDID != q.Issuer {
 			continue
@@ -672,7 +617,7 @@ func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 				continue
 			}
 		}
-		rows = append(rows, indexCredentialRow{
+		rows = append(rows, IndexCredentialRow{
 			CID:        cred.CID,
 			IssuerDID:  cred.IssuerDID,
 			Aud:        "*",
@@ -684,20 +629,20 @@ func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 		})
 	}
 	if q.Order != "" {
-		return pageOrderedIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, func(row indexCredentialRow) string {
+		return pageOrderedIndexRows(rows, func(row IndexCredentialRow) string { return row.CID }, func(row IndexCredentialRow) string {
 			if q.Order == "createdAt.desc" {
 				return row.CreatedAt
 			}
 			return row.IngestedAt
 		}, q.OrderedAfter, q.Limit), nil
 	}
-	return pageIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, q.After, q.Limit), nil
+	return pageIndexRows(rows, func(row IndexCredentialRow) string { return row.CID }, q.After, q.Limit), nil
 }
 
-func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error) {
+func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]IndexOperationRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows := []indexOperationRow{}
+	rows := []IndexOperationRow{}
 	for _, row := range s.indexOperationRows {
 		if q.Kind != "" && row.Kind != q.Kind {
 			continue
@@ -715,7 +660,7 @@ func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 		}
 		rows = append(rows, row)
 	}
-	return pageOrderedIndexRows(rows, func(row indexOperationRow) string { return row.CID }, func(row indexOperationRow) string {
+	return pageOrderedIndexRows(rows, func(row IndexOperationRow) string { return row.CID }, func(row IndexOperationRow) string {
 		if q.Order == "createdAt.desc" {
 			return row.CreatedAt
 		}
@@ -723,24 +668,18 @@ func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 	}, q.OrderedAfter, q.Limit), nil
 }
 
-func (s *MemoryStore) PutIndexIdentityRow(row indexIdentityRow) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexIdentityRowLocked(row IndexIdentityRow) error {
 	s.indexIdentityRows[row.DID] = row
 	return nil
 }
 
-func (s *MemoryStore) PutIndexContentRow(row indexContentRow) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexContentRowLocked(row IndexContentRow) error {
 	s.indexContentRows[row.ContentID] = row
 	return nil
 }
 
-func (s *MemoryStore) PutIndexCreditRows(contentID string, rows []indexCreditRow) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	replacement := make([]indexCreditRow, len(rows))
+func (s *MemoryStore) putIndexCreditRowsLocked(contentID string, rows []IndexCreditRow) error {
+	replacement := make([]IndexCreditRow, len(rows))
 	copy(replacement, rows)
 	for i := range replacement {
 		replacement[i].ContentID = contentID
@@ -749,16 +688,12 @@ func (s *MemoryStore) PutIndexCreditRows(contentID string, rows []indexCreditRow
 	return nil
 }
 
-func (s *MemoryStore) PutIndexArtifactRow(row indexArtifactRow) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexArtifactRowLocked(row IndexArtifactRow) error {
 	s.indexArtifactRows[row.CID] = row
 	return nil
 }
 
-func (s *MemoryStore) PutIndexContentSigner(contentID string, did string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexContentSignerLocked(contentID string, did string) error {
 	signers := s.indexContentSigners[contentID]
 	if signers == nil {
 		signers = map[string]struct{}{}
@@ -771,9 +706,7 @@ func (s *MemoryStore) PutIndexContentSigner(contentID string, did string) error 
 // PutIndexIdentityKey adds one proved public key to a DID's has-ever-proved set.
 // keyID is not retained: nothing queries by it, and the durable store's
 // (public_key, did, key_id) row only uses it to keep one row per membership.
-func (s *MemoryStore) PutIndexIdentityKey(did string, _ string, publicKey string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexIdentityKeyLocked(did string, publicKey string) error {
 	keys := s.indexIdentityKeys[did]
 	if keys == nil {
 		keys = map[string]struct{}{}
@@ -783,9 +716,7 @@ func (s *MemoryStore) PutIndexIdentityKey(did string, _ string, publicKey string
 	return nil
 }
 
-func (s *MemoryStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) putIndexCountersignatureRowLocked(row StoredIndexCountersignature) error {
 	s.indexCountersignRows[row.CID] = row
 	return nil
 }
@@ -814,9 +745,7 @@ func (s *MemoryStore) GetIndexContentIDsByDocumentCID(documentCID string) ([]str
 	return contentIds, nil
 }
 
-func (s *MemoryStore) AppendToLog(entry LogEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) appendToLogLocked(entry LogEntry) error {
 	// One op, one log row — the SQLite twin enforces it with a unique index on
 	// cid, and indexOperationRows (written only here) is this store's record of
 	// which CIDs the log already carries. Silently ignoring the repeat matches
@@ -835,12 +764,11 @@ func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	if op, ok := s.operations[entry.CID]; ok && op.IngestedAt != "" {
 		ingestedAt = op.IngestedAt
 	}
-	s.indexOperationRows[entry.CID] = indexOperationRow{
+	entry.IngestedAt = ingestedAt
+	s.operationLog[len(s.operationLog)-1] = entry
+	s.indexOperationRows[entry.CID] = IndexOperationRow{
 		CID: entry.CID, Kind: entry.Kind, ChainID: entry.ChainID, CreatedAt: operationCreatedAt(entry.JWSToken),
 		IngestedAt: ingestedAt,
-	}
-	if entry.SignerKey != "" {
-		s.indexOperationSignerKeys[entry.CID] = entry.SignerKey
 	}
 	return nil
 }
@@ -1127,24 +1055,7 @@ func (s *MemoryStore) CountUnsequenced() (int, error) {
 // revocations
 // ---------------------------------------------------------------------------
 
-func (s *MemoryStore) GetRevocations(issuerDID string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var cids []string
-	for _, rev := range s.revocations {
-		if rev.IssuerDID == issuerDID {
-			cids = append(cids, rev.CredentialCID)
-		}
-	}
-	if cids == nil {
-		return []string{}, nil
-	}
-	return cids, nil
-}
-
-func (s *MemoryStore) AddRevocation(revocation StoredRevocation) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) addRevocationLocked(revocation StoredRevocation) error {
 	key := revocation.IssuerDID + "::" + revocation.CredentialCID
 	// earliest boundary wins — see revocationSupersedes. The survivor is kept
 	// WHOLE (artifact + boundary together), so the revocation this store serves
@@ -1241,19 +1152,21 @@ func (s *MemoryStore) GetPublicCredentialByCID(cid string) (*StoredPublicCredent
 	return &credential, nil
 }
 
-func (s *MemoryStore) AddPublicCredential(credential StoredPublicCredential) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *MemoryStore) addPublicCredentialLocked(credential StoredPublicCredential) error {
 	s.publicCredentials[credential.CID] = credential
 	return nil
 }
 
-func (s *MemoryStore) RemovePublicCredential(issuerDID string, credentialCID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if credential, ok := s.publicCredentials[credentialCID]; ok && credential.IssuerDID == issuerDID {
-		delete(s.publicCredentials, credentialCID)
+// removePublicCredentialLocked drops a held grant only when the revoking issuer
+// is the credential's OWN issuer. Unscoped removal let any identity sign a
+// revocation naming someone else's credential CID and un-publish content it had
+// no authority over.
+func (s *MemoryStore) removePublicCredentialLocked(removal PublicCredentialRemoval) error {
+	held, ok := s.publicCredentials[removal.CredentialCID]
+	if !ok || held.IssuerDID != removal.IssuerDID {
+		return nil
 	}
+	delete(s.publicCredentials, removal.CredentialCID)
 	return nil
 }
 
@@ -1274,4 +1187,156 @@ func (s *MemoryStore) ResetSequencer() error {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// write contract
+// ---------------------------------------------------------------------------
+
+// Commit persists one accepted operation, or one document blob, as a unit.
+//
+// Everything happens under the store's single lock, and every write below is a
+// map assignment that cannot fail, so "all of it or none of it" holds by
+// construction here. A durable store buys the same property with a transaction
+// (see SQLiteStore.Commit).
+func (s *MemoryStore) Commit(batch CommitBatch) (CommitResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if batch.Blob != nil {
+		// Blob bytes are content-addressed, so a rewrite is a no-op and the
+		// answer is always "new".
+		return CommitNew, s.putBlobLocked(batch.Blob.Key, batch.Blob.Bytes)
+	}
+	op := batch.Operation
+	if op == nil {
+		return "", errors.New("commit batch carries neither an operation nor a blob")
+	}
+	// The race backstop. Ingestion already read for this CID before verifying —
+	// it has to, to tell "same op" from "same CID, different signature" — so
+	// reaching here with the CID held means a concurrent submission won.
+	if _, held := s.operations[op.Operation.CID]; held {
+		return CommitDuplicate, nil
+	}
+
+	if err := s.putOperationLocked(op.Operation); err != nil {
+		return "", err
+	}
+	if op.IdentityChain != nil {
+		if err := s.putIdentityChainLocked(*op.IdentityChain); err != nil {
+			return "", err
+		}
+	}
+	if op.ContentChain != nil {
+		if err := s.putContentChainLocked(*op.ContentChain); err != nil {
+			return "", err
+		}
+	}
+	if op.Countersignature != nil {
+		if err := s.addCountersignatureLocked(op.Countersignature.TargetCID, op.Countersignature.JWSToken); err != nil {
+			return "", err
+		}
+	}
+	if op.Revocation != nil {
+		if err := s.addRevocationLocked(*op.Revocation); err != nil {
+			return "", err
+		}
+	}
+	if op.RemovePublicCredential != nil {
+		if err := s.removePublicCredentialLocked(*op.RemovePublicCredential); err != nil {
+			return "", err
+		}
+	}
+	if op.PublicCredential != nil {
+		if err := s.addPublicCredentialLocked(*op.PublicCredential); err != nil {
+			return "", err
+		}
+	}
+	if op.LogEntry != nil {
+		if err := s.appendToLogLocked(*op.LogEntry); err != nil {
+			return "", err
+		}
+	}
+	return CommitNew, nil
+}
+
+// ---------------------------------------------------------------------------
+// index projection — write side
+// ---------------------------------------------------------------------------
+
+func (s *MemoryStore) ApplyIndexRows(rows IndexRowBatch) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range rows.Identities {
+		if err := s.putIndexIdentityRowLocked(row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Content {
+		if err := s.putIndexContentRowLocked(row); err != nil {
+			return err
+		}
+	}
+	for _, set := range rows.Credits {
+		if err := s.putIndexCreditRowsLocked(set.ContentID, set.Rows); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Artifacts {
+		if err := s.putIndexArtifactRowLocked(row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Countersignatures {
+		if err := s.putIndexCountersignatureRowLocked(row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.IdentityKeys {
+		if err := s.putIndexIdentityKeyLocked(row.DID, row.PublicKey); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.ContentSigners {
+		if err := s.putIndexContentSignerLocked(row.ContentID, row.DID); err != nil {
+			return err
+		}
+	}
+	for _, key := range rows.OperationSignerKeys {
+		// An unresolved key is never stamped — see IndexOperationSignerKey.
+		if key.PublicKey != "" {
+			s.indexOperationSignerKeys[key.CID] = key.PublicKey
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) GetIndexCursor() (IndexCursor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cursor := s.indexCursor
+	if cursor.Sweep != nil {
+		sweep := *cursor.Sweep
+		cursor.Sweep = &sweep
+	}
+	return cursor, nil
+}
+
+func (s *MemoryStore) SetIndexCursor(cursor IndexCursor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cursor.Sweep != nil {
+		sweep := *cursor.Sweep
+		cursor.Sweep = &sweep
+	}
+	s.indexCursor = cursor
+	return nil
+}
+
+// RewriteIdentityChainState replaces one row's materialized state with a fresh
+// walk of the log it already holds. See MigratableStore.
+func (s *MemoryStore) RewriteIdentityChainState(chain StoredIdentityChain) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.putIdentityChainLocked(chain)
 }

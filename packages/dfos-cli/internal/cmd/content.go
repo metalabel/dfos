@@ -111,7 +111,12 @@ func newContentCreateCmd() *cobra.Command {
 			}
 
 			// store blob in relay
-			lr.Store.PutBlob(relay.BlobKey{CreatorDID: chain.DID, DocumentCID: documentCID}, canonicalBytes)
+			if _, err := lr.Store.Commit(relay.CommitBatch{Blob: &relay.BlobCommit{
+				Key:   relay.BlobKey{CreatorDID: chain.DID, DocumentCID: documentCID},
+				Bytes: canonicalBytes,
+			}}); err != nil {
+				return fmt.Errorf("store document bytes: %w", err)
+			}
 
 			// push to peer if specified
 			var publishedTo []string
@@ -664,7 +669,12 @@ func newContentUpdateCmd() *cobra.Command {
 				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			lr.Store.PutBlob(relay.BlobKey{CreatorDID: contentChain.State.CreatorDID, DocumentCID: documentCID}, canonicalBytes)
+			if _, err := lr.Store.Commit(relay.CommitBatch{Blob: &relay.BlobCommit{
+				Key:   relay.BlobKey{CreatorDID: contentChain.State.CreatorDID, DocumentCID: documentCID},
+				Bytes: canonicalBytes,
+			}}); err != nil {
+				return fmt.Errorf("store document bytes: %w", err)
+			}
 
 			// push to peer
 			rn := peerName

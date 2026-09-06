@@ -28,7 +28,7 @@ type bundledSigningIdentity struct {
 }
 
 func (r *Relay) signingMailboxStore() SigningStore {
-	return r.readStore.(SigningStore)
+	return r.signStore
 }
 
 func verifySigningBundle(tokens []string) (map[string]bundledSigningIdentity, error) {
@@ -102,7 +102,7 @@ func signingBundleKey(identity bundledSigningIdentity, kid string, historical bo
 	return nil, fmt.Errorf("unknown key %s", keyID)
 }
 
-func signingResolvers(store Store, bundle map[string]bundledSigningIdentity) (dfos.KeyResolver, dfos.KeyResolver) {
+func signingResolvers(store RelayReadStore, bundle map[string]bundledSigningIdentity) (dfos.KeyResolver, dfos.KeyResolver) {
 	localCurrent := CreateCurrentKeyResolver(store)
 	localHistorical := CreateKeyResolver(store)
 	current := func(kid string) (ed25519.PublicKey, error) {

@@ -789,14 +789,14 @@ dfos status --store --json
 
 The store block reports the database path and file size, total sequenced operations, counts by operation kind, and pending raw operations. It is entirely local and still works when the configured peer is unreachable.
 
-Compact the SQLite file and run the relay's revoked follower-blob cleanup in one shot:
+Compact the SQLite file:
 
 ```bash
 dfos relay gc
 dfos relay gc --json
 ```
 
-`relay gc` reports the database size before and after `VACUUM`. The blob sweep is a no-op unless content following is eager, and its current API does not report a removal count. GC never deletes operations, chains, or other proof-plane data.
+`relay gc` reports the database size before and after `VACUUM`. GC never deletes operations, chains, or other proof-plane data.
 
 Identity chains, content chains, operations, countersignatures, and blobs all live in this single database. Local metadata (identity names, publish state) is tracked in `config.toml`.
 
@@ -975,21 +975,20 @@ What a pin does not establish is who the peer is in the world — only that it i
 dfos serve --port 4444 --peers https://relay.example.com
 ```
 
-| Flag               | Default            | Env                 | Purpose                                                                   |
-| ------------------ | ------------------ | ------------------- | ------------------------------------------------------------------------- |
-| `--port`           | `4444`             | `PORT`              | Port to listen on                                                         |
-| `--db`             | `~/.dfos/relay.db` | `SQLITE_PATH`       | Database path                                                             |
-| `--name`           | `DFOS Relay`       | `RELAY_NAME`        | Relay profile name in the well-known                                      |
-| `--peers`          | —                  | `PEERS`             | Peer URLs: comma-separated, a JSON array, or per-peer objects             |
-| `--sync-interval`  | `30s`              | `SYNC_INTERVAL`     | Peer sync interval                                                        |
-| `--resync`         | `false`            | `RESYNC=true`       | Reset peer cursors for a full re-sync on boot                             |
-| `--no-sync`        | `false`            | `NO_SYNC=true`      | Pull no peer's log: serve and ingest, but boot local-only                 |
-| `--no-write`       | `false`            | `WRITE=false`       | LITE pull-only node: reject `POST /operations`, sync from peers only      |
-| `--no-index`       | `false`            | `INDEX=false`       | Disable `/index/v0`: advertise `index: false` and return 501              |
-| `--content-follow` | `none`             | `CONTENT_FOLLOW`    | Materialize granted public content blobs from peers (`none` \| `eager`)   |
-| `--authority`      | —                  | `AUTHORITY`         | This relay's own `host[:port]` — the host identity proofs bind            |
-| `--ingestion`      | `open`             | `INGESTION`         | Admission for `POST /operations` (`open` \| `proof-required` \| `closed`) |
-| `--gossip-proof`   | `false`            | `GOSSIP_PROOF=true` | Sign gossip-out pushes with this relay's own identity proof               |
+| Flag              | Default            | Env                 | Purpose                                                                   |
+| ----------------- | ------------------ | ------------------- | ------------------------------------------------------------------------- |
+| `--port`          | `4444`             | `PORT`              | Port to listen on                                                         |
+| `--db`            | `~/.dfos/relay.db` | `SQLITE_PATH`       | Database path                                                             |
+| `--name`          | `DFOS Relay`       | `RELAY_NAME`        | Relay profile name in the well-known                                      |
+| `--peers`         | —                  | `PEERS`             | Peer URLs: comma-separated, a JSON array, or per-peer objects             |
+| `--sync-interval` | `30s`              | `SYNC_INTERVAL`     | Peer sync interval                                                        |
+| `--resync`        | `false`            | `RESYNC=true`       | Reset peer cursors for a full re-sync on boot                             |
+| `--no-sync`       | `false`            | `NO_SYNC=true`      | Pull no peer's log: serve and ingest, but boot local-only                 |
+| `--no-write`      | `false`            | `WRITE=false`       | LITE pull-only node: reject `POST /operations`, sync from peers only      |
+| `--no-index`      | `false`            | `INDEX=false`       | Disable `/index/v0`: advertise `index: false` and return 501              |
+| `--authority`     | —                  | `AUTHORITY`         | This relay's own `host[:port]` — the host identity proofs bind            |
+| `--ingestion`     | `open`             | `INGESTION`         | Admission for `POST /operations` (`open` \| `proof-required` \| `closed`) |
+| `--gossip-proof`  | `false`            | `GOSSIP_PROOF=true` | Sign gossip-out pushes with this relay's own identity proof               |
 
 Peers accept three forms. Comma-separated URLs and a JSON array of URLs configure
 every peer with defaults; a JSON array of objects sets the per-peer switches
@@ -1552,7 +1551,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `POST` | `peer add <name> <url>`         | Register a named relay (`--no-sync`: no bulk log sync)                    |
 | `SET`  | `peer repin <name>`             | Pin a peer to the identity it serves now                                  |
 | `DEL`  | `peer remove <name>`            | Unregister a relay                                                        |
-| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store                        |
+| `DEL`  | `relay gc`                      | Compact the local SQLite store                                            |
 | `GET`  | `config list`                   | Show full configuration                                                   |
 | `GET`  | `config get <key>`              | Read a single config value                                                |
 | `SET`  | `config set <key> <value>`      | Write a config value                                                      |

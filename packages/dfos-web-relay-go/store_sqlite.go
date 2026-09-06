@@ -260,44 +260,36 @@ CREATE TABLE IF NOT EXISTS index_meta (
 );
 `
 
-// SQLiteStore is a durable Store backed by SQLite.
+// SQLiteStore is a durable SQLite implementation of the relay store contracts:
+// RelayReadStore, RelayWriteStore, RelayWriterState, IndexReadStore,
+// IndexWriteStore, RebuildableIndexStore, MigratableStore, and SigningStore.
 //
-// The readOnly flag controls readerDB() behavior. When false (default for the
-// ingestion store), readerDB() returns the active write transaction so that
-// within-batch reads see uncommitted writes. When true (for the HTTP read
-// store), readerDB() always returns the WAL read pool — safe for concurrent
-// use while ingestion holds a write transaction.
+// TWO CONNECTIONS, NO MODE FLAG. One capped write connection and one WAL read
+// pool, and which one a method uses is a property of the method, not of the
+// store: see writerDB and readerDB below. There is no read-only variant and no
+// transaction on the struct, so there is nothing to configure and no way for a
+// read to land inside someone else's open write.
 type SQLiteStore struct {
-	db       *sql.DB // write connection (single writer)
-	readDB   *sql.DB // read connection pool (concurrent reads)
-	tx       *sql.Tx // active write batch transaction, if any
-	readOnly bool    // if true, readerDB() never returns tx
+	db     *sql.DB // write connection (single writer)
+	readDB *sql.DB // read connection pool (concurrent reads)
 }
 
-// writerDB returns the active transaction if one exists, otherwise the raw db.
+// writerDB is the single write connection.
+//
+// NO TRANSACTION LIVES ON THE STRUCT. Every multi-statement write opens its own
+// transaction on this connection (Commit, ApplyIndexRows) and closes it before
+// returning, so a caller cannot hold one open across work this store cannot see,
+// and two concurrent writers cannot alias one another's handle. The pool is
+// capped at a single connection, so a second writer waits rather than
+// interleaving.
 func (s *SQLiteStore) writerDB() dbConn {
-	if s.tx != nil {
-		return s.tx
-	}
 	return s.db
 }
 
-// readerDB returns the read connection to use. For the ingestion store
-// (readOnly=false), returns the active transaction if one exists so within-
-// batch reads see uncommitted writes. For the HTTP read store (readOnly=true),
-// always returns the WAL read pool.
+// readerDB is the WAL read pool. Reads are answered from committed state,
+// concurrently with an open write transaction and never from inside one.
 func (s *SQLiteStore) readerDB() dbConn {
-	if !s.readOnly && s.tx != nil {
-		return s.tx
-	}
 	return s.readDB
-}
-
-// ReadStore returns a Store that shares this store's database connections but
-// always reads from the WAL read pool, never from an active write transaction.
-// Use this for HTTP handlers that run concurrently with ingestion.
-func (s *SQLiteStore) ReadStore() *SQLiteStore {
-	return &SQLiteStore{db: s.db, readDB: s.readDB, readOnly: true}
 }
 
 // dbConn is the common interface between *sql.DB and *sql.Tx.
@@ -305,40 +297,6 @@ type dbConn interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
-}
-
-// BeginWriteBatch starts a SQLite transaction for batching writes.
-// Only safe to call when the caller holds exclusive write access (e.g. ingestMu).
-func (s *SQLiteStore) BeginWriteBatch() error {
-	if s.tx != nil {
-		return fmt.Errorf("write batch already active")
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	s.tx = tx
-	return nil
-}
-
-// CommitWriteBatch commits the active write batch transaction.
-func (s *SQLiteStore) CommitWriteBatch() error {
-	if s.tx == nil {
-		return fmt.Errorf("no write batch active")
-	}
-	err := s.tx.Commit()
-	s.tx = nil
-	return err
-}
-
-// RollbackWriteBatch rolls back the active write batch transaction.
-func (s *SQLiteStore) RollbackWriteBatch() error {
-	if s.tx == nil {
-		return nil
-	}
-	err := s.tx.Rollback()
-	s.tx = nil
-	return err
 }
 
 // NewSQLiteStore opens or creates a SQLite database at the given path
@@ -921,32 +879,15 @@ func (s *SQLiteStore) GetOperation(cid string) (*StoredOperation, error) {
 	return &op, nil
 }
 
-func (s *SQLiteStore) PutOperation(op StoredOperation) error {
+func putOperationTx(db dbConn, op StoredOperation) error {
 	if op.IngestedAt == "" {
 		op.IngestedAt = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
-	_, err := s.writerDB().Exec(
+	_, err := db.Exec(
 		"INSERT OR REPLACE INTO operations (cid, jws_token, chain_type, chain_id, ingested_at) VALUES (?, ?, ?, ?, ?)",
 		op.CID, op.JWSToken, op.ChainType, op.ChainID, op.IngestedAt,
 	)
 	return err
-}
-
-func (s *SQLiteStore) ListArtifactOperations() ([]StoredOperation, error) {
-	rows, err := s.readerDB().Query("SELECT cid, jws_token, chain_type, chain_id, ingested_at FROM operations WHERE chain_type = 'artifact' ORDER BY cid")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []StoredOperation{}
-	for rows.Next() {
-		var op StoredOperation
-		if err := rows.Scan(&op.CID, &op.JWSToken, &op.ChainType, &op.ChainID, &op.IngestedAt); err != nil {
-			return nil, err
-		}
-		result = append(result, op)
-	}
-	return result, rows.Err()
 }
 
 // ---------------------------------------------------------------------------
@@ -973,7 +914,7 @@ func (s *SQLiteStore) GetIdentityChain(did string) (*StoredIdentityChain, error)
 	return &chain, nil
 }
 
-func (s *SQLiteStore) PutIdentityChain(chain StoredIdentityChain) error {
+func putIdentityChainTx(db dbConn, chain StoredIdentityChain) error {
 	logJSON, err := json.Marshal(chain.Log)
 	if err != nil {
 		return err
@@ -982,7 +923,7 @@ func (s *SQLiteStore) PutIdentityChain(chain StoredIdentityChain) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.writerDB().Exec(
+	_, err = db.Exec(
 		"INSERT OR REPLACE INTO identity_chains (did, log, head_cid, last_created_at, state) VALUES (?, ?, ?, ?, ?)",
 		chain.DID, logJSON, chain.HeadCID, chain.LastCreatedAt, stateJSON,
 	)
@@ -1013,7 +954,7 @@ func (s *SQLiteStore) GetContentChain(contentID string) (*StoredContentChain, er
 	return &chain, nil
 }
 
-func (s *SQLiteStore) PutContentChain(chain StoredContentChain) error {
+func putContentChainTx(db dbConn, chain StoredContentChain) error {
 	logJSON, err := json.Marshal(chain.Log)
 	if err != nil {
 		return err
@@ -1022,7 +963,7 @@ func (s *SQLiteStore) PutContentChain(chain StoredContentChain) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.writerDB().Exec(
+	_, err = db.Exec(
 		"INSERT OR REPLACE INTO content_chains (content_id, genesis_cid, log, last_created_at, state) VALUES (?, ?, ?, ?, ?)",
 		chain.ContentID, chain.GenesisCID, logJSON, chain.LastCreatedAt, stateJSON,
 	)
@@ -1060,6 +1001,12 @@ func (s *SQLiteStore) ListIdentityChains() ([]StoredIdentityChain, error) {
 	return chains, rows.Err()
 }
 
+// ListContentChains enumerates every stored content chain.
+//
+// NOT PART OF ANY RELAY CONTRACT, and deliberately so: an unpaged whole-corpus
+// enumeration is exactly the shape the index projection exists to avoid, and no
+// route reaches it. It is here for local tooling that owns the database it is
+// reading — `dfos content list` over a single operator's own relay.
 func (s *SQLiteStore) ListContentChains() ([]StoredContentChain, error) {
 	rows, err := s.readerDB().Query("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains")
 	if err != nil {
@@ -1104,19 +1051,10 @@ func (s *SQLiteStore) GetBlob(key BlobKey) ([]byte, error) {
 	return data, nil
 }
 
-func (s *SQLiteStore) PutBlob(key BlobKey, data []byte) error {
-	_, err := s.writerDB().Exec(
+func putBlobTx(db dbConn, key BlobKey, data []byte) error {
+	_, err := db.Exec(
 		"INSERT OR REPLACE INTO blobs (creator_did, document_cid, data) VALUES (?, ?, ?)",
 		key.CreatorDID, key.DocumentCID, data,
-	)
-	return err
-}
-
-func (s *SQLiteStore) DeleteBlob(key BlobKey) error {
-	// Idempotent: deleting a missing row affects zero rows and returns no error.
-	_, err := s.writerDB().Exec(
-		"DELETE FROM blobs WHERE creator_did = ? AND document_cid = ?",
-		key.CreatorDID, key.DocumentCID,
 	)
 	return err
 }
@@ -1146,7 +1084,7 @@ func (s *SQLiteStore) GetCountersignatures(operationCID string) ([]string, error
 	return tokens, rows.Err()
 }
 
-func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) error {
+func addCountersignatureTx(db dbConn, operationCID string, jwsToken string) error {
 	// extract witness DID from kid header for dedup
 	witnessDID := ""
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
@@ -1165,41 +1103,11 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
 	// INSERT OR IGNORE deduplicates by (operation_cid, witness_did)
-	_, err = s.writerDB().Exec(
+	_, err = db.Exec(
 		"INSERT OR IGNORE INTO countersignatures (operation_cid, jws_token, witness_did, created_at, ingested_at) VALUES (?, ?, ?, ?, ?)",
 		operationCID, jwsToken, witnessDID, createdAt, ingestedAt,
 	)
 	return err
-}
-
-// ListCountersignatures enumerates every stored countersignature (all
-// witnesses), sorted by CID. Used ONLY by the index-projection rebuild path.
-func (s *SQLiteStore) ListCountersignatures() ([]StoredCountersignature, error) {
-	rows, err := s.readerDB().Query("SELECT operation_cid, jws_token, created_at, ingested_at FROM countersignatures")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := []StoredCountersignature{}
-	for rows.Next() {
-		var targetCID, token, createdAt, ingestedAt string
-		if err := rows.Scan(&targetCID, &token, &createdAt, &ingestedAt); err != nil {
-			return nil, err
-		}
-		row := countersignatureFromToken(targetCID, token)
-		if row == nil {
-			continue
-		}
-		row.CreatedAt = createdAt
-		row.IngestedAt = ingestedAt
-		result = append(result, *row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CID < result[j].CID })
-	return result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,8 +1133,8 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
-	var row indexIdentityRow
+func scanIndexIdentityRow(sc scanner) (IndexIdentityRow, error) {
+	var row IndexIdentityRow
 	var isDeleted int
 	var anchor, docSchema, name sql.NullString
 	var publicRead sql.NullInt64
@@ -1240,7 +1148,7 @@ func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
 	// A projected profile always carries an anchor (profileProjection returns nil
 	// otherwise), so anchor validity is exactly profile presence.
 	if anchor.Valid {
-		profile := &indexProfile{
+		profile := &IndexProfile{
 			Anchor:     anchor.String,
 			PublicRead: publicRead.Valid && publicRead.Int64 != 0,
 		}
@@ -1259,8 +1167,8 @@ func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
 
 const indexIdentityCols = "did, head_cid, op_count, genesis_at, head_at, is_deleted, profile_anchor, profile_public_read, profile_doc_schema, profile_name"
 
-func scanIndexContentRow(sc scanner) (indexContentRow, error) {
-	var row indexContentRow
+func scanIndexContentRow(sc scanner) (IndexContentRow, error) {
+	var row IndexContentRow
 	var isDeleted, publicRead int
 	var currentDocCID, docSchema, title sql.NullString
 	if err := sc.Scan(
@@ -1288,7 +1196,7 @@ func scanIndexContentRow(sc scanner) (indexContentRow, error) {
 
 const indexContentCols = "content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count, genesis_at, head_at, current_document_cid, public_read, doc_schema, title"
 
-func (s *SQLiteStore) PutIndexIdentityRow(row indexIdentityRow) error {
+func putIndexIdentityRowTx(db dbConn, row IndexIdentityRow) error {
 	var anchor, docSchema, name any
 	var publicRead any
 	hasPublicProfile := 0
@@ -1301,7 +1209,7 @@ func (s *SQLiteStore) PutIndexIdentityRow(row indexIdentityRow) error {
 			hasPublicProfile = 1
 		}
 	}
-	_, err := s.writerDB().Exec(
+	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_identity
 		 (did, head_cid, op_count, genesis_at, head_at, is_deleted,
 		  profile_anchor, profile_public_read, profile_doc_schema, profile_name, has_public_profile)
@@ -1312,8 +1220,8 @@ func (s *SQLiteStore) PutIndexIdentityRow(row indexIdentityRow) error {
 	return err
 }
 
-func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
-	_, err := s.writerDB().Exec(
+func putIndexContentRowTx(db dbConn, row IndexContentRow) error {
+	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_content
 		 (content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count,
 		  genesis_at, head_at, current_document_cid, public_read, doc_schema, title)
@@ -1324,7 +1232,7 @@ func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
 	return err
 }
 
-func putIndexCreditRows(db dbConn, contentID string, rows []indexCreditRow) error {
+func putIndexCreditRowsTx(db dbConn, contentID string, rows []IndexCreditRow) error {
 	if _, err := db.Exec("DELETE FROM index_credit WHERE content_id = ?", contentID); err != nil {
 		return err
 	}
@@ -1340,23 +1248,8 @@ func putIndexCreditRows(db dbConn, contentID string, rows []indexCreditRow) erro
 	return nil
 }
 
-func (s *SQLiteStore) PutIndexCreditRows(contentID string, rows []indexCreditRow) error {
-	if s.tx != nil {
-		return putIndexCreditRows(s.tx, contentID, rows)
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	if err := putIndexCreditRows(tx, contentID, rows); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *SQLiteStore) PutIndexArtifactRow(row indexArtifactRow) error {
-	_, err := s.writerDB().Exec(
+func putIndexArtifactRowTx(db dbConn, row IndexArtifactRow) error {
+	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_artifact
 		 (cid, signer_did, created_at, ingested_at, doc_schema) VALUES (?, ?, ?, ?, ?)`,
 		row.CID, row.SignerDID, row.CreatedAt, row.IngestedAt, nullStr(row.DocSchema),
@@ -1364,8 +1257,8 @@ func (s *SQLiteStore) PutIndexArtifactRow(row indexArtifactRow) error {
 	return err
 }
 
-func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error {
-	_, err := s.writerDB().Exec(
+func putIndexContentSignerTx(db dbConn, contentID string, did string) error {
+	_, err := db.Exec(
 		"INSERT OR IGNORE INTO content_signers (content_id, did) VALUES (?, ?)",
 		contentID, did,
 	)
@@ -1377,16 +1270,16 @@ func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error 
 // secondary index is needed — nothing queries this table by did. INSERT OR IGNORE
 // because the caller rewrites the chain's whole has-ever-proved union on every
 // accepted operation: the union is monotonic, so the re-writes are idempotent.
-func (s *SQLiteStore) PutIndexIdentityKey(did string, keyID string, publicKey string) error {
-	_, err := s.writerDB().Exec(
+func putIndexIdentityKeyTx(db dbConn, did string, keyID string, publicKey string) error {
+	_, err := db.Exec(
 		"INSERT OR IGNORE INTO identity_keys (public_key, did, key_id) VALUES (?, ?, ?)",
 		publicKey, did, keyID,
 	)
 	return err
 }
 
-func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
-	_, err := s.writerDB().Exec(
+func putIndexCountersignatureRowTx(db dbConn, row StoredIndexCountersignature) error {
+	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_countersign
 		 (cid, witness_did, target_cid, relation, jws_token, created_at, ingested_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1395,7 +1288,7 @@ func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignatur
 	return err
 }
 
-func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
+func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]IndexIdentityRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.DID != "" {
@@ -1451,7 +1344,7 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexIdentityRow{}
+	result := []IndexIdentityRow{}
 	for rows.Next() {
 		row, err := scanIndexIdentityRow(rows)
 		if err != nil {
@@ -1462,7 +1355,7 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
+func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]IndexContentRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.ContentID != nil {
@@ -1527,7 +1420,7 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexContentRow{}
+	result := []IndexContentRow{}
 	for rows.Next() {
 		row, err := scanIndexContentRow(rows)
 		if err != nil {
@@ -1538,7 +1431,7 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error) {
+func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]IndexCreditRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.DID != nil {
@@ -1568,9 +1461,9 @@ func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, e
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCreditRow{}
+	result := []IndexCreditRow{}
 	for rows.Next() {
-		var row indexCreditRow
+		var row IndexCreditRow
 		var role sql.NullString
 		var hasClaim int
 		if err := rows.Scan(&row.ContentID, &row.DID, &role, &row.Position, &hasClaim); err != nil {
@@ -1586,7 +1479,7 @@ func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, e
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
+func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]IndexArtifactRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.CID != nil {
@@ -1630,9 +1523,9 @@ func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifact
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexArtifactRow{}
+	result := []IndexArtifactRow{}
 	for rows.Next() {
-		var row indexArtifactRow
+		var row IndexArtifactRow
 		var docSchema sql.NullString
 		if err := rows.Scan(&row.CID, &row.SignerDID, &row.CreatedAt, &row.IngestedAt, &docSchema); err != nil {
 			return nil, err
@@ -1646,7 +1539,7 @@ func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifact
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
+func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]IndexCountersignatureRow, error) {
 	query := "SELECT cid, target_cid, relation, jws_token, created_at, ingested_at FROM index_countersign WHERE witness_did = ?"
 	args := []any{q.Witness}
 	if q.Relation != nil {
@@ -1679,9 +1572,9 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCountersignatureRow{}
+	result := []IndexCountersignatureRow{}
 	for rows.Next() {
-		var row indexCountersignatureRow
+		var row IndexCountersignatureRow
 		var relation sql.NullString
 		if err := rows.Scan(&row.CID, &row.TargetCID, &relation, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
@@ -1695,7 +1588,7 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error) {
+func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]IndexCredentialRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.Issuer != "" {
@@ -1755,9 +1648,9 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCredentialRow{}
+	result := []IndexCredentialRow{}
 	for rows.Next() {
-		var row indexCredentialRow
+		var row IndexCredentialRow
 		var attJSON string
 		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
@@ -1771,7 +1664,7 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error) {
+func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]IndexOperationRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.Kind != "" {
@@ -1812,9 +1705,9 @@ func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexOperationRow{}
+	result := []IndexOperationRow{}
 	for rows.Next() {
-		var row indexOperationRow
+		var row IndexOperationRow
 		if err := rows.Scan(&row.CID, &row.Kind, &row.ChainID, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
 		}
@@ -1891,37 +1784,8 @@ func (s *SQLiteStore) ClearIndexProjection() error {
 	}
 	// operation_log is deliberately absent: it is the authoritative record a
 	// rebuild reads FROM, not a projection row it may truncate. Its one index
-	// column, signer_key, is filled in place instead — see
-	// ListOperationLogEntriesMissingSignerKey.
-	return nil
-}
-
-func (s *SQLiteStore) ListOperationLogEntriesMissingSignerKey() ([]LogEntry, error) {
-	rows, err := s.readerDB().Query(
-		"SELECT cid, jws_token, kind, chain_id FROM operation_log WHERE signer_key IS NULL OR signer_key = '' ORDER BY seq ASC",
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	entries := []LogEntry{}
-	for rows.Next() {
-		var e LogEntry
-		if err := rows.Scan(&e.CID, &e.JWSToken, &e.Kind, &e.ChainID); err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-	return entries, rows.Err()
-}
-
-func (s *SQLiteStore) SetOperationLogSignerKey(cid string, signerKey string) error {
-	if signerKey == "" {
-		return nil // still unresolvable — leave the row NULL rather than stamping ""
-	}
-	_, err := s.writerDB().Exec(
-		"UPDATE operation_log SET signer_key = ? WHERE cid = ?", signerKey, cid,
-	)
+	// column, signer_key, is cleared in place so the re-walk re-stamps it.
+	_, err := s.writerDB().Exec("UPDATE operation_log SET signer_key = NULL")
 	return err
 }
 
@@ -1929,7 +1793,7 @@ func (s *SQLiteStore) SetOperationLogSignerKey(cid string, signerKey string) err
 // operation log
 // ---------------------------------------------------------------------------
 
-func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
+func appendToLogTx(db dbConn, entry LogEntry) error {
 	createdAt := operationCreatedAt(entry.JWSToken)
 	// One op, one receipt stamp: PutOperation wrote this op's ingested_at moments
 	// ago in the same ingest, so source the log row's stamp from the operations
@@ -1940,7 +1804,7 @@ func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
 	// stored op.
 	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	var storedIngestedAt string
-	if err := s.readerDB().QueryRow(
+	if err := db.QueryRow(
 		"SELECT ingested_at FROM operations WHERE cid = ?", entry.CID,
 	).Scan(&storedIngestedAt); err == nil && storedIngestedAt != "" {
 		ingestedAt = storedIngestedAt
@@ -1950,16 +1814,14 @@ func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
 	// append-only and one op appends one row, so the first row is the receipt —
 	// a repeat carries no new information, and failing the write would turn a
 	// harmless repeat into a persistence error that fails the whole ingest.
-	// An unresolved signer key stores as NULL, not "": `signer_key = ?` never
-	// matches NULL, so the row is invisible to signerKey= while staying browsable
-	// unfiltered — and NULL is the predicate the rebuild backfill selects on.
-	var signerKey any
-	if entry.SignerKey != "" {
-		signerKey = entry.SignerKey
-	}
-	_, err := s.writerDB().Exec(
-		"INSERT OR IGNORE INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at, signer_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt, signerKey,
+	// signer_key is left NULL here and stamped by the index projection
+	// (IndexOperationSignerKey): resolving a kid is a read against identity state
+	// this write has no business performing, and `signer_key = ?` never matches
+	// NULL, so an unstamped row is invisible to signerKey= while staying browsable
+	// unfiltered.
+	_, err := db.Exec(
+		"INSERT OR IGNORE INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
+		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt,
 	)
 	return err
 }
@@ -1981,13 +1843,13 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 			return nil, "", err
 		}
 		rows, err = s.readerDB().Query(
-			`SELECT cid, jws_token, kind, chain_id FROM operation_log
+			`SELECT cid, jws_token, kind, chain_id, ingested_at FROM operation_log
 			 WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
 			afterSeq, limit,
 		)
 	} else {
 		rows, err = s.readerDB().Query(
-			"SELECT cid, jws_token, kind, chain_id FROM operation_log ORDER BY seq ASC LIMIT ?",
+			"SELECT cid, jws_token, kind, chain_id, ingested_at FROM operation_log ORDER BY seq ASC LIMIT ?",
 			limit,
 		)
 	}
@@ -1999,7 +1861,7 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	var entries []LogEntry
 	for rows.Next() {
 		var e LogEntry
-		if err := rows.Scan(&e.CID, &e.JWSToken, &e.Kind, &e.ChainID); err != nil {
+		if err := rows.Scan(&e.CID, &e.JWSToken, &e.Kind, &e.ChainID, &e.IngestedAt); err != nil {
 			return nil, "", err
 		}
 		entries = append(entries, e)
@@ -2334,23 +2196,6 @@ func (s *SQLiteStore) CountUnsequenced() (int, error) {
 // revocations — storage plus the as-of validity boundary logic
 // ---------------------------------------------------------------------------
 
-func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
-	rows, err := s.readerDB().Query("SELECT credential_cid FROM revocations WHERE issuer_did = ?", issuerDID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	cids := []string{}
-	for rows.Next() {
-		var cid string
-		if err := rows.Scan(&cid); err != nil {
-			return nil, err
-		}
-		cids = append(cids, cid)
-	}
-	return cids, rows.Err()
-}
-
 // AddRevocation stores a revocation, keeping the one with the EARLIEST as-of
 // boundary when the (issuer_did, credential_cid) pair already has one — see
 // revocationSupersedes. `INSERT OR IGNORE` alone would make the boundary depend on
@@ -2360,18 +2205,17 @@ func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
 // share one implementation of the rule, including the legacy-NULL-column fallback
 // and the CID tiebreak. Writes here are serialized through the single writer
 // connection, so the read-compare-write is not racing another writer.
-func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
-	w := s.writerDB()
+func addRevocationTx(db dbConn, revocation StoredRevocation) error {
 
 	var existing StoredRevocation
 	var existingCreatedAt sql.NullString
-	err := s.readerDB().QueryRow(
+	err := db.QueryRow(
 		"SELECT cid, jws_token, created_at FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
 		revocation.IssuerDID, revocation.CredentialCID,
 	).Scan(&existing.CID, &existing.JWSToken, &existingCreatedAt)
 	switch {
 	case err == sql.ErrNoRows:
-		_, err = w.Exec(
+		_, err = db.Exec(
 			"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
 			revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
 		)
@@ -2388,13 +2232,13 @@ func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
 	// Replace the row wholesale rather than UPDATE-ing cid in place: cid is the
 	// PRIMARY KEY, and delete-then-insert keeps the artifact, its boundary, and the
 	// key consistent in one step.
-	if _, err := w.Exec(
+	if _, err := db.Exec(
 		"DELETE FROM revocations WHERE issuer_did = ? AND credential_cid = ?",
 		revocation.IssuerDID, revocation.CredentialCID,
 	); err != nil {
 		return err
 	}
-	_, err = w.Exec(
+	_, err = db.Exec(
 		"INSERT INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
 		revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
 	)
@@ -2533,12 +2377,12 @@ func (s *SQLiteStore) GetPublicCredentialByCID(cid string) (*StoredPublicCredent
 	return &credential, nil
 }
 
-func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) error {
+func addPublicCredentialTx(db dbConn, credential StoredPublicCredential) error {
 	attJSON, err := json.Marshal(credential.Att)
 	if err != nil {
 		return err
 	}
-	if _, err = s.writerDB().Exec(
+	if _, err = db.Exec(
 		"INSERT OR IGNORE INTO public_credentials (cid, issuer_did, att, exp, jws_token, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		credential.CID, credential.IssuerDID, attJSON, credential.Exp, credential.JWSToken, credential.CreatedAt, credential.IngestedAt,
 	); err != nil {
@@ -2547,9 +2391,8 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	// ONE statement, from the SAME bytes stored above.
 	//
 	// Two properties are load-bearing and a per-resource Exec loop has neither.
-	// A single statement is atomic even when this store is not inside a write
-	// batch — writerDB() is the bare connection when s.tx is nil, so a loop
-	// autocommits per resource and a crash mid-loop leaves a credential holding
+	// A single statement keeps the projection whole even if the surrounding
+	// transaction is lost: a per-resource loop would leave a credential holding
 	// SOME of its rows. The boot repair cannot see that: its NOT EXISTS is
 	// cid-granular, so a partially-projected credential looks done forever and
 	// the missing grants simply stop being returned. The loop also took one host
@@ -2562,7 +2405,7 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	// backfillPublicCredentialResources uses, so the live path and the repair
 	// path admit exactly the same rows. A resource-less att writes nothing, which
 	// is the correct projection of a credential that names no resource.
-	if _, err := s.writerDB().Exec(
+	if _, err := db.Exec(
 		`INSERT OR IGNORE INTO public_credential_resources (cid, resource)
 		 SELECT ?, json_extract(je.value, '$.resource')
 		 FROM json_each(?) je
@@ -2574,23 +2417,29 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	return nil
 }
 
-// RemovePublicCredential deletes the credential row and its derived resource
-// rows, both qualified by issuer. The resource table carries no issuer column,
-// so its predicate reads the issuer off the parent row it derives from — which
-// is why the parent delete runs SECOND: reversing the order would delete the
-// row the EXISTS clause interrogates and the resource rows would survive as
-// orphans that GetPublicCredentials still answers with.
-func (s *SQLiteStore) RemovePublicCredential(issuerDID string, credentialCID string) error {
-	if _, err := s.writerDB().Exec(
-		`DELETE FROM public_credential_resources
-		 WHERE cid = ?
-		   AND EXISTS (SELECT 1 FROM public_credentials WHERE cid = ? AND issuer_did = ?)`,
-		credentialCID, credentialCID, issuerDID,
+// removePublicCredentialTx drops a held standing grant, ISSUER-SCOPED: the row
+// goes only when its own issuer_did is the DID that signed the revocation. See
+// PublicCredentialRemoval — an unscoped delete let any identity un-publish
+// content it had no authority over by naming someone else's credential CID.
+//
+// public_credential_resources carries no issuer column, so its predicate reads
+// the issuer off the parent row it derives from — which is why the parent
+// delete runs SECOND: reversing the order would delete the row the EXISTS
+// clause interrogates and the resource rows would survive as orphans that
+// GetPublicCredentials still answers with.
+func removePublicCredentialTx(db dbConn, removal PublicCredentialRemoval) error {
+	if _, err := db.Exec(
+		`DELETE FROM public_credential_resources WHERE cid = ? AND EXISTS (
+			SELECT 1 FROM public_credentials
+			WHERE cid = ? AND issuer_did = ?
+		)`,
+		removal.CredentialCID, removal.CredentialCID, removal.IssuerDID,
 	); err != nil {
 		return err
 	}
-	_, err := s.writerDB().Exec(
-		"DELETE FROM public_credentials WHERE cid = ? AND issuer_did = ?", credentialCID, issuerDID,
+	_, err := db.Exec(
+		"DELETE FROM public_credentials WHERE cid = ? AND issuer_did = ?",
+		removal.CredentialCID, removal.IssuerDID,
 	)
 	return err
 }
@@ -2609,4 +2458,217 @@ func (s *SQLiteStore) ResetPeerCursors() error {
 func (s *SQLiteStore) ResetSequencer() error {
 	_, err := s.writerDB().Exec("UPDATE raw_ops SET status = 'pending' WHERE status != 'rejected'")
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// write contract
+// ---------------------------------------------------------------------------
+
+// Commit persists one accepted operation, or one document blob, in a single
+// transaction.
+//
+// ATOMICITY IS WHY THIS EXISTS. Admitting one operation writes its chain state,
+// its operation row, and its /proof/v1/log append. Outside a transaction each of
+// those commits on its own, so a fault after the operation row but before the
+// log append leaves an operation every per-chain route serves and the proof log
+// has never heard of — permanently, because the idempotency check at the top of
+// each ingest path then answers "duplicate" and the missing append is never
+// retried. Inside one transaction the writes land together or not at all, and a
+// failed Commit is a store fault the relay retries with the raw op still
+// pending.
+func (s *SQLiteStore) Commit(batch CommitBatch) (result CommitResult, err error) {
+	if batch.Blob == nil && batch.Operation == nil {
+		return "", errors.New("commit batch carries neither an operation nor a blob")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil || result == CommitDuplicate {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if batch.Blob != nil {
+		// Blob bytes are content-addressed, so a rewrite is a no-op and the
+		// answer is always "new".
+		if err = putBlobTx(tx, batch.Blob.Key, batch.Blob.Bytes); err != nil {
+			return "", err
+		}
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return CommitNew, nil
+	}
+
+	op := batch.Operation
+	// The race backstop, inside the transaction so it is decided against the same
+	// snapshot the writes land on. Ingestion already read for this CID before
+	// verifying — it has to, to tell "same op" from "same CID, different
+	// signature" — so reaching here with the CID held means a concurrent
+	// submission won, and nothing is written.
+	var held string
+	switch scanErr := tx.QueryRow("SELECT cid FROM operations WHERE cid = ?", op.Operation.CID).Scan(&held); {
+	case scanErr == nil:
+		return CommitDuplicate, nil
+	case !errors.Is(scanErr, sql.ErrNoRows):
+		err = scanErr
+		return "", err
+	}
+
+	if err = putOperationTx(tx, op.Operation); err != nil {
+		return "", err
+	}
+	if op.IdentityChain != nil {
+		if err = putIdentityChainTx(tx, *op.IdentityChain); err != nil {
+			return "", err
+		}
+	}
+	if op.ContentChain != nil {
+		if err = putContentChainTx(tx, *op.ContentChain); err != nil {
+			return "", err
+		}
+	}
+	if op.Countersignature != nil {
+		if err = addCountersignatureTx(tx, op.Countersignature.TargetCID, op.Countersignature.JWSToken); err != nil {
+			return "", err
+		}
+	}
+	if op.Revocation != nil {
+		if err = addRevocationTx(tx, *op.Revocation); err != nil {
+			return "", err
+		}
+	}
+	if op.RemovePublicCredential != nil {
+		if err = removePublicCredentialTx(tx, *op.RemovePublicCredential); err != nil {
+			return "", err
+		}
+	}
+	if op.PublicCredential != nil {
+		if err = addPublicCredentialTx(tx, *op.PublicCredential); err != nil {
+			return "", err
+		}
+	}
+	if op.LogEntry != nil {
+		if err = appendToLogTx(tx, *op.LogEntry); err != nil {
+			return "", err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return CommitNew, nil
+}
+
+// ---------------------------------------------------------------------------
+// index projection — write side
+// ---------------------------------------------------------------------------
+
+// ApplyIndexRows writes one projection run's rows in a single transaction, so a
+// failed run leaves the rows and the cursor consistent with each other: neither
+// moved.
+func (s *SQLiteStore) ApplyIndexRows(rows IndexRowBatch) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := applyIndexRowsTx(tx, rows); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+func applyIndexRowsTx(tx dbConn, rows IndexRowBatch) error {
+	for _, row := range rows.Identities {
+		if err := putIndexIdentityRowTx(tx, row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Content {
+		if err := putIndexContentRowTx(tx, row); err != nil {
+			return err
+		}
+	}
+	for _, set := range rows.Credits {
+		if err := putIndexCreditRowsTx(tx, set.ContentID, set.Rows); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Artifacts {
+		if err := putIndexArtifactRowTx(tx, row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.Countersignatures {
+		if err := putIndexCountersignatureRowTx(tx, row); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.IdentityKeys {
+		if err := putIndexIdentityKeyTx(tx, row.DID, row.KeyID, row.PublicKey); err != nil {
+			return err
+		}
+	}
+	for _, row := range rows.ContentSigners {
+		if err := putIndexContentSignerTx(tx, row.ContentID, row.DID); err != nil {
+			return err
+		}
+	}
+	for _, key := range rows.OperationSignerKeys {
+		// An unresolved key is never stamped — see IndexOperationSignerKey.
+		if key.PublicKey == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			"UPDATE operation_log SET signer_key = ? WHERE cid = ?", key.PublicKey, key.CID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetIndexCursor reads the projection worker's persisted position. An absent or
+// undecodable value reads as "never run", which restarts the walk — a replay
+// costs work and changes nothing, because every recompute is convergent.
+func (s *SQLiteStore) GetIndexCursor() (IndexCursor, error) {
+	var value string
+	err := s.readerDB().QueryRow("SELECT value FROM index_meta WHERE key = 'projection_cursor'").Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return IndexCursor{}, nil
+	}
+	if err != nil {
+		return IndexCursor{}, err
+	}
+	var cursor IndexCursor
+	if err := json.Unmarshal([]byte(value), &cursor); err != nil {
+		return IndexCursor{}, nil
+	}
+	return cursor, nil
+}
+
+func (s *SQLiteStore) SetIndexCursor(cursor IndexCursor) error {
+	encoded, err := json.Marshal(cursor)
+	if err != nil {
+		return err
+	}
+	_, err = s.writerDB().Exec(
+		"INSERT OR REPLACE INTO index_meta (key, value) VALUES ('projection_cursor', ?)",
+		string(encoded),
+	)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// durable-store maintenance
+// ---------------------------------------------------------------------------
+
+// RewriteIdentityChainState replaces one row's materialized state with a fresh
+// walk of the log it already holds. See MigratableStore: it admits nothing and
+// changes no chain's history.
+func (s *SQLiteStore) RewriteIdentityChainState(chain StoredIdentityChain) error {
+	return putIdentityChainTx(s.writerDB(), chain)
 }

@@ -35,20 +35,19 @@ The container generates Ed25519 keys on first boot and persists them in SQLite. 
 
 All configuration is via environment variables:
 
-| Variable         | Default            | Description                                                                                                                           |
-| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`           | `4444`             | HTTP listen port                                                                                                                      |
-| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                                                                                               |
-| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                                                                                           |
-| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                                                                                           |
-| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot                                                                                 |
-| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                                                                                            |
-| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below)                                                                      |
-| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                                            |
-| `WRITE`          | _(enabled)_        | `false` makes this a LITE pull-only node: `POST /operations` and blob upload answer 501, and the well-known advertises `write: false` |
-| `AUTHORITY`      | _(unset)_          | This relay's own `host[:port]` — the host identity proofs bind                                                                        |
-| `INGESTION`      | `open`             | Admission for `POST /operations`: `open`, `proof-required`, `closed`                                                                  |
-| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's identity proof                                                                       |
+| Variable        | Default            | Description                                                                                                                           |
+| --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`          | `4444`             | HTTP listen port                                                                                                                      |
+| `SQLITE_PATH`   | `~/.dfos/relay.db` | Path to SQLite database                                                                                                               |
+| `RELAY_NAME`    | `DFOS Relay`       | Profile name (shown in well-known endpoint)                                                                                           |
+| `PEERS`         | _(empty)_          | Peer relay URLs (see below)                                                                                                           |
+| `RESYNC`        | `false`            | `true` resets peer cursors for a full re-sync on boot                                                                                 |
+| `SYNC_INTERVAL` | `30s`              | How often to poll peers for new operations                                                                                            |
+| `INDEX`         | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                                            |
+| `WRITE`         | _(enabled)_        | `false` makes this a LITE pull-only node: `POST /operations` and blob upload answer 501, and the well-known advertises `write: false` |
+| `AUTHORITY`     | _(unset)_          | This relay's own `host[:port]` — the host identity proofs bind                                                                        |
+| `INGESTION`     | `open`             | Admission for `POST /operations`: `open`, `proof-required`, `closed`                                                                  |
+| `GOSSIP_PROOF`  | `false`            | `true` signs gossip-out pushes with this relay's identity proof                                                                       |
 
 `AUTHORITY` is what every [API-AUTH](https://protocol.dfos.com/api-auth) identity proof
 is checked against — configuration, never taken from a request header. Without it the
@@ -97,19 +96,6 @@ no pin and is not checked, and a peer that cannot be reached is not a mismatch.
 A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected: a bad peer config fails
 at boot rather than degrading into peers that error on every sync tick.
-
-### Content following
-
-`CONTENT_FOLLOW` controls whether this relay also pulls the document blobs it
-holds a standing public-read grant for. Content following is a Go-relay
-behavior, not part of the relay contract:
-
-- `none` (default) — proof plane only; byte-identical to a non-following node.
-- `eager` — convergent sweep pulls granted public blobs on each sync interval.
-
-`eager` is the only mode that follows: `lazy` read-through-on-404 is not
-implemented, and any other value — including a typo — leaves the relay
-non-following rather than erroring.
 
 ## Topology Testing
 
@@ -160,6 +146,36 @@ r, _ := relay.NewRelay(relay.RelayOptions{
 
 http.ListenAndServe(":8080", r.Handler())
 ```
+
+### Store contracts
+
+`RelayOptions.Store` takes a `RelayReadStore` — every read a route performs, and
+nothing else. `NewRelay` asserts the further contracts once, at construction, and
+derives what the relay advertises from what it finds:
+
+| contract           | what it adds                                       | what it enables                       |
+| ------------------ | -------------------------------------------------- | ------------------------------------- |
+| `RelayReadStore`   | the reads                                          | the whole proof plane, read-only      |
+| `RelayWriteStore`  | `Commit(CommitBatch)` — one operation, atomically  | `capabilities.write`, ingestion       |
+| `IndexReadStore`   | the nine `/index/v0` queries                       | `capabilities.index`                  |
+| `IndexWriteStore`  | `ApplyIndexRows` + the projection cursor           | this relay maintains the index itself |
+| `SigningStore`     | the mailbox                                        | `capabilities.signing`                |
+| `RelayWriterState` | raw ops, the sequencer's pending set, peer cursors | sequencing and peer sync              |
+
+A store implements what it can do and omits the rest. There are no optional
+members and no stubs that throw: what a store can do is a fact about its type, so
+a store that answers the index queries from rows another process maintains simply
+does not implement `IndexWriteStore`, and this relay does no projection work for
+it. Both reference stores (`MemoryStore`, `SQLiteStore`) implement all of them.
+
+### Index projection
+
+The `/index/v0` rows are maintained by a worker that walks the operation log from
+a persisted cursor with a per-run budget, outside the ingest mutex. By default the
+relay drains it after an ingest batch on its own goroutine; set
+`IndexProjection: relay.IndexProjectionExternal` and call `Relay.ProjectIndex()`
+from a timer or another process instead. A rebuild is the same walk: clear the
+rows, reset the cursor, re-read the log.
 
 ## Key Persistence
 

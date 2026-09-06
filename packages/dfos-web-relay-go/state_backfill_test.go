@@ -31,10 +31,16 @@ func backfillTestLogger() (*slog.Logger, *bytes.Buffer) {
 	return slog.New(slog.NewTextHandler(&logs, nil)), &logs
 }
 
+// staleRowStore is the read plus the migration rewrite a stale-row fixture needs.
+type staleRowStore interface {
+	RelayReadStore
+	MigratableStore
+}
+
 // staleIdentityRow rewrites an identity row the way a pre-ProvedKeys binary
 // would have written it: same log, same head, same effective arrays, no
 // has-ever-proved union. Returns the row as it now stands on disk.
-func staleIdentityRow(t *testing.T, store Store, did string) StoredIdentityChain {
+func staleIdentityRow(t *testing.T, store staleRowStore, did string) StoredIdentityChain {
 	t.Helper()
 	chain, err := store.GetIdentityChain(did)
 	if err != nil || chain == nil {
@@ -44,14 +50,14 @@ func staleIdentityRow(t *testing.T, store Store, did string) StoredIdentityChain
 		t.Fatalf("fixture is already stale — the rotation did not fold a union: %+v", chain.State)
 	}
 	chain.State.ProvedKeys = dfos.DeclaredKeyState{}
-	if err := store.PutIdentityChain(*chain); err != nil {
+	if err := store.RewriteIdentityChainState(*chain); err != nil {
 		t.Fatalf("write stale identity chain %s: %v", did, err)
 	}
 	return *chain
 }
 
 // resolvesHistorically reports whether the has-ever-proved resolver knows a key.
-func resolvesHistorically(t *testing.T, store Store, did, keyID string) bool {
+func resolvesHistorically(t *testing.T, store RelayReadStore, did, keyID string) bool {
 	t.Helper()
 	_, err := CreateKeyResolver(store)(did + "#" + keyID)
 	return err == nil
@@ -64,10 +70,10 @@ func resolvesHistorically(t *testing.T, store Store, did, keyID string) bool {
 func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		store func(t *testing.T) Store
+		store func(t *testing.T) referenceStore
 	}{
-		{"memory", func(t *testing.T) Store { return NewMemoryStore() }},
-		{"sqlite", func(t *testing.T) Store {
+		{"memory", func(t *testing.T) referenceStore { return NewMemoryStore() }},
+		{"sqlite", func(t *testing.T) referenceStore {
 			s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "backfill.db"))
 			if err != nil {
 				t.Fatal(err)
@@ -210,17 +216,16 @@ func TestBackfillPrecedesTheIndexRebuild(t *testing.T) {
 // is the re-verification cost — a signature check per operation, per boot — that
 // makes that unacceptable.
 //
-// It embeds the Store interface rather than a concrete store, which also means
-// it does NOT forward BeginWriteBatch: the wrapper deliberately exercises the
-// no-batch path of the backfill.
+// It embeds MigratableStore — the only contract the backfill takes — so the
+// wrapper cannot accidentally widen what the backfill is allowed to reach.
 type countingPutStore struct {
-	Store
+	MigratableStore
 	identityPuts int
 }
 
-func (s *countingPutStore) PutIdentityChain(chain StoredIdentityChain) error {
+func (s *countingPutStore) RewriteIdentityChainState(chain StoredIdentityChain) error {
 	s.identityPuts++
-	return s.Store.PutIdentityChain(chain)
+	return s.MigratableStore.RewriteIdentityChainState(chain)
 }
 
 // TestBackfillIsIdempotent: the repaired row fails the IsZero test, so the
@@ -236,7 +241,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 	rotateExistingTestIdentity(t, r, id)
 	staleIdentityRow(t, inner, id.did)
 
-	store := &countingPutStore{Store: inner}
+	store := &countingPutStore{MigratableStore: inner}
 	logger, _ := backfillTestLogger()
 
 	if err := backfillProvedKeyState(store, logger); err != nil {
@@ -277,7 +282,7 @@ func TestBackfillLeavesAnUnverifiableChainAlone(t *testing.T) {
 	rotateExistingTestIdentity(t, r, broken)
 	corrupt := staleIdentityRow(t, store, broken.did)
 	corrupt.Log = append(append([]string{}, corrupt.Log...), "not-a-jws")
-	if err := store.PutIdentityChain(corrupt); err != nil {
+	if err := store.RewriteIdentityChainState(corrupt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +326,7 @@ func TestBackfillLeavesAnUnverifiableChainAlone(t *testing.T) {
 func TestBackfillSkipsChainsWithNoLog(t *testing.T) {
 	store := NewMemoryStore()
 	empty := StoredIdentityChain{DID: "did:dfos:z6MkfakefakefakefakefakeF", Log: []string{}}
-	if err := store.PutIdentityChain(empty); err != nil {
+	if err := store.RewriteIdentityChainState(empty); err != nil {
 		t.Fatal(err)
 	}
 	logger, logs := backfillTestLogger()

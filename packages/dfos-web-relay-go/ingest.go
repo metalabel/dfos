@@ -12,14 +12,14 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// temporal guard
+// rejection classification
 // ---------------------------------------------------------------------------
 
 // ErrDependencyMissing marks a verification failure as a MISSING DEPENDENCY:
 // the identity chain or key the operation references is not in this store yet,
 // so the operation may verify once sync or gossip delivers it. The sequencer
-// keeps such an op pending; every other rejection is permanent and DELETES the
-// raw op (MarkOpRejected), which is unrecoverable.
+// keeps such an op pending; a PERMANENT rejection DELETES the raw op
+// (MarkOpRejected), which is unrecoverable.
 //
 // CLASSIFICATION IS A TYPED FACT, NEVER A SPELLING. Only a resolver knows that
 // a lookup missed — "this identity is not here" and "this kid is malformed" are
@@ -41,6 +41,22 @@ import (
 // isDependencyMissing/markDependencyMissing in @metalabel/dfos-protocol, wrapped
 // at the same resolver miss sites (ingest.ts).
 var ErrDependencyMissing = errors.New("dependency missing")
+
+// ErrStoreFault marks a failure as THE STORE'S, NOT THE OPERATION'S: a read or a
+// write did not complete, so nothing was decided about the operation and — since
+// Commit is atomic — nothing was persisted.
+//
+// It is a separate sentinel from ErrDependencyMissing because the two are
+// different facts about the world, even though both are retryable. A missing
+// dependency is a verdict the relay reached against what it holds; a store fault
+// is the relay failing to reach a verdict at all. Conflating them worked until a
+// resolver returned a raw store error that carried NEITHER marker: the rejection
+// classified as permanent, and a momentary "database is locked" during signature
+// verification durably DELETED a valid operation.
+//
+// The sentinel survives the %w wrapping the protocol library applies on the way
+// back up, which a bare error value from the store does not.
+var ErrStoreFault = errors.New("store fault")
 
 // dependencyMissingError carries ErrDependencyMissing WITHOUT altering the
 // human-readable message.
@@ -64,6 +80,32 @@ func dependencyMissingf(format string, a ...any) error {
 	return dependencyMissingError{msg: fmt.Sprintf(format, a...)}
 }
 
+// storeFaultError carries ErrStoreFault the same way, and for the same reason.
+type storeFaultError struct{ msg string }
+
+func (e storeFaultError) Error() string { return e.msg }
+
+func (e storeFaultError) Unwrap() error { return ErrStoreFault }
+
+// storeFault wraps a failed store call so the fault survives every %w wrap
+// between here and the classifier.
+func storeFault(err error) error {
+	return storeFaultError{msg: storeReadErrorPrefix + err.Error()}
+}
+
+// rejected builds a rejection from a verification error, classified structurally:
+// a store fault and a missing dependency are both retryable, and the sequencer
+// tells them apart by StoreFault.
+func rejected(cid string, err error) IngestionResult {
+	return IngestionResult{
+		CID:               cid,
+		Status:            "rejected",
+		Error:             err.Error(),
+		DependencyMissing: errors.Is(err, ErrDependencyMissing) || errors.Is(err, ErrStoreFault),
+		StoreFault:        errors.Is(err, ErrStoreFault),
+	}
+}
+
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
 const identityConflictingExtensionError = "identity chains are linear: conflicting extension refused"
 
@@ -84,6 +126,43 @@ func isFutureTimestamp(createdAt string) bool {
 		return false // invalid dates rejected by protocol verification
 	}
 	return t.After(time.Now().Add(maxFutureTimestamp))
+}
+
+// ---------------------------------------------------------------------------
+// idempotency
+// ---------------------------------------------------------------------------
+
+// heldOperation answers the "have I already got this?" question every ingest
+// path asks before it verifies, and it FAILS CLOSED.
+//
+// It returns a rejection result when the answer could not be obtained, when the
+// CID is held under a different signature, or when it is held under the same one
+// (a duplicate). A nil result means "not held, carry on".
+//
+// The fail-closed part is the whole point. Two of these gates used to be
+// literally `existing, _ := store.GetOperation(cid)`, dropping the error — so one
+// transient reader fault on a resubmitted genesis made `existing` nil, re-ran the
+// genesis branch, and rewrote an N-operation chain as a 1-operation chain,
+// reviving rotated-out keys and undoing a delete. Unrecoverable, because the
+// later operations were still in the operations table while the chain row was
+// gone, and every replay path hit the same duplicate short-circuit.
+func heldOperation(store RelayReadStore, cid, jwsToken, kind, duplicateChainID string) *IngestionResult {
+	existing, err := store.GetOperation(cid)
+	if err != nil {
+		result := rejected(cid, storeFault(err))
+		return &result
+	}
+	if existing == nil {
+		return nil
+	}
+	if existing.JWSToken != jwsToken {
+		return &IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
+	}
+	chainID := duplicateChainID
+	if chainID == "" {
+		chainID = existing.ChainID
+	}
+	return &IngestionResult{CID: cid, Status: "duplicate", Kind: kind, ChainID: chainID}
 }
 
 // ---------------------------------------------------------------------------
@@ -275,13 +354,14 @@ func findKeyInKeyState(state dfos.DeclaredKeyState, keyID string) (dfos.Multikey
 // No fast/slow split remains either: has-ever-proved is a superset of effective,
 // so one search over ProvedKeys answers both.
 //
-// WHICH FAILURES ARE DEPENDENCY MISSES. Exactly two: the identity chain is not
-// in this store, and the identity is here but has never proved that key id.
-// Both may be answered differently once sync delivers more of the graph, so
-// both wrap ErrDependencyMissing. The malformed-kid and malformed-DID failures
-// do NOT: no amount of syncing makes a kid that is not a DID URL into one, so
-// they stay permanent and the op is durably rejected.
-func CreateKeyResolver(store Store) dfos.KeyResolver {
+// THREE FAILURE CLASSES, AND THE STORE IS ITS OWN. A missing chain and an
+// unknown key id may be answered differently once sync delivers more of the
+// graph, so both wrap ErrDependencyMissing. A store error decided nothing at all
+// and wraps ErrStoreFault — without that marker a momentary "database is locked"
+// during signature verification classified as permanent and DELETED a valid
+// operation. The malformed-kid and malformed-DID failures wrap neither: no amount
+// of syncing makes a kid that is not a DID URL into one, so they stay permanent.
+func CreateKeyResolver(store RelayReadStore) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
 		if hashIdx < 0 {
@@ -296,7 +376,7 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {
-			return nil, err
+			return nil, storeFault(err)
 		}
 		if identity == nil {
 			return nil, dependencyMissingf("unknown identity: %s", did)
@@ -319,10 +399,11 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 // beyond saying so — the possession fold made the arrays correct for this
 // surface for free.
 //
-// Only the unknown-identity failure is a dependency miss here. A DELETED
-// identity and a key that is merely no longer current are both verdicts this
-// store is already entitled to reach, and re-asking later cannot change them.
-func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
+// Only the unknown-identity failure is a dependency miss here, and only a store
+// error is a store fault. A DELETED identity and a key that is merely no longer
+// current are both verdicts this store is already entitled to reach, and
+// re-asking later cannot change them.
+func CreateCurrentKeyResolver(store RelayReadStore) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
 		if hashIdx < 0 {
@@ -337,7 +418,7 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {
-			return nil, err
+			return nil, storeFault(err)
 		}
 		if identity == nil {
 			return nil, dependencyMissingf("unknown identity: %s", did)
@@ -354,7 +435,7 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 	}
 }
 
-func admissionKeyResolver(store Store, mode admissionMode) dfos.KeyResolver {
+func admissionKeyResolver(store RelayReadStore, mode admissionMode) dfos.KeyResolver {
 	if mode == historicalAdmission {
 		return CreateKeyResolver(store)
 	}
@@ -362,10 +443,50 @@ func admissionKeyResolver(store Store, mode admissionMode) dfos.KeyResolver {
 }
 
 // ---------------------------------------------------------------------------
+// the commit
+// ---------------------------------------------------------------------------
+
+// commitOperation hands one accepted operation to the store as a single unit and
+// turns the two answers into results.
+//
+// A store error here is a STORE FAULT, never a verdict: Commit persisted nothing,
+// the raw op stays pending, and a later pass re-ingests it. That is the whole
+// reason the write contract is one atomic call — a run of independent put calls
+// could leave the operation half-held, and the half that DID land makes every
+// retry short-circuit as a duplicate, so the half that failed is never made up.
+func commitOperation(store RelayWriteStore, result IngestionResult, commit OperationCommit) IngestionResult {
+	outcome, err := store.Commit(CommitBatch{Operation: &commit})
+	if err != nil {
+		return IngestionResult{
+			CID:               result.CID,
+			Status:            "rejected",
+			Error:             persistErrorPrefix + err.Error(),
+			DependencyMissing: true,
+			StoreFault:        true,
+		}
+	}
+	if outcome == CommitDuplicate {
+		// Another submission of the same operation won the race. Nothing was
+		// written by this one, and the operation is held either way.
+		return IngestionResult{CID: result.CID, Status: "duplicate", Kind: result.Kind, ChainID: result.ChainID}
+	}
+	return result
+}
+
+// logEntryFor builds the global-log append for an accepted operation, or nil when
+// the relay runs with the log disabled.
+func logEntryFor(enabled bool, cid, jwsToken, kind, chainID string) *LogEntry {
+	if !enabled {
+		return nil
+	}
+	return &LogEntry{CID: cid, JWSToken: jwsToken, Kind: kind, ChainID: chainID}
+}
+
+// ---------------------------------------------------------------------------
 // individual verifiers
 // ---------------------------------------------------------------------------
 
-func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
+func ingestIdentityOp(jwsToken string, store RelayWriteStore, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -381,13 +502,8 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
 	}
 
-	// idempotent: already stored
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
-			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
-		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "identity-op", ChainID: existing.ChainID}
+	if held := heldOperation(store, cid, jwsToken, "identity-op", ""); held != nil {
+		return *held
 	}
 
 	opType, _ := payload["type"].(string)
@@ -396,7 +512,18 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 	if isGenesis {
 		result, err := dfos.VerifyIdentityChain([]string{jwsToken})
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+			return rejected(cid, err)
+		}
+		// A genesis never REPLACES a chain. The chain row is written whole, so
+		// admitting a genesis for a DID that already has history would rewrite an
+		// N-operation chain as a 1-operation one — reviving rotated-out keys and
+		// undoing a delete — and nothing legitimate does that.
+		existing, cerr := store.GetIdentityChain(result.State.DID)
+		if cerr != nil {
+			return rejected(cid, storeFault(cerr))
+		}
+		if existing != nil && existing.HeadCID != cid {
+			return IngestionResult{CID: cid, Status: "rejected", Error: "identity chain already exists"}
 		}
 		createdAt, _ := payload["createdAt"].(string)
 		chain := StoredIdentityChain{
@@ -406,18 +533,13 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			LastCreatedAt: createdAt,
 			State:         result.State,
 		}
-		if perr := persistError(cid, store.PutIdentityChain(chain)); perr != nil {
-			return *perr
-		}
-		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})); perr != nil {
-			return *perr
-		}
-		if logEnabled {
-			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})); perr != nil {
-				return *perr
-			}
-		}
-		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID}
+		return commitOperation(store,
+			IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID},
+			OperationCommit{
+				Operation:     StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID},
+				IdentityChain: &chain,
+				LogEntry:      logEntryFor(logEnabled, cid, jwsToken, "identity-op", result.State.DID),
+			})
 	}
 
 	// extension — find existing chain via kid DID
@@ -428,7 +550,10 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 	}
 	did := kid[:hashIdx]
 
-	chain, _ := store.GetIdentityChain(did)
+	chain, cerr := store.GetIdentityChain(did)
+	if cerr != nil {
+		return rejected(cid, storeFault(cerr))
+	}
 	if chain == nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown identity: %s", did), DependencyMissing: true}
 	}
@@ -440,7 +565,7 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		// linear extension (fast path)
 		extResult, err := dfos.VerifyIdentityExtension(chain.State, chain.HeadCID, chain.LastCreatedAt, jwsToken)
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+			return rejected(cid, err)
 		}
 		updated := StoredIdentityChain{
 			DID:           chain.DID,
@@ -449,18 +574,13 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			LastCreatedAt: extResult.LastCreatedAt,
 			State:         extResult.State,
 		}
-		if perr := persistError(cid, store.PutIdentityChain(updated)); perr != nil {
-			return *perr
-		}
-		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})); perr != nil {
-			return *perr
-		}
-		if logEnabled {
-			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
-				return *perr
-			}
-		}
-		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
+		return commitOperation(store,
+			IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did},
+			OperationCommit{
+				Operation:     StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did},
+				IdentityChain: &updated,
+				LogEntry:      logEntryFor(logEnabled, cid, jwsToken, "identity-op", did),
+			})
 	}
 
 	// Unknown parents are retryable dependencies. A known non-head parent
@@ -471,9 +591,9 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 	return IngestionResult{CID: cid, Status: "rejected", Error: identityConflictingExtensionError}
 }
 
-func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
-	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
-	if err != nil || header == nil {
+func ingestContentOp(jwsToken string, store RelayWriteStore, logEnabled bool, mode admissionMode) IngestionResult {
+	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
 	}
 
@@ -487,13 +607,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
 	}
 
-	// idempotent
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
-			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
-		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "content-op", ChainID: existing.ChainID}
+	if held := heldOperation(store, cid, jwsToken, "content-op", ""); held != nil {
+		return *held
 	}
 
 	// reject content ops from deleted identities. A failed lookup is NOT
@@ -501,8 +616,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 	signerDID, _ := payload["did"].(string)
 	if signerDID != "" {
 		signerIdentity, err := store.GetIdentityChain(signerDID)
-		if serr := storeReadError(cid, err); serr != nil {
-			return *serr
+		if err != nil {
+			return rejected(cid, storeFault(err))
 		}
 		if signerIdentity != nil && signerIdentity.State.IsDeleted {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "signer identity is deleted"}
@@ -525,13 +640,21 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 	// the future. Current knowledge is strictly stronger and byte-identical to the
 	// pre-as-of behavior, so ingest verdicts do not change.) Mirrors the TS twin
 	// (ingest.ts).
+	//
+	// Both closures mark a store failure as a STORE FAULT rather than letting the
+	// raw error through: an unmarked error classifies as a permanent rejection,
+	// and a permanent rejection deletes the raw op.
 	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, _ int64) (bool, error) {
-		return store.IsCredentialRevoked(issuerDID, credentialCID, 0)
+		revoked, err := store.IsCredentialRevoked(issuerDID, credentialCID, 0)
+		if err != nil {
+			return false, storeFault(err)
+		}
+		return revoked, nil
 	})
 	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {
-			return false, err
+			return false, storeFault(err)
 		}
 		return identity != nil && identity.State.IsDeleted, nil
 	})
@@ -541,7 +664,16 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 	if isGenesis {
 		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+			return rejected(cid, err)
+		}
+		// Same rule as an identity genesis: a chain row is written whole, so a
+		// genesis never replaces existing history.
+		existing, cerr := store.GetContentChain(result.State.ContentID)
+		if cerr != nil {
+			return rejected(cid, storeFault(cerr))
+		}
+		if existing != nil && existing.GenesisCID != cid {
+			return IngestionResult{CID: cid, Status: "rejected", Error: "content chain already exists"}
 		}
 		createdAt, _ := payload["createdAt"].(string)
 		chain := StoredContentChain{
@@ -551,18 +683,13 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 			LastCreatedAt: createdAt,
 			State:         result.State,
 		}
-		if perr := persistError(cid, store.PutContentChain(chain)); perr != nil {
-			return *perr
-		}
-		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})); perr != nil {
-			return *perr
-		}
-		if logEnabled {
-			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})); perr != nil {
-				return *perr
-			}
-		}
-		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID}
+		return commitOperation(store,
+			IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID},
+			OperationCommit{
+				Operation:    StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID},
+				ContentChain: &chain,
+				LogEntry:     logEntryFor(logEnabled, cid, jwsToken, "content-op", result.State.ContentID),
+			})
 	}
 
 	// extension — find chain via previousOperationCID
@@ -571,7 +698,10 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return IngestionResult{CID: cid, Status: "rejected", Error: "missing previousOperationCID"}
 	}
 
-	prevOp, _ := store.GetOperation(previousCID)
+	prevOp, perr := store.GetOperation(previousCID)
+	if perr != nil {
+		return rejected(cid, storeFault(perr))
+	}
 	if prevOp == nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown previous operation: %s", previousCID), DependencyMissing: true}
 	}
@@ -579,15 +709,18 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return IngestionResult{CID: cid, Status: "rejected", Error: "previousOperationCID is not a content operation"}
 	}
 
-	chain, _ := store.GetContentChain(prevOp.ChainID)
+	chain, cerr := store.GetContentChain(prevOp.ChainID)
+	if cerr != nil {
+		return rejected(cid, storeFault(cerr))
+	}
 	if chain == nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("content chain not found: %s", prevOp.ChainID), DependencyMissing: true}
 	}
 
 	// reject if creator's identity is deleted (fails closed on a store error)
-	creatorIdentity, cerr := store.GetIdentityChain(chain.State.CreatorDID)
-	if serr := storeReadError(cid, cerr); serr != nil {
-		return *serr
+	creatorIdentity, ierr := store.GetIdentityChain(chain.State.CreatorDID)
+	if ierr != nil {
+		return rejected(cid, storeFault(ierr))
 	}
 	if creatorIdentity != nil && creatorIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "content creator identity is deleted"}
@@ -597,7 +730,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		// linear extension (fast path)
 		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+			return rejected(cid, err)
 		}
 		updated := StoredContentChain{
 			ContentID:     chain.ContentID,
@@ -606,18 +739,13 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 			LastCreatedAt: extResult.LastCreatedAt,
 			State:         extResult.State,
 		}
-		if perr := persistError(cid, store.PutContentChain(updated)); perr != nil {
-			return *perr
-		}
-		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})); perr != nil {
-			return *perr
-		}
-		if logEnabled {
-			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
-				return *perr
-			}
-		}
-		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
+		return commitOperation(store,
+			IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID},
+			OperationCommit{
+				Operation:    StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID},
+				ContentChain: &updated,
+				LogEntry:     logEntryFor(logEnabled, cid, jwsToken, "content-op", chain.ContentID),
+			})
 	}
 
 	// fork path — check if previousCID exists in chain ops
@@ -627,7 +755,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 
 	forkState, err := store.GetContentStateAtCID(chain.ContentID, previousCID)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: ForkPointStateErrorPrefix + fmt.Sprintf("%v", err), DependencyMissing: true}
+		return IngestionResult{CID: cid, Status: "rejected", Error: ForkPointStateErrorPrefix + fmt.Sprintf("%v", err), DependencyMissing: true, StoreFault: true}
 	}
 	if forkState == nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain", DependencyMissing: true}
@@ -635,7 +763,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 
 	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+		return rejected(cid, err)
 	}
 
 	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
@@ -656,43 +784,39 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		LastCreatedAt: headLastCreatedAt,
 		State:         headState,
 	}
-	if perr := persistError(cid, store.PutContentChain(updated)); perr != nil {
-		return *perr
-	}
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
+	return commitOperation(store,
+		IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID},
+		OperationCommit{
+			Operation:    StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID},
+			ContentChain: &updated,
+			LogEntry:     logEntryFor(logEnabled, cid, jwsToken, "content-op", chain.ContentID),
+		})
 }
 
-func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
+func ingestCountersign(jwsToken string, store RelayWriteStore, logEnabled bool, mode admissionMode) IngestionResult {
 	resolveKey := admissionKeyResolver(store, mode)
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+		return rejected(computeOpCID(jwsToken), err)
 	}
 
 	cid := result.CountersignCID
 	witnessDID := result.WitnessDID
 	targetCID := result.TargetCID
 
-	// idempotent
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
+	if held := heldOperation(store, cid, jwsToken, "countersign", targetCID); held != nil {
+		if held.Status == "rejected" && held.Error == "operation already exists with a different signature" {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "countersign already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "countersign", ChainID: targetCID}
+		return *held
 	}
 
 	// target must exist (may arrive later via sync/gossip — retryable)
-	targetOp, _ := store.GetOperation(targetCID)
+	targetOp, terr := store.GetOperation(targetCID)
+	if terr != nil {
+		return rejected(cid, storeFault(terr))
+	}
 	if targetOp == nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown target operation: %s", targetCID), DependencyMissing: true}
 	}
@@ -716,15 +840,18 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admis
 
 	// reject countersigns from deleted witnesses (fails closed on a store error)
 	witnessIdentity, werr := store.GetIdentityChain(witnessDID)
-	if serr := storeReadError(cid, werr); serr != nil {
-		return *serr
+	if werr != nil {
+		return rejected(cid, storeFault(werr))
 	}
 	if witnessIdentity != nil && witnessIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "witness identity is deleted"}
 	}
 
 	// dedup: one countersign per witness per target
-	existingCountersigns, _ := store.GetCountersignatures(targetCID)
+	existingCountersigns, cerr := store.GetCountersignatures(targetCID)
+	if cerr != nil {
+		return rejected(cid, storeFault(cerr))
+	}
 	for _, csJws := range existingCountersigns {
 		_, csPayload, err := dfos.DecodeJWSUnsafe(csJws)
 		if err != nil {
@@ -735,84 +862,69 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admis
 		}
 	}
 
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID})); perr != nil {
-		return *perr
-	}
-	if perr := persistError(cid, store.AddCountersignature(targetCID, jwsToken)); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID}
+	return commitOperation(store,
+		IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID},
+		OperationCommit{
+			Operation:        StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID},
+			Countersignature: &CountersignatureCommit{TargetCID: targetCID, JWSToken: jwsToken},
+			LogEntry:         logEntryFor(logEnabled, cid, jwsToken, "countersign", targetCID),
+		})
 }
 
-func ingestArtifact(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
+func ingestArtifact(jwsToken string, store RelayWriteStore, logEnabled bool, mode admissionMode) IngestionResult {
 	resolveKey := admissionKeyResolver(store, mode)
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+		return rejected(computeOpCID(jwsToken), err)
 	}
 
 	cid := result.ArtifactCID
 	did := result.DID
 
-	// idempotent
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
+	if held := heldOperation(store, cid, jwsToken, "artifact", did); held != nil {
+		if held.Status == "rejected" && held.Error == "operation already exists with a different signature" {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "artifact already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "artifact", ChainID: did}
+		return *held
 	}
 
 	// reject artifacts from deleted identities (fails closed on a store error)
 	identity, ierr := store.GetIdentityChain(did)
-	if serr := storeReadError(cid, ierr); serr != nil {
-		return *serr
+	if ierr != nil {
+		return rejected(cid, storeFault(ierr))
 	}
 	if identity != nil && identity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
 
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did}
+	return commitOperation(store,
+		IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did},
+		OperationCommit{
+			Operation: StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did},
+			LogEntry:  logEntryFor(logEnabled, cid, jwsToken, "artifact", did),
+		})
 }
 
-func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionResult {
+func ingestRevocation(jwsToken string, store RelayWriteStore, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyRevocation(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+		return rejected(computeOpCID(jwsToken), err)
 	}
 
 	cid := result.RevocationCID
 	did := result.DID
 
-	// idempotent
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
-			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
-		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "revocation", ChainID: did}
+	if held := heldOperation(store, cid, jwsToken, "revocation", did); held != nil {
+		return *held
 	}
 
 	// reject if identity is deleted (fails closed on a store error)
 	identity, ierr := store.GetIdentityChain(did)
-	if serr := storeReadError(cid, ierr); serr != nil {
-		return *serr
+	if ierr != nil {
+		return rejected(cid, storeFault(ierr))
 	}
 	if identity != nil && identity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
@@ -820,10 +932,12 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 
 	// Issuer scope, not CID scope. Revocation is issuer-only, so a held
 	// credential someone ELSE issued is not the credential this revocation
-	// reaches: it is neither reported as a revoked grant nor evicted below.
+	// reaches: it is neither reported as a revoked grant nor evicted below. See
+	// PublicCredentialRemoval — the store enforces the same pairing on the way
+	// down, so a foreign revocation cannot drop a grant it did not issue.
 	revokedCredential, err := store.GetPublicCredentialByCID(result.CredentialCID)
-	if perr := persistError(cid, err); perr != nil {
-		return *perr
+	if err != nil {
+		return rejected(cid, storeFault(err))
 	}
 	var revokedGrant *RevokedGrant
 	if revokedCredential != nil && revokedCredential.IssuerDID == did {
@@ -831,49 +945,37 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		revokedGrant = &RevokedGrant{Wildcard: wildcard, ContentIDs: contentIDs}
 	}
 
-	// store revocation — carrying the VERIFIED createdAt, which is the as-of
-	// boundary every later validity check compares against
-	if perr := persistError(cid, store.AddRevocation(StoredRevocation{
-		CID:           cid,
-		IssuerDID:     did,
-		CredentialCID: result.CredentialCID,
-		JWSToken:      jwsToken,
-		CreatedAt:     result.CreatedAt,
-	})); perr != nil {
-		return *perr
-	}
-
-	// revoke any standing public credential THIS issuer granted
-	if perr := persistError(cid, store.RemovePublicCredential(did, result.CredentialCID)); perr != nil {
-		return *perr
-	}
-
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "revocation", ChainID: did})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did, RevokedGrant: revokedGrant}
+	accepted := IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did, RevokedGrant: revokedGrant}
+	return commitOperation(store, accepted, OperationCommit{
+		Operation: StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "revocation", ChainID: did},
+		// The stored revocation carries the VERIFIED createdAt, which is the as-of
+		// boundary every later validity check compares against.
+		Revocation: &StoredRevocation{
+			CID:           cid,
+			IssuerDID:     did,
+			CredentialCID: result.CredentialCID,
+			JWSToken:      jwsToken,
+			CreatedAt:     result.CreatedAt,
+		},
+		RemovePublicCredential: &PublicCredentialRemoval{IssuerDID: did, CredentialCID: result.CredentialCID},
+		LogEntry:               logEntryFor(logEnabled, cid, jwsToken, "revocation", did),
+	})
 }
 
-func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) IngestionResult {
+func ingestPublicCredential(jwsToken string, store RelayWriteStore, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
 	}
 
 	// header.CID is the JWS-header-claimed CID. It keys the OPERATION store /
-	// idempotency lookups below (GetOperation/PutOperation) and is surfaced to API
-	// callers as IngestionResult.CID — but it does NOT key the raw op: raw_ops is
-	// keyed by the recomputed storage CID (computeOpCID(token) = DagCborCID(payload)),
+	// idempotency lookups below and is surfaced to API callers as
+	// IngestionResult.CID — but it does NOT key the raw op: raw_ops is keyed by the
+	// recomputed storage CID (computeOpCID(token) = DagCborCID(payload)),
 	// independent of header.CID. The drain loops therefore key MarkOp{Rejected,
 	// Sequenced} on that storage CID, and gate on it (NOT on this res.CID), so a
 	// rejection carrying an empty header.CID still drains its stored raw row rather
-	// than stranding it 'pending'. (Pre-#117 this comment claimed header.CID keyed
-	// the raw op — it never did in the Go relay; that mismatch caused the wedge.)
+	// than stranding it 'pending'.
 	cid := header.CID
 
 	// verify it's a credential
@@ -907,21 +1009,16 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{Status: "rejected", Error: "missing cid in credential header"}
 	}
 
-	// idempotent
-	existing, _ := store.GetOperation(cid)
-	if existing != nil {
-		if existing.JWSToken != jwsToken {
-			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
-		}
-		return IngestionResult{CID: cid, Status: "duplicate", Kind: "credential", ChainID: kidDID}
+	if held := heldOperation(store, cid, jwsToken, "credential", kidDID); held != nil {
+		return *held
 	}
 
 	// reject credentials from a deleted issuer (matches TS verifyDFOSCredential,
 	// which resolves the issuer identity and rejects when isDeleted). Fails
 	// closed on a store error.
 	issuerIdentity, ierr := store.GetIdentityChain(kidDID)
-	if serr := storeReadError(cid, ierr); serr != nil {
-		return *serr
+	if ierr != nil {
+		return rejected(cid, storeFault(ierr))
 	}
 	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "issuer identity is deleted"}
@@ -931,8 +1028,8 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	// is an acceptance decision, so it asks what the relay knows right now. A
 	// revocation lookup that FAILS is not "not revoked": the gate fails closed.
 	revoked, rerr := store.IsCredentialRevoked(kidDID, cid, 0)
-	if serr := storeReadError(cid, rerr); serr != nil {
-		return *serr
+	if rerr != nil {
+		return rejected(cid, storeFault(rerr))
 	}
 	if revoked {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
@@ -943,7 +1040,7 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	resolveKey := CreateKeyResolver(store)
 	publicKey, err := resolveKey(kid)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err), DependencyMissing: errors.Is(err, ErrDependencyMissing)}
+		return rejected(cid, fmt.Errorf("failed to resolve key: %w", err))
 	}
 
 	credential, err := dfos.VerifyCredential(jwsToken, publicKey, "", "")
@@ -965,27 +1062,21 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	}
 	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
-	if perr := persistError(cid, store.AddPublicCredential(StoredPublicCredential{
-		CID:        cid,
-		IssuerDID:  credential.Iss,
-		Att:        att,
-		Exp:        credential.Exp,
-		JWSToken:   jwsToken,
-		CreatedAt:  credentialCreatedAt(credential.Iat),
-		IngestedAt: ingestedAt,
-	})); perr != nil {
-		return *perr
-	}
-
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID, IngestedAt: ingestedAt})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "credential", ChainID: kidDID}
+	return commitOperation(store,
+		IngestionResult{CID: cid, Status: "new", Kind: "credential", ChainID: kidDID},
+		OperationCommit{
+			Operation: StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID, IngestedAt: ingestedAt},
+			PublicCredential: &StoredPublicCredential{
+				CID:        cid,
+				IssuerDID:  credential.Iss,
+				Att:        att,
+				Exp:        credential.Exp,
+				JWSToken:   jwsToken,
+				CreatedAt:  credentialCreatedAt(credential.Iat),
+				IngestedAt: ingestedAt,
+			},
+			LogEntry: logEntryFor(logEnabled, cid, jwsToken, "credential", kidDID),
+		})
 }
 
 // ---------------------------------------------------------------------------
@@ -1176,7 +1267,13 @@ func WithHistoricalAdmission() IngestOption {
 
 // IngestOperations classifies, dependency-sorts, and processes a batch of JWS
 // tokens. Returns results in the original submission order.
-func IngestOperations(tokens []string, store Store, opts ...IngestOption) []IngestionResult {
+//
+// NO INDEX WORK HAPPENS HERE. Maintaining the /index/v0 projection used to be a
+// choke point inside this loop, which put a full-corpus sweep inside the ingest
+// mutex behind an anonymous POST. The projection now reads the operation log on
+// its own schedule (index_projection.go); this function's only job is to admit
+// operations and commit them.
+func IngestOperations(tokens []string, store RelayWriteStore, opts ...IngestOption) []IngestionResult {
 	cfg := ingestConfig{logEnabled: true, admissionMode: currentAdmission}
 	for _, o := range opts {
 		o(&cfg)
@@ -1196,64 +1293,45 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	}
 	results := make([]indexedResult, 0, len(sorted))
 
-	// Collect the /index/v0 materialized-projection dirtiness across the whole
-	// batch and flush it ONCE below. This is the single choke point for every
-	// apply path (local POST, the sequencer fixed-point loop, and peer sync all
-	// funnel through IngestOperations). Per-op collection keeps the fan-out
-	// triggers (a chain:* grant, a revocation, an identity deletion) from each
-	// running a full sweep; the batch flush runs at most one. Non-authoritative
-	// and self-isolating: it never throws back into ingestion.
-	dirty := newIndexDirtySet()
-
-	for _, op := range sorted {
-		var result IngestionResult
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					result = IngestionResult{CID: computeOpCID(op.jwsToken), Status: "rejected", Error: fmt.Sprintf("unexpected error: %v", r)}
-				}
-			}()
-			switch op.kind {
-			case "identity-op":
-				result = ingestIdentityOp(op.jwsToken, store, cfg.logEnabled)
-			case "content-op":
-				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
-			case "countersign":
-				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
-			case "artifact":
-				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
-			case "revocation":
-				result = ingestRevocation(op.jwsToken, store, cfg.logEnabled)
-			case "credential":
-				result = ingestPublicCredential(op.jwsToken, store, cfg.logEnabled)
-			default:
-				result = IngestionResult{CID: computeOpCID(op.jwsToken), Status: "rejected", Error: "unrecognized operation type"}
+	apply := func(op classifiedOp, token string) (result IngestionResult) {
+		defer func() {
+			if r := recover(); r != nil {
+				result = IngestionResult{CID: computeOpCID(token), Status: "rejected", Error: fmt.Sprintf("unexpected error: %v", r)}
 			}
 		}()
-		// Maintain the /index/v0 materialized projection synchronously, in
-		// dependency order, right after the op is applied to the store. This is
-		// the single choke point for every apply path (local POST, the sequencer
-		// fixed-point loop, and peer sync all funnel through IngestOperations).
-		// Non-authoritative and self-isolating: it never throws back into ingestion.
-		collectIndexDirtyAfterOp(result, op.jwsToken, store, dirty)
-		results = append(results, indexedResult{index: op.originalIndex, result: result})
+		switch op.kind {
+		case "identity-op":
+			return ingestIdentityOp(token, store, cfg.logEnabled)
+		case "content-op":
+			return ingestContentOp(token, store, cfg.logEnabled, cfg.admissionMode)
+		case "countersign":
+			return ingestCountersign(token, store, cfg.logEnabled, cfg.admissionMode)
+		case "artifact":
+			return ingestArtifact(token, store, cfg.logEnabled, cfg.admissionMode)
+		case "revocation":
+			return ingestRevocation(token, store, cfg.logEnabled)
+		case "credential":
+			return ingestPublicCredential(token, store, cfg.logEnabled)
+		default:
+			return IngestionResult{CID: computeOpCID(token), Status: "rejected", Error: "unrecognized operation type"}
+		}
 	}
 
-	// retry ops that failed due to missing dependencies — their dependencies
-	// may have been satisfied by earlier ops in the same batch
+	for _, op := range sorted {
+		results = append(results, indexedResult{index: op.originalIndex, result: apply(op, op.jwsToken)})
+	}
+
+	// Retry ops that failed on a missing dependency — their dependencies may have
+	// been satisfied by later ops in the same batch.
 	//
-	// A half-applied op is excluded even though it is retryable: its dependencies
-	// were never the problem, and re-running it now is actively harmful. Whatever
-	// the failed attempt DID write makes the idempotency check at the top of the
-	// ingest path answer "duplicate", which would overwrite the persistence
-	// failure with a success verdict — hiding the fact that the op is half
-	// applied from the batch owner, whose rollback is the only thing that can
-	// undo it. The retry that matters is the next pass, after the batch is
-	// discarded and the op is whole again.
+	// A STORE FAULT IS NOT RETRIED HERE. It is retryable, but not within this
+	// batch: the store is unwell, so a second attempt against it costs the same
+	// verification work to reach the same answer. The retry that matters is the
+	// next sequencer pass, with the raw op still pending.
 	for retry := 0; retry < 3; retry++ {
 		var pending []indexedResult
 		for i, ir := range results {
-			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result) && !ir.result.PersistFailed {
+			if ir.result.Status == "rejected" && ir.result.DependencyMissing && !ir.result.StoreFault {
 				pending = append(pending, results[i])
 			}
 		}
@@ -1272,13 +1350,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			default:
 				continue
 			}
-			if result.Status != "rejected" || isPermanentRejection(result) {
-				// An op that failed dependency-missing in the main pass and now
-				// succeeds on retry must still maintain the projection — the main
-				// pass ran maintenance on its "rejected" result (a no-op). Mirror
-				// the choke-point call here so a retried identity/content row lands.
-				collectIndexDirtyAfterOp(result, tokens[p.index], store, dirty)
-				// find and update the result
+			if result.Status != "rejected" || isPermanentRejection(result) || result.StoreFault {
 				for i, ir := range results {
 					if ir.index == p.index {
 						results[i].result = result
@@ -1292,10 +1364,6 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			break
 		}
 	}
-
-	// Flush the batch's collected projection dirtiness once, against the final
-	// post-batch store state.
-	flushIndexMaintenance(dirty, store)
 
 	// return in original submission order
 	sort.Slice(results, func(i, j int) bool {

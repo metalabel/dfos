@@ -158,20 +158,20 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 	// backed-up one reads >0. Surfacing it here makes the otherwise-invisible
 	// sequencer-backlog failure mode a single curl instead of an on-box sqlite3
 	// query. Best-effort: a transient read error reports -1 rather than 500ing
-	// the status endpoint. readStore uses the WAL read pool and never races on
-	// the ingest transaction.
+	// the status endpoint. A store that keeps no writer state has no backlog to
+	// report, which reads as -1 for the same reason: this relay cannot say.
 	pendingOps := -1
-	if n, err := r.readStore.CountUnsequenced(); err == nil {
-		pendingOps = n
+	if r.writerState != nil {
+		if n, err := r.writerState.CountUnsequenced(); err == nil {
+			pendingOps = n
+		}
 	}
 	statsBlock := map[string]any{"pendingOps": pendingOps}
-	if sp, ok := r.readStore.(StatsProvider); ok {
-		if st, err := sp.RelayStats(); err == nil && st != nil {
-			statsBlock["opCount"] = st.OpCount
-			statsBlock["countsByKind"] = st.CountsByKind
-			statsBlock["oldestOpAt"] = st.OldestOpAt
-			statsBlock["headCid"] = st.HeadCID
-		}
+	if st, err := r.readStore.RelayStats(); err == nil && st != nil {
+		statsBlock["opCount"] = st.OpCount
+		statsBlock["countsByKind"] = st.CountsByKind
+		statsBlock["oldestOpAt"] = st.OldestOpAt
+		statsBlock["headCid"] = st.HeadCID
 	}
 	// Per-peer sync liveness, keyed by peer endpoint. Everything above describes
 	// what this relay HOLDS and says nothing about whether it is still pulling:
@@ -923,31 +923,32 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Content-address check (shared with the follower materializer): the bytes
-	// must canonically hash to the documentCID the chain committed. Integrity is
-	// the CID alone — no signature over the bytes is needed or wanted.
+	// Content-address check: the bytes must canonically hash to the documentCID
+	// the chain committed. Integrity is the CID alone — no signature over the
+	// bytes is needed or wanted.
 	if err := verifyBlobBytes(bytes, documentCID); err != nil {
 		writeError(w, 400, "blob bytes do not match documentCID")
 		return
 	}
 
-	// Hold ingestMu for the write: the ingestion store's writerDB() aliases the
-	// active batch transaction, which ingest/sequencer mutate under ingestMu.
-	// Writing here without the lock races on s.tx. Propagate the error instead
-	// of discarding it and returning an unconditional 200.
-	r.ingestMu.Lock()
-	putErr := r.store.PutBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID}, bytes)
-	if putErr == nil {
-		// A document blob just landed — often out of band, after the content op
-		// that referenced it. Recompute the content rows that project this
-		// documentCID (docSchema/name/profile), cascading to anchored identities.
-		// Under ingestMu so the projection writes don't race on the ingestion tx.
-		maintainIndexAfterBlob(documentCID, r.store)
+	if r.writeStore == nil {
+		writeError(w, 501, "this relay does not accept content")
+		return
 	}
-	r.ingestMu.Unlock()
+	_, putErr := r.writeStore.Commit(CommitBatch{Blob: &BlobCommit{
+		Key:   BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID},
+		Bytes: bytes,
+	}})
 	if storeErr(w, putErr) {
 		return
 	}
+	// A document blob just landed — often out of band, after the content op that
+	// referenced it — and it can turn a row's docSchema/title/profile projection
+	// from unknown to known. Nothing on the operation log marks that moment, so
+	// this is the one projection entry point the log does not drive. Bounded by
+	// the reverse lookup, outside the ingest lock, and serialized against the
+	// projection worker (see projectIndexForBlob).
+	r.projectIndexForBlob(documentCID)
 
 	writeJSON(w, 200, map[string]any{
 		"status":       "stored",

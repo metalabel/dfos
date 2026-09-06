@@ -10,42 +10,31 @@ import (
 // ===================================================================
 // store test doubles
 //
-// Both embed the Store INTERFACE (not *MemoryStore), so only Store's own
-// methods are promoted. That keeps the doubles from accidentally satisfying
-// SigningStore / RebuildableIndexStore and changing which relay code paths the
-// test exercises.
+// Each embeds the referenceStore INTERFACE (not *MemoryStore), so only that
+// interface's own methods are promoted. That keeps the doubles from accidentally
+// satisfying RebuildableIndexStore and changing which relay code paths the test
+// exercises.
 // ===================================================================
 
 var errInjectedStore = errors.New("injected store failure")
 
-// failingCommitStore makes the ingestion batch's CommitWriteBatch fail, so a
-// test can observe what the relay does with a batch it could not commit.
+// failingCommitStore refuses every operation Commit, so a test can observe what
+// the relay does with an operation the store did not persist.
 //
-// NOTE: the wrapped store is a MemoryStore with no real transaction, so the
-// rollback is SIMULATED — the underlying writes are not actually reverted.
-// That is deliberate and sufficient: these tests pin the RELAY's contract on
-// commit failure (do not gossip, do not report the batch as landed), not
-// SQLite's transactional semantics, which are the store's own concern.
+// This is the whole shape of a write failure now. The relay used to open a
+// transaction around a chunk of operations, watch for a half-applied op, and
+// roll back — so a commit failure was something the relay had to detect from the
+// outside and every op in the chunk shared its fate. Commit is atomic and
+// per-operation, so a store that cannot persist simply says so, nothing is
+// written, and the raw op stays pending.
 type failingCommitStore struct {
-	Store
-	begun      int
-	committed  int
-	rolledBack int
+	referenceStore
+	attempts int
 }
 
-func (s *failingCommitStore) BeginWriteBatch() error {
-	s.begun++
-	return nil
-}
-
-func (s *failingCommitStore) CommitWriteBatch() error {
-	s.committed++
-	return errInjectedStore
-}
-
-func (s *failingCommitStore) RollbackWriteBatch() error {
-	s.rolledBack++
-	return nil
+func (s *failingCommitStore) Commit(batch CommitBatch) (CommitResult, error) {
+	s.attempts++
+	return "", errInjectedStore
 }
 
 // erroringStore injects a read failure into the specific store lookups that
@@ -53,7 +42,7 @@ func (s *failingCommitStore) RollbackWriteBatch() error {
 // toggleable so a test can build its fixture against a healthy store and only
 // then break the one lookup under test.
 type erroringStore struct {
-	Store
+	referenceStore
 	// failIdentityDID makes GetIdentityChain fail for exactly this DID, and by
 	// default only for its FIRST call.
 	//
@@ -84,14 +73,14 @@ func (s *erroringStore) GetIdentityChain(did string) (*StoredIdentityChain, erro
 			return nil, errInjectedStore
 		}
 	}
-	return s.Store.GetIdentityChain(did)
+	return s.referenceStore.GetIdentityChain(did)
 }
 
 func (s *erroringStore) IsCredentialRevoked(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
 	if s.failRevocation {
 		return false, errInjectedStore
 	}
-	return s.Store.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
+	return s.referenceStore.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
 }
 
 // assertRetryableStoreReadRejection asserts the fail-closed shape: the op was
@@ -124,9 +113,18 @@ func assertRetryableStoreReadRejection(t *testing.T, result IngestionResult) {
 func TestCommitFailureDoesNotGossipOrReportLanded(t *testing.T) {
 	peerStore := NewMemoryStore()
 	mock := newMockPeerClient(peerStore, 0)
-	store := &failingCommitStore{Store: NewMemoryStore()}
+	backing := NewMemoryStore()
+	// Bootstrap writes the relay's own identity chain, which this store refuses
+	// like everything else — so the relay is given an identity instead. A
+	// read-only or unwell store still serves; it just cannot mint its own DID.
+	seed, err := BootstrapRelayIdentity(NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &failingCommitStore{referenceStore: backing}
 	relay, err := NewRelay(RelayOptions{
 		Store:      store,
+		Identity:   seed,
 		PeerClient: mock,
 		Peers:      []PeerConfig{{URL: "http://peer-a"}},
 	})
@@ -137,13 +135,13 @@ func TestCommitFailureDoesNotGossipOrReportLanded(t *testing.T) {
 	id := createTestIdentity(t)
 	results := relay.Ingest([]string{id.token})
 
-	if store.rolledBack != 1 {
-		t.Fatalf("expected exactly 1 rollback after the failed commit, got %d", store.rolledBack)
+	if store.attempts == 0 {
+		t.Fatal("the relay never attempted a commit")
 	}
 
-	// The batch is not held, so it must not be advertised.
+	// The op is not held, so it must not be advertised.
 	if calls := mock.drainSubmits(100 * time.Millisecond); len(calls) != 0 {
-		t.Fatalf("a rolled-back batch must not be gossiped, got %d gossip call(s)", len(calls))
+		t.Fatalf("an operation the store refused must not be gossiped, got %d gossip call(s)", len(calls))
 	}
 
 	// ...and it must not be reported to the caller as landed.
@@ -151,17 +149,37 @@ func TestCommitFailureDoesNotGossipOrReportLanded(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if results[0].Status == "new" || results[0].Status == "duplicate" {
-		t.Fatalf("a rolled-back op must not be reported as %q — the relay does not hold it", results[0].Status)
+		t.Fatalf("an unpersisted op must not be reported as %q — the relay does not hold it", results[0].Status)
 	}
-	if results[0].Status != "rejected" || !results[0].DependencyMissing {
-		t.Fatalf("expected a retryable rejection, got status=%q dependencyMissing=%v",
-			results[0].Status, results[0].DependencyMissing)
+	if results[0].Status != "rejected" || !results[0].StoreFault {
+		t.Fatalf("expected a store-fault rejection, got status=%q storeFault=%v",
+			results[0].Status, results[0].StoreFault)
+	}
+	if isPermanentRejection(results[0]) {
+		t.Fatal("a store fault is transient — a permanent rejection DELETES the raw op forever")
 	}
 	if !strings.Contains(results[0].Error, persistErrorPrefix) {
 		t.Fatalf("error = %q, want it prefixed %q", results[0].Error, persistErrorPrefix)
 	}
 	if results[0].CID == "" {
-		t.Fatal("the rewritten result must keep its CID so the op can be located in the raw store")
+		t.Fatal("the result must keep its CID so the op can be located in the raw store")
+	}
+
+	// NOTHING CHANGED. Not a chain row, not an operation row, not a log entry.
+	if chain, err := backing.GetIdentityChain(id.did); err != nil || chain != nil {
+		t.Fatalf("a refused commit must leave no chain row: chain=%v err=%v", chain, err)
+	}
+	if op, err := backing.GetOperation(results[0].CID); err != nil || op != nil {
+		t.Fatalf("a refused commit must leave no operation row: op=%v err=%v", op, err)
+	}
+	entries, _, err := backing.ReadLog("", 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("a refused commit must leave the log empty: %d entries, err=%v", len(entries), err)
+	}
+
+	// The raw op is still pending, which is what makes the retry possible.
+	if pending, err := store.CountUnsequenced(); err != nil || pending != 1 {
+		t.Fatalf("the raw op must stay pending for retry: pending=%d err=%v", pending, err)
 	}
 }
 
@@ -200,7 +218,7 @@ func TestSuccessfulCommitStillGossips(t *testing.T) {
 // credential was ADMITTED on no evidence.
 func TestIngestCredentialDeniesWhenRevocationCheckFails(t *testing.T) {
 	memory := NewMemoryStore()
-	store := &erroringStore{Store: memory}
+	store := &erroringStore{referenceStore: memory}
 	relay, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +240,7 @@ func TestIngestCredentialDeniesWhenRevocationCheckFails(t *testing.T) {
 	// Now break the revocation lookup and re-admit the same credential from a
 	// clean store. A gate that cannot be evaluated must deny.
 	memory2 := NewMemoryStore()
-	store2 := &erroringStore{Store: memory2}
+	store2 := &erroringStore{referenceStore: memory2}
 	relay2, err := NewRelay(RelayOptions{Store: store2})
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +262,7 @@ func TestIngestCredentialDeniesWhenRevocationCheckFails(t *testing.T) {
 // failure read as "not deleted" and the write was ADMITTED.
 func TestIngestContentDeniesWhenSignerDeletedLookupFails(t *testing.T) {
 	memory := NewMemoryStore()
-	store := &erroringStore{Store: memory}
+	store := &erroringStore{referenceStore: memory}
 	relay, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +335,7 @@ func newReadPathFixture(t *testing.T, relay *Relay) readPathFixture {
 	}
 }
 
-func (f readPathFixture) verify(store Store) error {
+func (f readPathFixture) verify(store RelayReadStore) error {
 	return verifyCredentialForAccess(
 		f.leafJWS, CreateKeyResolver(store), f.resource, "read",
 		f.creator.did, f.requester.did, store, false,
@@ -370,7 +388,7 @@ func TestReadPathDeniesWhenStoreErrorsAtAnAuthorizationGate(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := &erroringStore{Store: memory}
+			store := &erroringStore{referenceStore: memory}
 			tc.break_(store)
 			if err := fix.verify(store); err == nil {
 				t.Fatalf("a store failure at %s must DENY the read, but access was granted", tc.gate)

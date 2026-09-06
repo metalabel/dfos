@@ -281,7 +281,7 @@ func TestSQLitePublicCredentialTimestampUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	remaining := queryCIDs(IndexCredentialQuery{
-		OrderedAfter: &indexOrderedCursor{Timestamp: first[0].CreatedAt, Key: first[0].CID},
+		OrderedAfter: &IndexOrderedCursor{Timestamp: first[0].CreatedAt, Key: first[0].CID},
 		Order:        "createdAt.desc",
 		Limit:        1,
 	})

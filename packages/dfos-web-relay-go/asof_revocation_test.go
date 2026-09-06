@@ -242,11 +242,11 @@ func TestSQLiteStoreAsOfRevocation(t *testing.T) {
 	}
 	createdAt, _ := payload["createdAt"].(string)
 
-	if err := store.AddRevocation(StoredRevocation{
+	if err := seedRevocation(t, store, StoredRevocation{
 		CID: revCID, IssuerDID: issuer.did, CredentialCID: credentialCID,
 		JWSToken: token, CreatedAt: createdAt,
 	}); err != nil {
-		t.Fatalf("AddRevocation: %v", err)
+		t.Fatalf("seed revocation: %v", err)
 	}
 
 	stored, err := store.GetRevocationForCredential(credentialCID)
@@ -542,10 +542,10 @@ func TestEarliestRevocationBoundaryWins(t *testing.T) {
 		early := c.storedRevocation("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
 		late := c.storedRevocation("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
 
-		if err := c.store.AddRevocation(early); err != nil {
+		if err := seedRevocation(t, c.store, early); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.store.AddRevocation(late); err != nil {
+		if err := seedRevocation(t, c.store, late); err != nil {
 			t.Fatal(err)
 		}
 		if got := c.boundaryOf(t); got != early.CreatedAt {
@@ -558,10 +558,10 @@ func TestEarliestRevocationBoundaryWins(t *testing.T) {
 		late := c.storedRevocation("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
 		early := c.storedRevocation("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
 
-		if err := c.store.AddRevocation(late); err != nil {
+		if err := seedRevocation(t, c.store, late); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.store.AddRevocation(early); err != nil {
+		if err := seedRevocation(t, c.store, early); err != nil {
 			t.Fatal(err)
 		}
 		if got := c.boundaryOf(t); got != early.CreatedAt {
@@ -574,10 +574,10 @@ func TestEarliestRevocationBoundaryWins(t *testing.T) {
 		dated := c.storedRevocation("bafydated", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
 		broken := c.storedRevocation("bafybroken", "not-a-timestamp")
 
-		if err := c.store.AddRevocation(dated); err != nil {
+		if err := seedRevocation(t, c.store, dated); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.store.AddRevocation(broken); err != nil {
+		if err := seedRevocation(t, c.store, broken); err != nil {
 			t.Fatal(err)
 		}
 		if got := c.boundaryOf(t); got != broken.CreatedAt {
@@ -638,10 +638,10 @@ func TestSQLiteEarliestRevocationBoundaryWins(t *testing.T) {
 	early := rev("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
 	late := rev("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
 
-	if err := store.AddRevocation(late); err != nil {
+	if err := seedRevocation(t, store, late); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AddRevocation(early); err != nil {
+	if err := seedRevocation(t, store, early); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := store.GetRevocationForCredential(credentialCID)
@@ -657,7 +657,7 @@ func TestSQLiteEarliestRevocationBoundaryWins(t *testing.T) {
 		t.Fatalf("surviving artifact: got %q, want %q", stored.CID, early.CID)
 	}
 	// re-adding the later one must not move it back
-	if err := store.AddRevocation(late); err != nil {
+	if err := seedRevocation(t, store, late); err != nil {
 		t.Fatal(err)
 	}
 	if got := c0BoundaryOf(t, store, credentialCID); got != early.CreatedAt {
@@ -666,7 +666,7 @@ func TestSQLiteEarliestRevocationBoundaryWins(t *testing.T) {
 }
 
 // c0BoundaryOf is the store-agnostic boundary read used by the SQLite test.
-func c0BoundaryOf(t *testing.T, store Store, credentialCID string) string {
+func c0BoundaryOf(t *testing.T, store referenceStore, credentialCID string) string {
 	t.Helper()
 	stored, err := store.GetRevocationForCredential(credentialCID)
 	if err != nil {
@@ -727,7 +727,7 @@ func TestAsOfBoundaryParsingIsCanonicalGrammarOnly(t *testing.T) {
 			c := seedAsOfChain(t, -60*time.Minute)
 			// JWSToken empty so the legacy decode fallback cannot rescue the value —
 			// this isolates the parse.
-			if err := c.store.AddRevocation(c.storedRevocation("bafyparse", tc.createdAt)); err != nil {
+			if err := seedRevocation(t, c.store, c.storedRevocation("bafyparse", tc.createdAt)); err != nil {
 				t.Fatal(err)
 			}
 			revoked, err := c.store.IsCredentialRevoked(c.creator.did, c.credentialCID, wellBefore.Unix())
@@ -805,7 +805,7 @@ func TestReplayEnforcesRetroactiveIdentityDeletion(t *testing.T) {
 		t.Fatalf("GetIdentityChain: %v (nil=%v)", err, chain == nil)
 	}
 	chain.State.IsDeleted = true
-	if err := c.store.PutIdentityChain(*chain); err != nil {
+	if err := c.store.RewriteIdentityChainState(*chain); err != nil {
 		t.Fatal(err)
 	}
 

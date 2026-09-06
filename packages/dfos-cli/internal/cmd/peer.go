@@ -40,7 +40,7 @@ type relayGCResult struct {
 func newRelayGCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gc",
-		Short: "Reclaim revoked follower blobs and compact the local relay database",
+		Short: "Compact the local relay database",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lr, err := getRelay()
 			if err != nil {
@@ -51,10 +51,6 @@ func newRelayGCCmd() *cobra.Command {
 				return fmt.Errorf("stat local relay database before GC: %w", err)
 			}
 
-			// This is the same follower-blob GC sweep serve invokes. Its API does
-			// not report a removal count, and it is a no-op unless this relay was
-			// opened in eager content-follow mode.
-			lr.Relay.GCRevokedContent()
 			if err := lr.Vacuum(); err != nil {
 				return err
 			}

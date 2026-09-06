@@ -58,7 +58,7 @@ const (
 // they wrap dfos.ErrProofPresenterInvalid and surface as 401. An unknown chain
 // or a failed store read are things it could NOT check, so they stay bare and
 // surface as 503 — the server's condition, never a judgment on the caller.
-func CreateCurrentStateProofResolver(store Store) dfos.KeyResolver {
+func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hash := strings.Index(kid, "#")
 		if hash < 0 {
@@ -294,7 +294,7 @@ func originFormTarget(req *http.Request) string {
 // store)): the HTTP read path passes r.readStore (never races on the ingestion
 // tx); ingest-time index maintenance passes the ingestion store so the recompute
 // sees the same within-batch uncommitted writes the op just made.
-func hasPublicStandingAuth(contentID string, action string, store Store) bool {
+func hasPublicStandingAuth(contentID string, action string, store RelayReadStore) bool {
 	resource := "chain:" + contentID
 	publicCreds, _ := store.GetPublicCredentials(resource)
 	resolveKey := CreateKeyResolver(store)
@@ -369,7 +369,7 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 // For per-request credentials, requesterDID is checked against aud.
 // allowPublicGrant=false rejects public (aud="*") credentials outright — a
 // non-head read may not be granted by a public grant presented as a bearer.
-func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string, store Store, allowPublicGrant bool) error {
+func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string, store RelayReadStore, allowPublicGrant bool) error {
 	// decode to get kid and raw payload
 	header, payload, err := dfos.DecodeJWSUnsafe(credJws)
 	if err != nil || header == nil {

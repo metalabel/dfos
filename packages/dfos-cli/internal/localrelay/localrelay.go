@@ -38,10 +38,6 @@ type Options struct {
 	Write     *bool        // nil/true = accept writes; false = LITE pull-only node
 	Index     *bool        // nil/true = serve /index/v0; false = advertise false + 501
 	Logger    *slog.Logger // nil = relay's slog.Default(); CLI passes a quiet one
-	// ContentFollow: "eager" = eagerly materialize the document bytes of content
-	// chains this relay holds a standing public-read grant for (a follower / cache
-	// node). "" or "none" = off (default). See relay.RelayOptions.ContentFollow.
-	ContentFollow string
 	// Authority is this relay's OWN host[:port] — the host binding every identity
 	// proof is checked against. Empty leaves authenticated routes answering 503:
 	// the binding is the operator's to supply and must never be read off a
@@ -131,7 +127,6 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		Write:               opts.Write,
 		Index:               opts.Index,
 		Logger:              opts.Logger,
-		ContentFollow:       opts.ContentFollow,
 		Authority:           opts.Authority,
 		Ingestion:           opts.Ingestion,
 		GossipIdentityProof: opts.GossipIdentityProof,

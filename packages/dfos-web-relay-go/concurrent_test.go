@@ -10,13 +10,12 @@ import (
 // ===================================================================
 // SQLiteStore-backed concurrency (gives the -race CI job a real path)
 //
-// Every other Go relay test uses NewMemoryStore, which is RWMutex-guarded with
-// no s.tx — it reproduces nothing under `go test -race`. This test drives
-// concurrent Ingest + SyncFromPeers + RunSequencerAndGossip against a real
-// FILE-backed SQLiteStore (NewRelay auto-derives the WAL readStore for it), so
-// the shared two-pool writeDB(MaxOpenConns=1)/readDB(MaxOpenConns=4) and the
-// ingestMu/s.tx aliasing have an actual concurrency surface for the race
-// detector to inspect.
+// Every other Go relay test uses NewMemoryStore, which is RWMutex-guarded — it
+// reproduces nothing under `go test -race`. This test drives concurrent Ingest +
+// SyncFromPeers + RunSequencerAndGossip against a real FILE-backed SQLiteStore,
+// so the shared two-pool writeDB(MaxOpenConns=1)/readDB(MaxOpenConns=4), the
+// per-Commit transactions, and the index projection running OUTSIDE ingestMu
+// have an actual concurrency surface for the race detector to inspect.
 //
 // :memory: is a TRAP here — NewSQLiteStore opens TWO connection pools, and an
 // in-memory DB gives each pool a SEPARATE database, so the readDB never sees

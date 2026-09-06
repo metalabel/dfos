@@ -64,29 +64,29 @@ var (
 	indexOrderedCursorTimestampRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T`)
 )
 
-type indexProfile struct {
+type IndexProfile struct {
 	Anchor     string  `json:"anchor"`
 	PublicRead bool    `json:"publicRead"`
 	DocSchema  *string `json:"docSchema"`
 	Name       *string `json:"name"`
 }
 
-type indexIdentityRow struct {
+type IndexIdentityRow struct {
 	DID       string        `json:"did"`
 	HeadCID   string        `json:"headCID"`
 	OpCount   int           `json:"opCount"`
 	GenesisAt string        `json:"genesisAt"`
 	HeadAt    string        `json:"headAt"`
 	IsDeleted bool          `json:"isDeleted"`
-	Profile   *indexProfile `json:"profile"`
+	Profile   *IndexProfile `json:"profile"`
 }
 
 type indexIdentityPage struct {
-	Identities []indexIdentityRow `json:"identities"`
+	Identities []IndexIdentityRow `json:"identities"`
 	Next       *string            `json:"next"`
 }
 
-type indexContentRow struct {
+type IndexContentRow struct {
 	ContentID          string  `json:"contentId"`
 	GenesisCID         string  `json:"genesisCID"`
 	HeadCID            string  `json:"headCID"`
@@ -102,11 +102,11 @@ type indexContentRow struct {
 }
 
 type indexContentPage struct {
-	Content []indexContentRow `json:"content"`
+	Content []IndexContentRow `json:"content"`
 	Next    *string           `json:"next"`
 }
 
-type indexCreditRow struct {
+type IndexCreditRow struct {
 	ContentID string  `json:"contentId"`
 	DID       string  `json:"did"`
 	Role      *string `json:"role"`
@@ -115,16 +115,16 @@ type indexCreditRow struct {
 }
 
 type indexCreditPage struct {
-	Credits []indexCreditRow `json:"credits"`
+	Credits []IndexCreditRow `json:"credits"`
 	Next    *string          `json:"next"`
 }
 
-type indexCreditCursor struct {
+type IndexCreditCursor struct {
 	ContentID string
 	Position  int
 }
 
-type indexCountersignatureRow struct {
+type IndexCountersignatureRow struct {
 	CID        string  `json:"cid"`
 	TargetCID  string  `json:"targetCID"`
 	Relation   *string `json:"relation"`
@@ -135,11 +135,11 @@ type indexCountersignatureRow struct {
 
 type indexCountersignaturePage struct {
 	Witness           string                     `json:"witness"`
-	Countersignatures []indexCountersignatureRow `json:"countersignatures"`
+	Countersignatures []IndexCountersignatureRow `json:"countersignatures"`
 	Next              *string                    `json:"next"`
 }
 
-type indexCredentialRow struct {
+type IndexCredentialRow struct {
 	CID        string            `json:"cid"`
 	IssuerDID  string            `json:"issuerDID"`
 	Aud        string            `json:"aud"`
@@ -150,7 +150,7 @@ type indexCredentialRow struct {
 	IngestedAt string            `json:"-"`
 }
 
-type indexOperationRow struct {
+type IndexOperationRow struct {
 	CID        string `json:"cid"`
 	Kind       string `json:"kind"`
 	ChainID    string `json:"chainId"`
@@ -159,11 +159,11 @@ type indexOperationRow struct {
 }
 
 type indexOperationPage struct {
-	Operations []indexOperationRow `json:"operations"`
+	Operations []IndexOperationRow `json:"operations"`
 	Next       *string             `json:"next"`
 }
 
-type indexArtifactRow struct {
+type IndexArtifactRow struct {
 	CID        string  `json:"cid"`
 	SignerDID  string  `json:"signerDID"`
 	CreatedAt  string  `json:"createdAt"`
@@ -172,16 +172,16 @@ type indexArtifactRow struct {
 }
 
 type indexArtifactPage struct {
-	Artifacts []indexArtifactRow `json:"artifacts"`
+	Artifacts []IndexArtifactRow `json:"artifacts"`
 	Next      *string            `json:"next"`
 }
 
 type indexCredentialPage struct {
-	Credentials []indexCredentialRow `json:"credentials"`
+	Credentials []IndexCredentialRow `json:"credentials"`
 	Next        *string              `json:"next"`
 }
 
-type indexOrderedCursor struct {
+type IndexOrderedCursor struct {
 	Timestamp string
 	Key       string
 }
@@ -216,7 +216,7 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if order != "" && req.URL.Query().Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(req.URL.Query().Get("after"))
 		if !ok {
@@ -226,7 +226,7 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
+	rows, err := r.indexRead.QueryIndexIdentities(IndexIdentityQuery{
 		DID:              did,
 		Key:              key,
 		HasPublicProfile: hasPublicProfile,
@@ -304,7 +304,7 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if order != "" && query.Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
 		if !ok {
@@ -315,7 +315,7 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	}
 	limit := parseLimit(req, 100, 1000)
 
-	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
+	rows, err := r.indexRead.QueryIndexContent(IndexContentQuery{
 		ContentID:     contentID,
 		Creator:       creator,
 		Signer:        signer,
@@ -367,7 +367,7 @@ func (r *Relay) handleIndexCredits(w http.ResponseWriter, req *http.Request) {
 	if value, present := firstQueryValue(query, "role"); present {
 		role = &value
 	}
-	var after *indexCreditCursor
+	var after *IndexCreditCursor
 	if raw := query.Get("after"); raw != "" {
 		cursor, ok := decodeIndexCreditCursor(raw)
 		if !ok {
@@ -377,7 +377,7 @@ func (r *Relay) handleIndexCredits(w http.ResponseWriter, req *http.Request) {
 		after = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCredits(IndexCreditQuery{
+	rows, err := r.indexRead.QueryIndexCredits(IndexCreditQuery{
 		DID: did, ContentID: contentID, Role: role, After: after, Limit: limit,
 	})
 	if storeErr(w, err) {
@@ -416,7 +416,7 @@ func (r *Relay) handleIndexArtifacts(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if order != "" && query.Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
 		if !ok {
@@ -426,7 +426,7 @@ func (r *Relay) handleIndexArtifacts(w http.ResponseWriter, req *http.Request) {
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexArtifacts(IndexArtifactQuery{
+	rows, err := r.indexRead.QueryIndexArtifacts(IndexArtifactQuery{
 		CID: cid, Signer: signer, DocSchema: docSchema, After: query.Get("after"),
 		OrderedAfter: orderedAfter, Order: order, Limit: limit,
 	})
@@ -464,7 +464,7 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if order != "" && query.Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
 		if !ok {
@@ -474,7 +474,7 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCountersignatures(IndexCountersignatureQuery{
+	rows, err := r.indexRead.QueryIndexCountersignatures(IndexCountersignatureQuery{
 		Witness:      witness,
 		Relation:     relation,
 		After:        query.Get("after"),
@@ -520,7 +520,7 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if order != "" && query.Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
 		if !ok {
@@ -530,7 +530,7 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexCredentials(IndexCredentialQuery{
+	rows, err := r.indexRead.QueryIndexCredentials(IndexCredentialQuery{
 		Issuer:       issuer,
 		Resource:     resource,
 		Action:       action,
@@ -580,7 +580,7 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 		writeError(w, 400, "invalid order")
 		return
 	}
-	var orderedAfter *indexOrderedCursor
+	var orderedAfter *IndexOrderedCursor
 	if query.Get("after") != "" {
 		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
 		if !ok {
@@ -590,7 +590,7 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 		orderedAfter = cursor
 	}
 	limit := parseLimit(req, 100, 1000)
-	rows, err := r.readStore.QueryIndexOperations(IndexOperationQuery{
+	rows, err := r.indexRead.QueryIndexOperations(IndexOperationQuery{
 		Kind:         kind,
 		ChainID:      chainID,
 		SignerKey:    signerKey,
@@ -640,8 +640,8 @@ func nextIndexCursor(rowCount, limit int, order string, last func() (string, str
 // the HTTP read store. Byte-identical to the TS twins in index-routes.ts.
 // ---------------------------------------------------------------------------
 
-func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
-	return indexIdentityRow{
+func identityIndexRow(chain StoredIdentityChain, store RelayReadStore) IndexIdentityRow {
+	return IndexIdentityRow{
 		DID:       chain.DID,
 		HeadCID:   chain.HeadCID,
 		OpCount:   len(chain.Log),
@@ -652,7 +652,7 @@ func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
 	}
 }
 
-func contentIndexRow(chain StoredContentChain, src contentProjection) indexContentRow {
+func contentIndexRow(chain StoredContentChain, src contentProjection) IndexContentRow {
 	doc, docSchema, publicRead := src.doc, src.docSchema, src.publicRead
 	// Confidentiality is enforced at the application layer by whoever serves: a
 	// non-public document MUST NOT project its extracted display-name field onto
@@ -663,7 +663,7 @@ func contentIndexRow(chain StoredContentChain, src contentProjection) indexConte
 			title = &value
 		}
 	}
-	return indexContentRow{
+	return IndexContentRow{
 		ContentID:          chain.ContentID,
 		GenesisCID:         chain.GenesisCID,
 		HeadCID:            chain.State.HeadCID,
@@ -680,16 +680,16 @@ func contentIndexRow(chain StoredContentChain, src contentProjection) indexConte
 }
 
 // creditIndexRows builds one content chain's complete public-head credit set.
-func creditIndexRows(chain StoredContentChain, src contentProjection) []indexCreditRow {
+func creditIndexRows(chain StoredContentChain, src contentProjection) []IndexCreditRow {
 	doc, docSchema, publicRead := src.doc, src.docSchema, src.publicRead
 	if chain.State.IsDeleted || !publicRead || docSchema == nil || *docSchema != postSchema || doc == nil {
-		return []indexCreditRow{}
+		return []IndexCreditRow{}
 	}
 	credits, ok := doc["credits"].([]any)
 	if !ok {
-		return []indexCreditRow{}
+		return []IndexCreditRow{}
 	}
-	rows := []indexCreditRow{}
+	rows := []IndexCreditRow{}
 	for position, raw := range credits {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -704,7 +704,7 @@ func creditIndexRows(chain StoredContentChain, src contentProjection) []indexCre
 			role = &value
 		}
 		_, hasClaim := entry["claim"].(string)
-		rows = append(rows, indexCreditRow{
+		rows = append(rows, IndexCreditRow{
 			ContentID: chain.ContentID, DID: did, Role: role, Position: position, HasClaim: hasClaim,
 		})
 	}
@@ -715,7 +715,7 @@ func creditIndexRows(chain StoredContentChain, src contentProjection) []indexCre
 // non-public identity row before serialization — defense in depth against a row
 // persisted by a pre-gate builder (the current builder already withholds it).
 // Clones the profile so it never mutates a shared in-memory projection row.
-func redactNonPublicIdentityRow(row indexIdentityRow) indexIdentityRow {
+func redactNonPublicIdentityRow(row IndexIdentityRow) IndexIdentityRow {
 	if row.Profile != nil && !row.Profile.PublicRead && row.Profile.Name != nil {
 		clone := *row.Profile
 		clone.Name = nil
@@ -726,7 +726,7 @@ func redactNonPublicIdentityRow(row indexIdentityRow) indexIdentityRow {
 
 // redactNonPublicContentRow strips the extracted title from a non-public content
 // row before serialization — the content-side twin of the identity redaction.
-func redactNonPublicContentRow(row indexContentRow) indexContentRow {
+func redactNonPublicContentRow(row IndexContentRow) IndexContentRow {
 	if !row.PublicRead {
 		row.Title = nil
 	}
@@ -734,8 +734,8 @@ func redactNonPublicContentRow(row indexContentRow) indexContentRow {
 }
 
 // countersignatureIndexRow projects a stored countersignature to its wire row.
-func countersignatureIndexRow(row StoredCountersignature) indexCountersignatureRow {
-	return indexCountersignatureRow{
+func countersignatureIndexRow(row StoredCountersignature) IndexCountersignatureRow {
+	return IndexCountersignatureRow{
 		CID:       row.CID,
 		TargetCID: row.TargetCID,
 		Relation:  row.Relation,
@@ -743,7 +743,7 @@ func countersignatureIndexRow(row StoredCountersignature) indexCountersignatureR
 	}
 }
 
-func artifactIndexRow(cid, jwsToken, ingestedAt string) *indexArtifactRow {
+func artifactIndexRow(cid, jwsToken, ingestedAt string) *IndexArtifactRow {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil || payload == nil {
 		return nil
@@ -762,10 +762,10 @@ func artifactIndexRow(cid, jwsToken, ingestedAt string) *indexArtifactRow {
 			docSchema = &value
 		}
 	}
-	return &indexArtifactRow{CID: cid, SignerDID: signerDID, CreatedAt: createdAt, IngestedAt: ingestedAt, DocSchema: docSchema}
+	return &IndexArtifactRow{CID: cid, SignerDID: signerDID, CreatedAt: createdAt, IngestedAt: ingestedAt, DocSchema: docSchema}
 }
 
-func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
+func profileProjection(chain StoredIdentityChain, store RelayReadStore) *IndexProfile {
 	candidates := make([]dfos.ServiceEntry, 0)
 	for _, service := range chain.State.Services {
 		if service["type"] != "ContentAnchor" {
@@ -810,7 +810,7 @@ func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
 			name = &value
 		}
 	}
-	return &indexProfile{
+	return &IndexProfile{
 		Anchor:     anchor,
 		PublicRead: publicRead,
 		DocSchema:  docSchema,
@@ -818,7 +818,7 @@ func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
 	}
 }
 
-func headDocumentProjection(chain StoredContentChain, store Store) (map[string]any, *string) {
+func headDocumentProjection(chain StoredContentChain, store RelayReadStore) (map[string]any, *string) {
 	documentCID := chain.State.CurrentDocumentCID
 	if documentCID == nil {
 		return nil, nil
@@ -858,7 +858,7 @@ type contentProjection struct {
 	publicRead bool
 }
 
-func contentProjectionSources(chain StoredContentChain, store Store) contentProjection {
+func contentProjectionSources(chain StoredContentChain, store RelayReadStore) contentProjection {
 	doc, docSchema := headDocumentProjection(chain, store)
 	return contentProjection{
 		doc:        doc,
@@ -919,7 +919,7 @@ func encodeIndexOrderedCursor(timestamp, key string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(timestamp + "~" + key))
 }
 
-func decodeIndexOrderedCursor(raw string) (*indexOrderedCursor, bool) {
+func decodeIndexOrderedCursor(raw string) (*IndexOrderedCursor, bool) {
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return nil, false
@@ -934,14 +934,14 @@ func decodeIndexOrderedCursor(raw string) (*indexOrderedCursor, bool) {
 	if !indexOrderedCursorTimestampRe.MatchString(parts[0]) {
 		return nil, false
 	}
-	return &indexOrderedCursor{Timestamp: parts[0], Key: parts[1]}, true
+	return &IndexOrderedCursor{Timestamp: parts[0], Key: parts[1]}, true
 }
 
 func encodeIndexCreditCursor(contentID string, position int) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(contentID + "~" + strconv.Itoa(position)))
 }
 
-func decodeIndexCreditCursor(raw string) (*indexCreditCursor, bool) {
+func decodeIndexCreditCursor(raw string) (*IndexCreditCursor, bool) {
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return nil, false
@@ -959,7 +959,7 @@ func decodeIndexCreditCursor(raw string) (*indexCreditCursor, bool) {
 	if err != nil || position < 0 || strconv.Itoa(position) != parts[1] {
 		return nil, false
 	}
-	return &indexCreditCursor{ContentID: parts[0], Position: position}, true
+	return &IndexCreditCursor{ContentID: parts[0], Position: position}, true
 }
 
 func createdAtOf(log []string) string {

@@ -26,13 +26,13 @@ import (
 const testAuthority = "example.com"
 
 type authCountingStore struct {
-	Store
+	referenceStore
 	identityReads int
 }
 
 func (s *authCountingStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
 	s.identityReads++
-	return s.Store.GetIdentityChain(did)
+	return s.referenceStore.GetIdentityChain(did)
 }
 
 // proofFor signs an identity proof for EXACTLY one request. There is no reusable
@@ -58,7 +58,7 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 	if result := IngestOperations([]string{id.token}, base); result[0].Status != "new" {
 		t.Fatalf("seed identity: %+v", result[0])
 	}
-	counting := &authCountingStore{Store: base}
+	counting := &authCountingStore{referenceStore: base}
 	resolve := CreateCurrentStateProofResolver(counting)
 
 	if _, err := resolve(id.did + "#" + id.auth.keyID); err != nil {

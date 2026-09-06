@@ -112,10 +112,10 @@ func TestPeerPinMismatchSkipsTheSyncPull(t *testing.T) {
 	if mock.operationLogHits.Load() != 0 {
 		t.Errorf("a refused peer must not be pulled from, got %d log fetches", mock.operationLogHits.Load())
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain != nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain != nil {
 		t.Error("nothing from a refused peer may land in the local store")
 	}
-	if cursor, _ := r.readStore.GetPeerCursor("http://peer-a"); cursor != "" {
+	if cursor, _ := r.writerState.GetPeerCursor("http://peer-a"); cursor != "" {
 		t.Errorf("a refused peer's cursor must not move, got %q", cursor)
 	}
 }
@@ -190,20 +190,6 @@ func TestPeerPinMismatchSkipsReadThrough(t *testing.T) {
 	}
 }
 
-// TestPeerPinMismatchSkipsBlobMaterialization covers the content plane's pull.
-// The bytes are content-address-verified on arrival, so a refused peer could not
-// have slipped bad ones past that — but which relays this machine talks to is a
-// posture the operator set, and a re-keyed peer is outside it whatever the
-// hashes say.
-func TestPeerPinMismatchSkipsBlobMaterialization(t *testing.T) {
-	r, mock := pinnedRelay(t, NewMemoryStore(), otherRelayDID, pinnedRelayDID)
-
-	r.pullAndStoreBlob("content-id", "op-cid", BlobKey{CreatorDID: "did:dfos:x", DocumentCID: "doc-cid"})
-	if mock.blobHits.Load() != 0 {
-		t.Errorf("a refused peer must not be asked for blobs, got %d fetches", mock.blobHits.Load())
-	}
-}
-
 // TestPeerPinMatchingLetsTrafficThrough: the pin is not a tax on the normal
 // case. A peer serving the DID it is pinned to behaves exactly as an unpinned
 // one does.
@@ -216,7 +202,7 @@ func TestPeerPinMatchingLetsTrafficThrough(t *testing.T) {
 	if err := r.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain == nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain == nil {
 		t.Fatal("a matching pin must not stop the sync pull")
 	}
 	if st := r.PeerSyncStatuses()["http://peer-a"]; st.PinMismatch != nil {
@@ -246,7 +232,7 @@ func TestUnpinnedPeerIsNeverAsked(t *testing.T) {
 	if mock.didCalls.Load() != 0 {
 		t.Errorf("an unpinned peer must never be asked for its DID, got %d calls", mock.didCalls.Load())
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain == nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain == nil {
 		t.Fatal("an unpinned peer must sync exactly as before")
 	}
 }
@@ -266,7 +252,7 @@ func TestUnansweredPinIsNotAMismatch(t *testing.T) {
 	if err := r.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain == nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain == nil {
 		t.Fatal("an unanswered pin question must not stop the sync pull")
 	}
 	if st := r.PeerSyncStatuses()["http://peer-a"]; st.PinMismatch != nil {
@@ -302,7 +288,7 @@ func TestPeerPinVerdictExpires(t *testing.T) {
 	if err := r.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain == nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain == nil {
 		t.Fatal("precondition: the matching pin must sync first")
 	}
 
@@ -344,7 +330,7 @@ func TestPinnedPeerOnAnUnidentifyingClientStillFlows(t *testing.T) {
 	if err := r.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
-	if chain, _ := r.store.GetIdentityChain(id.did); chain == nil {
+	if chain, _ := r.readStore.GetIdentityChain(id.did); chain == nil {
 		t.Fatal("a pin no transport can check must not stop traffic")
 	}
 }

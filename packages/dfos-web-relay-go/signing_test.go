@@ -32,16 +32,26 @@ type signingTestFixture struct {
 }
 
 type signingTestStore interface {
-	Store
+	referenceStore
 	SigningStore
 }
 
+// relayStoreWithoutSigning is everything a reference store implements EXCEPT the
+// mailbox. Embedding it is what makes nonSigningTestStore genuinely not a
+// SigningStore, which is the case under test.
+type relayStoreWithoutSigning interface {
+	RelayWriteStore
+	IndexReadStore
+	IndexWriteStore
+	RelayWriterState
+}
+
 type nonSigningTestStore struct {
-	Store
+	relayStoreWithoutSigning
 }
 
 type limitCapturingSigningStore struct {
-	Store
+	relayStoreWithoutSigning
 	SigningStore
 	limits []int
 }
@@ -67,7 +77,7 @@ func signingCredential(t *testing.T, issuer testIdentity, aud, resource, action 
 	return token
 }
 
-func newSigningFixture(t *testing.T, store Store, role string) signingTestFixture {
+func newSigningFixture(t *testing.T, store referenceStore, role string) signingTestFixture {
 	t.Helper()
 	requester := createTestIdentity(t)
 	subject := createTestIdentity(t)
@@ -220,7 +230,7 @@ func TestSigningDisabledByDefault(t *testing.T) {
 }
 
 func TestSigningStoreRequiredOnlyWhenEnabled(t *testing.T) {
-	store := nonSigningTestStore{Store: NewMemoryStore()}
+	store := nonSigningTestStore{relayStoreWithoutSigning: NewMemoryStore()}
 	if _, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store}); err != nil {
 		t.Fatalf("signing-disabled relay rejected non-signing store: %v", err)
 	}
@@ -419,7 +429,7 @@ func TestSigningDeletedSubjectDepositAndPoll(t *testing.T) {
 
 func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
 	base := NewMemoryStore()
-	store := &limitCapturingSigningStore{Store: base, SigningStore: base}
+	store := &limitCapturingSigningStore{relayStoreWithoutSigning: base, SigningStore: base}
 	enabled := true
 	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 	if err != nil {
@@ -744,7 +754,7 @@ func TestNewRelayPrunesExpiredSigningRowsWhenCapabilityDisabled(t *testing.T) {
 	})
 }
 
-func assertSigningRequestPruned(t *testing.T, store Store, cid string) {
+func assertSigningRequestPruned(t *testing.T, store referenceStore, cid string) {
 	t.Helper()
 	switch typed := store.(type) {
 	case *MemoryStore:

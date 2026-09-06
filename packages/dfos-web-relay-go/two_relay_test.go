@@ -21,9 +21,9 @@ import (
 // newSyncedRelay returns a relay r2 whose peer client serves r1's global log,
 // so r2.SyncFromPeers() replays r1's full log in cursor order. r1 must already
 // be drained (its sequencer run) before r2 syncs.
-func newSyncedRelay(t *testing.T, r1Store *MemoryStore) *Relay {
+func newSyncedRelay(t *testing.T, r1referenceStore *MemoryStore) *Relay {
 	t.Helper()
-	mock := newMockPeerClient(r1Store, 0)
+	mock := newMockPeerClient(r1referenceStore, 0)
 	r2, err := NewRelay(RelayOptions{
 		Store:      NewMemoryStore(),
 		PeerClient: mock,
@@ -91,8 +91,8 @@ func mintDelegatedCredential(t *testing.T, issuerDID, issuerKid string, issuerPr
 // this test MUST flip RED. The assertion is the acceptance gate for any future
 // as-of-createdAt teeth; do not relax it to mask a regression.
 func TestTwoRelayRevocationAfterRotationConvergesUnderHistorical(t *testing.T) {
-	r1Store := NewMemoryStore()
-	r1, err := NewRelay(RelayOptions{Store: r1Store})
+	r1referenceStore := NewMemoryStore()
+	r1, err := NewRelay(RelayOptions{Store: r1referenceStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,19 +165,19 @@ func TestTwoRelayRevocationAfterRotationConvergesUnderHistorical(t *testing.T) {
 	r1.RunSequencerAndGossip()
 
 	// --- r1 oracle: credential revoked + subtree denied ---
-	assertRevokedAndSubtreeDenied(t, "r1", r1, r1Store, creator, delegate, subDelegate,
+	assertRevokedAndSubtreeDenied(t, "r1", r1, r1referenceStore, creator, delegate, subDelegate,
 		rootCred, childCred, rootCredCID, w1)
 
 	// --- r2 syncs r1's FULL log in one batch (rotation-first ordering) ---
-	r2 := newSyncedRelay(t, r1Store)
+	r2 := newSyncedRelay(t, r1referenceStore)
 	if err := r2.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
 	r2.RunSequencerAndGossip()
-	r2Store := r2.store.(*MemoryStore)
+	r2referenceStore := r2.readStore.(*MemoryStore)
 
 	// --- r2 oracle: MUST converge — credential revoked + subtree denied ---
-	assertRevokedAndSubtreeDenied(t, "r2", r2, r2Store, creator, delegate, subDelegate,
+	assertRevokedAndSubtreeDenied(t, "r2", r2, r2referenceStore, creator, delegate, subDelegate,
 		rootCred, childCred, rootCredCID, w1)
 }
 
@@ -246,8 +246,8 @@ func contentIDFromCred(t *testing.T, cred string) string {
 // countersign once the target arrives. This is the cross-relay analogue of the
 // Go unit-level dependency convergence test — it had no cross-relay coverage.
 func TestTwoRelayCountersignBeforeTargetConverges(t *testing.T) {
-	r1Store := NewMemoryStore()
-	r1, err := NewRelay(RelayOptions{Store: r1Store})
+	r1referenceStore := NewMemoryStore()
+	r1, err := NewRelay(RelayOptions{Store: r1referenceStore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestTwoRelayCountersignBeforeTargetConverges(t *testing.T) {
 	r1.RunSequencerAndGossip()
 
 	// sanity: r1 has the countersignature recorded against the target
-	cs, _ := r1Store.GetCountersignatures(contentOpCID)
+	cs, _ := r1referenceStore.GetCountersignatures(contentOpCID)
 	if len(cs) != 1 {
 		t.Fatalf("expected 1 countersignature on r1, got %d", len(cs))
 	}
@@ -281,20 +281,20 @@ func TestTwoRelayCountersignBeforeTargetConverges(t *testing.T) {
 	// r2 syncs r1's FULL log. The mock peer serves the global log in cursor
 	// (acceptance) order; r2's sequencer must converge the countersign via the
 	// DependencyMissing retry once the target content op has been sequenced.
-	r2 := newSyncedRelay(t, r1Store)
+	r2 := newSyncedRelay(t, r1referenceStore)
 	if err := r2.SyncFromPeers(); err != nil {
 		t.Fatal(err)
 	}
 	r2.RunSequencerAndGossip()
-	r2Store := r2.store.(*MemoryStore)
+	r2referenceStore := r2.readStore.(*MemoryStore)
 
-	cs2, _ := r2Store.GetCountersignatures(contentOpCID)
+	cs2, _ := r2referenceStore.GetCountersignatures(contentOpCID)
 	if len(cs2) != 1 {
 		t.Fatalf("expected countersign to converge on r2 (1 countersignature), got %d", len(cs2))
 	}
 
 	// nothing stuck pending on r2
-	pending, _ := r2Store.CountUnsequenced()
+	pending, _ := r2referenceStore.CountUnsequenced()
 	if pending != 0 {
 		t.Fatalf("expected 0 pending ops on r2 after convergence, got %d", pending)
 	}
