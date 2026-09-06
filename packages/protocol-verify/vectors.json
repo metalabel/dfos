@@ -1,0 +1,349 @@
+{
+  "version": 1,
+  "description": "Shared deterministic reference vectors for the DFOS protocol. Generated from the fixed seeds by packages/dfos-protocol/tests/protocol-reference.spec.ts and consumed by every protocol-verify suite — do not hand-edit.",
+  "generator": "packages/dfos-protocol/tests/protocol-reference.spec.ts",
+  "vectors": [
+    {
+      "id": "key-1",
+      "description": "Reference key 1 — the genesis controller. Seed is SHA-256 of the seed phrase.",
+      "values": {
+        "seedPhrase": "dfos-protocol-reference-key-1",
+        "privateKeyHex": "132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac",
+        "publicKeyHex": "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32",
+        "multikey": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb",
+        "keyId": "key_r9ev34fvc23z999veaaft83nn29zvhe"
+      }
+    },
+    {
+      "id": "key-2",
+      "description": "Reference key 2 — the key the rotation introduces.",
+      "values": {
+        "seedPhrase": "dfos-protocol-reference-key-2",
+        "privateKeyHex": "384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8",
+        "publicKeyHex": "0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c",
+        "multikey": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
+        "keyId": "key_ez9a874tckr3dv933d3ckdn7z6zrct8"
+      }
+    },
+    {
+      "id": "key-3",
+      "description": "Reference key 3 — a separate identity, the audience of both credential vectors.",
+      "values": {
+        "seedPhrase": "dfos-protocol-reference-key-3",
+        "privateKeyHex": "1d9f06faf69872c86c31a05d73f3c6dae0e3d102f2c88fc99511cb4476ef0ca1",
+        "publicKeyHex": "f40cb67fb44cbf48d5b4c7710ecbc13f725b106136029a2f3e8d5ef040a9b4e6",
+        "multikey": "z6MkvsvmSh2dGnu2qw1Tnw7M5fz98ycfuYGxqnpfgmPkLv7o",
+        "keyId": "key_a8r27434aar76ae72c877fa47kar8rn",
+        "did": "did:dfos:94ah7963n223k8c9884hh27ekh42nea"
+      }
+    },
+    {
+      "id": "identity-genesis",
+      "description": "Identity chain genesis (create, signed by key 1). Carries the canonical dag-cbor bytes, the CID bytes, the SHA-256 of those bytes, and the DID derived from them.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg",
+        "payload": {
+          "version": 1,
+          "type": "create",
+          "authKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "assertKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "controllerKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "createdAt": "2026-03-07T00:00:00.000Z"
+        },
+        "cborHex": "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62",
+        "cidBytesHex": "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69",
+        "cid": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne",
+        "didHashHex": "c66d21f27dceea0b05534c225ad7018ac7d4dfded0609dcd18022a3739a5488c",
+        "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+        "kid": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+        "typ": "did:dfos:identity-op"
+      }
+    },
+    {
+      "id": "identity-rotation",
+      "description": "Identity chain update (key rotation to key 2, operation signed by key 1). Carries the possession proof.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA",
+        "cid": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy",
+        "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
+        "previousOperationCID": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
+      }
+    },
+    {
+      "id": "key-proof",
+      "description": "The possession proof the rotation carries: a did:dfos:key-add envelope signed by key 2, whose payload is closed to exactly seven members in one order.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmtleS1hZGQifQ.eyJub25jZSI6ImRmb3MtcHJvdG9jb2wtcmVmZXJlbmNlLW5vbmNlLTEiLCJhdWRpZW5jZSI6ImtleXMuZGZvcy5jb20iLCJkaWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwicm9sZVNldCI6ImF1dGgsYXNzZXJ0LGNvbnRyb2xsZXIiLCJwcmV2Q0lEIjoiYmFmeXJlaWNvZ2h2anpudmxpdWxveHhtYmY1NHRwenF3YWhucXBpbGs3bmN4ZXBqaW5lZHBrZ2EzbmUiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rZlVkNjVKckFoZmRnRnVNQ2NjVTlUaFF2akIyZkpBTVVIa3V1YWpGOTkyZ0siLCJ0aW1lc3RhbXAiOiIyMDI2LTAzLTA3VDAwOjAwOjMwLjAwMFoifQ.8ng10Hbbs2BFCsYoSYNHS1T0020-HXm4aD10QrHlpysO1sqmy1U_dj9yEz0CJSMCYNwhTZMbTianhJ8CH1LtAw",
+        "typ": "did:dfos:key-add",
+        "canonicalPayload": "{\"nonce\":\"dfos-protocol-reference-nonce-1\",\"audience\":\"keys.dfos.com\",\"did\":\"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr\",\"roleSet\":\"auth,assert,controller\",\"prevCID\":\"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne\",\"publicKeyMultibase\":\"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK\",\"timestamp\":\"2026-03-07T00:00:30.000Z\"}",
+        "members": [
+          "nonce",
+          "audience",
+          "did",
+          "roleSet",
+          "prevCID",
+          "publicKeyMultibase",
+          "timestamp"
+        ],
+        "roleSet": "auth,assert,controller",
+        "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
+        "prevCID": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne",
+        "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+      }
+    },
+    {
+      "id": "identity-delete",
+      "description": "Identity chain delete (signed by key 2), parented on the rotation.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA",
+        "cid": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm",
+        "previousOperationCID": "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy"
+      }
+    },
+    {
+      "id": "identity-restore",
+      "description": "Identity chain restore (signed by key 2), parented on the delete.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA",
+        "cid": "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq",
+        "previousOperationCID": "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm"
+      }
+    },
+    {
+      "id": "document",
+      "description": "The content document the create operation commits to. Encode this map as canonical dag-cbor and the CID must come out byte-identical.",
+      "values": {
+        "value": {
+          "$schema": "https://schemas.dfos.com/post/v1",
+          "format": "short-post",
+          "publishedAt": "2026-03-07T00:02:00.000Z",
+          "title": "Hello World",
+          "body": "First post on the protocol.",
+          "credits": [
+            {
+              "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+              "label": "author"
+            }
+          ]
+        },
+        "cid": "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu"
+      }
+    },
+    {
+      "id": "document-updated",
+      "description": "The edited document the content update operation commits to.",
+      "values": {
+        "value": {
+          "$schema": "https://schemas.dfos.com/post/v1",
+          "format": "short-post",
+          "publishedAt": "2026-03-07T00:02:00.000Z",
+          "title": "Hello World (edited)",
+          "body": "Updated content.",
+          "credits": [
+            {
+              "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+              "label": "author"
+            }
+          ]
+        },
+        "cid": "bafyreiaoinzo2ai4hx56b7244zahnfqmgurcd3rppqbawhv32xzlvct5m4"
+      }
+    },
+    {
+      "id": "content-create",
+      "description": "Content chain create (signed by key 2), committing to the document CID.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.BpUjMx3_zq5q-bxOQN0pl4tfgf_uZIt97r7fM_dukJr--zB0g7sxG9IcBsy0RR3P_DtIK4GB17ikwDUDDHnuAw",
+        "cid": "bafyreibs3vlvainfjfuet6x4uds3pivbmbohy7f64iegbuw3gpsuqtma6i",
+        "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+        "typ": "did:dfos:content-op",
+        "documentCID": "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu"
+      }
+    },
+    {
+      "id": "content-update",
+      "description": "Content chain update (signed by key 2), rebasing on the create.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWVkNWNqZ2pqdDJwZHo1Mms2cGdpcGNqZzNpNHhsN3R4YnJiZGVkc2NlanZxaHRnbHR4ZGkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlhb2luem8yYWk0aHg1NmI3MjQ0emFobmZxbWd1cmNkM3JwcHFiYXdodjMyeHpsdmN0NW00IiwiYmFzZURvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.G-FIPUBtGPOUVhdT25i-PLzbsOjS3mQ74gTEGluf74dj9P4Pwi7mwZT3D_PpT7gtPgUWK7RT0szqNsxju7tAAQ",
+        "cid": "bafyreied5cjgjjt2pdz52k6pgipcjg3i4xl7txbrbdedscejvqhtgltxdi",
+        "documentCID": "bafyreiaoinzo2ai4hx56b7244zahnfqmgurcd3rppqbawhv32xzlvct5m4",
+        "baseDocumentCID": "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu"
+      }
+    },
+    {
+      "id": "content-chain",
+      "description": "The verified two-operation content chain: its id, genesis CID, and head CID.",
+      "values": {
+        "contentId": "8n8fnzhrrefkrde6h72kfvff43r8c63",
+        "genesisCID": "bafyreibs3vlvainfjfuet6x4uds3pivbmbohy7f64iegbuw3gpsuqtma6i",
+        "headCID": "bafyreied5cjgjjt2pdz52k6pgipcjg3i4xl7txbrbdedscejvqhtgltxdi"
+      }
+    },
+    {
+      "id": "services-genesis",
+      "description": "An identity create whose payload carries a full-state services discovery array (relay locator + content/artifact anchors). Re-encoding the decoded payload must re-derive this CID and DID.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYXNqZzN2cXM0YjN2ZXB3eTVxYzRveTRmNHZwa2NhaG13aTY0anR1ZWk1Y2Y3enFwZHhqeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiOG44Zm56aHJyZWZrcmRlNmg3MmtmdmZmNDNyOGM2MyJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.TPPGB4Yig_AUoxKKXwBAPXLqMDg6XMnbspZcZh0OijfnxXYgOs8EdXq6EiVjLbWeiczrg-uAZAHYpw3shRb5Cw",
+        "payload": {
+          "version": 1,
+          "type": "create",
+          "authKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "assertKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "controllerKeys": [
+            {
+              "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+              "type": "Multikey",
+              "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+            }
+          ],
+          "services": [
+            {
+              "id": "relay",
+              "type": "DfosRelay",
+              "endpoint": "https://relay.dfos.com"
+            },
+            {
+              "id": "profile",
+              "type": "ContentAnchor",
+              "label": "profile",
+              "anchor": "8n8fnzhrrefkrde6h72kfvff43r8c63"
+            },
+            {
+              "id": "avatar",
+              "type": "ContentAnchor",
+              "label": "avatar",
+              "anchor": "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu"
+            }
+          ],
+          "createdAt": "2026-03-07T00:05:00.000Z"
+        },
+        "cid": "bafyreiasjg3vqs4b3vepwy5qc4oy4f4vpkcahmwi64jtuei5cf7zqpdxjy",
+        "did": "did:dfos:krhcznk98f7r2r4a6ktafcv77f7k6e2",
+        "kid": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+        "typ": "did:dfos:identity-op"
+      }
+    },
+    {
+      "id": "credential-write",
+      "description": "A DFOS credential granting broad chain write, issued by key 1 to key 3’s DID.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg",
+        "cid": "bafyreifyinbxhbrit56m3aav66mw4xd6adqjasvcfhmu66g6tnuqgryclm",
+        "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
+        "typ": "did:dfos:credential",
+        "iss": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+        "aud": "did:dfos:94ah7963n223k8c9884hh27ekh42nea",
+        "resource": "chain:*",
+        "action": "write"
+      }
+    },
+    {
+      "id": "credential-read",
+      "description": "A DFOS credential granting broad chain read, issued by key 1 to key 3’s DID.",
+      "values": {
+        "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw",
+        "cid": "bafyreicthcbizxvgemsxv7kscoo7apieaal3fye37o45fkykne7b4hobra",
+        "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
+        "typ": "did:dfos:credential",
+        "iss": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+        "aud": "did:dfos:94ah7963n223k8c9884hh27ekh42nea",
+        "resource": "chain:*",
+        "action": "read"
+      }
+    },
+    {
+      "id": "jwt",
+      "description": "An EdDSA device-auth JWT signed by key 2.",
+      "values": {
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ",
+        "iss": "dfos",
+        "sub": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+        "aud": "dfos-api"
+      }
+    },
+    {
+      "id": "number-integer",
+      "description": "dag-cbor number determinism: whole numbers MUST encode as CBOR integers. floatCborHex/floatCid are the encoding a conforming encoder must never emit.",
+      "values": {
+        "value": {
+          "version": 1,
+          "type": "test"
+        },
+        "cborHex": "a2647479706564746573746776657273696f6e01",
+        "cid": "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa",
+        "floatCborHex": "a2647479706564746573746776657273696f6ef93c00",
+        "floatCid": "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+      }
+    },
+    {
+      "id": "number-max-safe",
+      "description": "WP-0 number policy: 2^53-1 is the largest accepted integer.",
+      "values": {
+        "value": {
+          "n": 9007199254740991
+        },
+        "cid": "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq"
+      }
+    },
+    {
+      "id": "number-null-vector",
+      "description": "WP-0 number policy: nulls and empty arrays encode without normalization.",
+      "values": {
+        "value": {
+          "documentCID": null,
+          "note": null,
+          "prf": []
+        },
+        "cid": "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue"
+      }
+    },
+    {
+      "id": "reject-corpus",
+      "description": "Nine tokens every conformant verifier MUST reject, each isolating one profile or signature gate. The base vector is a valid JWS signed by key 1; publicKeyHex is the key to verify against.",
+      "values": {
+        "publicKeyHex": "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32",
+        "tokens": {
+          "RV-LEN-SHORT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2",
+          "RV-LEN-LONG": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA",
+          "RV-S-NONCANON-PLUSL": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ",
+          "RV-S-NONCANON-FF": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w",
+          "RV-ALG-NONE": "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+          "RV-ALG-CASE": "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+          "RV-CRIT-PRESENT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+          "RV-HEADER-KEY-TRUST": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+          "RV-SIG-BITFLIP": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA"
+        }
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 """
 DFOS Protocol — Independent verification in Python
 
-Verifies all deterministic reference artifacts from the TypeScript implementation.
+Verifies all deterministic reference artifacts from the protocol specification.
 Uses only standard crypto libraries (pynacl, dag-cbor, base58).
 
 Run: uv run --python 3.14 --with pynacl --with dag-cbor --with base58 -- python3.14 verify_protocol.py
@@ -10,6 +10,7 @@ Run: uv run --python 3.14 --with pynacl --with dag-cbor --with base58 -- python3
 import base64
 import hashlib
 import json
+import pathlib
 import sys
 
 import dag_cbor
@@ -17,42 +18,72 @@ import nacl.signing
 from base58 import b58decode, b58encode
 
 # =============================================================================
-# Constants from the reference doc
+# Shared reference vectors
 # =============================================================================
+#
+# Every expected value below is read from ../vectors.json — the one artifact all
+# five suites share, generated from the protocol's fixed seeds by
+# packages/dfos-protocol/tests/protocol-reference.spec.ts, which asserts the
+# checked-in file is byte-identical to a fresh generation.
+#
+# Reading a JSON fixture is not a library import. This suite still uses only the
+# language's native Ed25519, dag-cbor and SHA-256, and a third party can run it
+# with nothing but this file and vectors.json.
+
+VECTORS_PATH = pathlib.Path(__file__).resolve().parent.parent / "vectors.json"
+VECTORS_BY_ID = {
+    v["id"]: v["values"] for v in json.loads(VECTORS_PATH.read_text())["vectors"]
+}
+
+
+def vector_values(vector_id: str) -> dict:
+    """All values of one vector, by id."""
+    if vector_id not in VECTORS_BY_ID:
+        raise KeyError(f'vectors.json has no vector "{vector_id}"')
+    return VECTORS_BY_ID[vector_id]
+
+
+def vec(vector_id: str, field: str):
+    """One field of one vector."""
+    values = vector_values(vector_id)
+    if field not in values:
+        raise KeyError(f"vectors.json {vector_id} has no field {field}")
+    return values[field]
+
 
 ALPHABET = "2346789acdefhknrtvz"
 ID_LENGTH = 31
 
-GENESIS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
+GENESIS_JWS = vec("identity-genesis", "jws")
+ROTATION_JWS = vec("identity-rotation", "jws")
+DELETE_JWS = vec("identity-delete", "jws")
+RESTORE_JWS = vec("identity-restore", "jws")
+CONTENT_CREATE_JWS = vec("content-create", "jws")
+JWT_TOKEN = vec("jwt", "token")
+BROAD_WRITE_VC = vec("credential-write", "jws")
+READ_VC = vec("credential-read", "jws")
 
-ROTATION_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA"
+# Services genesis: an identity create whose payload carries a full-state
+# services discovery array (relay locator + content/artifact anchors). The
+# services fields ride along in the payload map, so recomputing the operation
+# CID over the decoded payload yields the published CID unchanged.
+SERVICES_GENESIS_JWS = vec("services-genesis", "jws")
 
-DELETE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA"
-RESTORE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA"
-
-CONTENT_CREATE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.BpUjMx3_zq5q-bxOQN0pl4tfgf_uZIt97r7fM_dukJr--zB0g7sxG9IcBsy0RR3P_DtIK4GB17ikwDUDDHnuAw"
-
-JWT_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ"
-
-BROAD_WRITE_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
-
-READ_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw"
-
-EXPECTED_GENESIS_CID = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
-EXPECTED_DID = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
-EXPECTED_MULTIKEY1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
-EXPECTED_MULTIKEY2 = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+EXPECTED_GENESIS_CID = vec("identity-genesis", "cid")
+EXPECTED_DID = vec("identity-genesis", "did")
+EXPECTED_MULTIKEY1 = vec("key-1", "multikey")
+EXPECTED_MULTIKEY2 = vec("key-2", "multikey")
 
 # The possession proof the rotation carries. Its payload is CLOSED: exactly these
 # seven members, in exactly this order — and the octets below are the only
 # serialization those members are ever signed as. The envelope is signed by key 2
 # (the key being introduced) while the operation carrying it is signed by key 1.
-KEY_PROOF_MEMBERS = ["nonce", "audience", "did", "roleSet", "prevCID", "publicKeyMultibase", "timestamp"]
-KEY_PROOF_ROLE_SET = "auth,assert,controller"
-KEY_PROOF_CANONICAL_PAYLOAD = '{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}'
+KEY_PROOF_MEMBERS = vec("key-proof", "members")
+KEY_PROOF_ROLE_SET = vec("key-proof", "roleSet")
+KEY_PROOF_CANONICAL_PAYLOAD = vec("key-proof", "canonicalPayload")
 
-EXPECTED_CBOR_HEX = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
-EXPECTED_CID_HEX = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
+EXPECTED_CBOR_HEX = vec("identity-genesis", "cborHex")
+EXPECTED_CID_HEX = vec("identity-genesis", "cidBytesHex")
 
 # =============================================================================
 # Helpers
@@ -170,14 +201,14 @@ print("\n1. Key Derivation")
 seed1 = hashlib.sha256(b"dfos-protocol-reference-key-1").digest()
 signing_key1 = nacl.signing.SigningKey(seed1)
 pub1 = signing_key1.verify_key.encode()
-check("Key 1 private", seed1.hex() == "132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac")
-check("Key 1 public", pub1.hex() == "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32")
+check("Key 1 private", seed1.hex() == vec("key-1", "privateKeyHex"))
+check("Key 1 public", pub1.hex() == vec("key-1", "publicKeyHex"))
 
 seed2 = hashlib.sha256(b"dfos-protocol-reference-key-2").digest()
 signing_key2 = nacl.signing.SigningKey(seed2)
 pub2 = signing_key2.verify_key.encode()
-check("Key 2 private", seed2.hex() == "384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8")
-check("Key 2 public", pub2.hex() == "0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c")
+check("Key 2 private", seed2.hex() == vec("key-2", "privateKeyHex"))
+check("Key 2 public", pub2.hex() == vec("key-2", "publicKeyHex"))
 
 # --- 2. Multikey encoding ---
 print("\n2. Multikey Encoding")
@@ -188,14 +219,7 @@ check("Multikey 1 decode", decoded_pub1 == pub1)
 
 # --- 3. dag-cbor canonical encoding ---
 print("\n3. dag-cbor Canonical Encoding")
-genesis_payload = {
-    "version": 1,
-    "type": "create",
-    "authKeys": [{"id": "key_r9ev34fvc23z999veaaft83nn29zvhe", "type": "Multikey", "publicKeyMultibase": EXPECTED_MULTIKEY1}],
-    "assertKeys": [{"id": "key_r9ev34fvc23z999veaaft83nn29zvhe", "type": "Multikey", "publicKeyMultibase": EXPECTED_MULTIKEY1}],
-    "controllerKeys": [{"id": "key_r9ev34fvc23z999veaaft83nn29zvhe", "type": "Multikey", "publicKeyMultibase": EXPECTED_MULTIKEY1}],
-    "createdAt": "2026-03-07T00:00:00.000Z",
-}
+genesis_payload = vec("identity-genesis", "payload")
 cbor_bytes = dag_cbor.encode(genesis_payload)
 check("CBOR bytes match", cbor_bytes.hex() == EXPECTED_CBOR_HEX,
       f"\ngot:      {cbor_bytes.hex()[:80]}...\nexpected: {EXPECTED_CBOR_HEX[:80]}...")
@@ -210,11 +234,10 @@ check("CID string match", cid_string == EXPECTED_GENESIS_CID, f"got {cid_string}
 # --- 5. DID derivation ---
 print("\n5. DID Derivation")
 did_hash = hashlib.sha256(cid_bytes).digest()
-check("DID hash", did_hash.hex() == "c66d21f27dceea0b05534c225ad7018ac7d4dfded0609dcd18022a3739a5488c")
+check("DID hash", did_hash.hex() == vec("identity-genesis", "didHashHex"), f"got {did_hash.hex()}")
 did_suffix = encode_id(did_hash)
-check("DID suffix", did_suffix == "cnnnft9f8a2rn938d6nkz38r847v2kr", f"got {did_suffix}")
 full_did = f"did:dfos:{did_suffix}"
-check("Full DID", full_did == EXPECTED_DID)
+check("Full DID", full_did == EXPECTED_DID, f"got {full_did}")
 
 # --- 6. JWS verification: genesis ---
 print("\n6. JWS Verification: Genesis (key 1)")
@@ -222,7 +245,7 @@ result = verify_jws(GENESIS_JWS, pub1)
 check("Genesis signature valid", True)
 check("Genesis header alg", result["header"]["alg"] == "EdDSA")
 check("Genesis header typ", result["header"]["typ"] == "did:dfos:identity-op")
-check("Genesis header kid", result["header"]["kid"] == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+check("Genesis header kid", result["header"]["kid"] == vec("identity-genesis", "kid"))
 check("Genesis header cid", result["header"]["cid"] == EXPECTED_GENESIS_CID)
 check("Genesis payload type", result["payload"]["type"] == "create")
 check("Genesis payload version", result["payload"]["version"] == 1)
@@ -231,8 +254,8 @@ check("Genesis payload version", result["payload"]["version"] == 1)
 print("\n7. JWS Verification: Rotation (key 1 signs rotation to key 2)")
 result = verify_jws(ROTATION_JWS, pub1)
 check("Rotation signature valid", True)
-check("Rotation kid is DID URL", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe")
-check("Rotation header cid", result["header"]["cid"] == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
+check("Rotation kid is DID URL", result["header"]["kid"] == vec("identity-rotation", "kid"))
+check("Rotation header cid", result["header"]["cid"] == vec("identity-rotation", "cid"))
 check("Rotation payload type", result["payload"]["type"] == "update")
 check("Rotation previousOperationCID", result["payload"]["previousOperationCID"] == EXPECTED_GENESIS_CID)
 
@@ -240,13 +263,13 @@ check("Rotation previousOperationCID", result["payload"]["previousOperationCID"]
 print("\n7b. JWS Verification: Delete + Restore (key 2)")
 result = verify_jws(DELETE_JWS, pub2)
 check("Delete payload type", result["payload"]["type"] == "delete")
-check("Delete header cid", result["header"]["cid"] == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
-check("Delete parent is rotation", result["payload"]["previousOperationCID"] == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
+check("Delete header cid", result["header"]["cid"] == vec("identity-delete", "cid"))
+check("Delete parent is rotation", result["payload"]["previousOperationCID"] == vec("identity-delete", "previousOperationCID"))
 check("Delete CID re-derived", cid_to_base32(make_cid_bytes(dag_cbor.encode(result["payload"]))) == result["header"]["cid"])
 result = verify_jws(RESTORE_JWS, pub2)
 check("Restore payload type", result["payload"]["type"] == "restore")
-check("Restore header cid", result["header"]["cid"] == "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq")
-check("Restore parent is delete", result["payload"]["previousOperationCID"] == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
+check("Restore header cid", result["header"]["cid"] == vec("identity-restore", "cid"))
+check("Restore parent is delete", result["payload"]["previousOperationCID"] == vec("identity-restore", "previousOperationCID"))
 check("Restore CID re-derived", cid_to_base32(make_cid_bytes(dag_cbor.encode(result["payload"]))) == result["header"]["cid"])
 
 # --- 7c. Possession proof: the key proof the rotation carries ---
@@ -311,8 +334,8 @@ print("\n8. JWS Verification: Content Create (key 2)")
 result = verify_jws(CONTENT_CREATE_JWS, pub2)
 check("Content create signature valid", True)
 check("Content create typ", result["header"]["typ"] == "did:dfos:content-op")
-check("Content create kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8")
-check("Content create header cid", result["header"]["cid"] == "bafyreibs3vlvainfjfuet6x4uds3pivbmbohy7f64iegbuw3gpsuqtma6i")
+check("Content create kid", result["header"]["kid"] == vec("content-create", "kid"))
+check("Content create header cid", result["header"]["cid"] == vec("content-create", "cid"))
 check("Content create payload type", result["payload"]["type"] == "create")
 
 # --- 9. JWT verification (signed by key 2) ---
@@ -320,24 +343,17 @@ print("\n9. JWT Verification (key 2)")
 result = verify_jws(JWT_TOKEN, pub2)  # JWT uses same signing as JWS
 check("JWT signature valid", True)
 check("JWT header alg", result["header"]["alg"] == "EdDSA")
-check("JWT payload iss", result["payload"]["iss"] == "dfos")
-check("JWT payload sub", result["payload"]["sub"] == EXPECTED_DID)
-check("JWT payload aud", result["payload"]["aud"] == "dfos-api")
+check("JWT payload iss", result["payload"]["iss"] == vec("jwt", "iss"))
+check("JWT payload sub", result["payload"]["sub"] == vec("jwt", "sub"))
+check("JWT payload aud", result["payload"]["aud"] == vec("jwt", "aud"))
 
 # --- 10. Document CID ---
 print("\n10. Document CID Verification")
-document = {
-    "$schema": "https://schemas.dfos.com/post/v1",
-    "format": "short-post",
-    "publishedAt": "2026-03-07T00:02:00.000Z",
-    "title": "Hello World",
-    "body": "First post on the protocol.",
-    "credits": [{"did": EXPECTED_DID, "label": "author"}],
-}
+document = vec("document", "value")
 doc_cbor = dag_cbor.encode(document)
 doc_cid_bytes = make_cid_bytes(doc_cbor)
 doc_cid = cid_to_base32(doc_cid_bytes)
-check("Document CID", doc_cid == "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu", f"got {doc_cid}")
+check("Document CID", doc_cid == vec("document", "cid"), f"got {doc_cid}")
 
 # --- 11. Services-genesis JWS verification ---
 # Identity genesis carrying a services discovery set (relay locator + content/
@@ -345,14 +361,14 @@ check("Document CID", doc_cid == "bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jj
 # vector. The services fields ride along in the payload map, so recomputing the
 # operation CID over the decoded payload yields the published CID unchanged.
 print("\n11. Services-Genesis JWS Verification (key 1)")
-SERVICES_GENESIS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYXNqZzN2cXM0YjN2ZXB3eTVxYzRveTRmNHZwa2NhaG13aTY0anR1ZWk1Y2Y3enFwZHhqeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiOG44Zm56aHJyZWZrcmRlNmg3MmtmdmZmNDNyOGM2MyJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.TPPGB4Yig_AUoxKKXwBAPXLqMDg6XMnbspZcZh0OijfnxXYgOs8EdXq6EiVjLbWeiczrg-uAZAHYpw3shRb5Cw"
-EXPECTED_SERVICES_CID = "bafyreiasjg3vqs4b3vepwy5qc4oy4f4vpkcahmwi64jtuei5cf7zqpdxjy"
-EXPECTED_SERVICES_DID = "did:dfos:krhcznk98f7r2r4a6ktafcv77f7k6e2"
+SERVICES_GENESIS_JWS = vec("services-genesis", "jws")
+EXPECTED_SERVICES_CID = vec("services-genesis", "cid")
+EXPECTED_SERVICES_DID = vec("services-genesis", "did")
 
 result = verify_jws(SERVICES_GENESIS_JWS, pub1)
 check("Services-genesis signature valid", True)
 check("Services-genesis header typ", result["header"]["typ"] == "did:dfos:identity-op")
-check("Services-genesis header kid", result["header"]["kid"] == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+check("Services-genesis header kid", result["header"]["kid"] == vec("services-genesis", "kid"))
 check("Services-genesis header cid", result["header"]["cid"] == EXPECTED_SERVICES_CID)
 check("Services-genesis payload type", result["payload"]["type"] == "create")
 
@@ -366,59 +382,53 @@ check("Services-genesis derived DID", services_did == EXPECTED_SERVICES_DID, f"g
 
 # --- 13. DFOS Credential Verification ---
 print("\n13. DFOS Credential Verification (key 1)")
-EXPECTED_CREDENTIAL_AUD = "did:dfos:94ah7963n223k8c9884hh27ekh42nea"
+EXPECTED_CREDENTIAL_AUD = vec("credential-write", "aud")
 
 result = verify_jws(BROAD_WRITE_VC, pub1)
 check("Write credential signature valid", True)
 check("Write credential header typ", result["header"]["typ"] == "did:dfos:credential")
-check("Write credential header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe")
+check("Write credential header kid", result["header"]["kid"] == vec("credential-write", "kid"))
 check("Write credential payload type", result["payload"]["type"] == "DFOSCredential")
 check("Write credential payload iss", result["payload"]["iss"] == EXPECTED_DID)
 check("Write credential payload aud", result["payload"]["aud"] == EXPECTED_CREDENTIAL_AUD)
 att = result["payload"]["att"]
 check("Write credential att is list", isinstance(att, list) and len(att) > 0)
-check("Write credential att resource", att[0]["resource"] == "chain:*")
-check("Write credential att action", att[0]["action"] == "write")
+check("Write credential att resource", att[0]["resource"] == vec("credential-write", "resource"))
+check("Write credential att action", att[0]["action"] == vec("credential-write", "action"))
 
 result = verify_jws(READ_VC, pub1)
 check("Read credential signature valid", True)
 check("Read credential payload type", result["payload"]["type"] == "DFOSCredential")
-check("Read credential att action", result["payload"]["att"][0]["action"] == "read")
+check("Read credential att action", result["payload"]["att"][0]["action"] == vec("credential-read", "action"))
 
 # Number encoding determinism tests
 print("\n14. Number Encoding Determinism")
 
 def test_number_encoding_determinism():
-    payload = {"version": 1, "type": "test"}
+    payload = vec("number-integer", "value")
     cbor_bytes = dag_cbor.encode(payload)
-    expected_hex = "a2647479706564746573746776657273696f6e01"
-    check("Integer CBOR hex", cbor_bytes.hex() == expected_hex,
+    check("Integer CBOR hex", cbor_bytes.hex() == vec("number-integer", "cborHex"),
           f"got {cbor_bytes.hex()}")
-    cid_bytes = make_cid_bytes(cbor_bytes)
-    cid_string = cid_to_base32(cid_bytes)
-    expected_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-    check("Integer CID", cid_string == expected_cid, f"got {cid_string}")
+    cid_string = cid_to_base32(make_cid_bytes(cbor_bytes))
+    check("Integer CID", cid_string == vec("number-integer", "cid"), f"got {cid_string}")
 
 def test_number_encoding_from_json():
     payload = json.loads('{"version": 1, "type": "test"}')
     cbor_bytes = dag_cbor.encode(payload)
-    cid_bytes = make_cid_bytes(cbor_bytes)
-    cid_string = cid_to_base32(cid_bytes)
-    expected_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-    check("JSON int parsed as int (not float)", cid_string == expected_cid,
+    cid_string = cid_to_base32(make_cid_bytes(cbor_bytes))
+    check("JSON int parsed as int (not float)", cid_string == vec("number-integer", "cid"),
           f"got {cid_string}")
 
 def test_number_encoding_float_produces_wrong_cid():
-    payload = {"version": 1.0, "type": "test"}
-    cbor_bytes = dag_cbor.encode(payload)
-    cid_bytes = make_cid_bytes(cbor_bytes)
-    cid_string = cid_to_base32(cid_bytes)
-    correct_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-    # The exact wrong CID depends on float precision (float16/32/64) which varies
-    # by CBOR library. The important invariant: float encoding MUST NOT produce
-    # the correct (integer) CID.
-    check("Float CID differs from correct CID", cid_string != correct_cid,
-          f"unexpectedly matched correct CID")
+    # The float serialization a conforming encoder MUST NOT emit, and the CID it
+    # yields — the shared vector every suite pins as the known-wrong answer.
+    float_cbor = bytes.fromhex(vec("number-integer", "floatCborHex"))
+    cid_string = cid_to_base32(make_cid_bytes(float_cbor))
+    check("Float CBOR yields the known-wrong CID",
+          cid_string == vec("number-integer", "floatCid"), f"got {cid_string}")
+    check("Float CID differs from the integer CID",
+          cid_string != vec("number-integer", "cid"),
+          "unexpectedly matched the integer CID")
 
 test_number_encoding_determinism()
 test_number_encoding_from_json()
@@ -429,20 +439,9 @@ test_number_encoding_float_produces_wrong_cid()
 # across all five language suites. Reference key 1 signs the base vector.
 print("\n15. Reject Corpus (all MUST be rejected)")
 
-REJECT_PUB1_HEX = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
-reject_pub = bytes.fromhex(REJECT_PUB1_HEX)
+reject_pub = bytes.fromhex(vec("reject-corpus", "publicKeyHex"))
 
-REJECT_VECTORS = {
-    "RV-LEN-SHORT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2",
-    "RV-LEN-LONG": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA",
-    "RV-S-NONCANON-PLUSL": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ",
-    "RV-S-NONCANON-FF": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w",
-    "RV-ALG-NONE": "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-    "RV-ALG-CASE": "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-    "RV-CRIT-PRESENT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-    "RV-HEADER-KEY-TRUST": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-    "RV-SIG-BITFLIP": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA",
-}
+REJECT_VECTORS = vec("reject-corpus", "tokens")
 
 for name, token in REJECT_VECTORS.items():
     rejected = False
@@ -491,7 +490,7 @@ def number_cid(value) -> str:
 
 # accept: 2^53-1
 check("accept int 2^53-1",
-      number_cid({"n": MAX_SAFE}) == "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq",
+      number_cid(vec("number-max-safe", "value")) == vec("number-max-safe", "cid"),
       "wrong CID")
 
 # reject: 2^53, 1.5, NaN, +Inf, -Inf
@@ -511,8 +510,7 @@ for name, bad in [
 
 # null vector: { documentCID: null, note: null, prf: [] }
 check("null vector CID",
-      number_cid({"documentCID": None, "note": None, "prf": []}) ==
-      "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue",
+      number_cid(vec("number-null-vector", "value")) == vec("number-null-vector", "cid"),
       "wrong CID")
 
 # --- Summary ---

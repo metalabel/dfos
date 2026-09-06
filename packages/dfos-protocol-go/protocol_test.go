@@ -17,19 +17,23 @@ import (
 // ---------------------------------------------------------------------------
 // Reference constants from the protocol spec test vectors
 // ---------------------------------------------------------------------------
+//
+// Every expected value here comes from packages/protocol-verify/vectors.json —
+// the one artifact this twin and the five standalone verification suites share.
+// See vectors_test.go for the loader.
 
-const (
-	expectedMultikey1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
-	expectedGenCID    = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
-	expectedDID       = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
-	expectedCBORHex   = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
-	expectedCIDHex    = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
+var (
+	expectedMultikey1 = vec("key-1", "multikey")
+	expectedGenCID    = vec("identity-genesis", "cid")
+	expectedDID       = vec("identity-genesis", "did")
+	expectedCBORHex   = vec("identity-genesis", "cborHex")
+	expectedCIDHex    = vec("identity-genesis", "cidBytesHex")
 
-	genesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
+	genesisJWS = vec("identity-genesis", "jws")
 
 	// Number encoding test vectors
-	numberTestCID      = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-	numberTestWrongCID = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+	numberTestCID      = vec("number-integer", "cid")
+	numberTestWrongCID = vec("number-integer", "floatCid")
 )
 
 // ---------------------------------------------------------------------------
@@ -143,7 +147,7 @@ func TestMultikeyRoundTrip(t *testing.T) {
 
 func TestDagCborCIDReference(t *testing.T) {
 	key := map[string]any{
-		"id":                 "key_r9ev34fvc23z999veaaft83nn29zvhe",
+		"id":                 vec("identity-genesis", "kid"),
 		"type":               "Multikey",
 		"publicKeyMultibase": expectedMultikey1,
 	}
@@ -357,7 +361,7 @@ func TestJWSVerifyReference(t *testing.T) {
 	if h.Typ != "did:dfos:identity-op" {
 		t.Fatalf("wrong typ: %s", h.Typ)
 	}
-	if h.Kid != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if h.Kid != vec("identity-genesis", "kid") {
 		t.Fatalf("wrong kid: %s", h.Kid)
 	}
 	if h.CID != expectedGenCID {
@@ -399,7 +403,7 @@ func TestJWSDecodeUnsafe(t *testing.T) {
 	if h.Typ != "did:dfos:identity-op" {
 		t.Fatalf("wrong typ: %s", h.Typ)
 	}
-	if h.Kid != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if h.Kid != vec("identity-genesis", "kid") {
 		t.Fatalf("wrong kid: %s", h.Kid)
 	}
 	if h.CID != expectedGenCID {

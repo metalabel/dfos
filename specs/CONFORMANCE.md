@@ -232,8 +232,10 @@ each suite actually exercises.
 
 - **`packages/protocol-verify`** — the five-language re-derivation suite (TypeScript, Go,
   Python, Rust, Swift). Each suite is **standalone**: native crypto only, no DFOS library
-  imports, reference constants hardcoded inline (the same deterministic values published in
-  PROTOCOL.md). See `packages/protocol-verify/README.md`.
+  imports, expected values read from the shared `packages/protocol-verify/vectors.json`
+  artifact (the same deterministic values published in PROTOCOL.md, generated from the
+  fixed seeds and asserted byte-identical by the TypeScript reference suite). See
+  `packages/protocol-verify/README.md`.
 - **`packages/dfos-protocol/tests`** — the TypeScript reference test suite.
 - **Deterministic reference artifacts** — PROTOCOL.md "Deterministic Reference Artifacts"
   (`specs/PROTOCOL.md`) and the "Verification Checklist for Independent Implementers"
@@ -245,8 +247,8 @@ each suite actually exercises.
 (key, multikey, CID, DID, document CID, credential structure, number-encoding
 determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
 all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md,
-the five `protocol-verify` suites all run the same primitive set (TypeScript 81, Go 20,
-Rust 20, Python 82, Swift 19); the deep stateful chain-tier coverage lives separately in
+the five `protocol-verify` suites all run the same primitive set (TypeScript 98, Go 22,
+Rust 22, Python 98, Swift 21); the deep stateful chain-tier coverage lives separately in
 the TypeScript reference suite (`dfos-protocol/tests`, 402) and the Go library suite.
 **Chain linking,
 content fork/head-selection, identity linearity, delete/restore semantics, and credential

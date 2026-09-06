@@ -1,6 +1,6 @@
 // DFOS Protocol — Independent verification in Go
 //
-// Verifies all deterministic reference artifacts from the TypeScript implementation.
+// Verifies all deterministic reference artifacts from the protocol specification.
 // Uses only standard crypto + cbor + base58 libraries.
 //
 // Run: go test -v
@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -25,31 +27,137 @@ import (
 )
 
 // =============================================================================
+// Shared reference vectors
+// =============================================================================
+//
+// Every expected value below is read from ../vectors.json — the one artifact
+// all five suites share, generated from the protocol's fixed seeds by
+// packages/dfos-protocol/tests/protocol-reference.spec.ts, which asserts the
+// checked-in file is byte-identical to a fresh generation.
+//
+// Reading a JSON fixture is not a library import. This suite still uses only
+// the language's native Ed25519, CBOR and SHA-256, and a third party can run it
+// with nothing but this file and vectors.json.
+
+type vectorEntry struct {
+	ID          string         `json:"id"`
+	Description string         `json:"description"`
+	Values      map[string]any `json:"values"`
+}
+
+var vectorsByID = loadVectors()
+
+func loadVectors() map[string]map[string]any {
+	raw, err := os.ReadFile(filepath.Join("..", "vectors.json"))
+	if err != nil {
+		panic(fmt.Sprintf("read vectors.json: %v", err))
+	}
+	var file struct {
+		Vectors []vectorEntry `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		panic(fmt.Sprintf("parse vectors.json: %v", err))
+	}
+	byID := make(map[string]map[string]any, len(file.Vectors))
+	for _, v := range file.Vectors {
+		byID[v.ID] = v.Values
+	}
+	return byID
+}
+
+// vecAny returns one field of one vector.
+func vecAny(id, field string) any {
+	values, ok := vectorsByID[id]
+	if !ok {
+		panic(fmt.Sprintf("vectors.json has no vector %q", id))
+	}
+	value, ok := values[field]
+	if !ok {
+		panic(fmt.Sprintf("vectors.json %s has no field %s", id, field))
+	}
+	return value
+}
+
+// vec returns one string field of one vector.
+func vec(id, field string) string {
+	s, ok := vecAny(id, field).(string)
+	if !ok {
+		panic(fmt.Sprintf("vectors.json %s.%s is not a string", id, field))
+	}
+	return s
+}
+
+// vecMap returns one object field of one vector with JSON numbers normalized to
+// integers, so a dag-cbor re-encode uses integer major types.
+func vecMap(id, field string) map[string]any {
+	m, ok := vecAny(id, field).(map[string]any)
+	if !ok {
+		panic(fmt.Sprintf("vectors.json %s.%s is not an object", id, field))
+	}
+	return normalizeNumbers(m).(map[string]any)
+}
+
+// vecStringMap returns one string→string map field of one vector.
+func vecStringMap(id, field string) map[string]string {
+	m, ok := vecAny(id, field).(map[string]any)
+	if !ok {
+		panic(fmt.Sprintf("vectors.json %s.%s is not an object", id, field))
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			panic(fmt.Sprintf("vectors.json %s.%s.%s is not a string", id, field, k))
+		}
+		out[k] = s
+	}
+	return out
+}
+
+// vecStrings returns one string-array field of one vector.
+func vecStrings(id, field string) []string {
+	arr, ok := vecAny(id, field).([]any)
+	if !ok {
+		panic(fmt.Sprintf("vectors.json %s.%s is not an array", id, field))
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		s, ok := v.(string)
+		if !ok {
+			panic(fmt.Sprintf("vectors.json %s.%s is not a string array", id, field))
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// =============================================================================
 // Constants from the reference doc
 // =============================================================================
 
-const (
-	genesisJWS        = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
-	rotationJWS       = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA"
-	deleteJWS         = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA"
-	restoreJWS        = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA"
-	contentCreateJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA"
-	jwtToken          = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ"
-	expectedGenCID    = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
-	expectedDID       = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
-	expectedMultikey1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
-	expectedMultikey2 = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+var (
+	expectedGenCID    = vec("identity-genesis", "cid")
+	expectedDID       = vec("identity-genesis", "did")
+	expectedMultikey1 = vec("key-1", "multikey")
+	expectedMultikey2 = vec("key-2", "multikey")
+
+	genesisJWS       = vec("identity-genesis", "jws")
+	rotationJWS      = vec("identity-rotation", "jws")
+	deleteJWS        = vec("identity-delete", "jws")
+	restoreJWS       = vec("identity-restore", "jws")
+	contentCreateJWS = vec("content-create", "jws")
+	jwtToken         = vec("jwt", "token")
 
 	// The possession proof the rotation carries. The envelope's payload is
-	// CLOSED: exactly seven members, in exactly one order — and the octets below
-	// are the only serialization those members are ever signed as. The envelope
-	// is signed by key 2 (the key being introduced) while the operation carrying
-	// it is signed by key 1.
-	keyProofRoleSet          = "auth,assert,controller"
-	keyProofCanonicalPayload = `{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}`
+	// CLOSED: exactly seven members, in exactly one order — and the octets are
+	// the only serialization those members are ever signed as. The envelope is
+	// signed by key 2 (the key being introduced) while the operation carrying it
+	// is signed by key 1.
+	keyProofRoleSet          = vec("key-proof", "roleSet")
+	keyProofCanonicalPayload = vec("key-proof", "canonicalPayload")
 
-	expectedCBORHex = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
-	expectedCIDHex  = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
+	expectedCBORHex = vec("identity-genesis", "cborHex")
+	expectedCIDHex  = vec("identity-genesis", "cidBytesHex")
 )
 
 const alphabet = "2346789acdefhknrtvz"
@@ -237,10 +345,10 @@ func TestKeyDerivation(t *testing.T) {
 	priv1 := ed25519.NewKeyFromSeed(seed1[:])
 	pub1 := priv1.Public().(ed25519.PublicKey)
 
-	if fmt.Sprintf("%x", seed1[:]) != "132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac" {
+	if fmt.Sprintf("%x", seed1[:]) != vec("key-1", "privateKeyHex") {
 		t.Fatal("Key 1 seed mismatch")
 	}
-	if fmt.Sprintf("%x", []byte(pub1)) != "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32" {
+	if fmt.Sprintf("%x", []byte(pub1)) != vec("key-1", "publicKeyHex") {
 		t.Fatal("Key 1 public mismatch")
 	}
 
@@ -248,10 +356,10 @@ func TestKeyDerivation(t *testing.T) {
 	priv2 := ed25519.NewKeyFromSeed(seed2[:])
 	pub2 := priv2.Public().(ed25519.PublicKey)
 
-	if fmt.Sprintf("%x", seed2[:]) != "384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8" {
+	if fmt.Sprintf("%x", seed2[:]) != vec("key-2", "privateKeyHex") {
 		t.Fatal("Key 2 seed mismatch")
 	}
-	if fmt.Sprintf("%x", []byte(pub2)) != "0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c" {
+	if fmt.Sprintf("%x", []byte(pub2)) != vec("key-2", "publicKeyHex") {
 		t.Fatal("Key 2 public mismatch")
 	}
 }
@@ -272,22 +380,8 @@ func TestMultikeyEncoding(t *testing.T) {
 }
 
 func TestDagCborEncoding(t *testing.T) {
-	// Build the genesis payload as a map matching the reference
-	key := map[string]any{
-		"id":                 "key_r9ev34fvc23z999veaaft83nn29zvhe",
-		"type":               "Multikey",
-		"publicKeyMultibase": expectedMultikey1,
-	}
-	payload := map[string]any{
-		"version":        1,
-		"type":           "create",
-		"authKeys":       []any{key},
-		"assertKeys":     []any{key},
-		"controllerKeys": []any{key},
-		"createdAt":      "2026-03-07T00:00:00.000Z",
-	}
-
-	cborBytes := dagCborEncodeJSON(payload)
+	// The genesis payload is the shared vector, not a local transcription.
+	cborBytes := dagCborEncodeJSON(vecMap("identity-genesis", "payload"))
 	got := fmt.Sprintf("%x", cborBytes)
 	if got != expectedCBORHex {
 		t.Fatalf("CBOR mismatch\ngot:  %s...\nwant: %s...", got[:60], expectedCBORHex[:60])
@@ -311,11 +405,7 @@ func TestCIDDerivation(t *testing.T) {
 func TestDIDDerivation(t *testing.T) {
 	cidBytes, _ := hexDecode(expectedCIDHex)
 	didHash := sha256.Sum256(cidBytes)
-	suffix := encodeID(didHash[:])
-	if suffix != "cnnnft9f8a2rn938d6nkz38r847v2kr" {
-		t.Fatalf("DID suffix mismatch: got %s", suffix)
-	}
-	did := "did:dfos:" + suffix
+	did := "did:dfos:" + encodeID(didHash[:])
 	if did != expectedDID {
 		t.Fatalf("DID mismatch: got %s", did)
 	}
@@ -332,7 +422,7 @@ func TestJWSGenesisVerification(t *testing.T) {
 	if header["typ"] != "did:dfos:identity-op" {
 		t.Fatal("wrong typ")
 	}
-	if header["kid"] != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if header["kid"] != vec("identity-genesis", "kid") {
 		t.Fatal("wrong kid")
 	}
 	if header["cid"] != expectedGenCID {
@@ -348,10 +438,10 @@ func TestJWSRotationVerification(t *testing.T) {
 	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
 	header, payload := verifyJWS(rotationJWS, pub1)
-	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if header["kid"] != vec("identity-rotation", "kid") {
 		t.Fatalf("wrong kid: %s", header["kid"])
 	}
-	if header["cid"] != "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy" {
+	if header["cid"] != vec("identity-rotation", "cid") {
 		t.Fatalf("wrong cid: %s", header["cid"])
 	}
 	if payload["type"] != "update" {
@@ -361,9 +451,7 @@ func TestJWSRotationVerification(t *testing.T) {
 
 // keyProofMembers is the canonical member order — the ONLY order these bytes are
 // ever emitted in.
-var keyProofMembers = []string{
-	"nonce", "audience", "did", "roleSet", "prevCID", "publicKeyMultibase", "timestamp",
-}
+var keyProofMembers = vecStrings("key-proof", "members")
 
 // TestKeyProofCarriedByRotation verifies the possession proof embedded in the
 // rotation operation. The OPERATION is signed by key 1; the envelope inside it
@@ -468,11 +556,11 @@ func TestJWSDeleteRestoreVerification(t *testing.T) {
 	pub2 := ed25519.NewKeyFromSeed(seed2[:]).Public().(ed25519.PublicKey)
 
 	deleteHeader, deletePayload := verifyJWS(deleteJWS, pub2)
-	if deletePayload["type"] != "delete" || deletePayload["previousOperationCID"] != "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy" {
+	if deletePayload["type"] != "delete" || deletePayload["previousOperationCID"] != vec("identity-delete", "previousOperationCID") {
 		t.Fatalf("wrong delete payload: %+v", deletePayload)
 	}
 	deletePayload["version"] = int64(1)
-	if cidToBase32(makeCIDBytes(dagCborEncodeJSON(deletePayload))) != deleteHeader["cid"] || deleteHeader["cid"] != "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm" {
+	if cidToBase32(makeCIDBytes(dagCborEncodeJSON(deletePayload))) != deleteHeader["cid"] || deleteHeader["cid"] != vec("identity-delete", "cid") {
 		t.Fatalf("wrong delete CID: %s", deleteHeader["cid"])
 	}
 
@@ -481,7 +569,7 @@ func TestJWSDeleteRestoreVerification(t *testing.T) {
 		t.Fatalf("wrong restore payload: %+v", restorePayload)
 	}
 	restorePayload["version"] = int64(1)
-	if cidToBase32(makeCIDBytes(dagCborEncodeJSON(restorePayload))) != restoreHeader["cid"] || restoreHeader["cid"] != "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq" {
+	if cidToBase32(makeCIDBytes(dagCborEncodeJSON(restorePayload))) != restoreHeader["cid"] || restoreHeader["cid"] != vec("identity-restore", "cid") {
 		t.Fatalf("wrong restore CID: %s", restoreHeader["cid"])
 	}
 }
@@ -490,15 +578,29 @@ func TestJWSContentCreateVerification(t *testing.T) {
 	seed2 := sha256.Sum256([]byte("dfos-protocol-reference-key-2"))
 	pub2 := ed25519.NewKeyFromSeed(seed2[:]).Public().(ed25519.PublicKey)
 
-	header, _ := verifyJWS(contentCreateJWS, pub2)
-	if header["typ"] != "did:dfos:content-op" {
+	header, payload := verifyJWS(contentCreateJWS, pub2)
+	if header["typ"] != vec("content-create", "typ") {
 		t.Fatal("wrong typ")
 	}
-	if header["kid"] != expectedDID+"#key_ez9a874tckr3dv933d3ckdn7z6zrct8" {
+	if header["kid"] != vec("content-create", "kid") {
 		t.Fatal("wrong kid")
 	}
-	if header["cid"] != "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy" {
+	if header["cid"] != vec("content-create", "cid") {
 		t.Fatalf("wrong cid: %s", header["cid"])
+	}
+	if payload["documentCID"] != vec("content-create", "documentCID") {
+		t.Fatalf("wrong documentCID: %s", payload["documentCID"])
+	}
+}
+
+// TestDocumentCID re-derives the CID of the content document the create
+// operation commits to. The document itself is the shared vector: encode it as
+// canonical dag-cbor and the published CID must come back out.
+func TestDocumentCID(t *testing.T) {
+	document := vecMap("document", "value")
+	cid := cidToBase32(makeCIDBytes(dagCborEncodeJSON(document)))
+	if cid != vec("document", "cid") {
+		t.Fatalf("document CID mismatch: got %s, want %s", cid, vec("document", "cid"))
 	}
 }
 
@@ -510,11 +612,14 @@ func TestJWTVerification(t *testing.T) {
 	if header["alg"] != "EdDSA" {
 		t.Fatal("wrong alg")
 	}
-	if payload["sub"] != expectedDID {
+	if payload["sub"] != vec("jwt", "sub") {
 		t.Fatal("wrong sub")
 	}
-	if payload["iss"] != "dfos" {
+	if payload["iss"] != vec("jwt", "iss") {
 		t.Fatal("wrong iss")
+	}
+	if payload["aud"] != vec("jwt", "aud") {
+		t.Fatal("wrong aud")
 	}
 }
 
@@ -530,16 +635,15 @@ func hexDecode(s string) ([]byte, error) {
 // Services-genesis and credential tests
 // =============================================================================
 
-const (
-	// servicesGenesisJWS is the canonical services-genesis identity-op: a create
-	// op carrying a full-state services array (relay locator + content/artifact
-	// anchors). Signed by reference key 1. Sourced from
-	// packages/dfos-protocol/examples/identity-services.json chain[0].
-	servicesGenesisJWS     = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw"
-	expectedServicesGenCID = "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze"
-	expectedServicesDID    = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
-	broadWriteVC           = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
-	readVC                 = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw"
+// The canonical services-genesis identity-op is a create op carrying a
+// full-state services array (relay locator + content/artifact anchors), signed
+// by reference key 1, alongside the two credential vectors it shares a DID with.
+var (
+	servicesGenesisJWS     = vec("services-genesis", "jws")
+	expectedServicesGenCID = vec("services-genesis", "cid")
+	expectedServicesDID    = vec("services-genesis", "did")
+	broadWriteVC           = vec("credential-write", "jws")
+	readVC                 = vec("credential-read", "jws")
 )
 
 // normalizeNumbers recursively converts whole float64 values (as produced by
@@ -580,7 +684,7 @@ func TestServicesGenesisVerification(t *testing.T) {
 	if header["typ"] != "did:dfos:identity-op" {
 		t.Fatalf("wrong typ: %s", header["typ"])
 	}
-	if header["kid"] != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if header["kid"] != vec("services-genesis", "kid") {
 		t.Fatalf("wrong kid: %s", header["kid"])
 	}
 	if header["cid"] != expectedServicesGenCID {
@@ -612,58 +716,45 @@ func TestWriteCredentialVerification(t *testing.T) {
 	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
 	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
-	header, payload := verifyJWS(broadWriteVC, pub1)
-	if header["typ"] != "did:dfos:credential" {
-		t.Fatalf("wrong typ: %s", header["typ"])
-	}
-	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft83nn29zvhe" {
-		t.Fatalf("wrong kid: %s", header["kid"])
-	}
-	if payload["type"] != "DFOSCredential" {
-		t.Fatalf("wrong type: %s", payload["type"])
-	}
-	if payload["iss"] != expectedDID {
-		t.Fatalf("wrong iss: %s", payload["iss"])
-	}
-	if payload["aud"] != "did:dfos:94ah7963n223k8c9884hh27ekh42nea" {
-		t.Fatalf("wrong aud: %s", payload["aud"])
-	}
-	att := payload["att"].([]any)
-	attEntry := att[0].(map[string]any)
-	if attEntry["resource"] != "chain:*" {
-		t.Fatalf("wrong att resource: %s", attEntry["resource"])
-	}
-	if attEntry["action"] != "write" {
-		t.Fatalf("wrong att action: %s", attEntry["action"])
-	}
+	assertCredential(t, broadWriteVC, pub1, "credential-write")
 }
 
 func TestReadCredentialVerification(t *testing.T) {
 	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
 	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
-	header, payload := verifyJWS(readVC, pub1)
-	if header["typ"] != "did:dfos:credential" {
+	assertCredential(t, readVC, pub1, "credential-read")
+}
+
+// assertCredential checks one credential JWS against the shared vector of the
+// given id: signature under the issuer key, then every published header and
+// payload field.
+func assertCredential(t *testing.T, token string, pub ed25519.PublicKey, id string) {
+	t.Helper()
+	header, payload := verifyJWS(token, pub)
+	if header["typ"] != vec(id, "typ") {
 		t.Fatalf("wrong typ: %s", header["typ"])
 	}
-	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft83nn29zvhe" {
+	if header["kid"] != vec(id, "kid") {
 		t.Fatalf("wrong kid: %s", header["kid"])
+	}
+	if header["cid"] != vec(id, "cid") {
+		t.Fatalf("wrong cid: %s", header["cid"])
 	}
 	if payload["type"] != "DFOSCredential" {
 		t.Fatalf("wrong type: %s", payload["type"])
 	}
-	if payload["iss"] != expectedDID {
+	if payload["iss"] != vec(id, "iss") {
 		t.Fatalf("wrong iss: %s", payload["iss"])
 	}
-	if payload["aud"] != "did:dfos:94ah7963n223k8c9884hh27ekh42nea" {
+	if payload["aud"] != vec(id, "aud") {
 		t.Fatalf("wrong aud: %s", payload["aud"])
 	}
-	att := payload["att"].([]any)
-	attEntry := att[0].(map[string]any)
-	if attEntry["resource"] != "chain:*" {
+	attEntry := payload["att"].([]any)[0].(map[string]any)
+	if attEntry["resource"] != vec(id, "resource") {
 		t.Fatalf("wrong att resource: %s", attEntry["resource"])
 	}
-	if attEntry["action"] != "read" {
+	if attEntry["action"] != vec(id, "action") {
 		t.Fatalf("wrong att action: %s", attEntry["action"])
 	}
 }
@@ -672,12 +763,13 @@ func TestReadCredentialVerification(t *testing.T) {
 // Number encoding determinism tests
 // =============================================================================
 
-const (
+var (
 	// Test vector: {"version": 1, "type": "test"} with integer encoding
-	numberTestCBOR = "a2647479706564746573746776657273696f6e01"
-	numberTestCID  = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-	// Wrong CID that would result from float encoding of version: 1.0
-	numberTestWrongCID = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+	numberTestCBOR = vec("number-integer", "cborHex")
+	numberTestCID  = vec("number-integer", "cid")
+	// The CID that results from float encoding of version: 1.0 — the answer a
+	// conforming encoder must never produce.
+	numberTestWrongCID = vec("number-integer", "floatCid")
 )
 
 func TestNumberEncodingDeterminism(t *testing.T) {
@@ -752,6 +844,12 @@ func TestNumberEncodingFloatProducesWrongCID(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The float serialization is itself a shared vector: these are the exact
+	// bytes a conforming encoder must never emit.
+	if got := fmt.Sprintf("%x", cborBytes); got != vec("number-integer", "floatCborHex") {
+		t.Fatalf("Float CBOR mismatch: got %s, want %s", got, vec("number-integer", "floatCborHex"))
+	}
+
 	cidBytes := makeCIDBytes(cborBytes)
 	cidStr := cidToBase32(cidBytes)
 	if cidStr != numberTestWrongCID {
@@ -767,19 +865,9 @@ func TestNumberEncodingFloatProducesWrongCID(t *testing.T) {
 // Byte-identical inputs across all five language suites.
 // =============================================================================
 
-const rejectPub1Hex = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
+var rejectPub1Hex = vec("reject-corpus", "publicKeyHex")
 
-var rejectVectors = map[string]string{
-	"RV-LEN-SHORT":        "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2",
-	"RV-LEN-LONG":         "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA",
-	"RV-S-NONCANON-PLUSL": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ",
-	"RV-S-NONCANON-FF":    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w",
-	"RV-ALG-NONE":         "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-	"RV-ALG-CASE":         "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-	"RV-CRIT-PRESENT":     "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-	"RV-HEADER-KEY-TRUST": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
-	"RV-SIG-BITFLIP":      "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA",
-}
+var rejectVectors = vecStringMap("reject-corpus", "tokens")
 
 func TestRejectCorpus(t *testing.T) {
 	pub := ed25519.PublicKey(mustHex(rejectPub1Hex))
@@ -848,11 +936,11 @@ func numberCID(v any) (string, error) {
 }
 
 func TestNumberPolicyAcceptMaxSafe(t *testing.T) {
-	cid, err := numberCID(map[string]any{"n": int64(maxSafeCanonicalInteger)})
+	cid, err := numberCID(vecMap("number-max-safe", "value"))
 	if err != nil {
 		t.Fatalf("2^53-1 must be accepted: %v", err)
 	}
-	if cid != "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq" {
+	if cid != vec("number-max-safe", "cid") {
 		t.Fatalf("max-safe CID mismatch: got %s", cid)
 	}
 }
@@ -873,12 +961,11 @@ func TestNumberPolicyRejects(t *testing.T) {
 }
 
 func TestNumberPolicyNullVector(t *testing.T) {
-	nullVec := map[string]any{"documentCID": nil, "note": nil, "prf": []any{}}
-	cid, err := numberCID(nullVec)
+	cid, err := numberCID(vecMap("number-null-vector", "value"))
 	if err != nil {
 		t.Fatalf("null vector must encode: %v", err)
 	}
-	if cid != "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue" {
+	if cid != vec("number-null-vector", "cid") {
 		t.Fatalf("null vector CID mismatch: got %s", cid)
 	}
 }

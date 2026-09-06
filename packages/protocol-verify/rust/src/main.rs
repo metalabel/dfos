@@ -1,6 +1,6 @@
 // DFOS Protocol — Independent verification in Rust
 //
-// Verifies all deterministic reference artifacts from the TypeScript implementation.
+// Verifies all deterministic reference artifacts from the protocol specification.
 // Uses only standard crypto libraries.
 //
 // Run: cargo test
@@ -17,47 +17,75 @@ mod tests {
     use data_encoding::BASE32;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     use sha2::{Digest, Sha256};
+    use std::path::Path;
+    use std::sync::OnceLock;
+
+    // =========================================================================
+    // Shared reference vectors
+    // =========================================================================
+    //
+    // Every expected value below is read from ../vectors.json — the one artifact
+    // all five suites share, generated from the protocol's fixed seeds by
+    // packages/dfos-protocol/tests/protocol-reference.spec.ts, which asserts the
+    // checked-in file is byte-identical to a fresh generation.
+    //
+    // Reading a JSON fixture is not a library import. This suite still uses only
+    // the language's native Ed25519, CBOR and SHA-256, and a third party can run
+    // it with nothing but this file and vectors.json.
+
+    fn vectors_document() -> &'static serde_json::Value {
+        static VECTORS: OnceLock<serde_json::Value> = OnceLock::new();
+        VECTORS.get_or_init(|| {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vectors.json");
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            serde_json::from_str(&raw).expect("parse vectors.json")
+        })
+    }
+
+    /// All values of one vector, by id.
+    fn vector_values(id: &str) -> &'static serde_json::Value {
+        vectors_document()["vectors"]
+            .as_array()
+            .expect("vectors.json has no vectors array")
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap_or_else(|| panic!("vectors.json has no vector {id:?}"))
+            .get("values")
+            .unwrap_or_else(|| panic!("vectors.json vector {id:?} has no values"))
+    }
+
+    /// One field of one vector (a document, an operation payload, a token map).
+    fn vec_value(id: &str, field: &str) -> &'static serde_json::Value {
+        vector_values(id)
+            .get(field)
+            .unwrap_or_else(|| panic!("vectors.json {id} has no field {field}"))
+    }
+
+    /// One string field of one vector.
+    fn vec(id: &str, field: &str) -> &'static str {
+        vec_value(id, field)
+            .as_str()
+            .unwrap_or_else(|| panic!("vectors.json {id}.{field} is not a string"))
+    }
+
+    /// One string-array field of one vector.
+    fn vec_strings(id: &str, field: &str) -> Vec<&'static str> {
+        vec_value(id, field)
+            .as_array()
+            .unwrap_or_else(|| panic!("vectors.json {id}.{field} is not an array"))
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .unwrap_or_else(|| panic!("vectors.json {id}.{field} is not a string array"))
+            })
+            .collect()
+    }
 
     // =========================================================================
     // Constants from the reference doc
     // =========================================================================
-
-    const GENESIS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg";
-
-    const ROTATION_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA";
-
-    const DELETE_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA";
-    const RESTORE_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA";
-
-    const CONTENT_CREATE_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA";
-
-    const JWT_TOKEN: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ";
-
-    const EXPECTED_GENESIS_CID: &str = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne";
-    const EXPECTED_DID: &str = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr";
-    const EXPECTED_MULTIKEY1: &str = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb";
-    const EXPECTED_MULTIKEY2: &str = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK";
-
-    // The possession proof the rotation carries. The envelope's payload is
-    // CLOSED: exactly these seven members, in exactly this order — and the octets
-    // below are the only serialization those members are ever signed as. The
-    // envelope is signed by key 2 (the key being introduced) while the operation
-    // carrying it is signed by key 1.
-    const KEY_PROOF_MEMBERS: [&str; 7] = [
-        "nonce",
-        "audience",
-        "did",
-        "roleSet",
-        "prevCID",
-        "publicKeyMultibase",
-        "timestamp",
-    ];
-    const KEY_PROOF_ROLE_SET: &str = "auth,assert,controller";
-    const KEY_PROOF_CANONICAL_PAYLOAD: &str = r#"{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}"#;
-
-    const EXPECTED_CBOR_HEX: &str = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62";
-
-    const EXPECTED_CID_HEX: &str = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69";
 
     const ALPHABET: &[u8] = b"2346789acdefhknrtvz";
     const ID_LENGTH: usize = 31;
@@ -278,24 +306,24 @@ mod tests {
         let (seed1, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
         assert_eq!(
             hex::encode(&seed1),
-            "132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac",
+            vec("key-1", "privateKeyHex"),
             "Key 1 seed mismatch"
         );
         assert_eq!(
             hex::encode(pub1.as_bytes()),
-            "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32",
+            vec("key-1", "publicKeyHex"),
             "Key 1 public mismatch"
         );
 
         let (seed2, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
         assert_eq!(
             hex::encode(&seed2),
-            "384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8",
+            vec("key-2", "privateKeyHex"),
             "Key 2 seed mismatch"
         );
         assert_eq!(
             hex::encode(pub2.as_bytes()),
-            "0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c",
+            vec("key-2", "publicKeyHex"),
             "Key 2 public mismatch"
         );
     }
@@ -305,84 +333,58 @@ mod tests {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
 
         let encoded = encode_multikey(pub1.as_bytes());
-        assert_eq!(encoded, EXPECTED_MULTIKEY1, "multikey encode mismatch");
+        assert_eq!(encoded, vec("key-1", "multikey"), "multikey encode mismatch");
 
-        let decoded = decode_multikey(EXPECTED_MULTIKEY1);
+        let decoded = decode_multikey(vec("key-1", "multikey"));
         assert_eq!(decoded, pub1.as_bytes(), "multikey decode mismatch");
     }
 
     #[test]
     fn test_dag_cbor_encoding() {
-        // Build key entry in dag-cbor key order (length-first, then lex)
-        // Key lengths: "id" (2), "type" (4), "publicKeyMultibase" (18)
-        let make_key_entry = || {
-            Value::Map(vec![
-                (
-                    Value::Text("id".to_string()),
-                    Value::Text("key_r9ev34fvc23z999veaaft83nn29zvhe".to_string()),
-                ),
-                (
-                    Value::Text("type".to_string()),
-                    Value::Text("Multikey".to_string()),
-                ),
-                (
-                    Value::Text("publicKeyMultibase".to_string()),
-                    Value::Text(EXPECTED_MULTIKEY1.to_string()),
-                ),
-            ])
-        };
-
-        // Genesis payload in dag-cbor key order:
-        // "type" (4), "version" (7), "authKeys" (8), "createdAt" (9),
-        // "assertKeys" (10), "controllerKeys" (14)
-        let cbor_bytes = dag_cbor_encode_map(vec![
-            ("type", Value::Text("create".to_string())),
-            ("version", Value::Integer(1.into())),
-            ("authKeys", Value::Array(vec![make_key_entry()])),
-            ("createdAt", Value::Text("2026-03-07T00:00:00.000Z".to_string())),
-            ("assertKeys", Value::Array(vec![make_key_entry()])),
-            ("controllerKeys", Value::Array(vec![make_key_entry()])),
-        ]);
-
+        // The genesis payload is the shared vector, not a local transcription.
+        // json_to_dag_cbor applies the dag-cbor key order (length-first, then
+        // lexicographic), so the sorting itself is under test here.
+        let cbor_bytes = dag_cbor_encode_json(vec_value("identity-genesis", "payload"));
         let got = hex::encode(&cbor_bytes);
-        assert_eq!(got, EXPECTED_CBOR_HEX, "CBOR bytes mismatch");
+        assert_eq!(
+            got,
+            vec("identity-genesis", "cborHex"),
+            "CBOR bytes mismatch"
+        );
     }
 
     #[test]
     fn test_cid_derivation() {
-        let cbor_bytes = hex::decode(EXPECTED_CBOR_HEX).unwrap();
+        let cbor_bytes = hex::decode(vec("identity-genesis", "cborHex")).unwrap();
         let cid_bytes = make_cid_bytes(&cbor_bytes);
 
         assert_eq!(
             hex::encode(&cid_bytes),
-            EXPECTED_CID_HEX,
+            vec("identity-genesis", "cidBytesHex"),
             "CID bytes mismatch"
         );
 
         let cid_str = cid_to_base32(&cid_bytes);
-        assert_eq!(cid_str, EXPECTED_GENESIS_CID, "CID string mismatch");
+        assert_eq!(cid_str, vec("identity-genesis", "cid"), "CID string mismatch");
     }
 
     #[test]
     fn test_did_derivation() {
-        let cid_bytes = hex::decode(EXPECTED_CID_HEX).unwrap();
+        let cid_bytes = hex::decode(vec("identity-genesis", "cidBytesHex")).unwrap();
         let did_hash: [u8; 32] = Sha256::digest(&cid_bytes).into();
-        let suffix = encode_id(&did_hash);
-        assert_eq!(suffix, "cnnnft9f8a2rn938d6nkz38r847v2kr", "DID suffix mismatch");
-
-        let did = format!("did:dfos:{}", suffix);
-        assert_eq!(did, EXPECTED_DID, "DID mismatch");
+        let did = format!("did:dfos:{}", encode_id(&did_hash));
+        assert_eq!(did, vec("identity-genesis", "did"), "DID mismatch");
     }
 
     #[test]
     fn test_jws_genesis_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(GENESIS_JWS, &pub1);
+        let (header, payload) = verify_jws(vec("identity-genesis", "jws"), &pub1);
 
         assert_eq!(header["alg"], "EdDSA", "wrong alg");
         assert_eq!(header["typ"], "did:dfos:identity-op", "wrong typ");
-        assert_eq!(header["kid"], "key_r9ev34fvc23z999veaaft83nn29zvhe", "wrong kid");
-        assert_eq!(header["cid"], EXPECTED_GENESIS_CID, "wrong cid");
+        assert_eq!(header["kid"], vec("identity-genesis", "kid"), "wrong kid");
+        assert_eq!(header["cid"], vec("identity-genesis", "cid"), "wrong cid");
         assert_eq!(payload["type"], "create", "wrong payload type");
         assert_eq!(payload["version"], 1, "wrong payload version");
     }
@@ -390,17 +392,14 @@ mod tests {
     #[test]
     fn test_jws_rotation_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(ROTATION_JWS, &pub1);
+        let (header, payload) = verify_jws(vec("identity-rotation", "jws"), &pub1);
 
-        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft83nn29zvhe", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
-        assert_eq!(
-            header["cid"], "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy",
-            "wrong cid"
-        );
+        assert_eq!(header["kid"], vec("identity-rotation", "kid"), "wrong kid");
+        assert_eq!(header["cid"], vec("identity-rotation", "cid"), "wrong cid");
         assert_eq!(payload["type"], "update", "wrong type");
         assert_eq!(
-            payload["previousOperationCID"], EXPECTED_GENESIS_CID,
+            payload["previousOperationCID"],
+            vec("identity-rotation", "previousOperationCID"),
             "wrong previousOperationCID"
         );
     }
@@ -414,7 +413,7 @@ mod tests {
     fn test_key_proof_carried_by_rotation() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
         let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
-        let (_, payload) = verify_jws(ROTATION_JWS, &pub1);
+        let (_, payload) = verify_jws(vec("identity-rotation", "jws"), &pub1);
 
         let proofs = payload["keyProofs"]
             .as_array()
@@ -432,7 +431,7 @@ mod tests {
 
         let header: serde_json::Value = serde_json::from_str(&header_text).unwrap();
         assert_eq!(header["alg"], "EdDSA", "wrong key proof alg");
-        assert_eq!(header["typ"], "did:dfos:key-add", "wrong key proof typ");
+        assert_eq!(header["typ"], vec("key-proof", "typ"), "wrong key proof typ");
         assert_eq!(
             header.as_object().unwrap().len(),
             2,
@@ -442,7 +441,8 @@ mod tests {
         // The load-bearing check: the presented octets ARE the canonical
         // serialization. The bytes bind the verifier, not only the signer.
         assert_eq!(
-            payload_text, KEY_PROOF_CANONICAL_PAYLOAD,
+            payload_text,
+            vec("key-proof", "canonicalPayload"),
             "key proof payload is not the canonical serialization"
         );
 
@@ -454,7 +454,7 @@ mod tests {
         );
 
         let mut cursor: isize = -1;
-        for member in KEY_PROOF_MEMBERS {
+        for member in vec_strings("key-proof", "members") {
             let at = payload_text
                 .find(&format!("\"{member}\":"))
                 .map(|i| i as isize)
@@ -463,14 +463,20 @@ mod tests {
             cursor = at;
         }
 
-        assert_eq!(proof["did"], EXPECTED_DID, "wrong key proof did");
+        assert_eq!(proof["did"], vec("key-proof", "did"), "wrong key proof did");
         assert_eq!(
-            proof["prevCID"], EXPECTED_GENESIS_CID,
+            proof["prevCID"],
+            vec("key-proof", "prevCID"),
             "key proof prevCID is not the genesis CID"
         );
-        assert_eq!(proof["roleSet"], KEY_PROOF_ROLE_SET, "wrong key proof roleSet");
         assert_eq!(
-            proof["publicKeyMultibase"], EXPECTED_MULTIKEY2,
+            proof["roleSet"],
+            vec("key-proof", "roleSet"),
+            "wrong key proof roleSet"
+        );
+        assert_eq!(
+            proof["publicKeyMultibase"],
+            vec("key-proof", "publicKeyMultibase"),
             "key proof does not name key 2"
         );
 
@@ -502,69 +508,72 @@ mod tests {
     #[test]
     fn test_jws_delete_restore_verification() {
         let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
-        let (delete_header, delete_payload) = verify_jws(DELETE_JWS, &pub2);
+        let (delete_header, delete_payload) = verify_jws(vec("identity-delete", "jws"), &pub2);
         assert_eq!(delete_payload["type"], "delete");
-        assert_eq!(delete_payload["previousOperationCID"], "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy");
+        assert_eq!(
+            delete_payload["previousOperationCID"],
+            vec("identity-delete", "previousOperationCID")
+        );
         let delete_cid = cid_to_base32(&make_cid_bytes(&dag_cbor_encode_json(&delete_payload)));
         assert_eq!(delete_cid, delete_header["cid"]);
-        assert_eq!(delete_cid, "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm");
+        assert_eq!(delete_cid, vec("identity-delete", "cid"));
 
-        let (restore_header, restore_payload) = verify_jws(RESTORE_JWS, &pub2);
+        let (restore_header, restore_payload) = verify_jws(vec("identity-restore", "jws"), &pub2);
         assert_eq!(restore_payload["type"], "restore");
         assert_eq!(restore_payload["previousOperationCID"], delete_header["cid"]);
         let restore_cid = cid_to_base32(&make_cid_bytes(&dag_cbor_encode_json(&restore_payload)));
         assert_eq!(restore_cid, restore_header["cid"]);
-        assert_eq!(restore_cid, "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq");
+        assert_eq!(restore_cid, vec("identity-restore", "cid"));
     }
 
     #[test]
     fn test_jws_content_create_verification() {
         let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
-        let (header, payload) = verify_jws(CONTENT_CREATE_JWS, &pub2);
+        let (header, payload) = verify_jws(vec("content-create", "jws"), &pub2);
 
-        assert_eq!(header["typ"], "did:dfos:content-op", "wrong typ");
-        let expected_kid = format!("{}#key_ez9a874tckr3dv933d3ckdn7z6zrct8", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
-        assert_eq!(
-            header["cid"], "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy",
-            "wrong cid"
-        );
+        assert_eq!(header["typ"], vec("content-create", "typ"), "wrong typ");
+        assert_eq!(header["kid"], vec("content-create", "kid"), "wrong kid");
+        assert_eq!(header["cid"], vec("content-create", "cid"), "wrong cid");
         assert_eq!(payload["type"], "create", "wrong payload type");
+        assert_eq!(
+            payload["documentCID"],
+            vec("content-create", "documentCID"),
+            "wrong documentCID"
+        );
+    }
+
+    /// Re-derive the CID of the content document the create operation commits
+    /// to. The document itself is the shared vector: encode it as canonical
+    /// dag-cbor and the published CID must come back out.
+    #[test]
+    fn test_document_cid() {
+        let cbor_bytes = dag_cbor_encode_json(vec_value("document", "value"));
+        let cid = cid_to_base32(&make_cid_bytes(&cbor_bytes));
+        assert_eq!(cid, vec("document", "cid"), "document CID mismatch");
     }
 
     #[test]
     fn test_jwt_verification() {
         let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
-        let (header, payload) = verify_jws(JWT_TOKEN, &pub2);
+        let (header, payload) = verify_jws(vec("jwt", "token"), &pub2);
 
         assert_eq!(header["alg"], "EdDSA", "wrong alg");
         assert_eq!(header["typ"], "JWT", "wrong typ");
-        assert_eq!(payload["iss"], "dfos", "wrong iss");
-        assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
-        assert_eq!(payload["aud"], "dfos-api", "wrong aud");
+        assert_eq!(payload["iss"], vec("jwt", "iss"), "wrong iss");
+        assert_eq!(payload["sub"], vec("jwt", "sub"), "wrong sub");
+        assert_eq!(payload["aud"], vec("jwt", "aud"), "wrong aud");
     }
 
     // =========================================================================
     // Services-genesis and credential tests
     // =========================================================================
 
-    // Canonical services-genesis identity-op: a create op carrying a full-state
-    // services array (relay locator + content/artifact anchors), signed by
-    // reference key 1. Sourced from
-    // packages/dfos-protocol/examples/identity-services.json chain[0]. The
-    // services fields ride along in the payload map, so recomputing the operation
-    // CID over the decoded payload requires no services-validation logic here.
-    const SERVICES_GENESIS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw";
-
-    const EXPECTED_SERVICES_GEN_CID: &str =
-        "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze";
-    const EXPECTED_SERVICES_DID: &str = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar";
-
-    const BROAD_WRITE_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg";
-
-    const READ_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw";
-
-    const EXPECTED_CREDENTIAL_AUDIENCE: &str = "did:dfos:94ah7963n223k8c9884hh27ekh42nea";
+    // The canonical services-genesis identity-op is a create op carrying a
+    // full-state services array (relay locator + content/artifact anchors),
+    // signed by reference key 1, alongside the two credential vectors it shares
+    // a DID with. The services fields ride along in the payload map, so
+    // recomputing the operation CID over the decoded payload requires no
+    // services-validation logic here.
 
     #[test]
     fn test_services_genesis_verification() {
@@ -574,11 +583,11 @@ mod tests {
         // no services-validation logic required here), asserting it equals the JWS
         // header cid and that the derived DID matches.
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(SERVICES_GENESIS_JWS, &pub1);
+        let (header, payload) = verify_jws(vec("services-genesis", "jws"), &pub1);
 
-        assert_eq!(header["typ"], "did:dfos:identity-op", "wrong typ");
-        assert_eq!(header["kid"], "key_r9ev34fvc23z999veaaft83nn29zvhe", "wrong kid");
-        assert_eq!(header["cid"], EXPECTED_SERVICES_GEN_CID, "wrong cid");
+        assert_eq!(header["typ"], vec("services-genesis", "typ"), "wrong typ");
+        assert_eq!(header["kid"], vec("services-genesis", "kid"), "wrong kid");
+        assert_eq!(header["cid"], vec("services-genesis", "cid"), "wrong cid");
         assert_eq!(payload["type"], "create", "wrong payload type");
 
         // Recompute the operation CID over the decoded payload and assert it
@@ -586,7 +595,8 @@ mod tests {
         let cbor_bytes = dag_cbor_encode_json(&payload);
         let cid_str = cid_to_base32(&make_cid_bytes(&cbor_bytes));
         assert_eq!(
-            cid_str, EXPECTED_SERVICES_GEN_CID,
+            cid_str,
+            vec("services-genesis", "cid"),
             "recomputed CID mismatch"
         );
 
@@ -594,43 +604,38 @@ mod tests {
         let cid_bytes = make_cid_bytes(&cbor_bytes);
         let did_hash: [u8; 32] = Sha256::digest(&cid_bytes).into();
         let did = format!("did:dfos:{}", encode_id(&did_hash));
-        assert_eq!(did, EXPECTED_SERVICES_DID, "DID mismatch");
+        assert_eq!(did, vec("services-genesis", "did"), "DID mismatch");
+    }
+
+    /// Check one credential JWS against the shared vector of the given id:
+    /// signature under the issuer key, then every published header and payload
+    /// field.
+    fn assert_credential(token: &str, pub_key: &VerifyingKey, id: &str) {
+        let (header, payload) = verify_jws(token, pub_key);
+
+        assert_eq!(header["typ"], vec(id, "typ"), "wrong typ");
+        assert_eq!(header["kid"], vec(id, "kid"), "wrong kid");
+        assert_eq!(header["cid"], vec(id, "cid"), "wrong cid");
+        assert_eq!(payload["type"], "DFOSCredential", "wrong type");
+        assert_eq!(payload["iss"], vec(id, "iss"), "wrong iss");
+        assert_eq!(payload["aud"], vec(id, "aud"), "wrong aud");
+
+        let att = payload["att"].as_array().expect("att should be an array");
+        assert_eq!(att.len(), 1, "att should have one entry");
+        assert_eq!(att[0]["resource"], vec(id, "resource"), "wrong resource");
+        assert_eq!(att[0]["action"], vec(id, "action"), "wrong action");
     }
 
     #[test]
     fn test_write_credential_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(BROAD_WRITE_VC, &pub1);
-
-        assert_eq!(header["typ"], "did:dfos:credential", "wrong typ");
-        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft83nn29zvhe", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
-        assert_eq!(payload["type"], "DFOSCredential", "wrong type");
-        assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
-        assert_eq!(payload["aud"], EXPECTED_CREDENTIAL_AUDIENCE, "wrong aud");
-
-        let att = payload["att"].as_array().expect("att should be an array");
-        assert_eq!(att.len(), 1, "att should have one entry");
-        assert_eq!(att[0]["resource"], "chain:*", "wrong resource");
-        assert_eq!(att[0]["action"], "write", "wrong action");
+        assert_credential(vec("credential-write", "jws"), &pub1, "credential-write");
     }
 
     #[test]
     fn test_read_credential_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(READ_VC, &pub1);
-
-        assert_eq!(header["typ"], "did:dfos:credential", "wrong typ");
-        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft83nn29zvhe", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
-        assert_eq!(payload["type"], "DFOSCredential", "wrong type");
-        assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
-        assert_eq!(payload["aud"], EXPECTED_CREDENTIAL_AUDIENCE, "wrong aud");
-
-        let att = payload["att"].as_array().expect("att should be an array");
-        assert_eq!(att.len(), 1, "att should have one entry");
-        assert_eq!(att[0]["resource"], "chain:*", "wrong resource");
-        assert_eq!(att[0]["action"], "read", "wrong action");
+        assert_credential(vec("credential-read", "jws"), &pub1, "credential-read");
     }
 
     // =========================================================================
@@ -647,7 +652,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(&cbor_bytes),
-            "a2647479706564746573746776657273696f6e01",
+            vec("number-integer", "cborHex"),
             "CBOR bytes mismatch for integer 1"
         );
 
@@ -655,7 +660,7 @@ mod tests {
         let cid_str = cid_to_base32(&cid_bytes);
         assert_eq!(
             cid_str,
-            "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa",
+            vec("number-integer", "cid"),
             "CID mismatch for integer 1"
         );
     }
@@ -664,24 +669,13 @@ mod tests {
     fn test_number_encoding_from_json() {
         // Parse JSON and convert to ciborium Value, mimicking the
         // JSON deserialization → CBOR encoding pipeline.
-        let json: serde_json::Value =
-            serde_json::from_str(r#"{"version": 1, "type": "test"}"#).unwrap();
-
-        // Extract fields and build CBOR map in dag-cbor key order
-        // ("type" length 4 before "version" length 7)
-        let type_str = json["type"].as_str().unwrap().to_string();
-        let version_int = json["version"].as_i64().unwrap();
-
-        let cbor_bytes = dag_cbor_encode_map(vec![
-            ("type", Value::Text(type_str)),
-            ("version", Value::Integer(version_int.into())),
-        ]);
+        let cbor_bytes = dag_cbor_encode_json(vec_value("number-integer", "value"));
 
         let cid_bytes = make_cid_bytes(&cbor_bytes);
         let cid_str = cid_to_base32(&cid_bytes);
         assert_eq!(
             cid_str,
-            "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa",
+            vec("number-integer", "cid"),
             "CID from JSON deserialization should match integer-encoded CID"
         );
     }
@@ -696,14 +690,27 @@ mod tests {
             ("version", Value::Float(1.0)),
         ]);
 
+        // The float serialization is itself a shared vector: these are the exact
+        // bytes a conforming encoder must never emit.
+        assert_eq!(
+            hex::encode(&cbor_bytes),
+            vec("number-integer", "floatCborHex"),
+            "float CBOR bytes mismatch"
+        );
+
         let cid_bytes = make_cid_bytes(&cbor_bytes);
         let cid_str = cid_to_base32(&cid_bytes);
 
-        let correct_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa";
-        let wrong_cid = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q";
-
-        assert_eq!(cid_str, wrong_cid, "float 1.0 should produce the known-wrong CID");
-        assert_ne!(cid_str, correct_cid, "float 1.0 must NOT produce the correct integer CID");
+        assert_eq!(
+            cid_str,
+            vec("number-integer", "floatCid"),
+            "float 1.0 should produce the known-wrong CID"
+        );
+        assert_ne!(
+            cid_str,
+            vec("number-integer", "cid"),
+            "float 1.0 must NOT produce the correct integer CID"
+        );
     }
 
     // =========================================================================
@@ -712,26 +719,21 @@ mod tests {
     // above is what makes RV-S-NONCANON-* fail under dalek.
     // =========================================================================
 
-    const REJECT_PUB1_HEX: &str =
-        "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32";
-
-    const REJECT_VECTORS: &[(&str, &str)] = &[
-        ("RV-LEN-SHORT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2"),
-        ("RV-LEN-LONG", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA"),
-        ("RV-S-NONCANON-PLUSL", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ"),
-        ("RV-S-NONCANON-FF", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w"),
-        ("RV-ALG-NONE", "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-        ("RV-ALG-CASE", "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-        ("RV-CRIT-PRESENT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-        ("RV-HEADER-KEY-TRUST", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-        ("RV-SIG-BITFLIP", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA"),
-    ];
-
     #[test]
     fn test_reject_corpus() {
-        let pub_bytes: [u8; 32] = hex::decode(REJECT_PUB1_HEX).unwrap().try_into().unwrap();
+        let pub_bytes: [u8; 32] = hex::decode(vec("reject-corpus", "publicKeyHex"))
+            .unwrap()
+            .try_into()
+            .unwrap();
         let pub_key = VerifyingKey::from_bytes(&pub_bytes).unwrap();
-        for (name, token) in REJECT_VECTORS {
+        let tokens = vec_value("reject-corpus", "tokens")
+            .as_object()
+            .expect("reject-corpus.tokens is not an object");
+        assert!(!tokens.is_empty(), "reject corpus is empty");
+        for (name, token) in tokens {
+            let token = token
+                .as_str()
+                .unwrap_or_else(|| panic!("reject vector {name} is not a string"));
             assert!(
                 verify_jws_profiled(token, &pub_key).is_err(),
                 "{name}: expected rejection, got accept"
@@ -767,13 +769,10 @@ mod tests {
     fn test_number_policy_accept_max_safe() {
         // { "n": 2^53-1 } — accepted, encodes to the reference CID
         assert!(assert_canonical_number_f64(MAX_SAFE_CANONICAL_INTEGER as f64).is_ok());
-        let cbor = dag_cbor_encode_map(vec![(
-            "n",
-            Value::Integer(MAX_SAFE_CANONICAL_INTEGER.into()),
-        )]);
+        let cbor = dag_cbor_encode_json(vec_value("number-max-safe", "value"));
         assert_eq!(
             make_cid_string(&cbor),
-            "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq",
+            vec("number-max-safe", "cid"),
             "max-safe CID mismatch"
         );
     }
@@ -791,15 +790,10 @@ mod tests {
     #[test]
     fn test_number_policy_null_vector() {
         // { "documentCID": null, "note": null, "prf": [] }
-        // dag-cbor key order: "prf" (3), "note" (4), "documentCID" (11)
-        let cbor = dag_cbor_encode_map(vec![
-            ("prf", Value::Array(vec![])),
-            ("note", Value::Null),
-            ("documentCID", Value::Null),
-        ]);
+        let cbor = dag_cbor_encode_json(vec_value("number-null-vector", "value"));
         assert_eq!(
             make_cid_string(&cbor),
-            "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue",
+            vec("number-null-vector", "cid"),
             "null vector CID mismatch"
         );
     }

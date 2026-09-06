@@ -6,7 +6,17 @@ Each suite is **standalone**: it uses only its language's native Ed25519, dag-cb
 
 ## Reference Constants
 
-Each suite **hardcodes the reference constants inline** — there is no shared fixture file. The JWS tokens, expected CIDs, DIDs, multikeys, and other vectors are pasted directly into each language's source, and they are the same deterministic values published in the [protocol spec](https://protocol.dfos.com/spec). Those values are generated from fixed seeds (`dfos-protocol-reference-key-1`, `dfos-protocol-reference-key-2`) so every one is reproducible. Because nothing is read from an external fixture, a third party can verify each suite standalone — no DFOS library and no shared fixture file required.
+[`vectors.json`](vectors.json) is the single source of every expected value — JWS tokens, CIDs, DIDs, multikeys, canonical CBOR bytes, document-CID inputs and outputs, and the reject corpus. Each suite reads it at test time by relative path. The only literals left in a suite's source are the two seed phrases (`dfos-protocol-reference-key-1`, `dfos-protocol-reference-key-2`) that every value is derived from, and the protocol's own constant strings.
+
+The artifact is **generated, not curated**: `packages/dfos-protocol/tests/protocol-reference.spec.ts` derives every vector from those fixed seeds and asserts the checked-in file is byte-identical to a fresh generation, so an expected value cannot drift away from the reference implementation. Regenerate a deliberate change with:
+
+```
+UPDATE_VECTORS=1 pnpm --filter @metalabel/dfos-protocol exec vitest run tests/protocol-reference.spec.ts
+```
+
+`scripts/check-inline-vectors.mjs` is the other half of the guard: it fails if any suite has pasted a vector back inline. That is not hypothetical — the services-genesis and content-create vectors had already split into two self-consistent sets, {TypeScript, Python} against {Go, Rust, Swift}, with all five suites green and no signal.
+
+Standalone-ness is unchanged. Reading a JSON fixture is not a library import: a third party still needs nothing but one suite's source file, `vectors.json`, and their language's native crypto. The independence being claimed is between the five _verifiers_, not between their copies of the answers — and a shared answer sheet makes disagreement visible instead of invisible.
 
 ## Suites
 
@@ -27,7 +37,7 @@ Each suite **hardcodes the reference constants inline** — there is no shared f
 5. **DID derivation** — `did:dfos:` suffix from SHA-256 of CID bytes, custom alphabet
 6. **JWS verification** — identity genesis, key rotation, content creation signatures
 7. **JWT verification** — standard claims with EdDSA
-8. **Document CID** — content document hashing
+8. **Document CID** — the content document the create operation commits to, re-encoded as canonical dag-cbor and re-hashed
 9. **Services genesis** — an identity create whose payload carries a full-state services discovery array (relay locator + content/artifact anchors); the operation CID and DID are re-derived over the decoded payload
 10. **DFOS credentials** — UCAN-style credentials with resource/action attenuations
 11. **Number encoding determinism** — integers MUST encode as CBOR integers, not floats
@@ -41,8 +51,9 @@ Each suite **hardcodes the reference constants inline** — there is no shared f
 
 1. Create a new directory (e.g., `kotlin/`)
 2. Implement the 12 verification sections above using only native libraries
-3. Hard-code the same reference constants (JWS tokens, expected CIDs, etc.) from any existing suite
-4. Add a CI job in `.github/workflows/ci.yml`
+3. Read the expected values from `../vectors.json` — never paste them inline
+4. Add the suite's source path to `scripts/check-inline-vectors.mjs`
+5. Add a CI job in `.github/workflows/test-matrix.yml`
 
 If any suite disagrees with the others, the protocol spec is ambiguous and needs clarification.
 
