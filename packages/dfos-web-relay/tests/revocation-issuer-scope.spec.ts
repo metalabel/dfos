@@ -31,7 +31,9 @@ import { MemoryRelayStore } from '../src/store';
   The revocation SET has always honored that. Evicting the standing PUBLIC
   credential is the other half, and it used to be keyed on the CID alone — so
   any DID that could sign a well-formed revocation naming someone else's
-  credential CID destroyed that grant. Permanently: re-presenting the credential
+  credential CID destroyed that grant. The eviction now rides in the commit
+  batch as `removePublicCredential: { issuerDID, credentialCID }`, and the store
+  enforces the pairing. Permanently: re-presenting the credential
   lands on the duplicate-by-CID branch in ingestPublicCredential before
   addPublicCredential can run, so it never comes back.
 
@@ -110,10 +112,21 @@ describe('relay store — public-credential eviction is issuer-scoped', () => {
   it('ignores an eviction naming a different issuer, and honors the real one', async () => {
     const c = await seedPublicGrant();
 
-    await c.store.removePublicCredential(c.stranger.did, c.credentialCID);
+    // The eviction is a MEMBER OF THE COMMIT BATCH, not a standalone store call:
+    // a revocation lands as one atomic commit that carries the drop it implies.
+    // The store is what enforces the pairing, so this drives it the only way a
+    // relay can.
+    const evictBy = (issuerDID: string, cid: string) =>
+      c.store.commit({
+        kind: 'operation',
+        operation: { cid, jwsToken: cid, chainType: 'revocation', chainId: issuerDID },
+        removePublicCredential: { issuerDID, credentialCID: c.credentialCID },
+      });
+
+    await evictBy(c.stranger.did, 'evict-by-stranger');
     expect(await c.store.getPublicCredentials(RESOURCE)).toEqual([c.credential]);
 
-    await c.store.removePublicCredential(c.issuer.did, c.credentialCID);
+    await evictBy(c.issuer.did, 'evict-by-issuer');
     expect(await c.store.getPublicCredentials(RESOURCE)).toEqual([]);
   });
 });

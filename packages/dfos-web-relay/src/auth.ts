@@ -32,7 +32,7 @@ import {
 } from '@metalabel/dfos-protocol/credentials';
 import { isValidDfosDid } from './did-document';
 import { createHistoricalIdentityResolver } from './ingest';
-import type { RelayStore } from './types';
+import type { RelayReadStore } from './types';
 
 /**
  * Acceptance window `W` — how old an identity proof may be, in seconds.
@@ -74,7 +74,7 @@ const JTI_ENCODER = new TextEncoder();
  * about the caller.
  */
 export const createCurrentStateProofResolver =
-  (store: RelayStore): ResolveProofPresenter =>
+  (store: RelayReadStore): ResolveProofPresenter =>
   async (did: string): Promise<ProofPresenterState | null> => {
     // A `kid` whose DID is not a canonical did:dfos is INVALID (401), not
     // unverifiable — and it is refused BEFORE the store read, so a flood of
@@ -194,7 +194,7 @@ export interface AuthenticateIdentityProofOptions {
    * a relay that fell back to `Host` would have no host binding at all.
    */
   authority: string | undefined;
-  store: RelayStore;
+  store: RelayReadStore;
   /**
    * Whether this surface is WRITE-SHAPED and therefore REQUIRES `jti`. Ingestion
    * and blob upload are; blob reads and the mailbox poll are not (they rely on
@@ -333,7 +333,7 @@ export interface AccessVerification {
 export const hasPublicStandingAuth = async (
   contentId: string,
   action: 'read' | 'write',
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<boolean> => {
   const resource = `chain:${contentId}`;
   const publicCreds = await store.getPublicCredentials(resource);
@@ -390,7 +390,7 @@ export const verifyContentAccess = async (options: {
   requestedResource: string;
   /** The action being requested */
   action: 'read' | 'write';
-  store: RelayStore;
+  store: RelayReadStore;
   /** The DID of the content chain creator (root authority) */
   creatorDID: string;
   /** The identity-proven DID making the request (the proof's `kid` DID) */

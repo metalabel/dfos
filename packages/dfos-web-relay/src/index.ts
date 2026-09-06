@@ -42,8 +42,19 @@ export {
   createKeyResolver,
   createCurrentKeyResolver,
   createHistoricalIdentityResolver,
+  StoreFaultError,
+  isStoreFault,
 } from './ingest';
-export { sequenceOps, isDependencyFailure, computeOpCID } from './sequencer';
+export { sequenceOps, isRetryableRejection, computeOpCID } from './sequencer';
+export {
+  projectIndex,
+  drainIndexProjection,
+  projectIndexAfterBlob,
+  DEFAULT_INDEX_PROJECTION_BUDGET,
+  type IndexProjectionOptions,
+  type IndexProjectionRun,
+  type IndexProjectionStore,
+} from './index-projection';
 export {
   authenticateIdentityProof,
   createCurrentStateProofResolver,
@@ -57,7 +68,15 @@ export {
   type IdentityProofOutcome,
   type JtiReplayCache,
 } from './auth';
-export { INGESTION_MODES } from './types';
+export {
+  contentIdsFromCredential,
+  INGESTION_MODES,
+  isIndexReadStore,
+  isIndexWriteStore,
+  isRelayWriteStore,
+  isRelayWriterState,
+  isSigningStore,
+} from './types';
 export type {
   AdmissionPolicy,
   GossipProofSigner,
@@ -66,6 +85,19 @@ export type {
   RelayOpenApiOption,
   RelayOptions,
   RelayStore,
+  RelayReadStore,
+  RelayWriteStore,
+  RelayWriterState,
+  IndexReadStore,
+  IndexWriteStore,
+  IndexRowBatch,
+  IndexCursor,
+  IndexSweepState,
+  SigningStore,
+  CommitBatch,
+  CommitResult,
+  OperationCommit,
+  BlobCommit,
   RelayPeerInfo,
   RelayStats,
   StoredIdentityChain,

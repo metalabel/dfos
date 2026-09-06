@@ -21,7 +21,7 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { ingestOperations } from './ingest';
-import type { RelayIdentity, RelayStore } from './types';
+import type { RelayIdentity, RelayWriteStore } from './types';
 
 /**
  * Generate a relay identity and profile artifact, ingest both into the store
@@ -31,7 +31,7 @@ import type { RelayIdentity, RelayStore } from './types';
  * identity genesis and profile artifact are ingested into the store so
  * they are available via the relay's proof plane routes.
  */
-export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayIdentity> => {
+export const bootstrapRelayIdentity = async (store: RelayWriteStore): Promise<RelayIdentity> => {
   const keypair = createNewEd25519Keypair();
   const keyId = generateId('key');
   return bootstrapWithKeyMaterial(store, {
@@ -50,7 +50,7 @@ export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayId
  * BootstrapRelayIdentityFromKey.
  */
 export const bootstrapRelayIdentityFromKey = async (
-  store: RelayStore,
+  store: RelayWriteStore,
   params: {
     privateKey: Uint8Array;
     keyId: string;
@@ -74,7 +74,7 @@ export const bootstrapRelayIdentityFromKey = async (
  * lets createdAt default to now; the from-key path pins both.
  */
 const bootstrapWithKeyMaterial = async (
-  store: RelayStore,
+  store: RelayWriteStore,
   params: {
     privateKey: Uint8Array;
     publicKey: Uint8Array;

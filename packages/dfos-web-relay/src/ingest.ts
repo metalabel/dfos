@@ -37,16 +37,14 @@ import {
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { compareHeadPreference } from '@metalabel/dfos-protocol/fold';
 import {
-  collectIndexDirtyAfterOp,
   contentIdsFromCredential,
-  createIndexDirtySet,
-  flushIndexMaintenance,
-  logIndexMaintenanceError,
-} from './index-maintenance';
-import {
   provedKeyState,
+  type CommitResult,
   type IngestionResult,
-  type RelayStore,
+  type LogEntry,
+  type OperationKind,
+  type RelayReadStore,
+  type RelayWriteStore,
   type StoredContentChain,
   type StoredIdentityChain,
 } from './types';
@@ -115,6 +113,97 @@ export const computeOpCID = async (jwsToken: string): Promise<string> => {
   const encoded = await dagCborCanonicalEncode(decoded.payload);
   return encoded.cid.toString();
 };
+
+// -----------------------------------------------------------------------------
+// store faults
+// -----------------------------------------------------------------------------
+
+/**
+ * A STORE OPERATION FAILED. Not a verdict about the operation — a fact about the
+ * store.
+ *
+ * The distinction is destructive to get wrong. A rejection the sequencer reads
+ * as permanent DELETES the raw op, which is the only copy the relay holds, so a
+ * momentary "database is locked" during signature verification used to destroy a
+ * valid operation for good. And a read that fails is not a read that found
+ * nothing: `getOperation` throwing and `getOperation` returning `undefined` mean
+ * opposite things, and treating the first as the second re-runs a genesis branch
+ * over a chain that already has history.
+ *
+ * So every store call ingestion makes goes through `failClosedStore`, which tags
+ * a failure with this type, and every classification site reads the tag back:
+ * a store fault is RETRYABLE, the raw op is kept, and the same work happens
+ * again on the next pass once the store is well. Nothing infers it from a
+ * message.
+ */
+export class StoreFaultError extends Error {
+  constructor(
+    readonly site: string,
+    readonly fault: unknown,
+  ) {
+    super(
+      `store operation failed (${site}): ${fault instanceof Error ? fault.message : String(fault)}`,
+    );
+    this.name = 'StoreFaultError';
+  }
+}
+
+export const isStoreFault = (error: unknown): boolean => error instanceof StoreFaultError;
+
+const guard = async <T>(site: string, call: () => Promise<T>): Promise<T> => {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof StoreFaultError) throw error;
+    throw new StoreFaultError(site, error);
+  }
+};
+
+/**
+ * The store, with every call's failure tagged. Written out member by member
+ * rather than proxied: the list IS the read surface ingestion depends on, and it
+ * should be legible.
+ */
+const failClosedStore = (store: RelayWriteStore): RelayWriteStore => ({
+  getOperation: (cid) => guard('getOperation', () => store.getOperation(cid)),
+  getIdentityChain: (did) => guard('getIdentityChain', () => store.getIdentityChain(did)),
+  getContentChain: (contentId) => guard('getContentChain', () => store.getContentChain(contentId)),
+  getIdentityStateAtCID: (did, cid) =>
+    guard('getIdentityStateAtCID', () => store.getIdentityStateAtCID(did, cid)),
+  getContentStateAtCID: (contentId, cid) =>
+    guard('getContentStateAtCID', () => store.getContentStateAtCID(contentId, cid)),
+  getBlob: (key) => guard('getBlob', () => store.getBlob(key)),
+  getCountersignatures: (cid) =>
+    guard('getCountersignatures', () => store.getCountersignatures(cid)),
+  readLog: (params) => guard('readLog', () => store.readLog(params)),
+  getStats: () => guard('getStats', () => store.getStats()),
+  isCredentialRevoked: (issuerDID, credentialCID, asOfUnix) =>
+    guard('isCredentialRevoked', () =>
+      store.isCredentialRevoked(issuerDID, credentialCID, asOfUnix),
+    ),
+  getRevocationForCredential: (cid) =>
+    guard('getRevocationForCredential', () => store.getRevocationForCredential(cid)),
+  getRevocationsByIssuer: (did) =>
+    guard('getRevocationsByIssuer', () => store.getRevocationsByIssuer(did)),
+  getPublicCredentials: (resource) =>
+    guard('getPublicCredentials', () => store.getPublicCredentials(resource)),
+  getPublicCredentialByCID: (cid) =>
+    guard('getPublicCredentialByCID', () => store.getPublicCredentialByCID(cid)),
+  commit: (batch) => guard('commit', () => store.commit(batch)),
+});
+
+/**
+ * The relay's receipt stamp for one accepted operation, read from the wall clock
+ * exactly once, here. Every index surface sources it back out of the log rather
+ * than reading the clock again, so no two of them can disagree by a millisecond
+ * about when the same operation arrived.
+ */
+const logEntryFor = (
+  cid: string,
+  jwsToken: string,
+  kind: OperationKind,
+  chainId: string,
+): LogEntry => ({ cid, jwsToken, kind, chainId, ingestedAt: new Date().toISOString() });
 
 // -----------------------------------------------------------------------------
 // temporal guard
@@ -271,7 +360,7 @@ const classify = (jwsToken: string): ClassifiedOperation => {
  * deterministic CIDs for identical payloads.
  */
 export const createKeyResolver =
-  (store: RelayStore) =>
+  (store: RelayReadStore) =>
   async (kid: string): Promise<Uint8Array> => {
     const hashIdx = kid.indexOf('#');
     if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
@@ -341,7 +430,7 @@ const provedKeyMultibase = (identity: StoredIdentityChain, keyId: string): strin
 export const resolveSignerKeyMultibase = async (
   did: string,
   keyId: string,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<string | null> => {
   const identity = await store.getIdentityChain(did);
   return identity ? provedKeyMultibase(identity, keyId) : null;
@@ -373,7 +462,7 @@ export const mergeHistoricalIdentity = (state: VerifiedIdentity): VerifiedIdenti
   };
 };
 
-export const createHistoricalIdentityResolver = (store: RelayStore) => async (did: string) => {
+export const createHistoricalIdentityResolver = (store: RelayReadStore) => async (did: string) => {
   const chain = await store.getIdentityChain(did);
   if (!chain) return undefined;
   return mergeHistoricalIdentity(chain.state);
@@ -387,7 +476,7 @@ export const createHistoricalIdentityResolver = (store: RelayStore) => async (di
  * committed history through createKeyResolver, but cannot author a fresh op.
  */
 export const createCurrentKeyResolver =
-  (store: RelayStore) =>
+  (store: RelayReadStore) =>
   async (kid: string): Promise<Uint8Array> => {
     const hashIdx = kid.indexOf('#');
     if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
@@ -418,7 +507,7 @@ export const createCurrentKeyResolver =
     throw new Error(NONCURRENT_SIGNING_KEY_ERROR);
   };
 
-const createAdmissionKeyResolver = (store: RelayStore, mode: AdmissionMode) =>
+const createAdmissionKeyResolver = (store: RelayReadStore, mode: AdmissionMode) =>
   mode === 'historical' ? createKeyResolver(store) : createCurrentKeyResolver(store);
 
 // -----------------------------------------------------------------------------
@@ -427,7 +516,7 @@ const createAdmissionKeyResolver = (store: RelayStore, mode: AdmissionMode) =>
 
 const ingestIdentityOp = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
   // decode to get the operation CID
@@ -481,12 +570,13 @@ const ingestIdentityOp = async (
       lastCreatedAt: createdAt,
       state: identity,
     };
-    await store.putIdentityChain(chain);
-    await store.putOperation({ cid, jwsToken, chainType: 'identity', chainId: identity.did });
-    if (logEnabled) {
-      await store.appendToLog({ cid, jwsToken, kind: 'identity-op', chainId: identity.did });
-    }
-    return { cid, status: 'new', kind: 'identity-op', chainId: identity.did };
+    const status = await store.commit({
+      kind: 'operation',
+      operation: { cid, jwsToken, chainType: 'identity', chainId: identity.did },
+      identityChain: chain,
+      ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'identity-op', identity.did) } : {}),
+    });
+    return { cid, status, kind: 'identity-op', chainId: identity.did };
   }
 
   // extension — find existing chain via kid DID
@@ -533,12 +623,13 @@ const ingestIdentityOp = async (
       lastCreatedAt: extResult.createdAt,
       state: extResult.state,
     };
-    await store.putIdentityChain(updated);
-    await store.putOperation({ cid, jwsToken, chainType: 'identity', chainId: did });
-    if (logEnabled) {
-      await store.appendToLog({ cid, jwsToken, kind: 'identity-op', chainId: did });
-    }
-    return { cid, status: 'new', kind: 'identity-op', chainId: did };
+    const status = await store.commit({
+      kind: 'operation',
+      operation: { cid, jwsToken, chainType: 'identity', chainId: did },
+      identityChain: updated,
+      ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'identity-op', did) } : {}),
+    });
+    return { cid, status, kind: 'identity-op', chainId: did };
   }
 
   // An unknown parent is a retryable dependency. A known non-head parent
@@ -556,7 +647,7 @@ const ingestIdentityOp = async (
 
 const ingestContentOp = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
   admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
@@ -637,6 +728,7 @@ const ingestContentOp = async (
         status: 'rejected',
         error: message,
         dependencyMissing: isDependencyMissing(err),
+        storeFault: isStoreFault(err),
       };
     }
     const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
@@ -647,12 +739,15 @@ const ingestContentOp = async (
       lastCreatedAt: createdAt,
       state: content,
     };
-    await store.putContentChain(chain);
-    await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: content.contentId });
-    if (logEnabled) {
-      await store.appendToLog({ cid, jwsToken, kind: 'content-op', chainId: content.contentId });
-    }
-    return { cid, status: 'new', kind: 'content-op', chainId: content.contentId };
+    const status = await store.commit({
+      kind: 'operation',
+      operation: { cid, jwsToken, chainType: 'content', chainId: content.contentId },
+      contentChain: chain,
+      ...(logEnabled
+        ? { logEntry: logEntryFor(cid, jwsToken, 'content-op', content.contentId) }
+        : {}),
+    });
+    return { cid, status, kind: 'content-op', chainId: content.contentId };
   }
 
   // extension — find the existing chain via previousOperationCID
@@ -708,6 +803,7 @@ const ingestContentOp = async (
         status: 'rejected',
         error: message,
         dependencyMissing: isDependencyMissing(err),
+        storeFault: isStoreFault(err),
       };
     }
     const updated: StoredContentChain = {
@@ -717,12 +813,15 @@ const ingestContentOp = async (
       lastCreatedAt: extResult.createdAt,
       state: extResult.state,
     };
-    await store.putContentChain(updated);
-    await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: chain.contentId });
-    if (logEnabled) {
-      await store.appendToLog({ cid, jwsToken, kind: 'content-op', chainId: chain.contentId });
-    }
-    return { cid, status: 'new', kind: 'content-op', chainId: chain.contentId };
+    const status = await store.commit({
+      kind: 'operation',
+      operation: { cid, jwsToken, chainType: 'content', chainId: chain.contentId },
+      contentChain: updated,
+      ...(logEnabled
+        ? { logEntry: logEntryFor(cid, jwsToken, 'content-op', chain.contentId) }
+        : {}),
+    });
+    return { cid, status, kind: 'content-op', chainId: chain.contentId };
   }
 
   // fork path — check if previousCID exists in chain operations
@@ -785,6 +884,7 @@ const ingestContentOp = async (
       status: 'rejected',
       error: message,
       dependencyMissing: isDependencyMissing(err),
+      storeFault: isStoreFault(err),
     };
   }
 
@@ -807,17 +907,18 @@ const ingestContentOp = async (
     lastCreatedAt: headLastCreatedAt,
     state: headState,
   };
-  await store.putContentChain(updated);
-  await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: chain.contentId });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'content-op', chainId: chain.contentId });
-  }
-  return { cid, status: 'new', kind: 'content-op', chainId: chain.contentId };
+  const status = await store.commit({
+    kind: 'operation',
+    operation: { cid, jwsToken, chainType: 'content', chainId: chain.contentId },
+    contentChain: updated,
+    ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'content-op', chain.contentId) } : {}),
+  });
+  return { cid, status, kind: 'content-op', chainId: chain.contentId };
 };
 
 const ingestCountersign = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
   admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
@@ -833,6 +934,7 @@ const ingestCountersign = async (
       status: 'rejected',
       error: message,
       dependencyMissing: isDependencyMissing(err),
+      storeFault: isStoreFault(err),
     };
   }
 
@@ -896,17 +998,18 @@ const ingestCountersign = async (
     }
   }
 
-  await store.putOperation({ cid, jwsToken, chainType: 'countersign', chainId: targetCID });
-  await store.addCountersignature(targetCID, jwsToken);
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'countersign', chainId: targetCID });
-  }
-  return { cid, status: 'new', kind: 'countersign', chainId: targetCID };
+  const status = await store.commit({
+    kind: 'operation',
+    operation: { cid, jwsToken, chainType: 'countersign', chainId: targetCID },
+    countersignature: { targetCID, jwsToken },
+    ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'countersign', targetCID) } : {}),
+  });
+  return { cid, status, kind: 'countersign', chainId: targetCID };
 };
 
 const ingestArtifact = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
   admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
@@ -922,6 +1025,7 @@ const ingestArtifact = async (
       status: 'rejected',
       error: message,
       dependencyMissing: isDependencyMissing(err),
+      storeFault: isStoreFault(err),
     };
   }
 
@@ -947,16 +1051,17 @@ const ingestArtifact = async (
     return { cid, status: 'rejected', error: 'identity is deleted' };
   }
 
-  await store.putOperation({ cid, jwsToken, chainType: 'artifact', chainId: did });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'artifact', chainId: did });
-  }
-  return { cid, status: 'new', kind: 'artifact', chainId: did };
+  const status = await store.commit({
+    kind: 'operation',
+    operation: { cid, jwsToken, chainType: 'artifact', chainId: did },
+    ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'artifact', did) } : {}),
+  });
+  return { cid, status, kind: 'artifact', chainId: did };
 };
 
 const ingestRevocation = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
   const resolveKey = createKeyResolver(store);
@@ -971,6 +1076,7 @@ const ingestRevocation = async (
       status: 'rejected',
       error: message,
       dependencyMissing: isDependencyMissing(err),
+      storeFault: isStoreFault(err),
     };
   }
 
@@ -998,31 +1104,32 @@ const ingestRevocation = async (
 
   // Issuer scope, not CID scope. Revocation is issuer-only, so a held credential
   // someone ELSE issued is not the credential this revocation reaches: it is
-  // neither reported as a revoked grant nor evicted below.
+  // neither reported as a revoked grant nor evicted by the commit below.
   const held = await store.getPublicCredentialByCID(verified.credentialCID);
   const revokedCredential = held?.issuerDID === did ? held : undefined;
   const revokedGrant = revokedCredential ? contentIdsFromCredential(revokedCredential) : undefined;
 
-  // add to revocation set — carrying the VERIFIED createdAt, which is the as-of
-  // boundary every later validity check compares against
-  await store.addRevocation({
-    cid,
-    issuerDID: did,
-    credentialCID: verified.credentialCID,
-    jwsToken,
-    createdAt: verified.createdAt,
+  // The revocation carries the VERIFIED createdAt — the as-of boundary every
+  // later validity check compares against — and drops the standing grant it
+  // names, ISSUER-SCOPED: `did` is the revocation's signer, and the store removes
+  // the held credential only if that signer issued it. An unscoped removal let
+  // any identity un-publish anyone's public content by naming its credential CID.
+  const status = await store.commit({
+    kind: 'operation',
+    operation: { cid, jwsToken, chainType: 'revocation', chainId: did },
+    revocation: {
+      cid,
+      issuerDID: did,
+      credentialCID: verified.credentialCID,
+      jwsToken,
+      createdAt: verified.createdAt,
+    },
+    removePublicCredential: { issuerDID: did, credentialCID: verified.credentialCID },
+    ...(logEnabled ? { logEntry: logEntryFor(cid, jwsToken, 'revocation', did) } : {}),
   });
-
-  // if the revoked credential was a stored public credential THIS issuer granted, remove it
-  await store.removePublicCredential(did, verified.credentialCID);
-
-  await store.putOperation({ cid, jwsToken, chainType: 'revocation', chainId: did });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'revocation', chainId: did });
-  }
   return {
     cid,
-    status: 'new',
+    status,
     kind: 'revocation',
     chainId: did,
     ...(revokedGrant ? { revokedGrant } : {}),
@@ -1031,7 +1138,7 @@ const ingestRevocation = async (
 
 const ingestPublicCredential = async (
   jwsToken: string,
-  store: RelayStore,
+  store: RelayWriteStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
   const resolveIdentity = createHistoricalIdentityResolver(store);
@@ -1046,6 +1153,7 @@ const ingestPublicCredential = async (
       status: 'rejected',
       error: message,
       dependencyMissing: isDependencyMissing(err),
+      storeFault: isStoreFault(err),
     };
   }
 
@@ -1075,26 +1183,26 @@ const ingestPublicCredential = async (
     return { cid, status: 'rejected', error: 'credential is revoked' };
   }
 
-  await store.putOperation({ cid, jwsToken, chainType: 'credential', chainId: verified.iss });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'credential', chainId: verified.iss });
-  }
-
-  // Source the receipt stamp from the operation log so /index/v0/credentials
-  // and /index/v0/operations agree on one receipt time for the same op (mirrors
-  // the Go twin); wall clock only as fallback when the log/accessor is absent.
-  const ingestedAt =
-    (await store.getIndexOperationRow?.(cid))?.ingestedAt ?? new Date().toISOString();
-  await store.addPublicCredential({
-    cid,
-    issuerDID: verified.iss,
-    att: verified.att,
-    exp: verified.exp,
-    jwsToken,
-    createdAt: new Date(verified.iat * 1000).toISOString(),
-    ingestedAt,
+  // ONE receipt stamp for the operation, shared by the log entry and the held
+  // credential row, so /index/v0/credentials and /index/v0/operations report the
+  // same instant for the same op. With the log disabled there is no entry to
+  // share, so the stamp is read here instead.
+  const entry = logEntryFor(cid, jwsToken, 'credential', verified.iss);
+  const status = await store.commit({
+    kind: 'operation',
+    operation: { cid, jwsToken, chainType: 'credential', chainId: verified.iss },
+    publicCredential: {
+      cid,
+      issuerDID: verified.iss,
+      att: verified.att,
+      exp: verified.exp,
+      jwsToken,
+      createdAt: new Date(verified.iat * 1000).toISOString(),
+      ingestedAt: entry.ingestedAt,
+    },
+    ...(logEnabled ? { logEntry: entry } : {}),
   });
-  return { cid, status: 'new', kind: 'credential', chainId: verified.iss };
+  return { cid, status, kind: 'credential', chainId: verified.iss };
 };
 
 // -----------------------------------------------------------------------------
@@ -1279,9 +1387,9 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
  * rather than the public entry point, or it deadlocks. The tail promise is
  * rejection-swallowed so one failed span cannot poison the queue behind it.
  */
-const chainStateLocks = new WeakMap<RelayStore, Promise<unknown>>();
+const chainStateLocks = new WeakMap<RelayReadStore, Promise<unknown>>();
 
-export const withChainStateLock = <T>(store: RelayStore, fn: () => Promise<T>): Promise<T> => {
+export const withChainStateLock = <T>(store: RelayReadStore, fn: () => Promise<T>): Promise<T> => {
   const tail = chainStateLocks.get(store) ?? Promise.resolve();
   const run = tail.then(fn);
   chainStateLocks.set(
@@ -1299,74 +1407,43 @@ export const withChainStateLock = <T>(store: RelayStore, fn: () => Promise<T>): 
 // -----------------------------------------------------------------------------
 
 /**
- * Ingest a batch of JWS operations
+ * Ingest a batch of JWS operations.
  *
  * Classifies, dependency-sorts, and processes each token. Identity operations
- * are processed first so content chains can resolve their keys.
- * Within each kind, genesis operations are processed before extensions.
+ * are processed first so content chains can resolve their keys; within each
+ * kind, genesis operations are processed before extensions. Each accepted
+ * operation lands as ONE `commit`.
+ *
+ * NOTHING HERE MAINTAINS THE INDEX. The `/index/v0` projection is a worker over
+ * the operation log (`projectIndex`), driven by its own cursor and its own
+ * budget. Ingestion's job ends at the commit.
  */
 /**
- * Record the public key ONE accepted operation's signature verified against —
- * the stored `signerKey` column behind `signerKey=` on /index/v0/operations.
- *
- * WHY HERE AND NOT IN index-maintenance.ts: the other projection captures
- * (a content op's signer DID, an identity op's declared keys) read the signed
- * payload, so they belong with the projection builders. A signer key is not a
- * payload field — it is a VERIFICATION OUTCOME, and the only honest way to
- * record "the key this signature resolved to" is to resolve it exactly the way
- * ingestion just did (`provedKeyMultibase`, shared with `createKeyResolver`).
- * Nothing re-decodes the corpus at query time; this is the one resolution.
- *
- * The kid carries the DID for every kind except an identity GENESIS, whose kid
- * is bare (the DID does not exist until the op is encoded) — there the chain
- * identifier the ingest just derived is the signer's DID.
- *
- * Fenced like every other projection write: the index is a non-authoritative
- * hint plane and must never fail an authoritative write.
- */
-const captureIndexSignerKey = async (
-  result: IngestionResult,
-  jwsToken: string,
-  store: RelayStore,
-): Promise<void> => {
-  if (result.status !== 'new' || !result.kind) return;
-  try {
-    const kid = decodeJwsUnsafe(jwsToken)?.header.kid;
-    if (typeof kid !== 'string' || kid === '') return;
-    const hashIdx = kid.indexOf('#');
-    const did = hashIdx >= 0 ? kid.substring(0, hashIdx) : (result.chainId ?? '');
-    const keyId = hashIdx >= 0 ? kid.substring(hashIdx + 1) : kid;
-    if (!did || !keyId) return;
-    const publicKeyMultibase = await resolveSignerKeyMultibase(did, keyId, store);
-    if (publicKeyMultibase) await store.putIndexOperationSignerKey(result.cid, publicKeyMultibase);
-  } catch (error) {
-    logIndexMaintenanceError('captureIndexSignerKey', error);
-  }
-};
-
-/**
- * Ingest a batch under the store's chain-state lock. The entry point for every
- * caller that does not already hold it.
+ * Runs under the store's chain-state lock. The entry point for every caller that
+ * does not already hold it.
  */
 export const ingestOperations = (
   tokens: string[],
-  store: RelayStore,
+  writeStore: RelayWriteStore,
   options?: { logEnabled?: boolean; admissionMode?: AdmissionMode },
 ): Promise<IngestionResult[]> =>
-  withChainStateLock(store, () => ingestOperationsLocked(tokens, store, options));
+  withChainStateLock(writeStore, () => ingestOperationsLocked(tokens, writeStore, options));
 
 /**
  * The ingestion batch itself. CALLER MUST HOLD the store's chain-state lock —
- * the twin of Go's `IngestOperations`, which is likewise called only from
- * inside `ingestMu`.
+ * the twin of Go's `IngestOperations`, which is likewise called only from inside
+ * `ingestMu`.
  */
 export const ingestOperationsLocked = async (
   tokens: string[],
-  store: RelayStore,
+  writeStore: RelayWriteStore,
   options?: { logEnabled?: boolean; admissionMode?: AdmissionMode },
 ): Promise<IngestionResult[]> => {
   const logEnabled = options?.logEnabled !== false;
   const admissionMode = options?.admissionMode ?? 'current';
+  // Every store call below is tagged on failure, so a transient fault is
+  // classified as retryable rather than as a verdict about the operation.
+  const store = failClosedStore(writeStore);
 
   // classify all tokens, preserving submission order
   const classified = tokens.map((token, i) => ({ ...classify(token), originalIndex: i }));
@@ -1377,15 +1454,6 @@ export const ingestOperationsLocked = async (
 
   // process in dependency order, then re-sort results to submission order
   const indexedResults: { index: number; result: IngestionResult }[] = [];
-
-  // Collect the /index/v0 materialized-projection dirtiness across the whole
-  // batch and flush it ONCE below. This is the single choke point for every
-  // apply path (local POST, the sequencer fixed-point loop, and peer sync all
-  // funnel here). Per-op collection keeps the fan-out triggers (a `chain:*`
-  // grant, a revocation, an identity deletion) from each running a full sweep;
-  // the batch flush runs at most one. Non-authoritative and self-isolating: it
-  // never throws back into ingestion.
-  const dirty = createIndexDirtySet();
 
   for (const op of sorted) {
     try {
@@ -1416,19 +1484,24 @@ export const ingestOperationsLocked = async (
             error: 'unrecognized operation type',
           };
       }
-      await captureIndexSignerKey(result, op.jwsToken, store);
-      await collectIndexDirtyAfterOp(result, op.jwsToken, store, dirty);
       indexedResults.push({ index: op.originalIndex, result });
     } catch (err) {
+      // The catch-all. A store fault reaching here — including a `commit` that
+      // could not be applied — is RETRYABLE: the store persisted nothing, so the
+      // raw op is kept and the same work runs again on the next pass. Anything
+      // else is a permanent rejection.
       const message = err instanceof Error ? err.message : 'unexpected error';
       indexedResults.push({
         index: op.originalIndex,
-        result: { cid: await computeOpCID(op.jwsToken), status: 'rejected', error: message },
+        result: {
+          cid: await computeOpCID(op.jwsToken),
+          status: 'rejected',
+          error: message,
+          storeFault: isStoreFault(err),
+        },
       });
     }
   }
-
-  await flushIndexMaintenance(dirty, store);
 
   // return results in original submission order
   return indexedResults.sort((a, b) => a.index - b.index).map((r) => r.result);

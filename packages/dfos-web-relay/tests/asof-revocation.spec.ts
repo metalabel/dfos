@@ -413,9 +413,8 @@ describe('getContentStateAtCID — historical replay', () => {
 
     // mark the credential's issuer deleted in the store's identity state
     const issuerChain = await c.store.getIdentityChain(c.creator.did);
-    await c.store.putIdentityChain({
-      ...issuerChain!,
-      state: { ...issuerChain!.state, isDeleted: true },
+    await c.store.seed({
+      identityChains: [{ ...issuerChain!, state: { ...issuerChain!.state, isDeleted: true } }],
     });
 
     await expect(c.store.getContentStateAtCID(c.contentId, a.operationCID)).rejects.toThrow(
@@ -438,8 +437,8 @@ describe('relay store — earliest revocation boundary wins', () => {
     const early = c.storedRevocation('bafyearly', iso(-30));
     const late = c.storedRevocation('bafylate', iso(-5));
 
-    await c.store.addRevocation(early);
-    await c.store.addRevocation(late);
+    await c.store.seed({ revocations: [early] });
+    await c.store.seed({ revocations: [late] });
 
     expect(await c.boundaryOf()).toBe(early.createdAt);
   });
@@ -451,8 +450,8 @@ describe('relay store — earliest revocation boundary wins', () => {
     const late = c.storedRevocation('bafylate', iso(-5));
     const early = c.storedRevocation('bafyearly', iso(-30));
 
-    await c.store.addRevocation(late);
-    await c.store.addRevocation(early);
+    await c.store.seed({ revocations: [late] });
+    await c.store.seed({ revocations: [early] });
 
     expect(await c.boundaryOf()).toBe(early.createdAt);
   });
@@ -462,8 +461,8 @@ describe('relay store — earliest revocation boundary wins', () => {
     const dated = c.storedRevocation('bafydated', iso(-30));
     const broken = c.storedRevocation('bafybroken', 'not-a-timestamp');
 
-    await c.store.addRevocation(dated);
-    await c.store.addRevocation(broken);
+    await c.store.seed({ revocations: [dated] });
+    await c.store.seed({ revocations: [broken] });
 
     expect(await c.boundaryOf()).toBe(broken.createdAt);
     // and it bites at every instant — the fail-closed direction
@@ -520,7 +519,7 @@ describe('relay store — as-of boundary parsing', () => {
       // A lenient `new Date()` would accept the offset and missing-Z forms and
       // derive a timezone-dependent boundary from them.
       const c = await seedChain(-60);
-      await c.store.addRevocation(c.storedRevocation('bafyparse', createdAt));
+      await c.store.seed({ revocations: [c.storedRevocation('bafyparse', createdAt)] });
 
       const wellBefore = Math.floor(new Date('2020-01-01T00:00:00.000Z').getTime() / 1000);
       expect(await c.store.isCredentialRevoked(c.creator.did, c.credentialCID, wellBefore)).toBe(
