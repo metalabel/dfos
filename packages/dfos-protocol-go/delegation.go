@@ -167,10 +167,12 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 //
 // Pass nil for isRevoked or isDeleted to skip that store-backed check.
 //
-// asOfUnix is the revocation as-of basis handed to isRevoked at every hop: pass
-// the operation's own createdAt when verifying committed history (a validity
-// decision), or 0 for the timeless "revoked as far as we know right now" answer
-// the live read path wants (a freshness decision). See RevocationChecker.
+// asOfUnix is the temporal basis for the whole walk: pass the operation's own
+// createdAt when verifying committed history (a validity decision), or 0 for the
+// live read path (a freshness decision). It is handed to isRevoked at every hop
+// (see RevocationChecker) AND used as each parent's expiry basis, so the parents
+// are judged on the same clock as the leaf. asOfUnix == 0 leaves parent expiry
+// on the wall clock, which is what a read is: a local, ephemeral decision.
 func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, asOfUnix int64) error {
 	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, asOfUnix, 0)
 }
@@ -180,8 +182,9 @@ func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 // signature, audience linkage, expiry bounds, and monotonic attenuation.
 // The chain must root at rootDID.
 //
-// The optional isRevoked callback checks revocation at each parent level (on the
-// asOfUnix basis, see RevocationChecker), and the optional isDeleted callback
+// Each parent's expiry is checked on the asOfUnix basis (wall clock when
+// asOfUnix is 0). The optional isRevoked callback checks revocation at each
+// parent level (on the same basis, see RevocationChecker), and the isDeleted callback
 // gates each parent's issuer identity. Pass nil for either to skip that check
 // (the protocol layer is store-agnostic; the relay supplies these closures at the
 // call boundary).
@@ -242,7 +245,22 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 		return fmt.Errorf("failed to resolve parent credential key: %w", err)
 	}
 
-	pVerified, err := VerifyCredential(parentJws, pKey, "", "")
+	// Verify the parent on the SAME temporal basis as the leaf. asOfUnix > 0 is
+	// the committed-history basis (the operation's own createdAt, threaded in by
+	// verifyContentAuthorization); asOfUnix == 0 is the live read path, where
+	// the wall clock IS the basis. Checking a parent's exp against the wall
+	// clock while the leaf was checked against the operation's createdAt is
+	// exactly the ingest-time wall-clock exp check CREDENTIALS.md "Expiry Basis"
+	// forbids: a delegated op signed under a short-TTL root would verify today
+	// and stop verifying once that root's TTL lapsed, diverging both from itself
+	// over time and from the TS twin (dfos-credential.ts verifyDelegationChain
+	// threads `now` to every hop).
+	var pVerified *VerifiedCredential
+	if asOfUnix > 0 {
+		pVerified, err = VerifyCredentialAt(parentJws, pKey, "", "", asOfUnix)
+	} else {
+		pVerified, err = VerifyCredential(parentJws, pKey, "", "")
+	}
 	if err != nil {
 		return fmt.Errorf("parent credential verification failed: %v", err)
 	}
