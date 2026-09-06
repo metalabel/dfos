@@ -524,6 +524,29 @@ export interface StoredPublicCredential {
   ingestedAt: string;
 }
 
+/**
+ * Content ids named by a public credential's attenuations (`chain:<contentId>`
+ * resources). `wildcard` means it grants `chain:*`, which covers every chain and
+ * therefore fans out to all content rows.
+ *
+ * Lives here, on the leaf module both consumers already import: the projection
+ * worker reads it to size a credential's fan-out, and ingestion reads it to
+ * report what a revocation reached.
+ */
+export const contentIdsFromCredential = (
+  credential: Pick<StoredPublicCredential, 'att'>,
+): { wildcard: boolean; contentIds: string[] } => {
+  const contentIds: string[] = [];
+  let wildcard = false;
+  for (const entry of credential.att) {
+    if (entry.resource === 'chain:*') wildcard = true;
+    else if (entry.resource.startsWith('chain:')) {
+      contentIds.push(entry.resource.slice('chain:'.length));
+    }
+  }
+  return { wildcard, contentIds };
+};
+
 export interface StoredCountersignature {
   cid: string;
   targetCID: string;
@@ -629,10 +652,15 @@ export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
  * serves the whole proof plane, the content plane, the log, and the revocation
  * routes — read-only.
  *
- * Concurrency contract: the in-memory store is safe under single-threaded JS.
- * A durable implementation enforces optimistic concurrency (compare-and-swap on
- * the chain head CID) or pessimistic locking so two concurrent extensions of one
- * chain cannot overwrite each other.
+ * Concurrency contract: single-threaded JS does NOT make a store safe. Applying
+ * an operation is a read-verify-write span with real yield points inside it (the
+ * WebCrypto verify is one), so two overlapping ingests read the same chain head
+ * and the second write erases the first. Serializing that span is the RELAY's
+ * job, not the store's: every ingestion entry point, the sequencer, and the blob
+ * write hold the per-store chain-state lock (`withChainStateLock` in ingest.ts),
+ * the twin of the Go relay's `ingestMu`. That lock spans one process. A store
+ * shared across processes is outside its reach and must add its own optimistic
+ * concurrency (compare-and-swap on the chain head CID) or pessimistic locking.
  *
  * FAIL CLOSED. A read that cannot be answered THROWS. It never returns
  * `undefined`/`null`/`false` to mean "the store is unwell": absence and failure
@@ -1175,6 +1203,13 @@ export interface IngestionResult {
   kind?: OperationKind;
   /** Chain identifier if applicable */
   chainId?: string;
+  /**
+   * The public grant a revocation actually reached, ISSUER-SCOPED: absent when
+   * this relay holds no such credential, and absent when it holds one that a
+   * DIFFERENT issuer granted (a foreign revocation reaches nothing, so reporting
+   * a grant would be a lie). The `revokedGrant` field of the ingestion response.
+   */
+  revokedGrant?: { wildcard: boolean; contentIds: string[] };
   /**
    * Structured dependency-failure signal. When true, the rejection is due to a
    * missing dependency that may arrive later via sync or gossip, so the

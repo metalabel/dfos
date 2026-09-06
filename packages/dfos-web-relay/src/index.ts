@@ -50,7 +50,6 @@ export {
   projectIndex,
   drainIndexProjection,
   projectIndexAfterBlob,
-  contentIdsFromCredential,
   DEFAULT_INDEX_PROJECTION_BUDGET,
   type IndexProjectionOptions,
   type IndexProjectionRun,
@@ -70,6 +69,7 @@ export {
   type JtiReplayCache,
 } from './auth';
 export {
+  contentIdsFromCredential,
   INGESTION_MODES,
   isIndexReadStore,
   isIndexWriteStore,

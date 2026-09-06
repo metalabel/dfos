@@ -53,7 +53,7 @@ import {
   redactNonPublicContentRow,
   redactNonPublicIdentityRow,
 } from './index-routes';
-import { ingestOperations, type AdmissionMode } from './ingest';
+import { ingestOperationsLocked, withChainStateLock, type AdmissionMode } from './ingest';
 import { DEFAULT_OPENAPI_ROUTE, selfDescribingDocument } from './openapi';
 import {
   credentialRevocationStatus,
@@ -61,7 +61,7 @@ import {
   isValidCredentialCid,
   REVOCATIONS_BASE_PATH,
 } from './revocations';
-import { computeOpCID, sequenceOps } from './sequencer';
+import { computeOpCID, sequenceOpsLocked } from './sequencer';
 import { registerSigningRoutes } from './signing';
 import {
   INGESTION_MODES,
@@ -517,7 +517,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     `indexProjection: 'external'` and runs `projectIndex` from a timer.
 
     Runs are serialized by chaining onto the previous one, so two ingests landing
-    together never project concurrently.
+    together never project concurrently. That chain is NOT the chain-state lock
+    and never nests inside it: the projection reads the committed log, so it runs
+    after the accepting span has released.
   */
   const runProjection = async (): Promise<IndexProjectionRun> =>
     projectionStore ? projectIndex(projectionStore) : { projected: 0, swept: 0, caughtUp: true };
@@ -533,35 +535,49 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   // ingest wrapper: store raw → process → mark results → sequence pending →
   // schedule the projection → gossip
+  //
+  // Everything up to and including the sequencer run happens inside ONE hold of
+  // the store's chain-state lock, so a concurrent request cannot land a
+  // competing extension between this batch's read of a chain head and its
+  // write. The held span mirrors the Go twin's `Relay.Ingest`: raw-op writes,
+  // the batch apply, the sequenced/rejected marking, and the trailing sequencer
+  // pass are all under it. The projection drain and gossip happen after the
+  // release — the projection is a worker over the committed log and must never
+  // run inside the accepting write, and a network push must never hold the lock.
   const ingestWithGossip = async (tokens: string[], admissionMode: AdmissionMode = 'current') => {
     if (!writer) throw new Error('this relay does not accept writes');
     const origin = admissionMode === 'historical' ? 'peer' : 'direct';
-    // store raw ops first — they can never be lost
-    for (const token of tokens) {
-      const cid = await computeOpCID(token);
-      if (cid) await writer.putRawOp(cid, token, origin);
-    }
 
-    // process batch
-    const results = await ingestOperations(tokens, writer, { logEnabled, admissionMode });
-
-    // mark results in raw store
-    const newOps: string[] = [];
-    for (let i = 0; i < results.length; i++) {
-      const res = results[i]!;
-      if (!res.cid) continue;
-      if (res.status === 'new') {
-        await writer.markOpsSequenced([res.cid]);
-        newOps.push(tokens[i]!);
-      } else if (res.status === 'duplicate') {
-        await writer.markOpsSequenced([res.cid]);
+    const { results, newOps, seqNewOps } = await withChainStateLock(writer, async () => {
+      // store raw ops first — they can never be lost
+      for (const token of tokens) {
+        const cid = await computeOpCID(token);
+        if (cid) await writer.putRawOp(cid, token, origin);
       }
-    }
 
-    // run sequencer — resolves pending ops whose deps just arrived
-    const { newOps: seqNewOps } = await sequenceOps(writer);
+      // process batch
+      const results = await ingestOperationsLocked(tokens, writer, { logEnabled, admissionMode });
 
-    // the projection catches up on what was just committed
+      // mark results in raw store
+      const newOps: string[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const res = results[i]!;
+        if (!res.cid) continue;
+        if (res.status === 'new') {
+          await writer.markOpsSequenced([res.cid]);
+          newOps.push(tokens[i]!);
+        } else if (res.status === 'duplicate') {
+          await writer.markOpsSequenced([res.cid]);
+        }
+      }
+
+      // run sequencer — resolves pending ops whose deps just arrived
+      const { newOps: seqNewOps } = await sequenceOpsLocked(writer);
+
+      return { results, newOps, seqNewOps };
+    });
+
+    // the projection catches up on what was just committed — outside the lock
     await scheduleIndexProjection();
 
     // gossip outside the critical path
@@ -887,12 +903,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // `voidKeys` rides along because its absence is the failure mode: a
     // controller who introduced a key with no proof has a chain that verifies
     // and a key that is simply not there, and NOTHING in the effective arrays
-    // can tell them so. `declared` and `provedKeys` come with it — the first is
-    // what the chain says, the second is has-ever-proved (what the `key=` index
-    // answers and what verifies an artifact signed before a rotation). All three
-    // are re-derivable from the public log, so serving them discloses nothing
-    // new; it just spares every consumer a chain walk to learn it. They are
-    // OPTIONAL in the document: a relay that omits them is still conformant.
+    // can tell them so. `declared`, `provedKeys` and `seenKeys` come with it —
+    // what the chain says, has-ever-proved (what the `key=` index answers and
+    // what verifies an artifact signed before a rotation), and the
+    // key-id-to-material binding a verifier extending the chain one operation at
+    // a time needs to refuse a name that changed keys. All four are re-derivable
+    // from the public log, so serving them discloses nothing new; it just spares
+    // every consumer a chain walk to learn it. They are OPTIONAL in the
+    // document: a relay that omits them is still conformant.
     return c.json({
       did: chain.did,
       headCID: chain.headCID,
@@ -913,7 +931,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get('/1.0/identifiers/:did{.+}', async (c) => {
     const did = c.req.param('did');
 
-    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1:63
+    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1
     if (!isValidDfosDid(did)) {
       return c.json(
         {
@@ -1518,18 +1536,27 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'blob bytes do not match documentCID' }, 400);
     }
 
-    await acceptingWrites.commit({
-      kind: 'blob',
-      key: { creatorDID: chain.state.creatorDID, documentCID },
-      bytes,
-    });
+    // The blob write is a chain-state mutation, so it goes under the chain-state
+    // lock like the Go twin's blob route: committing bytes in the middle of an
+    // accepting batch would interleave two writers over the same store.
+    // (`committedDocumentCID` re-states the already-narrowed `documentCID` as a
+    // const, since narrowing a `let` does not survive into a closure.)
+    const committedDocumentCID = documentCID;
+    await withChainStateLock(acceptingWrites, () =>
+      acceptingWrites.commit({
+        kind: 'blob',
+        key: { creatorDID: chain.state.creatorDID, documentCID: committedDocumentCID },
+        bytes,
+      }),
+    );
     // A document blob just landed — often out of band, after the content op that
     // referenced it. Recompute the content rows that project this documentCID
     // (docSchema/name/profile), cascading to their anchored identities. Nothing
     // on the operation log marks this moment, so it is the one projection entry
-    // point the worker's cursor does not reach.
+    // point the worker's cursor does not reach — and, like every other
+    // projection pass, it runs OUTSIDE the chain-state lock.
     if (projectionStore && projectionMode === 'inline') {
-      await projectIndexAfterBlob(documentCID, projectionStore);
+      await projectIndexAfterBlob(committedDocumentCID, projectionStore);
     }
 
     return c.json({ status: 'stored', contentId, documentCID, operationCID });

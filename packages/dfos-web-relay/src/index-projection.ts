@@ -53,6 +53,7 @@ import {
 } from './index-routes';
 import { resolveSignerKeyMultibase } from './ingest';
 import {
+  contentIdsFromCredential,
   provedKeyState,
   type IndexCursor,
   type IndexReadStore,
@@ -134,25 +135,6 @@ interface DirtySet {
 // -----------------------------------------------------------------------------
 // credential scope
 // -----------------------------------------------------------------------------
-
-/**
- * Content ids named by a public credential's attenuations (`chain:<contentId>`
- * resources). `wildcard` means it grants `chain:*`, which covers every chain and
- * therefore fans out to all content rows.
- */
-export const contentIdsFromCredential = (
-  credential: Pick<StoredPublicCredential, 'att'>,
-): { wildcard: boolean; contentIds: string[] } => {
-  const contentIds: string[] = [];
-  let wildcard = false;
-  for (const entry of credential.att) {
-    if (entry.resource === 'chain:*') wildcard = true;
-    else if (entry.resource.startsWith('chain:')) {
-      contentIds.push(entry.resource.slice('chain:'.length));
-    }
-  }
-  return { wildcard, contentIds };
-};
 
 const contentIdsFromCredentialToken = (
   jwsToken: string,
