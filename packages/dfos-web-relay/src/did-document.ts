@@ -29,13 +29,13 @@ import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
-// did:dfos identifier validation (DID-METHOD.md §3.1, line 63)
+// did:dfos identifier validation (DID-METHOD.md §3.1)
 // -----------------------------------------------------------------------------
 
 /**
  * A valid did:dfos is EXACTLY `did:dfos:` + 31 chars over the 19-symbol
  * alphabet `2346789acdefhknrtvz`. Any other length or charset is not a valid
- * did:dfos identifier — resolvers MUST reject it (DID-METHOD.md:63). Note the
+ * did:dfos identifier — resolvers MUST reject it (DID-METHOD.md §3.1). Note the
  * proof-plane `/identities` route does not width-validate its input; the
  * resolver ADDS this check per the DID-core method contract.
  */
@@ -142,7 +142,7 @@ const projectService = (
 /**
  * Build a W3C DID Document from a verified identity's terminal state
  * (DID-METHOD.md §4). A deactivated identity resolves to a minimal document with
- * an empty verification-method set and no verification relationships (§5.4:275).
+ * an empty verification-method set and no verification relationships (§5.4).
  */
 export const identityToDidDocument = (state: VerifiedIdentity): DidDocument => {
   const did = state.did;
@@ -166,7 +166,7 @@ export const identityToDidDocument = (state: VerifiedIdentity): DidDocument => {
   // exclude. Never read `declared` here; `provedKeys` belongs to historical
   // artifact verification, not to what the DID authenticates with NOW.
   //
-  // dedup verification methods by DID-URL id across roles (§4.2:136), preserving
+  // dedup verification methods by DID-URL id across roles (§4.2), preserving
   // deterministic first-seen order: auth → assert → controller
   const vmById = new Map<string, DidVerificationMethod>();
   for (const key of [...state.authKeys, ...state.assertKeys, ...state.controllerKeys]) {

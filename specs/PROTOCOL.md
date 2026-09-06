@@ -520,6 +520,12 @@ Rotation therefore revokes going forward and leaves history valid: an operation
 committed while a key was effective still verifies after that key is rotated out,
 and the same key cannot sign a new ephemeral proof once it is gone.
 
+A **credit claim** runs no temporal check at all, so it has no basis time. The
+claimant's key is resolved against every key that claimant's identity chain has
+ever held. A claim binds a chain rather than a moment, so it survives the
+claimant's later rotations and the hosting document's later revisions
+([CONTENT-MODEL, Credits](https://protocol.dfos.com/content-model#credits)).
+
 The ingest basis is derived from `createdAt` by converting to integer Unix
 seconds:
 

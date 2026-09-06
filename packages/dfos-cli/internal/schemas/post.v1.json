@@ -43,7 +43,7 @@
       "items": {
         "$ref": "#/$defs/credit"
       },
-      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. A bare entry is the assertion tier of the authorship lattice — the operation signer asserts it; a credited DID upgrades its credit to proof by adding a credit claim in the entry's claim field (see https://protocol.dfos.com/credits)."
+      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. A bare entry is the assertion tier of the authorship lattice — the operation signer asserts it; a credited DID upgrades its credit to proof by adding a credit claim in the entry's claim field (see https://protocol.dfos.com/content-model#credits)."
     }
   },
   "additionalProperties": false,

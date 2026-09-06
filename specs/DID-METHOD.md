@@ -291,7 +291,7 @@ The full chain is available to any resolver, including the history of key rotati
 
 ### 7.4 Resolution Privacy
 
-A resolver reading a local chain reveals nothing. A resolver reading a relay reveals to that operator which DIDs it is interested in. Applications with strong privacy requirements resolve from local caches or through a privacy-preserving transport.
+A resolver reading a local chain reveals nothing. A resolver reading a relay reveals to that operator which DIDs it is interested in. Applications with strong privacy requirements SHOULD resolve from local caches or through a privacy-preserving transport.
 
 ---
 

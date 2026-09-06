@@ -12,16 +12,16 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What is the DFOS Protocol?',
     answer:
-      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are strictly linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
     answerHtml:
-      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are strictly linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
   },
   {
     question: 'How do chains handle forks and conflicts?',
     answer:
-      'It depends on the chain kind, and forks are permitted exactly where a merge function exists. Content chains are DAGs that converge to the same head deterministically on every implementation, with no consensus protocol; identity chains are strictly linear, and a conflicting extension is refused rather than arbitrated. The Protocol Specification defines the convergence rule, and Web Relay defines order authority for identity chains.',
+      'It depends on the chain kind, and forks are permitted exactly where a merge function exists. Content chains are DAGs that converge to the same head deterministically on every implementation, with no consensus protocol; an identity chain is linear per view, and a relay refuses a conflicting extension rather than arbitrating it, so two relays can serve two views of one identity. The Protocol Specification defines the convergence rule and the view model, and Web Relay defines relay admission.',
     answerHtml:
-      'It depends on the chain kind, and forks are permitted exactly where a merge function exists. Content chains are DAGs that converge to the same head deterministically on every implementation, with no consensus protocol; identity chains are strictly linear, and a conflicting extension is refused rather than arbitrated. The <a href="/spec">Protocol Specification</a> defines the convergence rule, and <a href="/web-relay">Web Relay</a> defines order authority for identity chains.',
+      'It depends on the chain kind, and forks are permitted exactly where a merge function exists. Content chains are DAGs that converge to the same head deterministically on every implementation, with no consensus protocol; an identity chain is linear per view, and a relay refuses a conflicting extension rather than arbitrating it, so two relays can serve two views of one identity. The <a href="/spec">Protocol Specification</a> defines the convergence rule and the view model, and <a href="/web-relay">Web Relay</a> defines relay admission.',
   },
   {
     question: 'How does the relay network work?',

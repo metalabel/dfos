@@ -144,12 +144,14 @@ A relay ingests, sequences, and serves. It implements:
   dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
   "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
 - **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
-  selection, identity-chain linearity and order authority (permanent refusal of
-  conflicting extensions — normative in PROTOCOL.md "Chain Validity",
-  `specs/PROTOCOL.md`), possession-blind admission (door two: an identity operation's
-  key-proof status never gates log membership; void memberships are excluded from every
-  served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
-  WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`),
+  selection, identity-chain admission (a relay keeps its own log linear by admitting the
+  first successor it sees for a chain position and permanently refusing later ones; the
+  refusal is that relay's admission verdict and not a claim that the refused operation is
+  invalid, since two operations at one position are two views of the identity: PROTOCOL.md
+  "Views", `specs/PROTOCOL.md`), possession-blind admission (door two: an identity
+  operation's key-proof status never gates log membership; void memberships are excluded
+  from every served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
+  WEB-RELAY.md "Identity Linearity and Admission", `specs/WEB-RELAY.md`),
   ingestion statuses (RELAY-CONTRACT.md "Submission",
   `specs/RELAY-CONTRACT.md`), deletion + restore semantics (WEB-RELAY.md
   "Fork Acceptance" / "Deletion Semantics", `specs/WEB-RELAY.md`).
