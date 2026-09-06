@@ -504,9 +504,7 @@ operation in the chain whose `createdAt` is less than or equal to the basis, wit
 key memberships read from the effective (proved) state. For an ephemeral
 presentation the basis is now, so this is the chain head. A basis earlier than
 the chain's genesis names no state: the identity did not exist, no key of it was
-effective, and an artifact with that basis does not verify. `createdAt` is the
-time of signing; a time an application wants to assert about its content belongs
-in the document.
+effective, and an artifact with that basis does not verify.
 
 Credentials have no validity window of their own beyond `exp`; `iat` is
 informational and is not a rejection gate.
