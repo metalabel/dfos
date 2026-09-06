@@ -4,7 +4,7 @@ What this protocol guarantees, and what it does not. Authorship is verifiable
 without trusting any server. Which view of an identity you follow is a choice of
 relay.
 
-This is the corpus's one derivative document. It states no rule of its own: every
+This is the one derivative document among the specifications. It states no rule of its own: every
 line points at the section that makes it true, and where this page and that
 section disagree, the section is right.
 
@@ -41,7 +41,7 @@ from the operations themselves
 ([PROTOCOL, Chain validity](https://protocol.dfos.com/spec#chain-validity),
 [Terminal states](https://protocol.dfos.com/spec#terminal-states)).
 
-**Possession of every key a chain lists.** The genesis key proves possession by
+**Possession of every key that resolves.** The genesis key proves possession by
 signing genesis. Every other key proves possession by an envelope that key itself
 signed, binding the chain DID, the role set, and the chain position. A membership
 with no valid covering envelope is void: excluded from effective state, never
@@ -62,11 +62,12 @@ and learn whether the guess was right. A document drawn from a small or guessabl
 space is not confidential against a party that holds its CID, and two chains that
 committed the same bytes are visibly the same bytes.
 
-**Verification is a pure function of the chains.** A signed chain and the
-identity chains it names give valid or invalid. Nothing in the answer depends on
-which relay supplied the bytes, on the reader's network, or on the reader's
-clock, except the two clock-bound checks named under
-[Time and ordering](#time-and-ordering).
+**Verification is a pure function of the chains.** A signed chain, the identity
+chains it names, and the revocations the verifier holds give valid or invalid.
+Nothing else in the answer depends on which relay supplied the bytes, on the
+reader's network, or on the reader's clock, except the clock-bound checks named
+under [Time and ordering](#time-and-ordering). Revocation knowledge is
+relay-supplied, and its reach is stated under [Accepted bounds](#accepted-bounds).
 
 ---
 
@@ -100,6 +101,11 @@ admission discipline, so which peers a relay syncs from decides which view of a
 divergent identity it ends up serving
 ([RELAY, Peering](https://protocol.dfos.com/relay#peering-convention)).
 
+**A carried chain is a view too.** An identity chain carried inside a sign-in or
+an app description reaches the verifier by the subject's own hand, so what it
+carries is the view the subject chose to present
+([INTEGRATIONS, Carried identity chains](https://protocol.dfos.com/integrations#carried-identity-chains)).
+
 **A rotated-out key can still open a second view.** Removal ends a key's authoring
 window at every relay that already committed a successor. A relay holding no
 successor at an earlier position admits an operation that key signs there and
@@ -117,10 +123,7 @@ identity order that relay serves. There are no signed tree heads, no inclusion o
 consistency proofs, and no Merkle transparency structure anywhere in this corpus.
 A relay that serves one committed order to one consumer and a different one to
 another is detectable by comparison between consumers, never from a single
-response. The known construction for making a log's ordering verifiable without
-trusting the log is Certificate Transparency
-([RFC 9162](https://www.rfc-editor.org/rfc/rfc9162)) and the log designs built on
-it. This corpus does not build it. Content chains sit outside the question: their
+response. Content chains sit outside the question: their
 head converges by deterministic selection over signed operations, so no relay's
 admission order is load-bearing for them.
 
@@ -144,7 +147,7 @@ encrypted above the protocol
 envelope encryption, no private-document primitive. The security posture of a
 document is the security posture of the party serving it.
 
-**Custody is custodial by default on the reference platform.** The DFOS platform
+**The reference platform is custodial by default.** The DFOS platform
 holds a signing key for your account by default, so ordinary use needs no key
 management. You can add keys it never holds.
 
@@ -175,7 +178,10 @@ another relay may admit the same operation, and the result is two views.
 
 **Ingestion cost is a deployment concern.** `POST /proof/v1/operations` accepts
 self-authenticating operations, and an aggregate operation-size cap plus
-cardinality caps bound per-operation abuse. Rate limiting, anti-spam, and blob
+cardinality caps bound per-operation abuse. A relay advertises its admission mode,
+`open`, `proof-required`, or `closed`, and a proof-required relay refuses an
+anonymous submission before verifying it
+([RELAY, Admission](https://protocol.dfos.com/relay#admission)). Rate limiting, anti-spam, and blob
 size limits are set per deployment, not by this protocol
 ([RELAY, Not defined here](https://protocol.dfos.com/relay#not-defined-here)).
 
@@ -243,7 +249,8 @@ verifier with any clock reaches the same verdict on them. Basis-time checks on a
 committed operation resolve against that operation's own `createdAt`, so two
 relays reach the same temporal verdict on it regardless of when each ingests it.
 The clock enters in exactly two places: the 24-hour future bound at admission, and
-the freshness window on an ephemeral presentation. A skewed verifier can therefore
+the basis of now on an ephemeral presentation, where a freshness window, a
+read-time `exp`, and a deposit-time `exp` all resolve. A skewed verifier can therefore
 refuse to admit an operation another verifier admits, and can refuse a sign-in or
 request proof another host accepts. It cannot reach a different verdict on
 committed history.
@@ -272,7 +279,8 @@ left to right, never a parsed epoch and never a locale-aware collation
 - **A holder of your keys.** A compromised custody service or a stolen device
   signs as you, and the chain cannot tell the difference.
 - **A host of your plaintext.** There is no end-to-end encryption, so a host that
-  reads or leaks what it stores is outside what any protocol rule reaches.
+  reads or leaks what it stores is outside what any protocol rule reaches. The
+  TLS terminator or CDN in front of a relay sees what the relay serves.
 - **A Byzantine network.** There is no consensus, no quorum, and no fault
   threshold. This is a selectively trusting design: you choose your relays and
   peers, and you can be your own.
@@ -281,8 +289,10 @@ left to right, never a parsed epoch and never a locale-aware collation
   obligations such as render-before-signing live in that software, and nothing on
   the wire shows whether it honored them.
 - **Traffic analysis.** `did:dfos` identifiers are persistent and public, chain
-  history including rotation timestamps is public, and resolving through a relay
-  tells that operator which DIDs you are interested in
+  history including rotation timestamps is public, a countersignature permanently
+  and publicly links the witness DID to its target, and resolving through a relay
+  or asking its `key=` index tells that operator which DIDs and keys you are
+  interested in
   ([DID-METHOD §7](https://protocol.dfos.com/did-method#7-privacy-considerations)).
 
 ### Binding strength of the identifier

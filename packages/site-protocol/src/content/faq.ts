@@ -19,14 +19,14 @@ export const faqs: FaqEntry[] = [
   {
     question: 'Who holds my keys?',
     answer:
-      "On the DFOS platform, the platform holds a signing key for your account by default. You can add keys it never holds, from Settings. The platform's default key is a controller key: it can change the key set, and every change is written to the chain where anyone can see it. Nothing the platform does can forge a signature from a key it does not hold.",
+      "On the DFOS platform, the platform holds a signing key for your account by default. You can add keys it never holds, from Settings. The platform's default key is a controller key: it can change the key set, and every change is written to the chain where anyone can see it. Nothing the platform does can forge a signature from a key it does not hold. Guarantees states what custody buys and what it does not.",
     answerHtml:
       'On the <a href="https://dfos.com">DFOS platform</a>, the platform holds a signing key for your account by default. You can add keys it never holds, from Settings. The platform\'s default key is a controller key: it can change the key set, and every change is written to the chain where anyone can see it. Nothing the platform does can forge a signature from a key it does not hold. <a href="/guarantees">Guarantees</a> states what custody buys and what it does not.',
   },
   {
     question: 'What happens if the platform I use goes away?',
     answer:
-      'Your identity chain and every proof in it are public and can be mirrored by anyone. With a controller key you hold, you continue the chain on another relay from the last operation that key controlled. Documents do not replicate with the proofs, and proofs survive only where a copy was kept: keep your own copies of your chain and your documents.',
+      'Your identity chain and every proof in it are public and can be mirrored by anyone. With a controller key you hold, you continue the chain on another relay from the last operation that key controlled. Documents do not replicate with the proofs, and proofs survive only where a copy was kept: keep your own copies of your chain and your documents. Guarantees states the bounds of that continuity.',
     answerHtml:
       'Your identity chain and every proof in it are public and can be mirrored by anyone. With a controller key you hold, you continue the chain on another relay from the last operation that key controlled. Documents do not replicate with the proofs, and proofs survive only where a copy was kept: keep your own copies of your chain and your documents. <a href="/guarantees">Guarantees</a> states the bounds of that continuity.',
   },
