@@ -21,6 +21,7 @@ import {
 import {
   createDFOSCredential,
   decodeDFOSCredentialUnsafe,
+  signApiIdentityRequest,
 } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
@@ -152,7 +153,7 @@ const readOnlyStore = (backing: MemoryRelayStore): RelayReadStore => ({
 // -----------------------------------------------------------------------------
 
 describe('commit is atomic', () => {
-  it('leaves no partial state when the persist fails, and keeps the raw op', async () => {
+  it('leaves no partial state when the whole commit fails, and keeps the raw op', async () => {
     // A store that accepts the identity genesis and then faults on the content
     // operation. The old contract would already have written the operation row
     // and the chain head by the time the log append failed; here the whole
@@ -194,6 +195,64 @@ describe('commit is atomic', () => {
     store.failContent = false;
     expect((await ingestOperations([content.jwsToken], store))[0]!.status).toBe('new');
     expect(await store.getOperation(content.operationCID)).toBeDefined();
+  });
+
+  it('never exposes an operation without its log entry — the apply block does not yield', async () => {
+    // WHAT THE ATOMICITY CLAUSE IS FOR, on the reference store: not "the commit
+    // throws at the top" (the test above) but "a commit interrupted PARTWAY is
+    // never observable". In a single-threaded store the only interruption is a
+    // yield, so the property is that the apply block defers nothing: it reads
+    // the batch, validates all of it, and applies all of it in one turn. This
+    // reads the store at the first boundary after the batch starts — where a
+    // concurrent read route, which takes no lock, would read it. A mutator that
+    // actually deferred (an async store member doing real work) would show the
+    // operation row here without its log entry, and fail.
+    const store = new MemoryRelayStore();
+    const identity = await createIdentityOp();
+
+    const pending = store.commit({
+      kind: 'operation',
+      operation: {
+        cid: identity.operationCID,
+        jwsToken: identity.jwsToken,
+        chainType: 'identity',
+        chainId: identity.did,
+      },
+      identityChain: {
+        did: identity.did,
+        log: [identity.jwsToken],
+        state: {
+          did: identity.did,
+          isDeleted: false,
+          authKeys: [identity.key.key],
+          assertKeys: [identity.key.key],
+          controllerKeys: [identity.key.key],
+          services: [],
+        },
+        lastCreatedAt: ts(),
+        headCID: identity.operationCID,
+      },
+      logEntry: {
+        cid: identity.operationCID,
+        jwsToken: identity.jwsToken,
+        kind: 'identity-op',
+        chainId: identity.did,
+        ingestedAt: new Date().toISOString(),
+      },
+    });
+
+    // Read BEFORE awaiting the commit: whatever a concurrent request would see
+    // at the first yield after the batch started.
+    const observed = {
+      operation: await store.getOperation(identity.operationCID),
+      chain: await store.getIdentityChain(identity.did),
+      log: (await store.readLog({ limit: 100 }))!.entries.map((entry) => entry.cid),
+    };
+    expect(await pending).toBe('new');
+
+    expect(observed.operation).toBeDefined();
+    expect(observed.chain).toBeDefined();
+    expect(observed.log).toContain(identity.operationCID);
   });
 
   it('answers duplicate and writes nothing when the operation CID is already held', async () => {
@@ -348,6 +407,67 @@ describe('capabilities are derived from the store', () => {
       'a relay over a read-only store must be given an identity',
     );
   });
+
+  it('turns the index off with the log it projects from', async () => {
+    // The index this relay maintains is a projection of the operation log and
+    // has no other input. With `log: false` no commit carries a log entry, so
+    // the projection would never see anything — and a relay that advertised
+    // `index: true` while answering every query with an empty page forever is
+    // exactly the lie derived capabilities exist to prevent.
+    const store = new MemoryRelayStore();
+    const relay = await createRelay({ store, log: false });
+
+    const wellKnown = (await (
+      await relay.app.request('http://localhost/.well-known/dfos-relay')
+    ).json()) as { capabilities: Record<string, boolean> };
+    expect(wellKnown.capabilities.log).toBe(false);
+    expect(wellKnown.capabilities.index).toBe(false);
+
+    const identity = await createIdentityOp();
+    const posted = await relay.app.request('http://localhost/proof/v1/operations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operations: [identity.jwsToken] }),
+    });
+    expect(posted.status).toBe(200);
+    // the routes answer capability-not-supported, not an empty page
+    expect(
+      (await relay.app.request(`http://localhost/index/v0/identities?did=${identity.did}`)).status,
+    ).toBe(501);
+    expect((await relay.app.request('http://localhost/proof/v1/log')).status).toBe(501);
+    // and the proof plane still answers for the operation it accepted
+    expect(
+      (await relay.app.request(`http://localhost/proof/v1/identities/${identity.did}`)).status,
+    ).toBe(200);
+
+    await expect(
+      createRelay({ store: new MemoryRelayStore(), log: false, index: true }),
+    ).rejects.toThrow('index capability requires the operation log');
+  });
+
+  it('keeps the index over a log-less relay when something else maintains the rows', async () => {
+    // The other half of the same rule: a store with no projection side has no
+    // feed to lose, so `log: false` says nothing about its index.
+    const backing = new MemoryRelayStore();
+    const identity = await bootstrapRelayIdentity(backing);
+    const queryOnly = {
+      ...readOnlyStore(backing),
+      queryIndexIdentities: backing.queryIndexIdentities.bind(backing),
+      queryIndexContent: backing.queryIndexContent.bind(backing),
+      queryIndexCredits: backing.queryIndexCredits.bind(backing),
+      queryIndexArtifacts: backing.queryIndexArtifacts.bind(backing),
+      queryIndexCountersignatures: backing.queryIndexCountersignatures.bind(backing),
+      queryIndexCredentials: backing.queryIndexCredentials.bind(backing),
+      queryIndexOperations: backing.queryIndexOperations.bind(backing),
+      getIndexIdentityDIDsByProfileAnchor:
+        backing.getIndexIdentityDIDsByProfileAnchor.bind(backing),
+      getIndexContentIdsByDocumentCID: backing.getIndexContentIdsByDocumentCID.bind(backing),
+    } as RelayStore;
+
+    const relay = await createRelay({ store: queryOnly, identity, log: false });
+    expect((await relay.app.request('http://localhost/index/v0/identities')).status).toBe(200);
+    expect((await relay.app.request('http://localhost/proof/v1/log')).status).toBe(501);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -394,6 +514,63 @@ describe('index projection worker', () => {
     });
     // and the relay's own handle drives the same worker
     expect((await relay.projectIndex()).caughtUp).toBe(true);
+  });
+
+  it('recomputes a content row after its blob lands, in external mode too', async () => {
+    // A BLOB ARRIVAL IS NOT ON THE LOG. The worker's whole feed is `readLog`, so
+    // an external drain — however often it runs — never reaches the moment a
+    // document's bytes land, and the rows that project that document would keep
+    // reporting docSchema: null forever. The blob route therefore recomputes
+    // them itself in every mode; it is bounded by the documentCID reverse
+    // lookup, not a fan-out.
+    const store = new MemoryRelayStore();
+    const relayIdentity = await bootstrapRelayIdentity(store);
+    const relay = await createRelay({
+      store,
+      identity: relayIdentity,
+      authority: 'localhost',
+      indexProjection: 'external',
+    });
+
+    const creator = await createIdentityOp();
+    await ingestOperations([creator.jwsToken], store);
+    const document = { $schema: 'example/post', title: 'late bytes' };
+    const post = await contentOp(creator, document);
+    const [created] = await ingestOperations([post.jwsToken], store);
+    const contentId = created!.chainId!;
+
+    // the external worker catches the log up; the bytes are not there yet
+    let guard = 0;
+    while (!(await relay.projectIndex()).caughtUp && guard++ < 20);
+    const before = (await store.queryIndexContent({ limit: 100 })).find(
+      (row) => row.contentId === contentId,
+    );
+    expect(before?.docSchema).toBeNull();
+
+    const path = `/content/${contentId}/blob/${post.operationCID}`;
+    const body = new TextEncoder().encode(JSON.stringify(document));
+    const { proof } = await signApiIdentityRequest({
+      method: 'PUT',
+      host: 'localhost',
+      path,
+      body,
+      kid: `${creator.did}#${creator.key.keyId}`,
+      sign: creator.key.signer,
+      extraMembers: { jti: 'store-contract-blob-external' },
+    });
+    const uploaded = await relay.app.request(`http://localhost${path}`, {
+      method: 'PUT',
+      headers: { authorization: `DFOS ${proof}`, 'content-type': 'application/octet-stream' },
+      body,
+    });
+    expect(uploaded.status).toBe(200);
+
+    // NO further drain: the log has nothing new on it, and the row is right.
+    expect((await relay.projectIndex()).caughtUp).toBe(true);
+    const after = (await store.queryIndexContent({ limit: 100 })).find(
+      (row) => row.contentId === contentId,
+    );
+    expect(after?.docSchema).toBe('example/post');
   });
 
   it('drains a chain:* fan-out across runs under a row budget', async () => {

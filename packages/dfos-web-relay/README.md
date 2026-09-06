@@ -251,6 +251,18 @@ bounded by a budget, and a full-corpus fan-out (a `chain:*` grant, an identity
 delete or restore) is carried on the cursor as a resumable sweep rather than
 drained in one pass.
 
+`external` moves the LOG drain to your worker; it is not "the relay runs no
+projection". A document blob arrives on its own route and nothing on the
+operation log marks that moment, so the relay recomputes the rows that project
+that document itself, in both modes, right after the blob commits. That pass is
+bounded by a reverse lookup on the documentCID — no fan-out, no log read.
+
+The index is a projection OF THE LOG, so `log: false` turns it off for a store
+this relay maintains: `createRelay` throws on an explicit `index: true` and
+advertises `index: false` otherwise, rather than serving empty pages forever. A
+store that implements only `IndexReadStore` is maintained elsewhere and keeps
+its index either way.
+
 ### `SigningStore` — the optional mailbox
 
 The ephemeral courier state behind `/signing/v0`. `signing: true` over a store
@@ -283,6 +295,16 @@ A store written against the single `RelayStore` interface needs three edits:
 Members that were optional and are now simply absent (`getStats` is required;
 `getRevocations` was unused and is deleted) and the members a read-only store
 used to answer by throwing can all be removed.
+
+Two more renames a caller sees: the exported `isDependencyFailure` is now
+`isRetryableRejection` (it covers a momentary store fault as well as a missing
+dependency, and both mean "keep the raw operation and try again"), and
+`IngestionResult` carries `storeFault` alongside `dependencyMissing`.
+
+A read-only store (`RelayReadStore` with no `commit`) also needs three things
+from its deployment: `getStats` is required rather than optional, `identity`
+must be passed to `createRelay` (there is nowhere to write a JIT genesis), and
+no `peers` may be configured (peer sync writes).
 
 ## License
 

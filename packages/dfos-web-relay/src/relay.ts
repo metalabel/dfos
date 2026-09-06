@@ -357,10 +357,23 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const acceptingWrites = options.write !== false ? writer : null;
   const writeEnabled = acceptingWrites !== null;
 
+  // THE INDEX THIS RELAY MAINTAINS IS A PROJECTION OF THE OPERATION LOG, and
+  // `readLog` is its only input. With `log: false` no commit carries a log entry,
+  // so the projection would have nothing to read and every `/index/v0` route
+  // would answer 200 with an empty page forever while the well-known advertised
+  // `index: true`. A store that only READS the index is maintained by something
+  // else and is unaffected — the log is this package's feed, not the world's.
+  const indexIsMaintainable = logEnabled || !isIndexWriteStore(store);
   const indexStore: (RelayStore & IndexReadStore) | null =
-    options.index !== false && isIndexReadStore(store) ? store : null;
+    options.index !== false && indexIsMaintainable && isIndexReadStore(store) ? store : null;
   if (options.index === true && indexStore === null) {
-    throw new Error('index capability requires a store implementing IndexReadStore');
+    throw new Error(
+      isIndexReadStore(store)
+        ? 'index capability requires the operation log: with log: false the projection has ' +
+            'nothing to read (pass a store that only implements IndexReadStore if the rows are ' +
+            'maintained elsewhere)'
+        : 'index capability requires a store implementing IndexReadStore',
+    );
   }
   const indexEnabled = indexStore !== null;
 
@@ -524,13 +537,28 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const runProjection = async (): Promise<IndexProjectionRun> =>
     projectionStore ? projectIndex(projectionStore) : { projected: 0, swept: 0, caughtUp: true };
 
+  // EVERY projection pass this relay runs goes through here, so no two of them
+  // overlap — a blob recompute that read an old content head, yielded, and then
+  // applied its rows over a newer row would undo a concurrent ingest's drain.
+  // The TAIL swallows rejections, like the chain-state lock's does: a single
+  // failed pass must not leave every later schedule returning an already
+  // rejected promise and 500ing every ingest from then on. The CALLER still
+  // sees the rejection.
   let projectionChain: Promise<void> = Promise.resolve();
+  const chainProjection = (pass: () => Promise<void>): Promise<void> => {
+    const next = projectionChain.then(pass);
+    projectionChain = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
+  };
+
   const scheduleIndexProjection = (): Promise<void> => {
     if (!projectionStore || projectionMode !== 'inline') return projectionChain;
-    projectionChain = projectionChain.then(async () => {
+    return chainProjection(async () => {
       await drainIndexProjection(projectionStore);
     });
-    return projectionChain;
   };
 
   // ingest wrapper: store raw → process → mark results → sequence pending →
@@ -1553,10 +1581,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // referenced it. Recompute the content rows that project this documentCID
     // (docSchema/name/profile), cascading to their anchored identities. Nothing
     // on the operation log marks this moment, so it is the one projection entry
-    // point the worker's cursor does not reach — and, like every other
-    // projection pass, it runs OUTSIDE the chain-state lock.
-    if (projectionStore && projectionMode === 'inline') {
-      await projectIndexAfterBlob(committedDocumentCID, projectionStore);
+    // point the worker's cursor does not reach — which is exactly why it runs in
+    // EVERY mode, `external` included: an external worker drains the log, and no
+    // amount of draining the log reaches a blob arrival, so gating this on
+    // `inline` would leave docSchema/title/credits null forever. It stays cheap
+    // (bounded by the documentCID reverse lookup, no fan-out), it runs OUTSIDE
+    // the chain-state lock, and it takes the projection chain like every other
+    // pass.
+    if (projectionStore) {
+      await chainProjection(() => projectIndexAfterBlob(committedDocumentCID, projectionStore));
     }
 
     return c.json({ status: 'stored', contentId, documentCID, operationCID });

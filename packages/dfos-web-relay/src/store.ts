@@ -231,16 +231,22 @@ export class MemoryRelayStore
    * Persist one accepted operation, or one document blob, whole.
    *
    * ATOMICITY IN A SINGLE-THREADED, IN-MEMORY STORE. There is no transaction to
-   * open: nothing here awaits between the first mutation and the last, so no
-   * other task can observe a half-applied commit, and the only way to leave one
-   * behind is to throw partway through. So every mutation this batch implies is
-   * VALIDATED FIRST, against a copy of nothing but the arguments, and applied
-   * only once all of it is known to be applicable. A durable store gets the same
-   * property from its transaction.
+   * open, so the property comes from two rules, and both are load-bearing:
+   *
+   * 1. NOTHING AWAITS between the first mutation and the last. Every mutator the
+   *    apply block calls is a SYNCHRONOUS private method for exactly this
+   *    reason — one `await` on a trivially-synchronous helper is still a
+   *    microtask yield, and a concurrent read route (which does not take the
+   *    chain-state lock) could observe the operation row before its log entry.
+   *    Do not make one of them async.
+   * 2. EVERYTHING IS VALIDATED FIRST, against nothing but the arguments, so the
+   *    apply block has no way to fail partway and leave a half-commit behind.
+   *
+   * A durable store gets the same property from its transaction.
    */
   async commit(batch: CommitBatch): Promise<CommitResult> {
     if (batch.kind === 'blob') {
-      await this.putBlob(batch.key, batch.bytes);
+      this.putBlob(batch.key, batch.bytes);
       return 'new';
     }
 
@@ -264,20 +270,17 @@ export class MemoryRelayStore
     if (batch.contentChain)
       this.contentChains.set(batch.contentChain.contentId, batch.contentChain);
     if (batch.countersignature) {
-      await this.addCountersignature(
-        batch.countersignature.targetCID,
-        batch.countersignature.jwsToken,
-      );
+      this.addCountersignature(batch.countersignature.targetCID, batch.countersignature.jwsToken);
     }
-    if (batch.revocation) await this.addRevocation(batch.revocation);
+    if (batch.revocation) this.addRevocation(batch.revocation);
     if (batch.removePublicCredential) {
-      await this.removeIssuerPublicCredential(
+      this.removeIssuerPublicCredential(
         batch.removePublicCredential.issuerDID,
         batch.removePublicCredential.credentialCID,
       );
     }
-    if (batch.publicCredential) await this.addPublicCredential(batch.publicCredential);
-    if (batch.logEntry) await this.appendToLog(batch.logEntry);
+    if (batch.publicCredential) this.addPublicCredential(batch.publicCredential);
+    if (batch.logEntry) this.appendToLog(batch.logEntry);
     return 'new';
   }
 
@@ -335,15 +338,15 @@ export class MemoryRelayStore
     logEntries?: LogEntry[];
     indexRows?: IndexRowBatch;
   }): Promise<void> {
-    for (const op of state.operations ?? []) await this.putOperation(op);
-    for (const chain of state.identityChains ?? []) await this.putIdentityChain(chain);
-    for (const chain of state.contentChains ?? []) await this.putContentChain(chain);
-    for (const blob of state.blobs ?? []) await this.putBlob(blob.key, blob.bytes);
-    for (const revocation of state.revocations ?? []) await this.addRevocation(revocation);
+    for (const op of state.operations ?? []) this.putOperation(op);
+    for (const chain of state.identityChains ?? []) this.putIdentityChain(chain);
+    for (const chain of state.contentChains ?? []) this.putContentChain(chain);
+    for (const blob of state.blobs ?? []) this.putBlob(blob.key, blob.bytes);
+    for (const revocation of state.revocations ?? []) this.addRevocation(revocation);
     for (const credential of state.publicCredentials ?? []) {
-      await this.addPublicCredential(credential);
+      this.addPublicCredential(credential);
     }
-    for (const entry of state.logEntries ?? []) await this.appendToLog(entry);
+    for (const entry of state.logEntries ?? []) this.appendToLog(entry);
     if (state.indexRows) await this.applyIndexRows(state.indexRows);
   }
 
@@ -450,7 +453,7 @@ export class MemoryRelayStore
     return this.operations.get(cid);
   }
 
-  private async putOperation(op: StoredOperation): Promise<void> {
+  private putOperation(op: StoredOperation): void {
     this.operations.set(op.cid, op);
   }
 
@@ -458,7 +461,7 @@ export class MemoryRelayStore
     return this.identityChains.get(did);
   }
 
-  private async putIdentityChain(chain: StoredIdentityChain): Promise<void> {
+  private putIdentityChain(chain: StoredIdentityChain): void {
     this.identityChains.set(chain.did, chain);
   }
 
@@ -466,7 +469,7 @@ export class MemoryRelayStore
     return this.contentChains.get(contentId);
   }
 
-  private async putContentChain(chain: StoredContentChain): Promise<void> {
+  private putContentChain(chain: StoredContentChain): void {
     this.contentChains.set(chain.contentId, chain);
   }
 
@@ -474,7 +477,7 @@ export class MemoryRelayStore
     return this.blobs.get(blobKeyString(key));
   }
 
-  private async putBlob(key: BlobKey, data: Uint8Array): Promise<void> {
+  private putBlob(key: BlobKey, data: Uint8Array): void {
     this.blobs.set(blobKeyString(key), data);
   }
 
@@ -482,7 +485,7 @@ export class MemoryRelayStore
     return this.countersignatures.get(operationCID) ?? [];
   }
 
-  private async addCountersignature(operationCID: string, jwsToken: string): Promise<void> {
+  private addCountersignature(operationCID: string, jwsToken: string): void {
     const existing = this.countersignatures.get(operationCID) ?? [];
 
     // dedup by witness DID (kid DID prefix), not just exact token match
@@ -505,7 +508,7 @@ export class MemoryRelayStore
 
   // --- revocations ---
 
-  private async addRevocation(revocation: StoredRevocation): Promise<void> {
+  private addRevocation(revocation: StoredRevocation): void {
     const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
     // earliest boundary wins — see revocationSupersedes. The survivor is kept
     // WHOLE (artifact + boundary together), so the revocation this store serves
@@ -889,7 +892,7 @@ export class MemoryRelayStore
     return this.publicCredentials.get(cid);
   }
 
-  private async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
+  private addPublicCredential(credential: StoredPublicCredential): void {
     this.publicCredentials.set(credential.cid, credential);
   }
 
@@ -899,10 +902,7 @@ export class MemoryRelayStore
    * pairing, any identity could un-publish anyone's public content by signing a
    * revocation that named its credential CID.
    */
-  private async removeIssuerPublicCredential(
-    issuerDID: string,
-    credentialCID: string,
-  ): Promise<void> {
+  private removeIssuerPublicCredential(issuerDID: string, credentialCID: string): void {
     const held = this.publicCredentials.get(credentialCID);
     if (held && held.issuerDID === issuerDID) this.publicCredentials.delete(credentialCID);
   }
@@ -912,7 +912,7 @@ export class MemoryRelayStore
   // The log carries the receipt stamp the writer read at commit — this store
   // adds no clock of its own. One clock read per operation is what keeps the
   // index surfaces from disagreeing by a millisecond about the same op.
-  private async appendToLog(entry: LogEntry): Promise<void> {
+  private appendToLog(entry: LogEntry): void {
     this.operationLog.push(entry);
   }
 

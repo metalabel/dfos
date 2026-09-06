@@ -192,25 +192,36 @@ export interface RelayOptions {
   identity?: RelayIdentity;
   /** Whether content plane routes are enabled (default: true) */
   content?: boolean;
-  /** Whether the global operation log is enabled (default: true) */
+  /**
+   * Whether the global operation log is enabled (default: true). With `false`,
+   * `GET /proof/v1/log` answers 501 and no commit carries a log entry — which
+   * also turns off an index this relay would maintain, since the projection
+   * reads the log and nothing else.
+   */
   log?: boolean;
   /** Whether the revocation status route family is enabled (default: true) */
   revocations?: boolean;
   /**
    * Whether the index query family is enabled (default: true, when the store
-   * implements `IndexReadStore`). An explicit `true` over a store that does not
-   * is a configuration error and throws at construction.
+   * implements `IndexReadStore` and the projection has a feed). An explicit
+   * `true` the deployment cannot back — a store without the queries, or
+   * `log: false` over a store this relay would maintain the index for — is a
+   * configuration error and throws at construction.
    */
   index?: boolean;
   /**
-   * Who advances the `/index/v0` projection.
+   * Who advances the `/index/v0` projection off the operation log.
    *
-   * - `inline` (default) — the relay drains the projection after each accepted
-   *   ingest batch, and recomputes a content row after its blob lands. Each pass
-   *   is budget-bounded and resumable from the persisted cursor; nothing about
-   *   it runs inside a commit.
-   * - `external` — the relay never runs it. The operator calls `projectIndex`
-   *   on the created relay from a timer or a worker.
+   * - `inline` (default) — the relay drains the log projection after each
+   *   accepted ingest batch. Each pass is budget-bounded and resumable from the
+   *   persisted cursor; nothing about it runs inside a commit.
+   * - `external` — the relay never drains the log itself. The operator calls
+   *   `projectIndex` on the created relay from a timer or a worker.
+   *
+   * ONE PASS IS NOT A CHOICE IN EITHER MODE: after a document blob lands, the
+   * relay recomputes the content rows that project it. Nothing on the operation
+   * log marks a blob arrival, so no amount of external draining reaches it. That
+   * pass is bounded by a reverse lookup on the documentCID.
    *
    * Inert when the store does not implement `IndexWriteStore`: such a store
    * serves index queries from rows something else maintains.
@@ -1107,6 +1118,13 @@ export interface SigningStore {
  * writes and peers. It is exported so an embedder building a durable writing
  * relay can implement it deliberately, not because a store needs it to be
  * useful.
+ *
+ * BE PRECISE ABOUT WHAT MOVED. This state left the contract every integration
+ * reads — a read-only store, and the platform's Postgres projection, now name
+ * none of it — but it is still an interface a durable WRITING relay implements,
+ * and still a precondition for `write`. Holding the raw-op buffer and the peer
+ * cursors inside this package would mean owning durability for them, which is
+ * the store's job. So the separation is by AUDIENCE, not by ownership.
  */
 export interface RelayWriterState {
   /** Store a raw JWS token by CID and durable origin — absent origin is direct. */

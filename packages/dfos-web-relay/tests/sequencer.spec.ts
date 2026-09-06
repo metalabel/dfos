@@ -119,6 +119,14 @@ describe('isRetryableRejection (structured discriminator)', () => {
     expect(isRetryableRejection({ dependencyMissing: false })).toBe(false);
     expect(isRetryableRejection({})).toBe(false);
   });
+
+  it('branches on the storeFault flag too — a fault is not a verdict', () => {
+    // The arm that keeps a momentary store fault from DELETING the only copy of
+    // a valid operation.
+    expect(isRetryableRejection({ storeFault: true })).toBe(true);
+    expect(isRetryableRejection({ storeFault: false })).toBe(false);
+    expect(isRetryableRejection({ dependencyMissing: false, storeFault: true })).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
