@@ -1418,6 +1418,12 @@ same PR that specifies it, exactly as internal names do.
 
 ## Reference vectors
 
+The vectors in this section are published as
+[`packages/protocol-verify/vectors.json`](https://github.com/metalabel/dfos/blob/main/packages/protocol-verify/vectors.json),
+the artifact every verification suite loads. The prose here renders that
+artifact byte for byte; the TypeScript reference suite regenerates it from the
+fixed seeds and fails if the two diverge.
+
 All artifacts below are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries. Private keys are derived from `SHA-256(UTF8("dfos-protocol-reference-key-N"))`.
 
 The same values are re-derived from scratch, in five languages using only native cryptography libraries, by the suites in [`packages/protocol-verify/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify). Each suite hardcodes these constants and imports no DFOS library, so a disagreement between any two suites is an ambiguity in this document.
