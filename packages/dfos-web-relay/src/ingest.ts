@@ -996,7 +996,11 @@ const ingestRevocation = async (
     return { cid, status: 'rejected', error: 'identity is deleted' };
   }
 
-  const revokedCredential = await store.getPublicCredentialByCID(verified.credentialCID);
+  // Issuer scope, not CID scope. Revocation is issuer-only, so a held credential
+  // someone ELSE issued is not the credential this revocation reaches: it is
+  // neither reported as a revoked grant nor evicted below.
+  const held = await store.getPublicCredentialByCID(verified.credentialCID);
+  const revokedCredential = held?.issuerDID === did ? held : undefined;
   const revokedGrant = revokedCredential ? contentIdsFromCredential(revokedCredential) : undefined;
 
   // add to revocation set — carrying the VERIFIED createdAt, which is the as-of
@@ -1009,8 +1013,8 @@ const ingestRevocation = async (
     createdAt: verified.createdAt,
   });
 
-  // if the revoked credential was a stored public credential, remove it
-  await store.removePublicCredential(verified.credentialCID);
+  // if the revoked credential was a stored public credential THIS issuer granted, remove it
+  await store.removePublicCredential(did, verified.credentialCID);
 
   await store.putOperation({ cid, jwsToken, chainType: 'revocation', chainId: did });
   if (logEnabled) {

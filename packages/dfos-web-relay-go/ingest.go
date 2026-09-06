@@ -818,12 +818,15 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
 
+	// Issuer scope, not CID scope. Revocation is issuer-only, so a held
+	// credential someone ELSE issued is not the credential this revocation
+	// reaches: it is neither reported as a revoked grant nor evicted below.
 	revokedCredential, err := store.GetPublicCredentialByCID(result.CredentialCID)
 	if perr := persistError(cid, err); perr != nil {
 		return *perr
 	}
 	var revokedGrant *RevokedGrant
-	if revokedCredential != nil {
+	if revokedCredential != nil && revokedCredential.IssuerDID == did {
 		wildcard, contentIDs := contentIdsFromCredential(*revokedCredential)
 		revokedGrant = &RevokedGrant{Wildcard: wildcard, ContentIDs: contentIDs}
 	}
@@ -840,8 +843,8 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return *perr
 	}
 
-	// revoke any standing public credential
-	if perr := persistError(cid, store.RemovePublicCredential(result.CredentialCID)); perr != nil {
+	// revoke any standing public credential THIS issuer granted
+	if perr := persistError(cid, store.RemovePublicCredential(did, result.CredentialCID)); perr != nil {
 		return *perr
 	}
 

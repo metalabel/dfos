@@ -750,8 +750,9 @@ export class MemoryRelayStore implements RelayStore {
     this.publicCredentials.set(credential.cid, credential);
   }
 
-  async removePublicCredential(credentialCID: string): Promise<void> {
-    this.publicCredentials.delete(credentialCID);
+  async removePublicCredential(issuerDID: string, credentialCID: string): Promise<void> {
+    const held = this.publicCredentials.get(credentialCID);
+    if (held?.issuerDID === issuerDID) this.publicCredentials.delete(credentialCID);
   }
 
   // --- operation log ---

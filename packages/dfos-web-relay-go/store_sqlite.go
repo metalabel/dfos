@@ -2574,13 +2574,24 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 	return nil
 }
 
-func (s *SQLiteStore) RemovePublicCredential(credentialCID string) error {
+// RemovePublicCredential deletes the credential row and its derived resource
+// rows, both qualified by issuer. The resource table carries no issuer column,
+// so its predicate reads the issuer off the parent row it derives from — which
+// is why the parent delete runs SECOND: reversing the order would delete the
+// row the EXISTS clause interrogates and the resource rows would survive as
+// orphans that GetPublicCredentials still answers with.
+func (s *SQLiteStore) RemovePublicCredential(issuerDID string, credentialCID string) error {
 	if _, err := s.writerDB().Exec(
-		"DELETE FROM public_credential_resources WHERE cid = ?", credentialCID,
+		`DELETE FROM public_credential_resources
+		 WHERE cid = ?
+		   AND EXISTS (SELECT 1 FROM public_credentials WHERE cid = ? AND issuer_did = ?)`,
+		credentialCID, credentialCID, issuerDID,
 	); err != nil {
 		return err
 	}
-	_, err := s.writerDB().Exec("DELETE FROM public_credentials WHERE cid = ?", credentialCID)
+	_, err := s.writerDB().Exec(
+		"DELETE FROM public_credentials WHERE cid = ? AND issuer_did = ?", credentialCID, issuerDID,
+	)
 	return err
 }
 
