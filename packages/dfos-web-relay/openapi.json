@@ -3131,7 +3131,7 @@
           },
           "state": {
             "type": "object",
-            "description": "Verified terminal state. The three key arrays are EFFECTIVE state — the key-role memberships a possession proof admitted — so a key the chain declared but nothing ever proved does not appear in them and does not resolve. The optional declared / voidKeys / provedKeys members carry the rest of the picture; a relay MAY omit them.",
+            "description": "Verified terminal state. The three key arrays are EFFECTIVE state — the key-role memberships a possession proof admitted — so a key the chain declared but nothing ever proved does not appear in them and does not resolve. The optional declared / voidKeys / provedKeys / seenKeys members carry the rest of the picture; a relay MAY omit them.",
             "required": [
               "did",
               "isDeleted",
@@ -3253,6 +3253,13 @@
                       "$ref": "#/components/schemas/MultikeyPublicKey"
                     }
                   }
+                }
+              },
+              "seenKeys": {
+                "type": "array",
+                "description": "HAS-EVER-BEEN-DECLARED, as a key-id-to-material binding: one entry per key id this chain has ever written, carrying the Multikey that id went in with, in first-seen order. A key id is bound to one key for the life of a chain — an operation that re-points an existing id at new material is rejected — and this is the binding a verifier extending the chain one operation at a time enforces without re-walking the log.",
+                "items": {
+                  "$ref": "#/components/schemas/MultikeyPublicKey"
                 }
               },
               "services": {

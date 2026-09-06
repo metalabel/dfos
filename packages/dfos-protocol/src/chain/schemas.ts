@@ -342,6 +342,30 @@ export const VerifiedIdentity = z.strictObject({
    * disagrees with this one.
    */
   provedKeys: DeclaredKeyState.optional(),
+  /**
+   * HAS-EVER-BEEN-DECLARED, as a key-id-to-material binding: one entry per key
+   * id the chain has ever written, carrying the Multikey that id went in with,
+   * in the order the walk first saw it.
+   *
+   * A KEY ID IS BOUND TO ONE KEY FOR THE LIFE OF A CHAIN. The full walk enforces
+   * that chain-wide and rejects the operation that breaks it — the id is a
+   * stable name, so re-pointing it at new material would silently re-aim every
+   * artifact that ever referenced it. The incremental extension verifier has no
+   * log to re-scan, so it needs the binding handed to it, and this member is how
+   * it arrives: with it, the fast path returns the SAME verdict as a full replay
+   * on the same operation, which is the property that keeps a relay's linear
+   * path from accepting a chain its own re-verification would refuse.
+   *
+   * Broader than `declared` and than `provedKeys` on purpose. The rule covers
+   * every id the chain wrote, including one declared into a void membership and
+   * later dropped — neither of the other two members remembers that id, and it
+   * is exactly the id an attacker would reuse.
+   *
+   * Optional because a caller may hand the extension verifier a hand-built or
+   * older state. Absent, the binding is read off `declared` and `provedKeys`,
+   * which is complete for any chain that never dropped an unproved key id.
+   */
+  seenKeys: z.array(MultikeyPublicKey).optional(),
 });
 export type VerifiedIdentity = z.infer<typeof VerifiedIdentity>;
 

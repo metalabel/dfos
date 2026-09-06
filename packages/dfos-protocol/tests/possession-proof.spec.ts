@@ -801,3 +801,192 @@ describe('possession proofs — the O(1) extension verifier agrees with full rep
     ).rejects.toThrow(/keyProofs is valid on update only/);
   });
 });
+
+/*
+
+  A KEY ID IS BOUND TO ONE KEY FOR THE LIFE OF A CHAIN, and the fast path says so
+  as loudly as the slow one.
+
+  The id is a stable name — artifacts reference it, resolvers dereference it — so
+  an operation that keeps the id and swaps the material under it re-aims every
+  reference at once. That is a VALIDITY break, not a possession one: the full
+  walk rejects the operation, and the incremental verifier that relays run on the
+  linear path has to reject it identically, or a relay accepts and sequences a
+  chain its own re-verification would refuse.
+
+*/
+describe('key-material consistency — the extension verifier returns the full walk verdict', () => {
+  /** The same key id, pointed at somebody else's material. */
+  const impostorFor = (id: string): MultikeyPublicKey => ({ ...makeKey().key, id });
+
+  it('rejects a reused key id carrying new material, with no envelope', async () => {
+    const g = await genesis();
+    const impostor = impostorFor(g.key.key.id);
+    const op = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [impostor],
+      assertKeys: [impostor],
+      controllerKeys: [impostor],
+    });
+
+    // full replay: reject
+    await expect(
+      verifyIdentityChain({ didPrefix: 'did:dfos', log: [g.jwsToken, op.jwsToken] }),
+    ).rejects.toThrow(/type or public key inconsistency/);
+
+    // the O(1) path: the SAME verdict, not a void membership and not an accept
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: g.state,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).rejects.toThrow(/type or public key inconsistency/);
+  });
+
+  it('rejects a reused key id carrying new material even with a valid envelope', async () => {
+    // Possession of the new material is not the question. The chain already bound
+    // this name, and an envelope cannot rename a key.
+    const g = await genesis();
+    const swapped = makeKey();
+    const impostor: MultikeyPublicKey = { ...swapped.key, id: g.key.key.id };
+    const op = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [impostor],
+      assertKeys: [impostor],
+      controllerKeys: [impostor],
+      keyProofs: [await proofFor({ key: swapped, did: g.did, prevCID: g.operationCID })],
+    });
+
+    await expect(
+      verifyIdentityChain({ didPrefix: 'did:dfos', log: [g.jwsToken, op.jwsToken] }),
+    ).rejects.toThrow(/type or public key inconsistency/);
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: g.state,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).rejects.toThrow(/type or public key inconsistency/);
+  });
+
+  it('rejects it from a trusted state that predates the binding member', async () => {
+    // A state persisted before `seenKeys` existed, or hand-built by a caller. The
+    // binding is read off declared plus has-ever-proved, and the verdict holds.
+    const g = await genesis();
+    const legacyState: VerifiedIdentity = { ...g.state };
+    delete legacyState.seenKeys;
+    const impostor = impostorFor(g.key.key.id);
+    const op = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [impostor],
+      assertKeys: [impostor],
+      controllerKeys: [impostor],
+    });
+
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: legacyState,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).rejects.toThrow(/type or public key inconsistency/);
+  });
+
+  it('admits an ordinary key-add with a valid envelope, and hands on the binding', async () => {
+    const g = await genesis();
+    const added = makeKey();
+    const op = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [g.key.key, added.key],
+      assertKeys: [g.key.key],
+      controllerKeys: [g.key.key],
+      keyProofs: [
+        await proofFor({ key: added, did: g.did, prevCID: g.operationCID, roles: ['auth'] }),
+      ],
+    });
+
+    const replayed = await verifyIdentityChain({
+      didPrefix: 'did:dfos',
+      log: [g.jwsToken, op.jwsToken],
+    });
+    const extended = await verifyIdentityExtensionFromTrustedState({
+      currentState: g.state,
+      headCID: g.operationCID,
+      lastCreatedAt: g.op.createdAt,
+      newOp: op.jwsToken,
+    });
+
+    expectProved(extended.state, added.key, ['auth']);
+    expect(extended.state.authKeys).toEqual(replayed.authKeys);
+    expect(extended.state.seenKeys).toEqual(replayed.seenKeys);
+    expect(extended.state.seenKeys?.map((k) => k.id)).toEqual([g.key.key.id, added.key.id]);
+  });
+
+  it('lets a void membership climb back out with a fresh envelope', async () => {
+    // Re-declaring the SAME id with the SAME material is not a rename, so the
+    // binding never fires — the membership is introduced again and an envelope
+    // headed at the new head rescues it.
+    const g = await genesis();
+    const unproved = makeKey();
+    const op1 = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [g.key.key, unproved.key],
+      assertKeys: [g.key.key],
+      controllerKeys: [g.key.key],
+    });
+    const ext1 = await verifyIdentityExtensionFromTrustedState({
+      currentState: g.state,
+      headCID: g.operationCID,
+      lastCreatedAt: g.op.createdAt,
+      newOp: op1.jwsToken,
+    });
+    expectVoid(ext1.state, unproved.key, ['auth']);
+
+    const op2 = await update({
+      did: g.did,
+      prevCID: op1.operationCID,
+      minute: 2,
+      signedBy: g.key,
+      authKeys: [g.key.key, unproved.key],
+      assertKeys: [g.key.key],
+      controllerKeys: [g.key.key],
+      keyProofs: [
+        await proofFor({ key: unproved, did: g.did, prevCID: op1.operationCID, roles: ['auth'] }),
+      ],
+    });
+    const ext2 = await verifyIdentityExtensionFromTrustedState({
+      currentState: ext1.state,
+      headCID: ext1.operationCID,
+      lastCreatedAt: ext1.createdAt,
+      newOp: op2.jwsToken,
+    });
+    expectProved(ext2.state, unproved.key, ['auth']);
+
+    const replayed = await verifyIdentityChain({
+      didPrefix: 'did:dfos',
+      log: [g.jwsToken, op1.jwsToken, op2.jwsToken],
+    });
+    expect(ext2.state.authKeys).toEqual(replayed.authKeys);
+    expect(ext2.state.voidKeys).toEqual(replayed.voidKeys);
+    expect(ext2.state.seenKeys).toEqual(replayed.seenKeys);
+  });
+});

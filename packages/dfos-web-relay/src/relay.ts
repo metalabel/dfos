@@ -778,12 +778,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // `voidKeys` rides along because its absence is the failure mode: a
     // controller who introduced a key with no proof has a chain that verifies
     // and a key that is simply not there, and NOTHING in the effective arrays
-    // can tell them so. `declared` and `provedKeys` come with it — the first is
-    // what the chain says, the second is has-ever-proved (what the `key=` index
-    // answers and what verifies an artifact signed before a rotation). All three
-    // are re-derivable from the public log, so serving them discloses nothing
-    // new; it just spares every consumer a chain walk to learn it. They are
-    // OPTIONAL in the document: a relay that omits them is still conformant.
+    // can tell them so. `declared`, `provedKeys` and `seenKeys` come with it —
+    // what the chain says, has-ever-proved (what the `key=` index answers and
+    // what verifies an artifact signed before a rotation), and the
+    // key-id-to-material binding a verifier extending the chain one operation at
+    // a time needs to refuse a name that changed keys. All four are re-derivable
+    // from the public log, so serving them discloses nothing new; it just spares
+    // every consumer a chain walk to learn it. They are OPTIONAL in the
+    // document: a relay that omits them is still conformant.
     return c.json({
       did: chain.did,
       headCID: chain.headCID,
