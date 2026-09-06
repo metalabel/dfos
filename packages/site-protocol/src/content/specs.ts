@@ -103,19 +103,6 @@ export const specs: SpecEntry[] = [
     nav: { tier: 'secondary' },
   },
   {
-    slug: '/credits',
-    title: 'Credits',
-    tile: 'Verifiable attribution &mdash; signed credit claims bound to the content they credit',
-    llms: 'Verifiable attribution — the credit-claim envelope, the two-way bind between a credits entry and a claimant signature, and the four verification states',
-    metaDescription:
-      'DFOS Credits — verifiable attribution via credit claims: the signed envelope, the two-way bind, and the four verification states.',
-    source: '../../specs/CREDITS.md',
-    grid: 'core',
-    chip: 'v1 · additive',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
     slug: '/siwd',
     title: 'Sign In With DFOS',
     tile: 'Identity verification, consent scopes, and credential issuance for third-party applications',
@@ -153,19 +140,6 @@ export const specs: SpecEntry[] = [
     chip: '0.x',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/key-proof',
-    title: 'Key Proof',
-    tile: 'Position-bound key possession proofs &mdash; closed payload, audience-bound, carried by the chain',
-    llms: 'Key possession-and-consent proofs binding key, chain, roles, and position — the closed seven-member envelope, presentation and chain-walk verification, and the ceremony purpose registry',
-    metaDescription:
-      'DFOS Key Proof — challenge-bound, position-bound key possession proofs with a closed payload, presented to ceremonies and embedded in identity chains.',
-    source: '../../specs/KEY-PROOF.md',
-    grid: 'auth',
-    chip: 'v1',
-    llmsSection: 'specifications',
-    nav: { label: 'Key Proof', tier: 'secondary' },
   },
   {
     slug: '/signing',
@@ -214,19 +188,6 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'DFOS Protocol threat model — adversaries, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol does and does not defend against.',
     source: '../../specs/THREAT-MODEL.md',
-    grid: 'companions',
-    chip: 'companion',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/extensions',
-    title: 'Extension Registry',
-    tile: 'Every registered service type and JWS <code>typ</code> — one index, owner specs linked',
-    llms: 'The single index of registered names — service types under the open services namespace, and JWS typ values with their cid-header carriage — each linked to the spec that owns its semantics',
-    metaDescription:
-      'DFOS Extension Registry — the single index of registered service types and JWS typ values, each linked to the owner spec that defines its semantics.',
-    source: '../../specs/EXTENSIONS.md',
     grid: 'companions',
     chip: 'companion',
     llmsSection: 'specifications',

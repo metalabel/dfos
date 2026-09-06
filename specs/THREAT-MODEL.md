@@ -24,7 +24,7 @@ optional signing mailbox's courier state sits outside both.
 
 ### Proof plane — self-authenticating, trustless
 
-The crypto core is the trust boundary (PROTOCOL.md "Protocol Overview", `specs/PROTOCOL.md`).
+The crypto core is the trust boundary (PROTOCOL.md "Overview", `specs/PROTOCOL.md`).
 Identity chains, content chains, artifacts, countersignatures, credentials,
 and revocations are all signed, content-addressed objects that anyone can verify with
 a public key and any standard EdDSA + dag-cbor library. There is no privileged registry,
@@ -47,7 +47,7 @@ below.
 ### Content plane — honest-host, undisclosed-by-default
 
 The protocol commits to content _hashes_, not plaintext — it does not encrypt
-(README.md, `README.md`; PROTOCOL.md "Philosophy", `specs/PROTOCOL.md`).
+(README.md, `README.md`; PROTOCOL.md "Scope", `specs/PROTOCOL.md`).
 Confidentiality of the underlying documents is enforced at the application layer by
 whoever serves them. **The relay operator can read what it stores.** This is
 undisclosed-by-default, _not_ end-to-end encrypted. The content plane never gossips;
@@ -188,8 +188,8 @@ the surface is built around:
 
 A key proof is a challenge-bound JWS in which a candidate key signs `{nonce,
 audience, chain DID, role set, chain position, its own public key, timestamp}` to
-demonstrate possession and consent to one named introduction (KEY-PROOF.md "The
-Envelope", `specs/KEY-PROOF.md`) — presented once during a ceremony, then carried
+demonstrate possession and consent to one named introduction (PROTOCOL.md "The envelope",
+`specs/PROTOCOL.md`) — presented once during a ceremony, then carried
 forever by the chain operation that adopted it (PROTOCOL.md "Key Possession").
 The threat consequences the surface is built around:
 
@@ -206,26 +206,25 @@ The threat consequences the surface is built around:
   head the introduction builds on, so no stored proof re-adds a removed key at a
   later head — the chain's own controller included. There is no standing consent
   and nothing to revoke: each introduction costs a fresh signature from the key
-  itself (KEY-PROOF.md "Position binding").
+  itself (PROTOCOL.md "Position binding").
 - **Challenge relay is defeated by audience binding, not carriage secrecy.** The
   signer names the completing authority its human confirmed inside the signed bytes,
   and the verifier compares against its own configured authority — so a phished or
   re-displayed challenge yields a proof that is dead bytes everywhere but the host
-  the victim actually initiated (KEY-PROOF.md "Audience Binding"). The
+  the victim actually initiated (PROTOCOL.md "The two legs"). The
   controller-verified leg has no host, and its audience is the chain's own DID —
   the two value domains never overlap, so neither leg's envelope verifies in the
-  other (KEY-PROOF.md "The Two Legs").
+  other (PROTOCOL.md "The two legs").
 - **The code is the capability, and resolving it names the identity — deliberately.**
   A shoulder-surfed code or intercepted QR yields the ability to resolve one
   short-lived ceremony's context — including which public identity it adopts into —
   and to attempt one presentation, which still requires the candidate key's
   signature plus the operator's own ceremony authorization. The disclosure is the
   price of consent: a holder who cannot see whom they are joining cannot refuse it,
-  and the named facts are public identity facts (KEY-PROOF.md "Carriage",
-  "Security Considerations").
+  and the named facts are public identity facts (PROTOCOL.md "Carriage and resolution").
 - **The payload is closed, so a key proof cannot be socially engineered into
   "signing something".** There is no member in which to smuggle a transaction or an
-  instruction; a proof proves a key and conveys no intent (KEY-PROOF.md pin 1).
+  instruction; a proof proves a key and conveys no intent (PROTOCOL.md "The envelope").
 - **The payload's bytes are a function of its members.** A signature covers whatever
   octets arrived, not member semantics, so the verifier recomputes the canonical signing
   input from the parsed payload and byte-compares it against the octets it was handed — a
@@ -235,23 +234,23 @@ The threat consequences the surface is built around:
   serialization leave one proof more than one envelope spelling, and nothing rests on
   envelope uniqueness — at presentation the nonce is what is spent, atomically and
   once, and on the chain the carrying operation's CID pins one spelling of the whole
-  operation (KEY-PROOF.md "Presentation Verification" steps 3 and 7,
-  "Chain-Walk Verification").
+  operation (PROTOCOL.md "Presentation verification" steps 3 and 8,
+  "Chain-walk verification").
 - **Nothing persists to hijack.** Ceremonies are single-shot: no session, pairing, or
   channel outlives adoption, and the nonce is consumed atomically. The envelope's
   afterlife on the chain is a fact about one introduction, inert at every other
-  position (KEY-PROOF.md pin 2).
+  position (PROTOCOL.md "Position binding").
 - **Cross-DID key reuse is a permanent public link.** The has-ever-proved `key=`
   index survives rotation and deletion, so proving one key into two chains publishes
   their association irreversibly — which is why holder tooling refuses by default
-  before any signature exists (KEY-PROOF.md "Holder Obligations"). An unproved
+  before any signature exists (PROTOCOL.md "Holder obligations"). An unproved
   declaration creates no link: void memberships never index.
 - **The operator may name the pre-flight's oracle, and that adds no trust the ceremony
   does not already extend.** The short-code resolution's optional `relay` member reaches
   only a holder with no configured relay of its own — a holder's own oracle always takes
   precedence, the member is ceremony-scoped, and adopting it as a standing peer is
   refused by rule. The party it defers to is the one that already decides what the
-  adoption effects (KEY-PROOF.md "Carriage", "Security Considerations").
+  adoption effects (PROTOCOL.md "Carriage and resolution").
 
 ### Countersignatures live on the public proof plane
 
@@ -306,7 +305,7 @@ A malicious peer can therefore only impose cost and noise, not corrupt state.
 arbitrary JWS tokens, imposing CPU (verification) and storage (store-then-verify
 buffering, `specs/WEB-RELAY.md`) cost. One aggregate 64 KiB operation-size cap plus
 a small set of cardinality caps bound per-operation abuse — there is deliberately no
-per-field string-length table (PROTOCOL.md "Operation Size and Cardinality Limits",
+per-field string-length table (PROTOCOL.md "Size and cardinality limits",
 `specs/PROTOCOL.md`) — but **protocol-layer rate limiting is explicitly deferred** to
 the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
 

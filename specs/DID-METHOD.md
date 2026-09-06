@@ -1,44 +1,22 @@
 # DID Method: `did:dfos`
 
-W3C DID Method specification for DFOS identity chains. Self-certifying, transport-agnostic, Ed25519-based decentralized identifiers.
-
-> **Status — Protocol v1: feature-complete and frozen.** The method core — `did:dfos` derivation, chain resolution, and the DID-document mapping — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is frozen but not yet final: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [DFOS](https://nce.dfos.com) space.
+W3C DID method registration for DFOS identity chains. Ed25519 keys, self-certifying identifiers, resolution from a signed chain rather than a registry.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [Protocol Specification](https://protocol.dfos.com/spec) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
 ---
 
-## Abstract
+## 1. Scope
 
-`did:dfos` identifiers are self-certifying — derived deterministically from the genesis operation of a cryptographically signed identity chain. No registry, no blockchain, no resolution service. The identifier itself is the trust anchor. Conforms to [W3C Decentralized Identifiers (DIDs) v1.0](https://www.w3.org/TR/did-core/).
+This document registers `did:dfos`. It defines the identifier syntax, the DID Document built from an identity's verified state, and the mapping of DID operations onto identity chain operations.
 
----
-
-## Conformance
+The mechanics underneath are specified in [PROTOCOL.md](https://protocol.dfos.com/spec) and are not restated here: canonical encoding and CIDs, the JWS envelope, identity chain signer validity, key possession, services, and the verification algorithm.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ---
 
-## 1. Introduction
-
-DFOS is a protocol for verifiable identity and content chains using Ed25519 signatures and content-addressed CIDs. Every identity in DFOS is an append-only chain of signed operations — a self-sovereign log of key management events. The DID for an identity is derived deterministically from the hash of the chain's genesis operation, making `did:dfos` identifiers **self-certifying**: given the chain, anyone can independently verify the DID without trusting the source.
-
-This property makes `did:dfos` fundamentally transport-agnostic. There is no privileged registry, blockchain, or consensus layer. The chain can be obtained from any source — an HTTP API, a peer-to-peer exchange, a local file, a USB drive — and the verifier can independently confirm the chain belongs to the claimed DID.
-
-For full protocol details including cryptographic primitives, chain mechanics, and test vectors, see the [DFOS Protocol Specification](https://protocol.dfos.com/spec).
-
-### 1.1 Design Goals
-
-- **Self-certifying** — The DID is a deterministic derivation of the genesis content. No external authority is needed to verify the binding between identifier and chain.
-- **Transport-agnostic** — Resolution requires obtaining and verifying a chain, not querying a specific endpoint. Any system that stores and serves identity chains is a valid source.
-- **Key rotation** — Identity chains support full key rotation via signed update operations. Keys can be added, removed, and replaced without changing the DID.
-- **Deactivation** — Identities can be deactivated via a signed delete operation. The `delete` record is permanent, but deactivation itself is reversible only by the controller, via an explicit signed `restore` operation (see §5.5).
-- **Minimal** — The method defines identifiers and verification. It deliberately does not define discovery, gossip, or consensus mechanisms.
-
----
-
-## 2. DID Method Name
+## 2. Method Name
 
 The method name is `dfos`. A DID using this method MUST begin with the prefix `did:dfos:`.
 
@@ -58,9 +36,9 @@ dfos-char      = "2" / "3" / "4" / "6" / "7" / "8" / "9" /
                  "n" / "r" / "t" / "v" / "z"
 ```
 
-The alphabet is 19 characters: `2346789acdefhknrtvz`. The identifier is exactly 31 characters, providing ~131.6 bits of entropy.
+The alphabet is 19 characters: `2346789acdefhknrtvz`. The identifier is exactly 31 characters, an identifier space of `19^31 ≈ 2^131.6`.
 
-An identifier that does not match `dfos-id` — the exact 31-character form over this alphabet — is not a valid `did:dfos` identifier. Resolvers and verifiers MUST reject any operation that references, and any resolved state that yields, a `did:dfos` identifier of any other length or character set.
+An identifier that does not match `dfos-id`, the exact 31-character form over this alphabet, is not a valid `did:dfos` identifier. Resolvers and verifiers MUST reject any operation that references, and any resolved state that yields, a `did:dfos` identifier of any other length or character set.
 
 ### 3.2 Derivation
 
@@ -86,13 +64,13 @@ First 31 bytes encoded:  cnnnft9f8a2rn938d6nkz38r847v2kr
 DID:                     did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
 ```
 
-See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for the complete worked example with key material, CBOR encoding, and CID construction.
+The worked example with key material, CBOR bytes, and CID construction is in [PROTOCOL.md](https://protocol.dfos.com/spec).
 
 ---
 
 ## 4. DID Document
 
-A resolved `did:dfos` DID Document is constructed from the current state of the identity chain — the key state after the chain's last operation.
+A resolved `did:dfos` DID Document is constructed from the identity's **effective** state: the key state and services after the chain's last operation, with every key membership no possession proof covers excluded ([PROTOCOL.md → Key Possession](https://protocol.dfos.com/spec#key-possession)). A void membership is never a verification method. The document states the keys the chain proved, not the keys it listed.
 
 ### 4.1 DID Document Structure
 
@@ -123,7 +101,7 @@ A resolved `did:dfos` DID Document is constructed from the current state of the 
 
 ### 4.2 Verification Method Mapping
 
-Identity chain operations declare three key sets. These map to W3C verification relationships as follows:
+Identity chain operations declare three key sets. They map to W3C verification relationships as follows:
 
 | Identity Chain Key Set | W3C Verification Relationship | Purpose                                                              |
 | ---------------------- | ----------------------------- | -------------------------------------------------------------------- |
@@ -131,50 +109,29 @@ Identity chain operations declare three key sets. These map to W3C verification 
 | `assertKeys`           | `assertionMethod`             | Issue verifiable assertions (e.g., sign content chain operations)    |
 | `controllerKeys`       | `capabilityInvocation`        | Manage the DID itself (sign identity chain update/delete operations) |
 
-Each key in the identity chain state becomes a `verificationMethod` entry. The `id` is constructed as a DID URL: `did:dfos:<id>#<keyId>`. The `type` is `Multikey`. The `publicKeyMultibase` is the W3C Multikey encoding (multicodec `0xed01` prefix + base58btc + `z` multibase prefix).
+Each effective key becomes a `verificationMethod` entry. The `id` is the DID URL `did:dfos:<id>#<keyId>`. The `type` is `Multikey`. The `publicKeyMultibase` is the W3C Multikey encoding (multicodec `0xed01` prefix + base58btc + `z` multibase prefix).
 
-**Key-id uniqueness and cross-role keys.** Within a single key set (`authKeys`, `assertKeys`, or `controllerKeys`) on any operation that declares key sets (`create` or `update`), key ids MUST be unique — the verifier rejects repeated ids in the same usage section. The _same_ key id MAY appear across different sets; this is the common case, where one key serves authentication, assertion, and control simultaneously (as in the reference document above, where one key id is referenced from `authentication`, `assertionMethod`, and `capabilityInvocation`). When building the DID Document, verification methods are keyed by their DID-URL `id`, so a key id appearing in multiple roles yields a single `verificationMethod` entry referenced from each relationship rather than three duplicate entries.
+Key ids MUST be unique within a single key set on any operation that declares key sets (`create` or `update`); a verifier rejects a repeated id in the same usage section. The same key id MAY appear across different sets, and that is the common case: one key serving authentication, assertion, and control at once, as in the document above. Verification methods are keyed by DID URL, so a key id in several roles yields one `verificationMethod` entry referenced from each relationship.
 
 ### 4.3 Controller
 
-`did:dfos` identities are self-sovereign. The `controller` property of the DID Document is always the DID itself. Only keys within the identity chain's `controllerKeys` set can sign operations that modify the chain.
+The `controller` property is always the DID itself. Only keys in the identity chain's `controllerKeys` set sign operations that modify the chain.
 
 ### 4.4 Key Rotation
 
-When an identity chain includes `update` operations that change the key sets, the DID Document reflects the **current state** — the key state after the **last operation** of the strictly linear identity chain (see the core protocol's Chain Validity rules), never a union across historical operations. Previous keys are not included in the resolved DID Document. Historical key states can be recovered by walking the chain.
+The DID Document reflects the state after the last operation of the chain, never a union across history. Rotated-out keys are absent from the document. Historical key states are recovered by walking the chain.
 
 ### 4.5 Services
 
-Identity chain `create`/`update` operations MAY carry a controller-signed
-`services` array — the identity's discovery vocabulary. It is full-state (an
-`update` replaces the entire set), bounded (≤256 entries, unique ids, a
-32768-byte cap on the canonical encoding), and projected into verified identity
-state alongside the key sets. The complete normative definition is in
-[PROTOCOL.md → Services](https://protocol.dfos.com/spec#services).
+Identity chain `create` and `update` operations MAY carry a controller-signed `services` array, the identity's discovery vocabulary, defined in [PROTOCOL.md → Services](https://protocol.dfos.com/spec#services).
 
-Each entry projects into the DID Document `service` array. Every entry carries
-the common envelope `{ id, type }`; the entry `id` becomes the DID-URL fragment
-(`did:dfos:<id>#<entry-id>`). Two service types are recognized and structurally
-validated; the namespace is open, and unrecognized types are preserved verbatim
-and ignored.
+Each entry in the effective state projects into the DID Document `service` array. The entry `id` becomes the DID URL fragment (`did:dfos:<id>#<entry-id>`). The namespace is open: a type this table does not name is preserved verbatim with its `id` re-anchored, and otherwise ignored.
 
-| Service `type`  | Fields            | DID Document mapping                                           |
-| --------------- | ----------------- | -------------------------------------------------------------- |
-| `DfosRelay`     | `endpoint` (URL)  | `serviceEndpoint` = the relay URL                              |
-| `ContentAnchor` | `label`, `anchor` | `serviceEndpoint` = the anchor; `label` retained as a property |
-
-A `ContentAnchor`'s `anchor` is a **stable** content identifier dispatched by
-shape: a 31-character contentId resolves to a content chain; a `baf…` CIDv1
-resolves to an artifact.
-
-Because the namespace is open, services beyond the proof plane define their own
-types additively. The document gateway adds `DfosDocumentGateway` (a gateway
-endpoint) and `DfosProfile` (a contentId-or-CID profile anchor); a relay that
-does not recognize them preserves and ignores them. SIWD adds
-`DfosAuthorizationServer` (an authorize origin; a relay that maps it projects
-`endpoint` → `serviceEndpoint` exactly as for `DfosRelay`). See
-[WEB-RELAY.md → Content Plane Discovery](https://protocol.dfos.com/web-relay#discovery)
-and [SIWD.md → Finding the authorize endpoint](https://protocol.dfos.com/siwd#finding-the-authorize-endpoint--the-dfosauthorizationserver-entry).
+| Service `type`            | Fields            | DID Document mapping                                           |
+| ------------------------- | ----------------- | -------------------------------------------------------------- |
+| `DfosRelay`               | `endpoint` (URL)  | `serviceEndpoint` = the relay URL                              |
+| `DfosAuthorizationServer` | `endpoint` (URL)  | `serviceEndpoint` = the authorize origin                       |
+| `ContentAnchor`           | `label`, `anchor` | `serviceEndpoint` = the anchor; `label` retained as a property |
 
 ```json
 "service": [
@@ -196,103 +153,83 @@ and [SIWD.md → Finding the authorize endpoint](https://protocol.dfos.com/siwd#
 
 ## 5. Operations
 
+Each DID operation is one identity chain operation. The payload schemas, signer rules, and validity checks are in [PROTOCOL.md → Identity Operations](https://protocol.dfos.com/spec#identity-operations).
+
 ### 5.1 Create
 
 Creating a `did:dfos` identifier means constructing and signing a genesis identity chain operation.
 
 1. Generate one Ed25519 key pair.
-2. Construct the genesis operation payload with `type: "create"`, declaring that one key as the sole entry of each of `authKeys`, `assertKeys`, and `controllerKeys` — genesis declares exactly one key, and its signature is the key's own possession proof ([PROTOCOL.md → Key Possession](https://protocol.dfos.com/spec#key-possession)). Further keys join via subsequent `update` operations under the possession rule.
-3. Canonical-encode the payload as dag-cbor, derive the CID, and include it in the JWS protected header as `cid`.
-4. Sign the operation as a JWS Compact Serialization token using that key. The `kid` in the protected header is the bare key ID (not a DID URL, since the DID does not yet exist).
-5. The DID is derived from the genesis CID as described in [Section 3.2](#32-derivation).
-
-The identity chain now exists as a single-operation chain. It can be stored in any system that serves identity chains.
+2. Construct the genesis payload with `type: "create"`, declaring that one key as the sole entry of `authKeys`, `assertKeys`, and `controllerKeys`. Genesis declares exactly one key and its signature is that key's possession proof. Further keys join via `update` operations under the possession rule.
+3. Sign the operation per PROTOCOL's JWS envelope.
+4. The DID is derived from the genesis CID as in [Section 3.2](#32-derivation).
 
 ### 5.2 Read (Resolve)
 
-Resolving a `did:dfos` DID means obtaining the identity chain and constructing a DID Document from its current state.
+Resolving a `did:dfos` DID means obtaining the identity chain and constructing a DID Document from its effective state.
 
 #### 5.2.1 Resolution Algorithm
 
 Given a DID `did:dfos:<id>`:
 
-1. **Obtain** the identity chain from any available source. The method does not prescribe how chains are discovered or transported.
-2. **Verify** the chain:
-   a. Decode each JWS token and parse the operation payload.
-   b. The first operation MUST be `type: "create"`.
-   c. Derive the genesis operation CID via dag-cbor canonical encoding.
-   d. Verify that `SHA-256(genesis CID bytes)` encoded with the ID alphabet produces `<id>`. If it does not match, the chain does not belong to this DID — reject it.
-   e. For each operation, verify the JWS EdDSA signature against the appropriate key (controller key from current declared chain state).
-   f. Verify `previousOperationCID` linkage, `createdAt` ordering, and `header.cid` consistency.
-   g. Compute key possession: the genesis key by its genesis signature, every other key-role membership by its introducing operation's embedded key-proof envelope; unproved memberships are void ([PROTOCOL.md → Key Possession](https://protocol.dfos.com/spec#key-possession)).
-   h. See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for complete verification rules.
-3. **Construct** the DID Document from the current **effective** chain state — the declared state minus void memberships — using the mapping in [Section 4.2](#42-verification-method-mapping). A void key is never a `verificationMethod`: the DID Document presents the keys the chain proved, not the keys it merely listed.
+1. **Obtain** the identity chain. This method does not prescribe how chains are transported.
+2. **Verify** the chain per [PROTOCOL.md → Verification](https://protocol.dfos.com/spec#verification): the genesis bootstrap, JWS signatures against the declared controller state, `previousOperationCID` linkage, `createdAt` ordering, `header.cid` consistency, and key possession.
+3. **Bind** the chain to the DID: derive the genesis operation CID, and verify that `SHA-256(genesis CID bytes)` encoded with the ID alphabet produces `<id>`. If it does not match, the chain does not belong to this DID and the resolver MUST reject it.
+4. **Construct** the DID Document from the effective state using the mapping in [Section 4](#4-did-document).
 
-#### 5.2.2 Resolution Metadata
+#### 5.2.2 Resolution Result
 
-| Property         | Value                                                    |
-| ---------------- | -------------------------------------------------------- |
-| `contentType`    | `application/did+ld+json`                                |
-| `created`        | `createdAt` from the genesis operation                   |
-| `updated`        | `createdAt` from the most recent operation               |
-| `deactivated`    | `true` if the chain's last operation is `type: "delete"` |
-| `operationCount` | Number of operations in the chain                        |
+A resolver returns the DID Document with two metadata objects:
+
+| Object                  | Property         | Value                                                    |
+| ----------------------- | ---------------- | -------------------------------------------------------- |
+| `didResolutionMetadata` | `contentType`    | `application/did+ld+json`                                |
+| `didDocumentMetadata`   | `created`        | `createdAt` from the genesis operation                   |
+| `didDocumentMetadata`   | `updated`        | `createdAt` from the most recent operation               |
+| `didDocumentMetadata`   | `deactivated`    | `true` if the chain's last operation is `type: "delete"` |
+| `didDocumentMetadata`   | `operationCount` | Number of operations in the chain                        |
 
 #### 5.2.3 Self-Certification
 
-The critical property of `did:dfos` resolution: **the DID is verified against the chain, not the source.** Step 2d above is the self-certification check — it proves the chain belongs to the claimed DID using only the chain content and a hash function. This means:
+Step 3 above is the self-certification check: it proves the chain belongs to the claimed DID using only the chain content and a hash function. A resolver therefore does not trust the server or peer that supplied the chain, the same chain served by independent sources yields the same document, and a chain held locally resolves offline.
 
-- A resolver does not need to trust the registry, server, or peer that provided the chain.
-- The same chain can be served by multiple independent sources with identical results.
-- Chains can be cached, replicated, and redistributed without loss of verifiability.
-- Offline resolution is possible if the chain is available locally.
+#### 5.2.4 Resolution Is Relay-Relative
 
-#### 5.2.4 Transport Bindings (Non-Normative)
+Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.
 
-The `did:dfos` method is transport-agnostic. Any system that can deliver an ordered sequence of JWS tokens (the identity chain) is a valid transport. Examples include:
+A relay keeps its own identity log linear by first-seen admission: it admits the first operation it sees at a chain position and does not admit a second at that position. Two relays that admitted different operations at the same position hold two views of the same identity. Both views are controller-signed, and neither is invalid. Which relay you resolve through is which view you get.
 
-- **HTTP API** — Any HTTP service that stores and retrieves ordered JWS logs can serve as a transport binding.
-- **Peer-to-peer exchange** — Chains can be exchanged directly between parties.
-- **Local storage** — Chains can be stored in local files, databases, or key-value stores.
-- **Bundle export** — Applications can export chains as portable bundles (e.g., JSON arrays of JWS tokens).
+A resolver that needs one answer picks one relay; an identity's `DfosRelay` service entries name relays that serve it. A resolver reading several relays sees the divergence and can present both views.
+
+The chain itself is transport-agnostic: any source that delivers the ordered JWS tokens is a valid one, including an HTTP relay, a peer exchange, a local file, or an exported bundle. A relay serving the DIF Universal Resolver binding answers at `GET /1.0/identifiers/:did`; the route contract is in [WEB-RELAY.md](https://protocol.dfos.com/web-relay).
 
 ### 5.3 Update
 
-Updating a `did:dfos` DID means appending a signed `update` operation to the identity chain.
+Updating a `did:dfos` DID means appending a signed `update` operation: `type: "update"`, the new key sets, a `keyProofs` envelope for each key the operation introduces, and `previousOperationCID` set to the CID of the current chain tip, signed with a key from the current `controllerKeys` set.
 
-1. Construct an update operation payload with `type: "update"`, the new key sets, and `previousOperationCID` set to the CID of the current chain tip.
-2. Sign the operation using a key from the **current** `controllerKeys` set. The `kid` is a DID URL: `did:dfos:<id>#<keyId>`.
-3. Append the signed JWS token to the chain.
-
-The DID does not change. The resolved DID Document now reflects the new key sets.
+The DID does not change. The resolved document reflects the new key sets.
 
 ### 5.4 Deactivate (Delete)
 
-Deactivating a `did:dfos` DID means appending a signed `delete` operation to the identity chain.
-
-1. Construct a delete operation payload with `type: "delete"` and `previousOperationCID` set to the CID of the current chain tip.
-2. Sign the operation using a key from the current `controllerKeys` set. The `kid` is a DID URL.
-3. Append the signed JWS token to the chain.
+Deactivating a `did:dfos` DID means appending a signed `delete` operation, `previousOperationCID` set to the CID of the current chain tip, signed with a key from the current `controllerKeys` set.
 
 After deactivation:
 
-- The resolved head reports the identity as deactivated. Resolution MUST return a DID Document with `deactivated: true` in the resolution metadata, and the DID Document SHOULD contain an empty set of verification methods, as the identity no longer has active keys.
-- The `delete` operation is a **permanent, auditable fact** in the chain log — it is gossiped and retained like any other operation and never removed.
-- The chain is sealed against every operation except one: a `restore` in the immediate successor position (Section 5.5). Appending any other operation from the deleted head is rejected.
+- Resolution MUST return `deactivated: true` in the document metadata, and the DID Document SHOULD contain an empty set of verification methods. The reference relays return an empty `verificationMethod` array and omit the verification relationships and services.
+- The `delete` operation is a permanent, auditable fact of the log. It is replicated and retained like any other operation.
+- The chain is sealed against every operation except one: a `restore` in the immediate successor position ([Section 5.5](#55-restore-undelete)). Any other operation from the deleted head is rejected.
+
+A `restore` needs only a controller key of the deleted state, so deleting an identity is not a substitute for rotating out a compromised key. Rotate first, then delete.
 
 ### 5.5 Restore (Undelete)
 
-Restoring a deactivated `did:dfos` DID means appending a signed `restore` operation immediately after the `delete`.
+Restoring a deactivated DID means appending a signed `restore` operation immediately after the `delete`: `type: "restore"` and `previousOperationCID` set to the CID of the `delete`, carrying nothing else beyond `version` and `createdAt`.
 
-1. Construct a restore operation payload with `type: "restore"` and `previousOperationCID` set to the CID of the `delete` operation. The payload carries nothing else beyond `version` and `createdAt`.
-2. Sign the operation using a **controller key of the deleted head state** — the key state produced by the `delete`, which carries the last key sets unchanged. A key rotated out before the delete is not in that state and cannot restore. The `kid` is a DID URL.
-3. Append the signed JWS token to the chain.
+It is signed with a controller key of the deleted head state, the key state the `delete` produced, which carries the last key sets unchanged. A key rotated out before the delete is not in that state and cannot restore.
 
-A valid `restore` clears the deactivated state: resolution reports `deactivated: false`, and the DID Document reflects the keys and services **as of the delete, verbatim**. Key or service changes happen via subsequent ordinary `update` operations. `restore` is valid **only** in the successor-of-delete position; anywhere else it is rejected (see the core protocol's `restore` validity rules).
+A valid `restore` clears the deactivated state: resolution reports `deactivated: false` and the document reflects the keys and services as of the delete, verbatim. Later changes happen via ordinary `update` operations. `restore` is valid only in the successor-of-delete position.
 
-Deactivation is therefore **reversible by the controller, and only by the controller**: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and `restore` alike, must be signed by a current controller key. Both the `delete` and the `restore` remain permanently in the single linear log — the full deactivation history is auditable. Treating deactivation as a true protocol-level seal that no controller key can reopen — and the adversarial cases that motivate it — is out of scope for this specification and deferred to a future additive operation.
-
-Note the security corollary: because `restore` needs only a controller key of the deleted state, **deleting an identity is not a substitute for rotating out a compromised key** — a thief holding a still-current controller key can restore and then rotate out the owner. Rotate first, then delete (see THREAT-MODEL.md).
+Deactivation is reversible by a controller key and only by a controller key. Both the `delete` and the `restore` stay in the log, so the deactivation history is auditable. There is no seal that a controller key cannot reopen.
 
 ---
 
@@ -300,46 +237,41 @@ Note the security corollary: because `restore` needs only a controller key of th
 
 ### 6.1 Self-Certifying Identifiers
 
-`did:dfos` identifiers are derived from a cryptographic hash of the genesis operation content. This binding is verified during resolution (Section 5.2.1, step 2d). An attacker cannot present a forged chain for a given DID — the genesis content would hash to a different identifier.
+The identifier is a hash of the genesis operation content, and resolution verifies that binding ([Section 5.2.3](#523-self-certification)). A chain that does not derive the claimed identifier is rejected.
 
-The identifier is 31 characters over a 19-symbol alphabet, so the encoded identifier space is `19^31 ≈ 2^131.6`. The relevant attack costs are:
+The identifier is 31 characters over a 19-symbol alphabet:
 
-- **Birthday collision** (two genesis chains that derive the same identifier): `≈ 2^65.8` work.
-- **Targeted second-preimage** (forge a chain that derives a _specific_ victim identifier): `≈ 2^131.6` work, bounded by the identifier space rather than the full 256-bit SHA-256 output.
+```
+Identifier space:         19^31 ≈ 2^131.6
+Birthday collision:       ≈ 2^65.8
+Targeted second-preimage: ≈ 2^131.6
+```
 
-Both costs sit comfortably above the 128-bit security floor, so the self-certification binding is not the weakest link relative to the Ed25519 signatures (≈128-bit) or SHA-256 (256-bit) primitives it composes.
+These bound the identifier only. Finding two genesis chains that encode to the same DID costs `≈ 2^65.8`; forging a chain that encodes to a specific victim DID costs `≈ 2^131.6`. The 32-byte genesis CID and the Ed25519 signatures are unaffected by the truncation.
 
 ### 6.2 Key Compromise
 
-If a controller key is compromised, the legitimate holder should immediately sign a key rotation (`update`) operation removing the compromised key. The protocol does not support key pre-rotation — there is no mechanism to pre-commit to a future key. The window of vulnerability exists between compromise and rotation.
+A holder whose controller key is compromised signs an `update` removing that key. There is no key pre-rotation: nothing pre-commits to a future key. The window between compromise and rotation is open.
 
-Because each role set holds up to 256 keys and any one current key in a set can authorize an operation, an identity can hold controller and auth keys on multiple devices (1-of-N availability). Any one held key can independently act, so a single lost or destroyed device key is not loss of the identity — a key on a surviving device can still rotate out the lost one. This is availability, not recovery: it requires registering additional keys in advance, while a controller key is still held. Note that 1-of-N availability is symmetric with the compromise surface — any held key in a set can authorize, so each additional device key is also an additional thing to keep safe.
+Each role set holds up to 256 keys and any one current key in a set authorizes an operation, so an identity can hold keys on several devices and a lost device is not loss of the identity. This is availability, not recovery: the extra keys are registered in advance, while a controller key is still held, and each one is another key to keep safe.
 
-### 6.3 Equivocation
+### 6.3 Who Can Extend a Chain
 
-Because `did:dfos` has no global consensus layer, an identity holder could sign two different operations at the same chain position (same `previousOperationCID`, different payloads). Identity chains are **strictly linear** (see the core protocol's Chain Validity rules), so this is not a fork — it is a **conflicting extension**, and at most one of the two operations can belong to the chain.
+Every operation is signed by a controller key in the chain's declared state. Whoever holds a controller key can update, delete, and restore the identity. Where custody is split, for example an identity whose controller keys include one held by a hosting platform, each holder has that full power independently.
 
-Equivocation is **detectable and invalid**: a verifier that encounters two operations sharing a `previousOperationCID` in an identity log MUST reject that log — a forked identity log is never valid. Which of two competing extensions becomes part of the chain is an ordering question, answered by the chain's order authority: nodes refuse a conflicting extension of an operation that already has a committed child, and the subject's services-listed home relay's committed order is the convergence rule (normative in the core protocol — PROTOCOL.md → Chain Validity, _Order authority_; relay ingest mechanics in WEB-RELAY.md, _Identity Linearity and Order Authority_).
+What no holder has is silence. Every extension is a signed operation in the log, addressed by CID and replicated by relays that have it, so a key removal or a deletion is visible to anyone reading the chain.
 
-In practice, equivocation requires the identity holder to act against themselves — no external party can extend an identity chain, since all operations must be signed by a current controller key.
+An identity chain has no consensus layer. Two operations signed at the same chain position are a divergence between relay views, handled as in [Section 5.2.4](#524-resolution-is-relay-relative), not a proof of invalidity.
 
 ### 6.4 Transport Security
 
-The `did:dfos` method does not mandate any specific transport security. Because resolution is verification-first (the chain is validated against the DID, not the source), transport-layer attacks (MITM, DNS hijacking) cannot produce a valid chain for a targeted DID. An attacker who intercepts a chain request can:
+This method mandates no transport security. Resolution verifies the chain against the DID rather than the source, so an intercepting attacker can withhold the chain, serve a stale chain, or serve a different chain that fails the self-certification check. It cannot produce a modified or forged chain that passes.
 
-- **Withhold** the chain (denial of service) — the resolver gets no result
-- **Serve a stale chain** — the resolver gets a valid but outdated DID Document
-- **Serve a completely different chain** — the self-certification check fails, the resolver rejects it
+A resolver that depends on a single source can be denied service by that source. Applications SHOULD support several chain sources and MAY cache verified chains locally.
 
-An attacker **cannot** serve a modified or forged chain that passes the self-certification check.
+### 6.5 Algorithms
 
-### 6.5 Denial of Service
-
-A resolver that depends on a single source for chain retrieval is vulnerable to denial of service. Applications SHOULD support multiple chain sources and MAY cache verified chains locally to mitigate this.
-
-### 6.6 Cryptographic Agility
-
-The current specification uses Ed25519 exclusively. The protocol does not currently support multiple signature algorithms. Future versions MAY introduce additional algorithms via new multicodec identifiers and verification method types. Implementations MUST reject operations signed with unrecognized algorithms.
+Ed25519 is the only signature algorithm. Implementations MUST reject operations signed with any other algorithm.
 
 ---
 
@@ -347,35 +279,25 @@ The current specification uses Ed25519 exclusively. The protocol does not curren
 
 ### 7.1 Correlation
 
-`did:dfos` identifiers are persistent and globally unique. Any content chain signed by a DID can be correlated to the same identity. Users who require unlinkability across contexts should use distinct identities (distinct identity chains and DIDs) for each context.
+`did:dfos` identifiers are persistent and globally unique, so every content chain a DID signs is correlatable to it. Unlinkability across contexts comes from using distinct identities, each its own chain and DID.
 
 ### 7.2 Key Material
 
-Identity chains contain only public keys. Private key material is never included in the chain and MUST NOT be transmitted during resolution.
+Identity chains carry public keys only. Private key material is never in the chain and MUST NOT be transmitted during resolution.
 
 ### 7.3 Chain History
 
-The full identity chain is available to any resolver. This reveals the history of key rotations, including timestamps (`createdAt`). Applications that consider key rotation history sensitive should be aware that this metadata is inherently public as part of the chain.
+The full chain is available to any resolver, including the history of key rotations and their timestamps. That metadata is public by construction.
 
-### 7.4 Herd Privacy
+### 7.4 Resolution Privacy
 
-Because `did:dfos` resolution can happen through any transport (including local storage), a resolver does not necessarily reveal which DIDs it is interested in. However, when using a shared registry API, the registry operator can observe resolution patterns. Applications with strong privacy requirements SHOULD resolve chains through privacy-preserving transports or maintain local chain caches.
-
----
-
-## 8. Reference Implementation
-
-A complete reference implementation is available as the `@metalabel/dfos-protocol` npm package:
-
-- **npm**: [@metalabel/dfos-protocol](https://www.npmjs.com/package/@metalabel/dfos-protocol)
-- **Source**: [github.com/metalabel/dfos](https://github.com/metalabel/dfos)
-- **Cross-language verification**: Go, TypeScript, Python, Rust, and Swift implementations verify the same deterministic test vectors
+A resolver reading a local chain reveals nothing. A resolver reading a relay reveals to that operator which DIDs it is interested in. Applications with strong privacy requirements resolve from local caches or through a privacy-preserving transport.
 
 ---
 
-## 9. References
+## 8. References
 
-### 9.1 Normative References
+### 8.1 Normative References
 
 | Reference                   | URI                                                 |
 | --------------------------- | --------------------------------------------------- |
@@ -386,11 +308,13 @@ A complete reference implementation is available as the `@metalabel/dfos-protoco
 | RFC 8032 (Ed25519)          | https://www.rfc-editor.org/rfc/rfc8032              |
 | DFOS Protocol Specification | https://protocol.dfos.com/spec                      |
 
-### 9.2 Informative References
+### 8.2 Informative References
 
-| Reference               | URI                                         |
-| ----------------------- | ------------------------------------------- |
-| W3C DID Spec Registries | https://w3c.github.io/did-spec-registries/  |
-| Multicodec Table        | https://github.com/multiformats/multicodec  |
-| CIDv1 Specification     | https://github.com/multiformats/cid         |
-| dag-cbor Codec          | https://ipld.io/specs/codecs/dag-cbor/spec/ |
+| Reference                   | URI                                                                  |
+| --------------------------- | -------------------------------------------------------------------- |
+| W3C DID Spec Registries     | https://w3c.github.io/did-spec-registries/                           |
+| Multicodec Table            | https://github.com/multiformats/multicodec                           |
+| CIDv1 Specification         | https://github.com/multiformats/cid                                  |
+| dag-cbor Codec              | https://ipld.io/specs/codecs/dag-cbor/spec/                          |
+| Reference implementation    | https://www.npmjs.com/package/@metalabel/dfos-protocol               |
+| Cross-language verification | https://github.com/metalabel/dfos/tree/main/packages/protocol-verify |

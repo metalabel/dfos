@@ -60,3 +60,7 @@
   Cache-Control: public, max-age=0, must-revalidate
 /document-gateway/
   Cache-Control: public, max-age=0, must-revalidate
+/key-proof/
+  Cache-Control: public, max-age=0, must-revalidate
+/extensions/
+  Cache-Control: public, max-age=0, must-revalidate

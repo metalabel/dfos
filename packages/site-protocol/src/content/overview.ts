@@ -30,7 +30,7 @@ Identity chains carry an optional discovery vocabulary — controller-signed \`s
 
 Verification is a pure function. Given a chain and a public key, any Ed25519 implementation returns valid or invalid. The chain carries everything needed — public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync. A proof exported today is verifiable by code that doesn't exist yet.
 
-The reference implementation is in [TypeScript](https://www.npmjs.com/package/@metalabel/dfos-protocol). Cross-language verification exists in Go, Python, Rust, and Swift — all running against the same [deterministic test vectors](https://protocol.dfos.com/spec#deterministic-reference-artifacts) from the specification.
+The reference implementation is in [TypeScript](https://www.npmjs.com/package/@metalabel/dfos-protocol). Cross-language verification exists in Go, Python, Rust, and Swift — all running against the same [deterministic test vectors](https://protocol.dfos.com/spec#reference-vectors) from the specification.
 
 ## What It Isn't
 
@@ -48,7 +48,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 ## Design Principles
 
 - **Self-certifying.** Identity derives from cryptographic operations. The DID is a deterministic hash of the genesis operation. No external authority needed.
-- **Forks exactly where a merge exists.** Content chains are directed acyclic graphs — forks are valid, and convergence is deterministic without consensus: given the same set of operations, any relay computes the same head regardless of ingestion order. Identity chains are strictly linear — key state has no merge function, so conflicting extensions are refused, never arbitrated.
+- **Forks exactly where a merge exists.** Content chains are directed acyclic graphs — forks are valid, and convergence is deterministic without consensus: given the same set of operations, any relay computes the same head regardless of ingestion order. Identity chains are linear per view — key state has no merge function, so a relay keeps its own log linear by first-seen admission, and two relays that admitted different operations at one position hold two views of the same identity.
 - **Transport-agnostic.** No privileged registry, blockchain, or API. A proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
 - **Offline-first.** Verification requires no network. The chain carries everything needed.
 - **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), credentials, countersignatures. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
