@@ -34,7 +34,13 @@ import {
 } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
-import { maintainIndexAfterBlob } from './index-maintenance';
+import {
+  drainIndexProjection,
+  projectIndex,
+  projectIndexAfterBlob,
+  type IndexProjectionRun,
+  type IndexProjectionStore,
+} from './index-projection';
 import {
   decodeIndexCreditCursor,
   decodeIndexOrderedCursor,
@@ -47,7 +53,7 @@ import {
   redactNonPublicContentRow,
   redactNonPublicIdentityRow,
 } from './index-routes';
-import { ingestOperationsLocked, withChainStateLock, type AdmissionMode } from './ingest';
+import { ingestOperations, type AdmissionMode } from './ingest';
 import { DEFAULT_OPENAPI_ROUTE, selfDescribingDocument } from './openapi';
 import {
   credentialRevocationStatus,
@@ -55,18 +61,30 @@ import {
   isValidCredentialCid,
   REVOCATIONS_BASE_PATH,
 } from './revocations';
-import { computeOpCID, sequenceOpsLocked } from './sequencer';
+import { computeOpCID, sequenceOps } from './sequencer';
 import { registerSigningRoutes } from './signing';
-import { INGESTION_MODES, PROOF_BASE_PATH } from './types';
+import {
+  INGESTION_MODES,
+  isIndexReadStore,
+  isIndexWriteStore,
+  isRelayWriterState,
+  isRelayWriteStore,
+  isSigningStore,
+  PROOF_BASE_PATH,
+} from './types';
 import type {
   AdmissionPolicy,
   GossipProofSigner,
+  IndexReadStore,
   IngestionMode,
   PeerClient,
   PeerConfig,
   RelayOptions,
   RelayStats,
   RelayStore,
+  RelayWriterState,
+  RelayWriteStore,
+  SigningStore,
   StoredContentChain,
 } from './types';
 
@@ -84,6 +102,15 @@ export interface CreatedRelay {
   did: string;
   /** Sync operations from all configured sync peers (call on a schedule) */
   syncFromPeers: () => Promise<void>;
+  /**
+   * Advance the `/index/v0` projection by one budget's worth of work.
+   *
+   * The relay drives this itself after each accepted batch unless
+   * `indexProjection: 'external'` is configured, in which case this is the whole
+   * of index maintenance and the operator calls it on a timer. A relay whose
+   * store does not implement `IndexWriteStore` reports nothing to do.
+   */
+  projectIndex: () => Promise<IndexProjectionRun>;
 }
 
 // -----------------------------------------------------------------------------
@@ -303,25 +330,55 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
   const revocationsEnabled = options.revocations !== false;
-  const indexEnabled = options.index !== false;
-  const writeEnabled = options.write !== false;
-  const signingEnabled = options.signing === true;
-  if (
-    signingEnabled &&
-    [
-      store.getSignRequest,
-      store.pruneExpiredSignRequests,
-      store.putSignRequest,
-      store.listPendingSignRequests,
-      store.putSignResponse,
-      store.declineSignRequest,
-    ].some((member) => typeof member !== 'function')
-  ) {
-    throw new Error('signing capability requires a store implementing the signing members');
+
+  // CAPABILITIES ARE DERIVED, ONCE, HERE. Each one is the conjunction of what
+  // the store can do (a fact about its type, read by a guard) and what this
+  // deployment asked for. Everything below holds a NARROWED reference or null —
+  // no route probes a member, and no store answers a call by throwing.
+  //
+  // An EXPLICIT `true` that the store cannot back is a configuration that lies,
+  // so it throws and names what is missing. A default that the store cannot back
+  // is just a smaller relay, and advertises itself as one.
+  //
+  // TWO DIFFERENT QUESTIONS about writing, and they were one flag before.
+  // `writer` is whether the STORE can write at all — a pull-only node still
+  // ingests peer logs, still keeps raw ops, and still bootstraps its own
+  // identity, so it needs one. `acceptingWrites` is whether this deployment
+  // takes writes from OUTSIDE, which is the capability the well-known advertises
+  // and the gate `POST /proof/v1/operations` and the blob upload sit behind.
+  const writer: (RelayStore & RelayWriteStore & RelayWriterState) | null =
+    isRelayWriteStore(store) && isRelayWriterState(store) ? store : null;
+  if (options.write === true && writer === null) {
+    throw new Error(
+      'write capability requires a store implementing commit (RelayWriteStore) and the ' +
+        'relay writer state (raw ops, sequencer, peer cursors)',
+    );
   }
-  if (typeof store.pruneExpiredSignRequests === 'function') {
-    await store.pruneExpiredSignRequests(Date.now());
+  const acceptingWrites = options.write !== false ? writer : null;
+  const writeEnabled = acceptingWrites !== null;
+
+  const indexStore: (RelayStore & IndexReadStore) | null =
+    options.index !== false && isIndexReadStore(store) ? store : null;
+  if (options.index === true && indexStore === null) {
+    throw new Error('index capability requires a store implementing IndexReadStore');
   }
+  const indexEnabled = indexStore !== null;
+
+  // The projection worker needs BOTH sides. A store that serves index queries
+  // from rows some other process maintains gets the read routes and no worker.
+  const projectionStore: IndexProjectionStore | null =
+    indexStore !== null && isIndexWriteStore(indexStore) ? indexStore : null;
+  const projectionMode = options.indexProjection ?? 'inline';
+
+  const mailboxStore: SigningStore | null = isSigningStore(store) ? store : null;
+  if (options.signing === true && mailboxStore === null) {
+    throw new Error('signing capability requires a store implementing SigningStore');
+  }
+  const signingStore = options.signing === true ? mailboxStore : null;
+  const signingEnabled = signingStore !== null;
+  // Ephemeral courier rows expire whether or not the mailbox is advertised, so a
+  // store that holds them is swept at construction either way.
+  if (mailboxStore) await mailboxStore.pruneExpiredSignRequests(Date.now());
   // THE RELAY'S OWN CONFIGURED AUTHORITY — the host binding for every identity
   // proof. Never read from a request; see RelayOptions.authority.
   const authority = options.authority;
@@ -366,15 +423,26 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       : undefined;
   const openapiUrl = openapiOption?.url ?? openapiRoute;
 
-  // peer configuration
+  // peer configuration. Peering is a WRITE: a pulled log is ingested, and the
+  // per-peer cursor is relay writer state. A read-only node has neither.
   const peers = options.peers ?? [];
+  if (peers.length > 0 && writer === null) {
+    throw new Error('peering requires a writing store (commit + relay writer state)');
+  }
   const peerClient: PeerClient | undefined = options.peerClient;
   const gossipPeers = peers.filter((p) => p.gossip !== false);
   const readThroughPeers = peers.filter((p) => p.readThrough !== false);
   const syncPeers = peers.filter((p) => p.sync !== false);
 
-  // resolve relay identity — use provided or JIT bootstrap
-  const identity = options.identity ?? (await bootstrapRelayIdentity(store));
+  // resolve relay identity — use provided or JIT bootstrap. Bootstrapping mints
+  // and INGESTS a genesis plus a profile artifact, so it needs a writing store;
+  // a read-only node is handed its identity.
+  if (options.identity === undefined && writer === null) {
+    throw new Error('a relay over a read-only store must be given an identity');
+  }
+  const identity =
+    options.identity ??
+    (await bootstrapRelayIdentity(writer as RelayWriteStore & RelayWriterState));
   const relayDID = identity.did;
   const profileArtifactJws = identity.profileArtifactJws;
 
@@ -429,46 +497,72 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
   };
 
-  // ingest wrapper: store raw → process → mark results → sequence pending → gossip
-  //
-  // Everything up to and including the sequencer run happens inside ONE hold of
-  // the store's chain-state lock, so a concurrent request cannot land a
-  // competing extension between this batch's read of a chain head and its
-  // write. The held span mirrors the Go twin's `Relay.Ingest` byte for byte:
-  // raw-op writes, the batch apply, the sequenced/rejected marking, and the
-  // trailing sequencer pass are all under it; gossip happens after the release,
-  // because a network push must never hold the lock.
-  const ingestWithGossip = async (tokens: string[], admissionMode: AdmissionMode = 'current') => {
-    const origin = admissionMode === 'historical' ? 'peer' : 'direct';
+  // ---------------------------------------------------------------------------
+  // index projection scheduling
+  // ---------------------------------------------------------------------------
 
-    const { results, newOps, seqNewOps } = await withChainStateLock(store, async () => {
-      // store raw ops first — they can never be lost
-      for (const token of tokens) {
-        const cid = await computeOpCID(token);
-        if (cid) await store.putRawOp(cid, token, origin);
-      }
+  /*
+    THE PROJECTION IS NEVER INSIDE THE ACCEPTING PATH'S WRITE.
 
-      // process batch
-      const results = await ingestOperationsLocked(tokens, store, { logEnabled, admissionMode });
+    It used to be: maintenance ran per ingest batch, in the same call that
+    committed the operations, and two of its triggers fan out over the corpus.
+    One of those triggers was reachable by an anonymous POST (issue #266). Now
+    the projection is a worker over the operation log with its own cursor and its
+    own budget, and ingestion SCHEDULES it after the commits are done.
 
-      // mark results in raw store
-      const newOps: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        const res = results[i]!;
-        if (!res.cid) continue;
-        if (res.status === 'new') {
-          await store.markOpsSequenced([res.cid]);
-          newOps.push(tokens[i]!);
-        } else if (res.status === 'duplicate') {
-          await store.markOpsSequenced([res.cid]);
-        }
-      }
+    Inline mode still awaits the drain before the response, and that is a
+    latency choice, not a correctness one: nothing about the projection is inside
+    a commit, each pass is budget-bounded, and the cursor makes a partial pass
+    resumable. A deployment that would rather not pay it sets
+    `indexProjection: 'external'` and runs `projectIndex` from a timer.
 
-      // run sequencer — resolves pending ops whose deps just arrived
-      const { newOps: seqNewOps } = await sequenceOpsLocked(store);
+    Runs are serialized by chaining onto the previous one, so two ingests landing
+    together never project concurrently.
+  */
+  const runProjection = async (): Promise<IndexProjectionRun> =>
+    projectionStore ? projectIndex(projectionStore) : { projected: 0, swept: 0, caughtUp: true };
 
-      return { results, newOps, seqNewOps };
+  let projectionChain: Promise<void> = Promise.resolve();
+  const scheduleIndexProjection = (): Promise<void> => {
+    if (!projectionStore || projectionMode !== 'inline') return projectionChain;
+    projectionChain = projectionChain.then(async () => {
+      await drainIndexProjection(projectionStore);
     });
+    return projectionChain;
+  };
+
+  // ingest wrapper: store raw → process → mark results → sequence pending →
+  // schedule the projection → gossip
+  const ingestWithGossip = async (tokens: string[], admissionMode: AdmissionMode = 'current') => {
+    if (!writer) throw new Error('this relay does not accept writes');
+    const origin = admissionMode === 'historical' ? 'peer' : 'direct';
+    // store raw ops first — they can never be lost
+    for (const token of tokens) {
+      const cid = await computeOpCID(token);
+      if (cid) await writer.putRawOp(cid, token, origin);
+    }
+
+    // process batch
+    const results = await ingestOperations(tokens, writer, { logEnabled, admissionMode });
+
+    // mark results in raw store
+    const newOps: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const res = results[i]!;
+      if (!res.cid) continue;
+      if (res.status === 'new') {
+        await writer.markOpsSequenced([res.cid]);
+        newOps.push(tokens[i]!);
+      } else if (res.status === 'duplicate') {
+        await writer.markOpsSequenced([res.cid]);
+      }
+    }
+
+    // run sequencer — resolves pending ops whose deps just arrived
+    const { newOps: seqNewOps } = await sequenceOps(writer);
+
+    // the projection catches up on what was just committed
+    await scheduleIndexProjection();
 
     // gossip outside the critical path
     gossip(newOps);
@@ -553,15 +647,17 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // backed-up one reads >0. Surfacing it here makes the otherwise-invisible
     // sequencer-backlog failure mode a single curl. Best-effort: a transient read
     // error reports -1 rather than 500ing the status endpoint.
-    let pendingOps = -1;
-    try {
-      pendingOps = await store.countUnsequenced();
-    } catch {
-      pendingOps = -1;
+    let pendingOps = writer === null ? 0 : -1;
+    if (writer) {
+      try {
+        pendingOps = await writer.countUnsequenced();
+      } catch {
+        pendingOps = -1;
+      }
     }
     let stats: RelayStats | undefined;
     try {
-      stats = store.getStats ? await store.getStats() : undefined;
+      stats = await store.getStats();
     } catch {
       stats = undefined;
     }
@@ -616,9 +712,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   registerSigningRoutes({
     app,
     store,
+    signingStore,
     relayDID,
     basePath: SIGNING_BASE_PATH,
-    enabled: signingEnabled,
     authority,
     proofWindowSeconds,
     proofSkewSeconds,
@@ -791,14 +887,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // `voidKeys` rides along because its absence is the failure mode: a
     // controller who introduced a key with no proof has a chain that verifies
     // and a key that is simply not there, and NOTHING in the effective arrays
-    // can tell them so. `declared`, `provedKeys` and `seenKeys` come with it —
-    // what the chain says, has-ever-proved (what the `key=` index answers and
-    // what verifies an artifact signed before a rotation), and the
-    // key-id-to-material binding a verifier extending the chain one operation at
-    // a time needs to refuse a name that changed keys. All four are re-derivable
-    // from the public log, so serving them discloses nothing new; it just spares
-    // every consumer a chain walk to learn it. They are OPTIONAL in the
-    // document: a relay that omits them is still conformant.
+    // can tell them so. `declared` and `provedKeys` come with it — the first is
+    // what the chain says, the second is has-ever-proved (what the `key=` index
+    // answers and what verifies an artifact signed before a rotation). All three
+    // are re-derivable from the public log, so serving them discloses nothing
+    // new; it just spares every consumer a chain walk to learn it. They are
+    // OPTIONAL in the document: a relay that omits them is still conformant.
     return c.json({
       did: chain.did,
       headCID: chain.headCID,
@@ -819,7 +913,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get('/1.0/identifiers/:did{.+}', async (c) => {
     const did = c.req.param('did');
 
-    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1
+    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1:63
     if (!isValidDfosDid(did)) {
       return c.json(
         {
@@ -921,7 +1015,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // ---------------------------------------------------------------------------
 
   app.get(`${INDEX_BASE_PATH}/identities`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
     if (hasPublicProfile === null) return c.json({ error: 'invalid boolean' }, 400);
@@ -948,7 +1042,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = (
-      await store.queryIndexIdentities({
+      await indexStore.queryIndexIdentities({
         ...(did !== undefined ? { did } : {}),
         ...(key ? { key } : {}),
         ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
@@ -972,7 +1066,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/content`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const creator = c.req.query('creator');
     if (creator && !isValidDfosDid(creator)) {
@@ -1002,7 +1096,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = (
-      await store.queryIndexContent({
+      await indexStore.queryIndexContent({
         ...(contentId !== undefined ? { contentId } : {}),
         ...(creator ? { creator } : {}),
         ...(signer ? { signer } : {}),
@@ -1034,7 +1128,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/credits`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const did = c.req.query('did');
     if (did !== undefined && !isValidDfosDid(did)) {
@@ -1047,7 +1141,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const after = afterRaw ? decodeIndexCreditCursor(afterRaw) : undefined;
     if (afterRaw && !after) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexCredits({
+    const rows = await indexStore.queryIndexCredits({
       ...(did !== undefined ? { did } : {}),
       ...(contentId !== undefined ? { contentId } : {}),
       ...(rolePresent ? { role: role ?? '' } : {}),
@@ -1061,7 +1155,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/artifacts`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const signer = c.req.query('signer');
     if (signer !== undefined && !isValidDfosDid(signer)) {
@@ -1075,7 +1169,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexArtifacts({
+    const rows = await indexStore.queryIndexArtifacts({
       ...(cid !== undefined ? { cid } : {}),
       ...(signer !== undefined ? { signer } : {}),
       ...(docSchema !== undefined ? { docSchema } : {}),
@@ -1096,7 +1190,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/countersignatures`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const witness = c.req.query('witness');
     if (!witness || !isValidDfosDid(witness)) {
@@ -1110,7 +1204,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexCountersignatures({
+    const rows = await indexStore.queryIndexCountersignatures({
       witness,
       ...(relation !== undefined ? { relation } : {}),
       ...(order ? { order } : {}),
@@ -1134,7 +1228,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/credentials`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const issuer = c.req.query('issuer');
     if (issuer && !isValidDfosDid(issuer)) {
@@ -1149,7 +1243,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexCredentials({
+    const rows = await indexStore.queryIndexCredentials({
       ...(issuer ? { issuer } : {}),
       ...(resource !== undefined ? { resource } : {}),
       ...(action !== undefined ? { action } : {}),
@@ -1174,7 +1268,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   app.get(`${INDEX_BASE_PATH}/operations`, async (c) => {
-    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+    if (!indexStore) return c.json({ error: 'index not available' }, 501);
 
     const rawKind = c.req.query('kind');
     const operationKinds = new Set([
@@ -1205,7 +1299,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = after ? decodeIndexOrderedCursor(after) : undefined;
     if (after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexOperations({
+    const rows = await indexStore.queryIndexOperations({
       ...(kind !== undefined ? { kind } : {}),
       ...(chainId !== undefined ? { chainId } : {}),
       ...(signerKey ? { signerKey } : {}),
@@ -1326,7 +1420,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
     // null = relay-local cursor this log never issued (or another relay's) → 400.
     if (!result) return c.json({ error: 'invalid cursor' }, 400);
-    return c.json({ entries: result.entries, next: result.next });
+    // PROJECTED EXPLICITLY. A stored log entry also carries the relay's receipt
+    // stamp, which is store state the index projection reads — it is not part of
+    // the frozen wire shape, and serving the row as-is would leak it into a
+    // response both twins must produce byte-identically.
+    return c.json({
+      entries: result.entries.map((entry) => ({
+        cid: entry.cid,
+        jwsToken: entry.jwsToken,
+        kind: entry.kind,
+        chainId: entry.chainId,
+      })),
+      next: result.next,
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1341,7 +1447,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // still open on the node whose whole point is a minimal attack surface, and
     // the well-known's capability advertisement lies about it. Both gates apply:
     // content:false disables the plane, write:false disables writing to it.
-    if (!writeEnabled) {
+    if (!acceptingWrites) {
       return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
     }
     const contentId = c.req.param('contentId');
@@ -1412,22 +1518,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'blob bytes do not match documentCID' }, 400);
     }
 
-    // Under the chain-state lock, like the Go twin's blob route: the projection
-    // rewrite below reads chain state and writes index rows, so running it
-    // alongside an ingest batch would project a half-applied chain. (`committed`
-    // re-states the already-narrowed `documentCID` as a const, since narrowing a
-    // `let` does not survive into a closure.)
-    const committedDocumentCID = documentCID;
-    await withChainStateLock(store, async () => {
-      await store.putBlob(
-        { creatorDID: chain.state.creatorDID, documentCID: committedDocumentCID },
-        bytes,
-      );
-      // A document blob just landed — often out of band, after the content op that
-      // referenced it. Recompute the content rows that project this documentCID
-      // (docSchema/name/profile), cascading to their anchored identities.
-      await maintainIndexAfterBlob(committedDocumentCID, store);
+    await acceptingWrites.commit({
+      kind: 'blob',
+      key: { creatorDID: chain.state.creatorDID, documentCID },
+      bytes,
     });
+    // A document blob just landed — often out of band, after the content op that
+    // referenced it. Recompute the content rows that project this documentCID
+    // (docSchema/name/profile), cascading to their anchored identities. Nothing
+    // on the operation log marks this moment, so it is the one projection entry
+    // point the worker's cursor does not reach.
+    if (projectionStore && projectionMode === 'inline') {
+      await projectIndexAfterBlob(documentCID, projectionStore);
+    }
 
     return c.json({ status: 'stored', contentId, documentCID, operationCID });
   });
@@ -1476,9 +1579,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const maxOpsPerSyncCycle = 5000;
 
   const syncFromPeers = async (): Promise<void> => {
-    if (!peerClient) return;
+    if (!peerClient || !writer) return;
     for (const peer of syncPeers) {
-      let cursor = await store.getPeerCursor(peer.url);
+      let cursor = await writer.getPeerCursor(peer.url);
       let fetched = 0;
       let resetAttempted = false;
       let resetPending = false;
@@ -1499,7 +1602,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         }
         if (!page) break;
         if (page.entries.length === 0) {
-          if (resetPending) await store.setPeerCursor(peer.url, page.next ?? '');
+          if (resetPending) await writer.setPeerCursor(peer.url, page.next ?? '');
           break;
         }
         await ingestWithGossip(
@@ -1511,7 +1614,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           // Only a successful from-scratch page proves that the old cursor was
           // genuinely invalid. Until then, preserve the persisted high-water
           // mark against transient edge-generated 400s.
-          if (!page.next) await store.setPeerCursor(peer.url, '');
+          if (!page.next) await writer.setPeerCursor(peer.url, '');
           resetPending = false;
         }
         // Persist ONLY peer-supplied cursors — never fabricate one from the last
@@ -1522,12 +1625,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         // and dedups cheaply. Mirrors the Go twin's pullPeerOps.
         if (!page.next) break;
         cursor = page.next;
-        await store.setPeerCursor(peer.url, cursor);
+        await writer.setPeerCursor(peer.url, cursor);
       }
     }
   };
 
-  return { app, did: relayDID, syncFromPeers };
+  // CATCH THE PROJECTION UP AT CONSTRUCTION. The bootstrap path ingests the
+  // relay's own genesis and profile artifact directly, and a durable store may
+  // come back with a cursor behind its log, so the index is stale the moment the
+  // relay is built. Bounded and resumable like every other pass; a store whose
+  // cursor is already at the tip pays one `readLog`. A deployment that does not
+  // want a startup catch-up runs `indexProjection: 'external'`.
+  await scheduleIndexProjection();
+
+  return { app, did: relayDID, syncFromPeers, projectIndex: runProjection };
 };
 
 // -----------------------------------------------------------------------------

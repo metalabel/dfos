@@ -2,7 +2,8 @@
 
   MEMORY RELAY STORE
 
-  In-memory implementation of RelayStore for development and testing
+  In-memory implementation of every relay store contract, for development and
+  testing.
 
 */
 
@@ -30,11 +31,20 @@ import { createKeyResolver } from './ingest';
 import { decodeSigningCursor, encodeSigningCursor } from './types';
 import type {
   BlobKey,
+  CommitBatch,
+  CommitResult,
+  IndexCursor,
+  IndexReadStore,
+  IndexRowBatch,
+  IndexWriteStore,
   LogEntry,
   OpOrigin,
   PendingOp,
+  RelayReadStore,
   RelayStats,
-  RelayStore,
+  RelayWriterState,
+  RelayWriteStore,
+  SigningStore,
   StoredContentChain,
   StoredIdentityChain,
   StoredOperation,
@@ -141,11 +151,22 @@ const revocationSupersedes = (
 };
 
 /**
- * In-memory relay store — all data lives in Maps, lost on restart
+ * In-memory relay store — all data lives in Maps, lost on restart.
  *
- * Suitable for development, testing, and short-lived relay instances.
+ * The reference implementation of EVERY contract: the reads, `commit`, both
+ * sides of the index profile, the signing mailbox, and the relay's
+ * writer-internal bookkeeping. Suitable for development, testing, and
+ * short-lived relay instances.
  */
-export class MemoryRelayStore implements RelayStore {
+export class MemoryRelayStore
+  implements
+    RelayReadStore,
+    RelayWriteStore,
+    IndexReadStore,
+    IndexWriteStore,
+    SigningStore,
+    RelayWriterState
+{
   private signRequests = new Map<string, StoredSignRequest>();
   private operations = new Map<string, StoredOperation>();
   private identityChains = new Map<string, StoredIdentityChain>();
@@ -199,6 +220,132 @@ export class MemoryRelayStore implements RelayStore {
   private indexOperationSignerKeys = new Map<string, string>();
   /** Standalone artifact projection rows keyed by artifact cid. */
   private indexArtifactRows = new Map<string, IndexArtifactRow>();
+  /** Where the index projection worker got to. */
+  private indexCursor: IndexCursor = { logCursor: null, sweep: null };
+
+  // ---------------------------------------------------------------------------
+  // write contract
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Persist one accepted operation, or one document blob, whole.
+   *
+   * ATOMICITY IN A SINGLE-THREADED, IN-MEMORY STORE. There is no transaction to
+   * open: nothing here awaits between the first mutation and the last, so no
+   * other task can observe a half-applied commit, and the only way to leave one
+   * behind is to throw partway through. So every mutation this batch implies is
+   * VALIDATED FIRST, against a copy of nothing but the arguments, and applied
+   * only once all of it is known to be applicable. A durable store gets the same
+   * property from its transaction.
+   */
+  async commit(batch: CommitBatch): Promise<CommitResult> {
+    if (batch.kind === 'blob') {
+      await this.putBlob(batch.key, batch.bytes);
+      return 'new';
+    }
+
+    const { operation } = batch;
+    // Idempotency key. The race backstop, not the primary duplicate check —
+    // ingestion reads for an existing operation before it verifies, because it
+    // must distinguish "the same operation" from "the same CID under a different
+    // signature". This closes the window between that read and this write.
+    if (this.operations.has(operation.cid)) return 'duplicate';
+
+    // VALIDATE EVERYTHING FIRST. Nothing below can fail once we start writing.
+    if (batch.logEntry && batch.logEntry.cid !== operation.cid) {
+      throw new Error('commit: log entry does not describe the committed operation');
+    }
+    if (batch.identityChain && batch.contentChain) {
+      throw new Error('commit: one operation extends one chain, not two');
+    }
+
+    this.operations.set(operation.cid, operation);
+    if (batch.identityChain) this.identityChains.set(batch.identityChain.did, batch.identityChain);
+    if (batch.contentChain)
+      this.contentChains.set(batch.contentChain.contentId, batch.contentChain);
+    if (batch.countersignature) {
+      await this.addCountersignature(
+        batch.countersignature.targetCID,
+        batch.countersignature.jwsToken,
+      );
+    }
+    if (batch.revocation) await this.addRevocation(batch.revocation);
+    if (batch.removePublicCredential) {
+      await this.removeIssuerPublicCredential(
+        batch.removePublicCredential.issuerDID,
+        batch.removePublicCredential.credentialCID,
+      );
+    }
+    if (batch.publicCredential) await this.addPublicCredential(batch.publicCredential);
+    if (batch.logEntry) await this.appendToLog(batch.logEntry);
+    return 'new';
+  }
+
+  // ---------------------------------------------------------------------------
+  // index projection contract
+  // ---------------------------------------------------------------------------
+
+  async applyIndexRows(rows: IndexRowBatch): Promise<void> {
+    for (const row of rows.identities ?? []) await this.putIndexIdentityRow(row);
+    for (const row of rows.content ?? []) await this.putIndexContentRow(row);
+    for (const entry of rows.credits ?? []) {
+      await this.putIndexCreditRows(entry.contentId, entry.rows);
+    }
+    for (const row of rows.artifacts ?? []) await this.putIndexArtifactRow(row);
+    for (const row of rows.countersignatures ?? []) await this.putIndexCountersignatureRow(row);
+    for (const row of rows.operations ?? []) this.indexOperationRows.set(row.cid, row);
+    for (const entry of rows.operationSignerKeys ?? []) {
+      await this.putIndexOperationSignerKey(entry.cid, entry.publicKeyMultibase);
+    }
+    for (const entry of rows.identityKeys ?? []) {
+      await this.putIndexIdentityKey(entry.did, entry.publicKeyMultibase, entry.keyId);
+    }
+    for (const entry of rows.contentSigners ?? []) {
+      await this.putIndexContentSigner(entry.contentId, entry.did);
+    }
+  }
+
+  async getIndexCursor(): Promise<IndexCursor> {
+    return { logCursor: this.indexCursor.logCursor, sweep: this.indexCursor.sweep };
+  }
+
+  async setIndexCursor(cursor: IndexCursor): Promise<void> {
+    this.indexCursor = { logCursor: cursor.logCursor, sweep: cursor.sweep };
+  }
+
+  // ---------------------------------------------------------------------------
+  // seeding (development and tests only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Write state directly, bypassing `commit`.
+   *
+   * NOT PART OF ANY STORE CONTRACT and deliberately absent from the durable
+   * shapes: this is the in-memory reference store, and a test that wants a
+   * revocation already on file should say so in one line rather than construct a
+   * whole operation to carry it. Nothing in the package calls it.
+   */
+  async seed(state: {
+    operations?: StoredOperation[];
+    identityChains?: StoredIdentityChain[];
+    contentChains?: StoredContentChain[];
+    blobs?: { key: BlobKey; bytes: Uint8Array }[];
+    revocations?: StoredRevocation[];
+    publicCredentials?: StoredPublicCredential[];
+    logEntries?: LogEntry[];
+    indexRows?: IndexRowBatch;
+  }): Promise<void> {
+    for (const op of state.operations ?? []) await this.putOperation(op);
+    for (const chain of state.identityChains ?? []) await this.putIdentityChain(chain);
+    for (const chain of state.contentChains ?? []) await this.putContentChain(chain);
+    for (const blob of state.blobs ?? []) await this.putBlob(blob.key, blob.bytes);
+    for (const revocation of state.revocations ?? []) await this.addRevocation(revocation);
+    for (const credential of state.publicCredentials ?? []) {
+      await this.addPublicCredential(credential);
+    }
+    for (const entry of state.logEntries ?? []) await this.appendToLog(entry);
+    if (state.indexRows) await this.applyIndexRows(state.indexRows);
+  }
 
   async pruneExpiredSignRequests(now: number): Promise<void> {
     for (const [cid, request] of this.signRequests) {
@@ -303,7 +450,7 @@ export class MemoryRelayStore implements RelayStore {
     return this.operations.get(cid);
   }
 
-  async putOperation(op: StoredOperation): Promise<void> {
+  private async putOperation(op: StoredOperation): Promise<void> {
     this.operations.set(op.cid, op);
   }
 
@@ -311,7 +458,7 @@ export class MemoryRelayStore implements RelayStore {
     return this.identityChains.get(did);
   }
 
-  async putIdentityChain(chain: StoredIdentityChain): Promise<void> {
+  private async putIdentityChain(chain: StoredIdentityChain): Promise<void> {
     this.identityChains.set(chain.did, chain);
   }
 
@@ -319,7 +466,7 @@ export class MemoryRelayStore implements RelayStore {
     return this.contentChains.get(contentId);
   }
 
-  async putContentChain(chain: StoredContentChain): Promise<void> {
+  private async putContentChain(chain: StoredContentChain): Promise<void> {
     this.contentChains.set(chain.contentId, chain);
   }
 
@@ -327,7 +474,7 @@ export class MemoryRelayStore implements RelayStore {
     return this.blobs.get(blobKeyString(key));
   }
 
-  async putBlob(key: BlobKey, data: Uint8Array): Promise<void> {
+  private async putBlob(key: BlobKey, data: Uint8Array): Promise<void> {
     this.blobs.set(blobKeyString(key), data);
   }
 
@@ -335,7 +482,7 @@ export class MemoryRelayStore implements RelayStore {
     return this.countersignatures.get(operationCID) ?? [];
   }
 
-  async addCountersignature(operationCID: string, jwsToken: string): Promise<void> {
+  private async addCountersignature(operationCID: string, jwsToken: string): Promise<void> {
     const existing = this.countersignatures.get(operationCID) ?? [];
 
     // dedup by witness DID (kid DID prefix), not just exact token match
@@ -358,15 +505,7 @@ export class MemoryRelayStore implements RelayStore {
 
   // --- revocations ---
 
-  async getRevocations(issuerDID: string): Promise<string[]> {
-    const cids: string[] = [];
-    for (const rev of this.revocations.values()) {
-      if (rev.issuerDID === issuerDID) cids.push(rev.credentialCID);
-    }
-    return cids;
-  }
-
-  async addRevocation(revocation: StoredRevocation): Promise<void> {
+  private async addRevocation(revocation: StoredRevocation): Promise<void> {
     const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
     // earliest boundary wins — see revocationSupersedes. The survivor is kept
     // WHOLE (artifact + boundary together), so the revocation this store serves
@@ -632,29 +771,33 @@ export class MemoryRelayStore implements RelayStore {
     return pageRows(rows, (row) => row.cid, q.after, q.limit);
   }
 
-  async putIndexIdentityRow(row: IndexIdentityRow): Promise<void> {
+  private async putIndexIdentityRow(row: IndexIdentityRow): Promise<void> {
     this.indexIdentityRows.set(row.did, row);
   }
 
-  async putIndexContentRow(row: IndexContentRow): Promise<void> {
+  private async putIndexContentRow(row: IndexContentRow): Promise<void> {
     this.indexContentRows.set(row.contentId, row);
   }
 
-  async putIndexCreditRows(contentId: string, rows: IndexCreditRow[]): Promise<void> {
+  private async putIndexCreditRows(contentId: string, rows: IndexCreditRow[]): Promise<void> {
     this.indexCreditRows.set(contentId, [...rows]);
   }
 
-  async putIndexArtifactRow(row: IndexArtifactRow): Promise<void> {
+  private async putIndexArtifactRow(row: IndexArtifactRow): Promise<void> {
     this.indexArtifactRows.set(row.cid, row);
   }
 
-  async putIndexContentSigner(contentId: string, did: string): Promise<void> {
+  private async putIndexContentSigner(contentId: string, did: string): Promise<void> {
     const signers = this.indexContentSigners.get(contentId) ?? new Set<string>();
     signers.add(did);
     this.indexContentSigners.set(contentId, signers);
   }
 
-  async putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void> {
+  private async putIndexIdentityKey(
+    did: string,
+    publicKeyMultibase: string,
+    keyId: string,
+  ): Promise<void> {
     const declarers = this.indexIdentityKeys.get(publicKeyMultibase) ?? new Set<string>();
     declarers.add(did);
     this.indexIdentityKeys.set(publicKeyMultibase, declarers);
@@ -667,13 +810,13 @@ export class MemoryRelayStore implements RelayStore {
     void keyId;
   }
 
-  async putIndexOperationSignerKey(cid: string, publicKeyMultibase: string): Promise<void> {
+  private async putIndexOperationSignerKey(cid: string, publicKeyMultibase: string): Promise<void> {
     // stored VERBATIM — the filter is an opaque byte match, so nothing here
     // normalizes, validates, or re-encodes the multibase string
     this.indexOperationSignerKeys.set(cid, publicKeyMultibase);
   }
 
-  async putIndexCountersignatureRow(
+  private async putIndexCountersignatureRow(
     row: IndexCountersignatureQueryRow & { witnessDID: string },
   ): Promise<void> {
     this.indexCountersignatureRows.set(row.cid, row);
@@ -746,45 +889,31 @@ export class MemoryRelayStore implements RelayStore {
     return this.publicCredentials.get(cid);
   }
 
-  async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
+  private async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
     this.publicCredentials.set(credential.cid, credential);
   }
 
-  async removePublicCredential(issuerDID: string, credentialCID: string): Promise<void> {
+  /**
+   * ISSUER-SCOPED. A revocation only reaches the credentials its own signer
+   * issued; a held grant issued by someone else is left alone. Without the
+   * pairing, any identity could un-publish anyone's public content by signing a
+   * revocation that named its credential CID.
+   */
+  private async removeIssuerPublicCredential(
+    issuerDID: string,
+    credentialCID: string,
+  ): Promise<void> {
     const held = this.publicCredentials.get(credentialCID);
-    if (held?.issuerDID === issuerDID) this.publicCredentials.delete(credentialCID);
+    if (held && held.issuerDID === issuerDID) this.publicCredentials.delete(credentialCID);
   }
 
   // --- operation log ---
 
-  // One op, one receipt stamp: this is the ONLY place an operation's receipt
-  // time is read off the wall clock. `putOperation` holds no receipt, so the
-  // operation-log row is the single source, and every other projection writer
-  // sources it back out through `getIndexOperationRow` (the Go twin sources
-  // from its op store instead, but the invariant is the same — one clock read
-  // per op, so no two index surfaces can disagree by a millisecond).
-  async appendToLog(entry: LogEntry): Promise<void> {
+  // The log carries the receipt stamp the writer read at commit — this store
+  // adds no clock of its own. One clock read per operation is what keeps the
+  // index surfaces from disagreeing by a millisecond about the same op.
+  private async appendToLog(entry: LogEntry): Promise<void> {
     this.operationLog.push(entry);
-    const payload = decodeJwsUnsafe(entry.jwsToken)?.payload;
-    const authoredAt = payload?.createdAt;
-    const issuedAt = payload?.iat;
-    const createdAt =
-      typeof authoredAt === 'string'
-        ? authoredAt
-        : typeof issuedAt === 'number' && Number.isFinite(issuedAt)
-          ? new Date(issuedAt * 1000).toISOString()
-          : '';
-    this.indexOperationRows.set(entry.cid, {
-      cid: entry.cid,
-      kind: entry.kind,
-      chainId: entry.chainId,
-      createdAt,
-      ingestedAt: new Date().toISOString(),
-    });
-  }
-
-  async getIndexOperationRow(cid: string): Promise<IndexOperationRow | undefined> {
-    return this.indexOperationRows.get(cid);
   }
 
   async readLog(params: {

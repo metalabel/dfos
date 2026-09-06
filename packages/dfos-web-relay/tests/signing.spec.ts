@@ -275,7 +275,7 @@ describe('signing mailbox', () => {
     ).resolves.toBeDefined();
     await expect(
       createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY, signing: true }),
-    ).rejects.toThrow('signing capability requires a store implementing the signing members');
+    ).rejects.toThrow('signing capability requires a store implementing SigningStore');
   });
 
   it('defaults off, advertises false, and gates all five routes before parsing or auth', async () => {

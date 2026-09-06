@@ -8,20 +8,23 @@
 
 */
 
-import { computeOpCID, ingestOperationsLocked, withChainStateLock } from './ingest';
-import type { IngestionResult, RelayStore, SequenceResult } from './types';
+import { computeOpCID, ingestOperations } from './ingest';
+import type { IngestionResult, RelayWriterState, RelayWriteStore, SequenceResult } from './types';
 
 export { computeOpCID };
 
 /**
- * Returns true if a rejection is retryable (a missing dependency that may
- * arrive later via sync or gossip). The sequencer branches on the STRUCTURED
- * `dependencyMissing` flag set by the ingest producer — not on substring
- * matching of the human-readable `error` string. Mirrors the Go twin's
- * structured discriminator.
+ * Returns true if a rejection must NOT be treated as permanent.
+ *
+ * Two structured signals, both set by the ingest producer, neither inferred from
+ * the human-readable `error` string: a missing dependency that may arrive later
+ * via sync or gossip, and a store fault, which is not a verdict about the
+ * operation at all. A permanent rejection DELETES the raw op — the only copy the
+ * relay holds — so both have to be readable as facts rather than as phrases.
  */
-export const isDependencyFailure = (res: Pick<IngestionResult, 'dependencyMissing'>): boolean =>
-  res.dependencyMissing === true;
+export const isRetryableRejection = (
+  res: Pick<IngestionResult, 'dependencyMissing' | 'storeFault'>,
+): boolean => res.dependencyMissing === true || res.storeFault === true;
 
 /**
  * Emit the one durable trace of a permanent rejection.
@@ -46,24 +49,10 @@ export const logOpRejected = (cid: string, reason: string): void => {
 
 /**
  * Process unsequenced raw ops in a fixed-point loop until no more progress
- * is made, under the store's chain-state lock. Returns the JWS tokens of newly
- * sequenced ops and aggregate stats.
- *
- * Twin of Go's `RunSequencer`, which takes `ingestMu` and delegates to
- * `runSequencerLocked`. A caller already holding the lock calls
- * `sequenceOpsLocked` instead — the lock is not reentrant.
+ * is made. Returns the JWS tokens of newly sequenced ops and aggregate stats.
  */
-export const sequenceOps = (
-  store: RelayStore,
-): Promise<{ newOps: string[]; result: SequenceResult }> =>
-  withChainStateLock(store, () => sequenceOpsLocked(store));
-
-/**
- * The sequencer inner loop. CALLER MUST HOLD the store's chain-state lock.
- * Twin of Go's `runSequencerLocked`.
- */
-export const sequenceOpsLocked = async (
-  store: RelayStore,
+export const sequenceOps = async (
+  store: RelayWriteStore & RelayWriterState,
 ): Promise<{ newOps: string[]; result: SequenceResult }> => {
   const newOps: string[] = [];
   const result: SequenceResult = { sequenced: 0, rejected: 0, pending: 0 };
@@ -78,7 +67,7 @@ export const sequenceOpsLocked = async (
         .map((op, index) => ({ op, index }))
         .filter(({ op }) => op.origin === origin);
       if (partition.length === 0) continue;
-      const partitionResults = await ingestOperationsLocked(
+      const partitionResults = await ingestOperations(
         partition.map(({ op }) => op.jwsToken),
         store,
         { admissionMode: origin === 'peer' ? 'historical' : 'current' },
@@ -104,7 +93,7 @@ export const sequenceOpsLocked = async (
       } else if (res.status === 'duplicate') {
         sequencedCIDs.push(res.cid);
         progress = true;
-      } else if (res.status === 'rejected' && !isDependencyFailure(res)) {
+      } else if (res.status === 'rejected' && !isRetryableRejection(res)) {
         const reason = res.error ?? 'unknown';
         logOpRejected(res.cid, reason);
         await store.markOpRejected(res.cid, reason);

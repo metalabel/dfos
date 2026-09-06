@@ -647,10 +647,15 @@ describe('index v0', () => {
   // reads its own clock instead.
   it('sources projection receipt stamps from the operation log, never its own clock', async () => {
     const pinned = '1999-12-31T23:59:59.000Z';
+    // The receipt stamp rides on the operation-log entry, which is the only
+    // place the projection can source it from. A log whose stamps are obviously
+    // not now makes a second clock read anywhere downstream visible.
     class PinnedReceiptStore extends MemoryRelayStore {
-      override async getIndexOperationRow(cid: string) {
-        const row = await super.getIndexOperationRow(cid);
-        return row ? { ...row, ingestedAt: pinned } : undefined;
+      override async readLog(params: { after?: string; limit: number }) {
+        const page = await super.readLog(params);
+        return page
+          ? { ...page, entries: page.entries.map((entry) => ({ ...entry, ingestedAt: pinned })) }
+          : null;
       }
     }
     const pinnedStore = new PinnedReceiptStore();
@@ -1489,23 +1494,31 @@ describe('index v0', () => {
     const identityHead = await json(await req('/index/v0/identities?order=headAt.desc&limit=1'));
     expect(identityHead.identities[0].did).toBe(a.did);
 
-    await store.putIndexIdentityRow({
-      did: 'did:dfos:identity-tie-b',
-      headCID: 'h',
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      isDeleted: false,
-      profile: null,
+    await store.applyIndexRows({
+      identities: [
+        {
+          did: 'did:dfos:identity-tie-b',
+          headCID: 'h',
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          isDeleted: false,
+          profile: null,
+        },
+      ],
     });
-    await store.putIndexIdentityRow({
-      did: 'did:dfos:identity-tie-a',
-      headCID: 'h',
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      isDeleted: false,
-      profile: null,
+    await store.applyIndexRows({
+      identities: [
+        {
+          did: 'did:dfos:identity-tie-a',
+          headCID: 'h',
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          isDeleted: false,
+          profile: null,
+        },
+      ],
     });
     const identityTied = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=2'));
     expect(identityTied.identities.map((row: { did: string }) => row.did)).toEqual([
@@ -1513,33 +1526,41 @@ describe('index v0', () => {
       'did:dfos:identity-tie-b',
     ]);
 
-    await store.putIndexContentRow({
-      contentId: 'tie-a',
-      genesisCID: 'g',
-      headCID: 'h',
-      creatorDID: a.did,
-      isDeleted: false,
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      currentDocumentCID: null,
-      publicRead: false,
-      docSchema: null,
-      title: null,
+    await store.applyIndexRows({
+      content: [
+        {
+          contentId: 'tie-a',
+          genesisCID: 'g',
+          headCID: 'h',
+          creatorDID: a.did,
+          isDeleted: false,
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          currentDocumentCID: null,
+          publicRead: false,
+          docSchema: null,
+          title: null,
+        },
+      ],
     });
-    await store.putIndexContentRow({
-      contentId: 'tie-b',
-      genesisCID: 'g',
-      headCID: 'h',
-      creatorDID: a.did,
-      isDeleted: false,
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      currentDocumentCID: null,
-      publicRead: false,
-      docSchema: null,
-      title: null,
+    await store.applyIndexRows({
+      content: [
+        {
+          contentId: 'tie-b',
+          genesisCID: 'g',
+          headCID: 'h',
+          creatorDID: a.did,
+          isDeleted: false,
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          currentDocumentCID: null,
+          publicRead: false,
+          docSchema: null,
+          title: null,
+        },
+      ],
     });
     const tied = await json(await req('/index/v0/content?order=genesisAt.desc&limit=2'));
     expect(tied.content.map((row: { contentId: string }) => row.contentId)).toEqual([
@@ -2087,9 +2108,13 @@ describe('index v0', () => {
     const cids = credentials.map(
       (credential) => decodeDFOSCredentialUnsafe(credential)!.header.cid as string,
     );
+    const operationRows = await store.queryIndexOperations({
+      order: 'ingestedAt.desc',
+      limit: 1000,
+    });
     for (const cid of cids) {
       expect((await store.getPublicCredentialByCID(cid))?.ingestedAt).toBe(
-        (await store.getIndexOperationRow(cid))?.ingestedAt,
+        operationRows.find((row) => row.cid === cid)?.ingestedAt,
       );
     }
 
@@ -2280,12 +2305,14 @@ describe('index v0', () => {
     expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
     expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
 
-    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    const applied = vi.spyOn(store, 'applyIndexRows');
     await revokeGrant(creator, credentialA);
 
     expect((await contentRow(contentA.contentId)).publicRead).toBe(false);
     expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
-    expect(putContentRow.mock.calls.map(([row]) => row.contentId)).toEqual([contentA.contentId]);
+    expect(
+      applied.mock.calls.flatMap(([rows]) => (rows.content ?? []).map((row) => row.contentId)),
+    ).toEqual([contentA.contentId]);
   });
 
   it('falls back to the public sweep for wildcard grant revocation', async () => {
@@ -2296,17 +2323,24 @@ describe('index v0', () => {
     expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
     expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
 
-    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    const applied = vi.spyOn(store, 'applyIndexRows');
     await revokeGrant(creator, credentialCID);
 
     expect((await contentRow(contentA.contentId)).publicRead).toBe(false);
     expect((await contentRow(contentB.contentId)).publicRead).toBe(false);
-    const recomputed = putContentRow.mock.calls.map(([row]) => row.contentId);
+    const recomputed = applied.mock.calls.flatMap(([rows]) =>
+      (rows.content ?? []).map((row) => row.contentId),
+    );
     expect(recomputed).toHaveLength(2);
     expect(new Set(recomputed)).toEqual(new Set([contentA.contentId, contentB.contentId]));
   });
 
-  it('falls back to the public sweep for an unresolvable revoked credential', async () => {
+  it('dirties nothing for a revocation of a credential this relay never held', async () => {
+    // THE #266 NARROWING. This is the attacker-paced trigger: a revocation is
+    // free to mint, needs only some identity on the relay, and used to sweep
+    // every currently-public content row whenever the named credential could not
+    // be resolved. It now resolves the credential through its own operation, so
+    // a credential the relay never held names no grant and dirties no row.
     const creator = await createIdentity();
     const contentA = await createContent(creator, { $schema: POST_SCHEMA, title: 'a' }, 1);
     const contentB = await createContent(creator, { $schema: POST_SCHEMA, title: 'b' }, 2);
@@ -2317,14 +2351,14 @@ describe('index v0', () => {
       'chain:unheld',
     );
 
-    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    const applied = vi.spyOn(store, 'applyIndexRows');
     await revokeGrant(creator, unheldCredentialCID);
 
     expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
     expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
-    const recomputed = putContentRow.mock.calls.map(([row]) => row.contentId);
-    expect(recomputed).toHaveLength(2);
-    expect(new Set(recomputed)).toEqual(new Set([contentA.contentId, contentB.contentId]));
+    expect(
+      applied.mock.calls.flatMap(([rows]) => (rows.content ?? []).map((row) => row.contentId)),
+    ).toEqual([]);
   });
 
   it('suspends a public-read credential on delete and honors it again after restore', async () => {
@@ -2499,33 +2533,41 @@ describe('index v0', () => {
     // A row a pre-gate builder might have persisted: non-public but carrying an
     // extracted name/title. Serve-time redaction must null both, and nameContains
     // must not confirm the stale name — the current builder never writes this.
-    await store.putIndexIdentityRow({
-      did: 'did:dfos:stale-identity',
-      headCID: 'h',
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      isDeleted: false,
-      profile: {
-        anchor: 'stale-anchor',
-        publicRead: false,
-        docSchema: PROFILE_SCHEMA,
-        name: 'stale',
-      },
+    await store.applyIndexRows({
+      identities: [
+        {
+          did: 'did:dfos:stale-identity',
+          headCID: 'h',
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          isDeleted: false,
+          profile: {
+            anchor: 'stale-anchor',
+            publicRead: false,
+            docSchema: PROFILE_SCHEMA,
+            name: 'stale',
+          },
+        },
+      ],
     });
-    await store.putIndexContentRow({
-      contentId: 'stale-content',
-      genesisCID: 'g',
-      headCID: 'h',
-      creatorDID: relayDID,
-      isDeleted: false,
-      opCount: 1,
-      genesisAt: '2999-01-01T00:00:00.000Z',
-      headAt: '2999-01-01T00:00:00.000Z',
-      currentDocumentCID: null,
-      publicRead: false,
-      docSchema: POST_SCHEMA,
-      title: 'stale-title',
+    await store.applyIndexRows({
+      content: [
+        {
+          contentId: 'stale-content',
+          genesisCID: 'g',
+          headCID: 'h',
+          creatorDID: relayDID,
+          isDeleted: false,
+          opCount: 1,
+          genesisAt: '2999-01-01T00:00:00.000Z',
+          headAt: '2999-01-01T00:00:00.000Z',
+          currentDocumentCID: null,
+          publicRead: false,
+          docSchema: POST_SCHEMA,
+          title: 'stale-title',
+        },
+      ],
     });
 
     expect((await identityRow('did:dfos:stale-identity')).profile.name).toBeNull();

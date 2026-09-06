@@ -30,13 +30,14 @@ const relay = await createRelay({
 // relay.app  — Hono application
 // relay.did  — the relay's auto-generated DID
 // relay.syncFromPeers() — pull operations from configured peers
+// relay.projectIndex()  — advance the /index/v0 projection by one budget
 
 export default relay.app;
 ```
 
 Set `signing: true` to enable the optional signing mailbox; it is disabled by default.
-The store must implement the optional signing members or `createRelay` throws
-`signing capability requires a store implementing the signing members`.
+The store must implement `SigningStore` or `createRelay` throws
+`signing capability requires a store implementing SigningStore`.
 
 Set `authority` to the `host[:port]` callers reach this relay at. It is what every
 [API-AUTH](https://protocol.dfos.com/api-auth) identity proof is checked against, and
@@ -170,73 +171,118 @@ A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The
 transport failure) is load-bearing for the sync loop's self-heal — see
 [Web Relay § Peering](https://protocol.dfos.com/web-relay#peering).
 
-## Custom Store
+## Implementing a store
 
-Implement the `RelayStore` interface to use any persistence backend. The relay
-handles what to store and when; the store handles how:
+A store implements one required contract and, optionally, up to three more. Which
+ones it implements is what the relay reads its capabilities from — there is no
+capability flag that can promise something the store cannot do, and no member
+that exists only to throw.
 
 ```typescript
-interface RelayStore {
-  getOperation(cid: string): Promise<StoredOperation | undefined>;
-  putOperation(op: StoredOperation): Promise<void>;
+import { createRelay } from '@metalabel/dfos-web-relay';
 
-  getIdentityChain(did: string): Promise<StoredIdentityChain | undefined>;
-  putIdentityChain(chain: StoredIdentityChain): Promise<void>;
+// a read-only relay: serves the proof plane, the content plane, the log and the
+// revocation routes. `write` is false, `index` is false, and it says so.
+const relay = await createRelay({ store: myReadStore, identity: myIdentity });
+```
 
-  getContentChain(contentId: string): Promise<StoredContentChain | undefined>;
-  putContentChain(chain: StoredContentChain): Promise<void>;
+### `RelayReadStore` — required
 
-  getBlob(key: BlobKey): Promise<Uint8Array | undefined>;
-  putBlob(key: BlobKey, data: Uint8Array): Promise<void>;
+Every read a route performs: operations, identity and content chains, chain state
+at an arbitrary CID, blobs, countersignatures, the paginated global log, stats,
+revocations, and held public credentials. A relay over nothing but this serves
+every GET the spec defines.
 
-  getCountersignatures(operationCID: string): Promise<string[]>;
-  addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
+Reads FAIL CLOSED. A read that cannot be answered throws; it never returns
+`undefined` to mean "the store is unwell". Absence and failure are different
+answers, and ingestion classifies them differently — absence is a verdict, a
+throw is retryable.
 
-  appendToLog(entry: LogEntry): Promise<void>;
-  // `null` (the whole result, not the `next` field) = the store does not
-  // recognize `after` — the relay MUST answer 400, never an empty page. A
-  // store that cannot signal this would silently mask foreign cursors as
-  // caught-up, permanently stalling any peer that trusted the answer.
-  readLog(params: {
-    after?: string;
-    limit: number;
-  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
+### `RelayWriteStore` — one method
 
-  // chain state at arbitrary CID (content fork verification; identity historical state)
-  getIdentityStateAtCID(
-    did: string,
-    cid: string,
-  ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null>;
-  getContentStateAtCID(
-    contentId: string,
-    cid: string,
-  ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
-
-  // peer sync cursors
-  getPeerCursor(peerUrl: string): Promise<string | undefined>;
-  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
+```typescript
+interface RelayWriteStore extends RelayReadStore {
+  commit(batch: CommitBatch): Promise<CommitResult>;
 }
 ```
 
-The `getIdentityStateAtCID` / `getContentStateAtCID` methods compute
-materialized chain state at an arbitrary operation CID — content-fork
-verification is the driving use. Implementations decide how: `MemoryRelayStore`
-replays from genesis; a SQL-backed store can use snapshot tables.
+`CommitBatch` is a typed, exhaustive description of everything ONE accepted
+operation implies — the operation row, the identity or content chain's new head
+and log, the global-log append, a countersignature, a revocation, a standing
+credential added or (issuer-scoped) dropped — or one document blob. The store
+persists all of it or none of it, and answers `new` or `duplicate`.
 
-Convergence (store-then-verify — [Web Relay § Convergence](https://protocol.dfos.com/web-relay#convergence))
-extends the interface with a content-addressed raw-operation buffer:
+Atomicity is the contract. A partial commit is a corrupt relay: an operation in
+the operation table but not in the log is invisible to every puller forever, and
+a chain head advanced without its operation row breaks fork verification. If the
+commit throws, the store MUST have persisted nothing; the relay treats a throw as
+retryable and keeps the raw operation for a later pass.
+
+A writing relay also holds writer-internal bookkeeping — the raw-operation
+buffer the sequencer drains, and per-peer sync cursors (`RelayWriterState`). That
+is this package's own state, not part of the store contract a read-only
+integration has to care about.
+
+### `IndexReadStore` / `IndexWriteStore` — the index profile
+
+`IndexReadStore` is the nine queries behind `/index/v0`, pushed down so a page
+costs O(page). `IndexWriteStore` is the projection side: `applyIndexRows` plus a
+persisted cursor.
+
+They are separate because a store can implement one without the other. A store
+whose index rows are maintained by an external worker implements the queries,
+advertises `index: true`, and the relay does no projection work for it. A store
+that implements both lets this package run the projection:
 
 ```typescript
-// raw ops — content-addressed store for all received operations
-putRawOp(cid: string, jwsToken: string): Promise<void>;
-getUnsequencedOps(limit: number): Promise<string[]>;
-markOpsSequenced(cids: string[]): Promise<void>;
-markOpRejected(cid: string, reason: string): Promise<void>;
-countUnsequenced(): Promise<number>;
-resetSequencer(): Promise<void>;
+import { projectIndex } from '@metalabel/dfos-web-relay';
+
+// inline (default): the relay drains the projection after each accepted batch
+await createRelay({ store });
+
+// external: nothing runs it but you
+const relay = await createRelay({ store, indexProjection: 'external' });
+setInterval(() => void relay.projectIndex(), 5_000);
 ```
 
-`MemoryRelayStore` is provided as a reference implementation and for testing.
+The projection walks the operation log from its cursor, maps each entry to the
+rows it dirties, and applies them. It is never inside a commit, every pass is
+bounded by a budget, and a full-corpus fan-out (a `chain:*` grant, an identity
+delete or restore) is carried on the cursor as a resumable sweep rather than
+drained in one pass.
+
+### `SigningStore` — the optional mailbox
+
+The ephemeral courier state behind `/signing/v0`. `signing: true` over a store
+that does not implement it is a configuration that lies, so `createRelay` throws.
+
+`MemoryRelayStore` implements all of them, and is the reference implementation.
+
+### Migrating a store written against the old interface
+
+This is a breaking change to the package's store API (`0.x`, so a minor bump).
+A store written against the single `RelayStore` interface needs three edits:
+
+1. **Replace the ~14 write members with `commit`.** `putOperation`,
+   `putIdentityChain`, `putContentChain`, `putBlob`, `addCountersignature`,
+   `appendToLog`, `addRevocation`, `addPublicCredential` and
+   `removePublicCredential` are gone. One `commit` carries what all of them
+   carried, and the store decides how to make it atomic. `removePublicCredential`
+   is now issuer-scoped: drop the held credential only when its `issuerDID`
+   matches the one on the batch.
+2. **Replace the `putIndex*` members with `applyIndexRows`, and add the cursor.**
+   `getIndexCursor` / `setIndexCursor` persist where the projection got to. If
+   your index is maintained elsewhere, implement neither and keep the queries.
+3. **Return `ingestedAt` on log entries, and delete `getIndexOperationRow`.** A
+   `LogEntry` now carries the relay's receipt stamp for that operation. It is the
+   single clock read per operation and the projection's only source for it, which
+   is what the optional `getIndexOperationRow` used to be for. It is store state,
+   not wire state: `GET /proof/v1/log` still serves
+   `{cid, jwsToken, kind, chainId}`.
+
+Members that were optional and are now simply absent (`getStats` is required;
+`getRevocations` was unused and is deleted) and the members a read-only store
+used to answer by throwing can all be removed.
 
 ## License
 

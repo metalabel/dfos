@@ -14,7 +14,7 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { IDENTITY_CONFLICTING_EXTENSION_ERROR, ingestOperations } from '../src/ingest';
-import { isDependencyFailure, sequenceOps } from '../src/sequencer';
+import { isRetryableRejection, sequenceOps } from '../src/sequencer';
 import { MemoryRelayStore } from '../src/store';
 
 /*
@@ -110,14 +110,14 @@ const corruptSignature = (jws: string): string => {
 };
 
 // ---------------------------------------------------------------------------
-// isDependencyFailure (structured)
+// isRetryableRejection (structured)
 // ---------------------------------------------------------------------------
 
-describe('isDependencyFailure (structured discriminator)', () => {
+describe('isRetryableRejection (structured discriminator)', () => {
   it('branches on the dependencyMissing flag, not the error string', () => {
-    expect(isDependencyFailure({ dependencyMissing: true })).toBe(true);
-    expect(isDependencyFailure({ dependencyMissing: false })).toBe(false);
-    expect(isDependencyFailure({})).toBe(false);
+    expect(isRetryableRejection({ dependencyMissing: true })).toBe(true);
+    expect(isRetryableRejection({ dependencyMissing: false })).toBe(false);
+    expect(isRetryableRejection({})).toBe(false);
   });
 });
 

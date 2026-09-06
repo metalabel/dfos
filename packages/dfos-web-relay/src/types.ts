@@ -196,8 +196,26 @@ export interface RelayOptions {
   log?: boolean;
   /** Whether the revocation status route family is enabled (default: true) */
   revocations?: boolean;
-  /** Whether the index query family is enabled (default: true) */
+  /**
+   * Whether the index query family is enabled (default: true, when the store
+   * implements `IndexReadStore`). An explicit `true` over a store that does not
+   * is a configuration error and throws at construction.
+   */
   index?: boolean;
+  /**
+   * Who advances the `/index/v0` projection.
+   *
+   * - `inline` (default) — the relay drains the projection after each accepted
+   *   ingest batch, and recomputes a content row after its blob lands. Each pass
+   *   is budget-bounded and resumable from the persisted cursor; nothing about
+   *   it runs inside a commit.
+   * - `external` — the relay never runs it. The operator calls `projectIndex`
+   *   on the created relay from a timer or a worker.
+   *
+   * Inert when the store does not implement `IndexWriteStore`: such a store
+   * serves index queries from rows something else maintains.
+   */
+  indexProjection?: 'inline' | 'external';
   /**
    * Whether this relay accepts writes (default: true). When false, it is a LITE
    * pull-only proof node: POST /proof/v1/operations is rejected (501), so neither
@@ -424,12 +442,24 @@ export interface BlobKey {
 // operation log
 // -----------------------------------------------------------------------------
 
-/** A single entry in the global append-only operation log */
+/**
+ * A single entry in the global append-only operation log.
+ *
+ * `ingestedAt` is THE receipt stamp for the operation, read from the wall clock
+ * exactly once, at commit. The log is the relay's record of what it accepted and
+ * in what order, so it is the honest place for that clock read — and because the
+ * index projection walks this log, every index surface (operations, artifacts,
+ * countersignatures, credentials) sources one receipt time for one operation
+ * rather than reading the clock again per surface. It is store state, not wire
+ * state: `GET /proof/v1/log` serves `{cid, jwsToken, kind, chainId}` and nothing
+ * more.
+ */
 export interface LogEntry {
   cid: string;
   jwsToken: string;
   kind: OperationKind;
   chainId: string;
+  ingestedAt: string;
 }
 
 /** A peer this relay is configured to talk to, surfaced in the well-known for mesh discovery. */
@@ -567,139 +597,120 @@ export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
 };
 
 // -----------------------------------------------------------------------------
-// relay store interface
+// relay store contracts
 // -----------------------------------------------------------------------------
 
+/*
+
+  THREE CONTRACTS, NOT ONE, AND NO OPTIONAL MEMBERS.
+
+  `RelayReadStore` is every read a route performs. `RelayWriteStore` adds ONE
+  method — `commit` — and is what a relay that accepts operations needs.
+  `IndexReadStore` / `IndexWriteStore` are the optional index profile: the query
+  side and the projection side, split because a store can serve one without the
+  other (a store whose index is maintained by an external worker implements the
+  queries and not the writes).
+
+  The split exists because the single fat interface was not implementable. Its
+  only production consumer serves the reads for real and answers ~22 write
+  members by throwing, which is not an implementation — it is a runtime promise
+  that those members are never called. A contract you satisfy by throwing tells
+  you nothing at construction time, so `createRelay` could not know what the
+  store could actually do and probed members one call at a time.
+
+  With the split, what a store can do is a fact about its TYPE, checked once at
+  construction (see `isRelayWriteStore` and friends) and turned into the
+  advertised capabilities. Nothing in this package probes `store.x?.()`.
+
+*/
+
 /**
- * Storage backend for a DFOS web relay
+ * EVERY READ A ROUTE PERFORMS. The base contract: implement this and the relay
+ * serves the whole proof plane, the content plane, the log, and the revocation
+ * routes — read-only.
  *
- * Implementations handle persistence (memory, SQLite, Postgres, S3, etc.).
- * The relay core handles verification — the store just reads and writes.
+ * Concurrency contract: the in-memory store is safe under single-threaded JS.
+ * A durable implementation enforces optimistic concurrency (compare-and-swap on
+ * the chain head CID) or pessimistic locking so two concurrent extensions of one
+ * chain cannot overwrite each other.
  *
- * Concurrency contract: single-threaded JS does NOT make a store safe. Applying
- * an operation is a read-verify-write span with real yield points inside it (the
- * WebCrypto verify is one), so two overlapping ingests read the same chain head
- * and the second write erases the first. Serializing that span is the RELAY's
- * job, not the store's: every ingestion entry point, the sequencer, and the blob
- * write hold the per-store chain-state lock (`withChainStateLock` in ingest.ts),
- * the twin of the Go relay's `ingestMu`. That lock spans one process. A store
- * shared across processes is outside its reach and must add its own optimistic
- * concurrency (compare-and-swap on the chain head CID) or pessimistic locking.
+ * FAIL CLOSED. A read that cannot be answered THROWS. It never returns
+ * `undefined`/`null`/`false` to mean "the store is unwell": absence and failure
+ * are different answers, and ingestion classifies them differently — absence is
+ * a verdict, a throw is retryable (see `StoreReadError` in ./ingest).
  */
-export interface RelayStore {
-  // --- signing mailbox (ephemeral courier state) ---
-
-  getSignRequest?(cid: string, now: number): Promise<StoredSignRequest | undefined>;
-  pruneExpiredSignRequests?(now: number): Promise<void>;
-  putSignRequest?(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
-  listPendingSignRequests?(params: {
-    subjectDID: string;
-    after?: string;
-    limit: number;
-    now: number;
-  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null>;
-  putSignResponse?(cid: string, response: string, now: number): Promise<SigningPutResult>;
-  declineSignRequest?(cid: string, now: number): Promise<SigningDeclineResult>;
-
+export interface RelayReadStore {
   // --- operations ---
 
   getOperation(cid: string): Promise<StoredOperation | undefined>;
-  putOperation(op: StoredOperation): Promise<void>;
 
-  // --- identity chains ---
+  // --- chains ---
 
   getIdentityChain(did: string): Promise<StoredIdentityChain | undefined>;
-  putIdentityChain(chain: StoredIdentityChain): Promise<void>;
-
-  // --- content chains ---
-
   getContentChain(contentId: string): Promise<StoredContentChain | undefined>;
-  putContentChain(chain: StoredContentChain): Promise<void>;
-
-  // --- blobs (content plane) ---
-
-  getBlob(key: BlobKey): Promise<Uint8Array | undefined>;
-  putBlob(key: BlobKey, data: Uint8Array): Promise<void>;
-
-  // --- countersignatures ---
-  // Implementations MUST deduplicate by witness DID per target CID.
-
-  getCountersignatures(operationCID: string): Promise<string[]>;
-  addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
-
-  // --- operation log ---
-  // Global append-only log of all accepted operations. CID-based cursor pagination.
-  // Cursors are relay-local (per-relay ingestion order): readLog resolves `after`
-  // positionally and returns null for a cursor this log does not contain — the
-  // route maps that to 400, never a silently empty page.
-
-  appendToLog(entry: LogEntry): Promise<void>;
-  readLog(params: {
-    after?: string;
-    limit: number;
-  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
-  /**
-   * Optional: compute operational statistics over the global log for the well-known
-   * response. A store that omits this leaves opCount/countsByKind/oldestOpAt/headCid
-   * out of the well-known (pendingOps still reports). Reference stores implement it.
-   */
-  getStats?(): Promise<RelayStats>;
-
-  // --- chain state at arbitrary CID (snapshot-backed) ---
 
   /**
-   * Get the materialized identity state at a specific operation CID.
-   *
-   * Used by fork verification — the ingestion pipeline needs state at the fork
-   * point to verify signer authority and createdAt ordering.
-   *
-   * Implementations decide how to compute this:
-   * - MemoryStore: replay from genesis (chains are short in tests)
-   * - SQLiteStore: check snapshot table, replay from nearest snapshot
-   *
-   * Returns null if the CID is not in this chain's log.
+   * Materialized identity state at a specific operation CID, or null when the
+   * CID is not in this chain's log. Fork verification needs state at the fork
+   * point to check signer authority and createdAt ordering. Implementations
+   * decide how: replay from genesis, or replay from the nearest snapshot.
    */
   getIdentityStateAtCID(
     did: string,
     cid: string,
   ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null>;
 
-  /** Same for content chains */
+  /** Same for content chains. */
   getContentStateAtCID(
     contentId: string,
     cid: string,
   ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
 
+  // --- blobs (content plane) ---
+
+  getBlob(key: BlobKey): Promise<Uint8Array | undefined>;
+
+  // --- countersignatures ---
+
+  /** The accepted countersignatures over one operation, deduped one per witness. */
+  getCountersignatures(operationCID: string): Promise<string[]>;
+
+  // --- operation log ---
+
+  /**
+   * Page the global append-only log by relay-local cursor. Cursors are the
+   * relay's own ingestion order, so a cursor this log never issued returns
+   * `null` — the route maps that to 400, never a silently empty page.
+   */
+  readLog(params: {
+    after?: string;
+    limit: number;
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
+
+  /** Operational statistics over the global log, for the well-known response. */
+  getStats(): Promise<RelayStats>;
+
   // --- revocations ---
 
-  /** Get all revoked credential CIDs for an issuer */
-  getRevocations(issuerDID: string): Promise<string[]>;
-  /** Add a revocation to the revocation set */
-  addRevocation(revocation: StoredRevocation): Promise<void>;
   /**
-   * Check if a specific credential CID has been revoked by a specific issuer.
+   * Has this credential been revoked by this issuer?
    *
    * With `asOfUnix` omitted **or `<= 0`** this is the FRESHNESS answer — "revoked
    * as far as this relay knows right now" — which is what acceptance gates
    * (ingest, live read-path authorization) ask. With a positive `asOfUnix` it is
-   * the VALIDITY answer: true only if the revocation's own signed `createdAt` is at
-   * or before `asOfUnix`, which is what verifying already-committed history asks.
-   * See CREDENTIALS.md "Revocation Scope".
+   * the VALIDITY answer: true only if the revocation's own signed `createdAt` is
+   * at or before `asOfUnix`, which is what verifying already-committed history
+   * asks.
    *
    * `<= 0` is timeless because the Go twin uses `0` as its in-band sentinel and
-   * cannot express "as of epoch 0"; treating a non-positive instant as timeless in
-   * both keeps the twins from answering that degenerate input oppositely. The
-   * practical effect is that an operation dated at or before 1970 gets the
-   * stricter (timeless) answer everywhere.
+   * cannot express "as of epoch 0"; treating a non-positive instant as timeless
+   * in both keeps the twins from answering that degenerate input oppositely.
    *
    * **Implementors: accept and honor the third parameter.** JS/TS arity is
    * permissive, so a two-parameter implementation still satisfies this type — and
    * silently degrades every as-of query to the timeless answer. That direction is
-   * safe (it over-rejects rather than over-admits) but it reintroduces exactly the
-   * retroactive-invalidation behavior the parameter exists to fix: history that was
-   * valid when it was signed starts failing verification as soon as any credential
-   * in it is revoked. A store that genuinely cannot answer the as-of question
-   * should document that rather than quietly ignore the argument.
+   * safe (it over-rejects rather than over-admits) but it reintroduces the
+   * retroactive-invalidation behavior the parameter exists to fix.
    */
   isCredentialRevoked(
     issuerDID: string,
@@ -707,35 +718,144 @@ export interface RelayStore {
     asOfUnix?: number,
   ): Promise<boolean>;
   /**
-   * Get the stored revocation for a credential CID, any issuer. Serves the
-   * `/revocations/v1/credential/:credentialCID` status route. If more than one
-   * issuer has revoked the same CID (possible — the set is keyed by
-   * (issuerDID, credentialCID) and issuer-only enforcement happens at
-   * credential verification, not ingest), implementations MUST return the one
-   * with the lexicographically smallest issuerDID so the answer is
-   * deterministic across stores and twins.
+   * The stored revocation for a credential CID, any issuer. Serves
+   * `/revocations/v1/credential/:credentialCID`. If more than one issuer has
+   * revoked the same CID, implementations MUST return the one with the
+   * lexicographically smallest issuerDID so the answer is deterministic across
+   * stores and twins.
    */
   getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined>;
   /**
-   * Get all stored revocations issued by a DID, sorted by credentialCID
-   * ascending (deterministic across stores and twins — the frozen v1 keyset
-   * order). Serves the
-   * `/revocations/v1/issuer/:did` listing route.
+   * Every stored revocation issued by a DID, sorted by credentialCID ascending
+   * (the frozen v1 keyset order). Serves `/revocations/v1/issuer/:did`.
    */
   getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
 
-  // --- index (v0) materialized projection ---
-  //
-  // The /index/v0 query family is served from materialized projection rows that
-  // the ingestion pipeline maintains incrementally (see index-maintenance.ts).
-  // Queries push their filters and keyset cursor into the store so a page costs
-  // O(page), never O(corpus): rows come back ascending by natural key, strictly
-  // greater than `after` (bytewise), and capped at `limit`. The route layer
-  // computes `next = rows.length === limit ? key(last) : null`. Row VALUES are a
-  // pure function of chain state + held blobs + standing credentials, so a
-  // recompute always converges to the same row regardless of when it runs — that
-  // is what makes incremental maintenance and a full rebuild interchangeable.
+  // --- public credentials (standing authorization) ---
 
+  /**
+   * Held public credentials covering a resource. A `chain:*` grant covers every
+   * `chain:` resource and is returned for any of them.
+   */
+  getPublicCredentials(resource: string): Promise<string[]>;
+  /** One held public credential by CID. */
+  getPublicCredentialByCID(cid: string): Promise<StoredPublicCredential | undefined>;
+}
+
+/**
+ * ONE ACCEPTED OPERATION, AND EVERYTHING IT IMPLIES.
+ *
+ * The write contract used to be ~14 put/add/remove members that ingestion called
+ * in sequence, so "an operation was accepted" was a shape a store had to infer
+ * from a run of unrelated calls it could not see the end of — and a fault
+ * halfway through left the store holding half an operation with no way to know
+ * it. This describes the whole effect up front so a store can persist it in one
+ * transaction or not at all.
+ *
+ * Exactly one operation per commit. The members present are a function of the
+ * operation's kind:
+ *
+ *  - identity op   → `operation`, `identityChain`, `logEntry`
+ *  - content op    → `operation`, `contentChain`, `logEntry`
+ *  - artifact      → `operation`, `logEntry`
+ *  - countersign   → `operation`, `countersignature`, `logEntry`
+ *  - credential    → `operation`, `publicCredential`, `logEntry`
+ *  - revocation    → `operation`, `revocation`, `removePublicCredential`, `logEntry`
+ *
+ * `logEntry` is absent when the relay runs with the global log disabled.
+ */
+export interface OperationCommit {
+  kind: 'operation';
+  /** The operation row. Its `cid` is the commit's idempotency key. */
+  operation: StoredOperation;
+  /** The global-log append. Absent when the relay's log is disabled. */
+  logEntry?: LogEntry;
+  /** The identity chain's new head, log and state, whole. */
+  identityChain?: StoredIdentityChain;
+  /** The content chain's new head, log and state, whole. */
+  contentChain?: StoredContentChain;
+  /** Add this countersignature to the target's set (one per witness per target). */
+  countersignature?: { targetCID: string; jwsToken: string };
+  /** Add this revocation to the revocation set (earliest boundary wins). */
+  revocation?: StoredRevocation;
+  /** Add this credential as standing public authorization. */
+  publicCredential?: StoredPublicCredential;
+  /**
+   * Drop a held standing grant, ISSUER-SCOPED: the store removes the credential
+   * only when the held row's `issuerDID` equals `issuerDID` here.
+   *
+   * Scoping is the whole point. Revocation is only meaningful from a credential's
+   * own issuer (`isCredentialRevoked` is keyed on the pair), but the removal used
+   * to be keyed on the credential CID alone — so any identity could sign a
+   * revocation naming someone else's credential CID and the relay would drop the
+   * held grant, un-publishing public content it had no authority over. The store
+   * enforces the pairing.
+   */
+  removePublicCredential?: { issuerDID: string; credentialCID: string };
+}
+
+/** A document blob landing on the content plane, out of band from its operation. */
+export interface BlobCommit {
+  kind: 'blob';
+  key: BlobKey;
+  bytes: Uint8Array;
+}
+
+/**
+ * One atomic unit of relay write. A discriminated union because the content
+ * plane accepts bytes that no single operation carries: a document blob arrives
+ * on its own route, often after the operation that referenced it.
+ */
+export type CommitBatch = OperationCommit | BlobCommit;
+
+/**
+ * `new` — the batch was persisted. `duplicate` — this operation CID was already
+ * held and NOTHING was written.
+ *
+ * The duplicate answer is the race backstop, not the primary check: ingestion
+ * still reads for an existing operation before it verifies, because it must
+ * distinguish "same op" from "same CID, different signature". A store that
+ * cannot detect the race may always answer `new`, and idempotent writes make
+ * that correct — but a store that CAN detect it makes concurrent submission of
+ * one operation safe without a relay-wide lock. A blob commit always answers
+ * `new`: blob bytes are content-addressed, so a rewrite is a no-op.
+ */
+export type CommitResult = 'new' | 'duplicate';
+
+/**
+ * A store that accepts writes. ONE method: the relay describes an accepted
+ * operation, the store persists all of it or none of it.
+ *
+ * ATOMICITY IS THE CONTRACT. A partial commit is a corrupt relay: an operation
+ * in `operations` but not in the log is invisible to every puller forever, and a
+ * chain head advanced without its operation row breaks fork verification. If the
+ * commit throws, the store MUST have persisted nothing; the relay classifies a
+ * throw as retryable and keeps the raw operation for a later pass.
+ */
+export interface RelayWriteStore extends RelayReadStore {
+  commit(batch: CommitBatch): Promise<CommitResult>;
+}
+
+// -----------------------------------------------------------------------------
+// index profile (optional)
+// -----------------------------------------------------------------------------
+
+/**
+ * THE QUERY SIDE of the index profile: the nine reads behind `/index/v0`.
+ *
+ * Queries push their filters and keyset cursor into the store so a page costs
+ * O(page), never O(corpus): rows come back ascending by natural key, strictly
+ * greater than `after` (bytewise), capped at `limit`. The route layer computes
+ * `next = rows.length === limit ? key(last) : null`. Row VALUES are a pure
+ * function of chain state + held blobs + standing credentials, so a recompute
+ * always converges to the same row regardless of when it runs — that is what
+ * makes incremental projection and a full rebuild interchangeable.
+ *
+ * A store implementing this and NOT `IndexWriteStore` serves the index from rows
+ * some other process maintains. That is a supported shape, and the relay does no
+ * projection work for it.
+ */
+export interface IndexReadStore {
   /**
    * Page identity projection rows ascending by DID, `did > after`, length <=
    * limit. `hasPublicProfile` (≡ profile != null && profile.publicRead) filters
@@ -816,6 +936,9 @@ export interface RelayStore {
    * Page held public credentials by lexical cid or the selected recency
    * composite, filtered by issuer, resource, and/or action exact match. For
    * chain resources, the `chain:*` bucket is unioned as an amber discovery hint.
+   *
+   * Served from the HELD credential set, not from a projection table — a
+   * standing grant is authoritative state, and this route is a view of it.
    */
   queryIndexCredentials(q: {
     issuer?: string;
@@ -826,7 +949,6 @@ export interface RelayStore {
     order?: IndexRecencyOrder;
     limit: number;
   }): Promise<IndexCredentialQueryRow[]>;
-
   /**
    * Page relay-held operations in non-authoritative recency order.
    *
@@ -835,10 +957,8 @@ export interface RelayStore {
    * key the row's `kid` resolved to when the operation was accepted, stored
    * verbatim as the identity chain declared it — resolution is never repeated at
    * query time, and nothing here normalizes or re-encodes the string. Matched
-   * byte-for-byte as an opaque value (a key no accepted operation was signed
-   * with simply matches nothing; no format validation, no 400), and ANDed with
-   * the other filters. A row whose signer key did not resolve at ingest carries
-   * no key and therefore matches no `signerKey` value.
+   * byte-for-byte as an opaque value, and ANDed with the other filters. A row
+   * whose signer key did not resolve carries no key and matches no `signerKey`.
    */
   queryIndexOperations(q: {
     kind?: OperationKind;
@@ -848,73 +968,6 @@ export interface RelayStore {
     order: IndexRecencyOrder;
     limit: number;
   }): Promise<IndexOperationRow[]>;
-
-  /**
-   * Optional: read one relay-held operation row by CID. Index maintenance uses
-   * it to source an artifact row's `ingestedAt` from the operation log's
-   * receipt stamp, so the two index surfaces report one receipt time for the
-   * same op (mirrors the Go twin); absent, maintenance falls back to the wall
-   * clock.
-   */
-  getIndexOperationRow?(cid: string): Promise<IndexOperationRow | undefined>;
-
-  /** Upsert an identity projection row by DID. */
-  putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
-  /** Upsert a content projection row by contentId. */
-  putIndexContentRow(row: IndexContentRow): Promise<void>;
-  /** Replace one content chain's complete public-head credit row set. */
-  putIndexCreditRows(contentId: string, rows: IndexCreditRow[]): Promise<void>;
-  /** Upsert a standalone artifact projection row by CID. */
-  putIndexArtifactRow(row: IndexArtifactRow): Promise<void>;
-  /** Add one accepted content-operation signer to a chain's signer set. */
-  putIndexContentSigner(contentId: string, did: string): Promise<void>;
-  /**
-   * Record one public key an accepted identity operation left PROVED — the
-   * `(publicKeyMultibase, did, keyId)` reverse row backing `key=` on
-   * /index/v0/identities.
-   *
-   * Called once per entry of the chain's `provedKeys` after every accepted
-   * identity operation, so the table accumulates has-ever-proved rather than
-   * head state — a rotated-out key stays findable, which is the case the filter
-   * exists for. A key an operation merely DECLARED is NOT recorded: no
-   * possession proof admitted it, so it publishes no link between chains, and
-   * recording it would let a stranger burn a key they do not hold.
-   *
-   * Rows are UPSERTS and are NEVER DELETED: a rotation removes nothing, a
-   * deleted identity keeps its rows. Append-only plus a monotonic `provedKeys`
-   * is what makes the accumulated table equal the head state's `provedKeys`, so
-   * incremental maintenance and a full rebuild agree. `publicKeyMultibase` is
-   * stored verbatim.
-   */
-  putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void>;
-  /**
-   * Record the public key ONE accepted operation's signature verified against —
-   * the stored column behind `signerKey=` on /index/v0/operations.
-   *
-   * Called once per accepted operation of every kind (identity-op, content-op,
-   * artifact, countersign, revocation, credential), keyed by the same operation
-   * CID the operation index row carries, with `publicKeyMultibase` stored
-   * VERBATIM as the identity chain declared it — the identical string
-   * `putIndexIdentityKey` records, so `key=` on /index/v0/identities and
-   * `signerKey=` here speak one alphabet.
-   *
-   * It is written at ingest precisely so the filter never re-decodes the corpus:
-   * the row retains what verification already computed. An operation whose
-   * signer key does not resolve records nothing, and the row then matches no
-   * `signerKey` value (it still enumerates unfiltered). A persistent store
-   * repopulates the column for a pre-existing corpus through its versioned
-   * projection rebuild, replaying the op log; the in-memory reference store's
-   * projection is born with the process and has no corpus to backfill.
-   */
-  putIndexOperationSignerKey(cid: string, publicKeyMultibase: string): Promise<void>;
-  /**
-   * Upsert a countersignature projection row by cid. The `witnessDID` column is
-   * stored (never echoed in the row body) so witness-scoped queries stay O(page).
-   */
-  putIndexCountersignatureRow(
-    row: IndexCountersignatureQueryRow & { witnessDID: string },
-  ): Promise<void>;
-
   /**
    * Reverse lookup: DIDs of identity projection rows whose `profile.anchor`
    * equals the given contentId. Powers the "content changed → recompute the
@@ -927,62 +980,182 @@ export interface RelayStore {
    * → recompute the content rows that project that document" cascade.
    */
   getIndexContentIdsByDocumentCID(documentCID: string): Promise<string[]>;
-
-  // --- public credentials (standing authorization) ---
-
-  /** Get public credentials covering a specific resource */
-  getPublicCredentials(resource: string): Promise<string[]>;
-  /** Get a stored public credential by CID */
-  getPublicCredentialByCID(cid: string): Promise<StoredPublicCredential | undefined>;
-  /** Add a public credential as standing authorization */
-  addPublicCredential(credential: StoredPublicCredential): Promise<void>;
-  /**
-   * Remove a public credential (e.g., after revocation), scoped to the DID that
-   * issued it. The scope is the whole point: revocation is issuer-only
-   * (CREDENTIALS.md "Relay Enforcement"), so an eviction keyed on the CID alone
-   * would let any DID that can sign a syntactically valid revocation destroy a
-   * grant it did not issue — permanently, since re-presenting the credential
-   * lands on the duplicate-by-CID branch. An (issuerDID, credentialCID) pair
-   * naming no held credential removes nothing and is not an error.
-   */
-  removePublicCredential(issuerDID: string, credentialCID: string): Promise<void>;
-
-  // --- peer sync state ---
-
-  /** Get last-synced log cursor for a peer relay */
-  getPeerCursor(peerUrl: string): Promise<string | undefined>;
-  /** Update last-synced log cursor for a peer relay */
-  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
-
-  // --- raw ops (content-addressed store for all received operations) ---
-
-  /** Store a raw JWS token by CID and durable origin — absent origin defaults to direct */
-  putRawOp(cid: string, jwsToken: string, origin?: OpOrigin): Promise<void>;
-  /** Return JWS tokens and durable origins for unsequenced (pending) ops */
-  getUnsequencedOps(limit: number): Promise<PendingOp[]>;
-  /** Mark ops as successfully sequenced */
-  markOpsSequenced(cids: string[]): Promise<void>;
-  /** Mark an op as permanently rejected */
-  markOpRejected(cid: string, reason: string): Promise<void>;
-  /** Count of pending (unsequenced) raw ops */
-  countUnsequenced(): Promise<number>;
-  /** Reset all non-rejected raw ops to pending (re-sequence) */
-  resetSequencer(): Promise<void>;
 }
 
-export type SigningStore = RelayStore &
-  Required<
-    Pick<
-      RelayStore,
-      | 'getSignRequest'
-      | 'pruneExpiredSignRequests'
-      | 'putSignRequest'
-      | 'listPendingSignRequests'
-      | 'putSignResponse'
-      | 'declineSignRequest'
-    >
-  >;
+/** One projection write: whatever rows a projection run recomputed. */
+export interface IndexRowBatch {
+  identities?: IndexIdentityRow[];
+  content?: IndexContentRow[];
+  /** Complete public-head credit row set per contentId — REPLACES that set. */
+  credits?: { contentId: string; rows: IndexCreditRow[] }[];
+  artifacts?: IndexArtifactRow[];
+  countersignatures?: (IndexCountersignatureQueryRow & { witnessDID: string })[];
+  operations?: IndexOperationRow[];
+  /**
+   * The multibase public key one accepted operation's signature verified
+   * against, keyed by operation CID — the stored column behind `signerKey=`.
+   * Stored VERBATIM: the filter is an opaque byte match.
+   */
+  operationSignerKeys?: { cid: string; publicKeyMultibase: string }[];
+  /**
+   * Has-ever-proved reverse rows: `(publicKeyMultibase, did, keyId)` for every
+   * key an accepted identity operation left PROVED. UPSERTS, NEVER DELETED — a
+   * rotation removes nothing and a deleted identity keeps its rows. Append-only
+   * plus a monotonic `provedKeys` is what makes the accumulated table equal the
+   * head state's `provedKeys`, so incremental projection and a full rebuild
+   * agree. A key an operation merely DECLARED is never recorded: no possession
+   * proof admitted it, so recording it would let a stranger burn a key they do
+   * not hold.
+   */
+  identityKeys?: { did: string; publicKeyMultibase: string; keyId: string }[];
+  /** Accepted content-operation signers, added to each chain's signer set. */
+  contentSigners?: { contentId: string; did: string }[];
+}
 
+/** A resumable full-corpus sweep. `after` is the last contentId recomputed. */
+export interface IndexSweepState {
+  /** `all` recomputes every content row; `public` only the currently-public ones. */
+  scope: 'all' | 'public';
+  after: string | null;
+}
+
+/**
+ * Where the projection worker got to. Persisted, so a run resumes rather than
+ * restarts.
+ *
+ * `logCursor` is the CID of the last operation-log entry projected; `null`
+ * before the first run. `sweep` is a full-corpus recompute in progress: some
+ * operations (a `chain:*` grant, an identity delete or restore) change the
+ * visibility of rows they never name, and draining that in one pass is the
+ * unbounded stall this cursor exists to break up.
+ */
+export interface IndexCursor {
+  logCursor: string | null;
+  sweep: IndexSweepState | null;
+}
+
+/**
+ * THE PROJECTION SIDE of the index profile. A store implementing it lets this
+ * package run the projection worker (see `projectIndex` in ./index-projection);
+ * a store that omits it keeps its index current some other way.
+ */
+export interface IndexWriteStore {
+  /** Apply one projection run's recomputed rows. */
+  applyIndexRows(rows: IndexRowBatch): Promise<void>;
+  getIndexCursor(): Promise<IndexCursor | undefined>;
+  setIndexCursor(cursor: IndexCursor): Promise<void>;
+}
+
+// -----------------------------------------------------------------------------
+// signing profile (optional)
+// -----------------------------------------------------------------------------
+
+/** The ephemeral courier state behind the optional signing mailbox. */
+export interface SigningStore {
+  getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined>;
+  pruneExpiredSignRequests(now: number): Promise<void>;
+  putSignRequest(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
+  listPendingSignRequests(params: {
+    subjectDID: string;
+    after?: string;
+    limit: number;
+    now: number;
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null>;
+  putSignResponse(cid: string, response: string, now: number): Promise<SigningPutResult>;
+  declineSignRequest(cid: string, now: number): Promise<SigningDeclineResult>;
+}
+
+// -----------------------------------------------------------------------------
+// writer-internal state
+// -----------------------------------------------------------------------------
+
+/**
+ * INTERNAL TO A RELAY THAT WRITES. Not part of the store contract a store
+ * implementor reads: raw-op durability, the sequencer's pending set, and peer
+ * sync cursors are bookkeeping this package keeps for itself, and a store that
+ * never accepts writes and configures no peers has nothing to keep.
+ *
+ * The reference in-memory store implements it because the reference relay both
+ * writes and peers. It is exported so an embedder building a durable writing
+ * relay can implement it deliberately, not because a store needs it to be
+ * useful.
+ */
+export interface RelayWriterState {
+  /** Store a raw JWS token by CID and durable origin — absent origin is direct. */
+  putRawOp(cid: string, jwsToken: string, origin?: OpOrigin): Promise<void>;
+  /** JWS tokens and durable origins for unsequenced (pending) ops. */
+  getUnsequencedOps(limit: number): Promise<PendingOp[]>;
+  markOpsSequenced(cids: string[]): Promise<void>;
+  markOpRejected(cid: string, reason: string): Promise<void>;
+  countUnsequenced(): Promise<number>;
+  /** Reset all non-rejected raw ops to pending (re-sequence). */
+  resetSequencer(): Promise<void>;
+  getPeerCursor(peerUrl: string): Promise<string | undefined>;
+  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
+}
+
+// -----------------------------------------------------------------------------
+// what createRelay accepts, and how it reads a store's shape
+// -----------------------------------------------------------------------------
+
+/**
+ * The store `createRelay` accepts: at minimum a `RelayReadStore`, plus whichever
+ * further contracts the implementation satisfies.
+ *
+ * The optionality lives HERE, in the option type, and nowhere else. Each further
+ * contract is all-or-nothing — a store either implements `RelayWriteStore` or it
+ * does not — and `createRelay` resolves which ones hold ONCE at construction
+ * with the guards below, then holds narrowed references. No route probes a
+ * member.
+ */
+export type RelayStore = RelayReadStore &
+  Partial<Omit<RelayWriteStore, keyof RelayReadStore>> &
+  Partial<IndexReadStore> &
+  Partial<IndexWriteStore> &
+  Partial<SigningStore> &
+  Partial<RelayWriterState>;
+
+/** A writing store: it can commit. */
+export const isRelayWriteStore = (store: RelayStore): store is RelayStore & RelayWriteStore =>
+  typeof store.commit === 'function';
+
+/** An index-serving store: it answers the nine `/index/v0` queries. */
+export const isIndexReadStore = (store: RelayStore): store is RelayStore & IndexReadStore =>
+  typeof store.queryIndexIdentities === 'function' &&
+  typeof store.queryIndexContent === 'function' &&
+  typeof store.queryIndexCredits === 'function' &&
+  typeof store.queryIndexArtifacts === 'function' &&
+  typeof store.queryIndexCountersignatures === 'function' &&
+  typeof store.queryIndexCredentials === 'function' &&
+  typeof store.queryIndexOperations === 'function' &&
+  typeof store.getIndexIdentityDIDsByProfileAnchor === 'function' &&
+  typeof store.getIndexContentIdsByDocumentCID === 'function';
+
+/** An index-projecting store: this package can run the projection worker on it. */
+export const isIndexWriteStore = (store: RelayStore): store is RelayStore & IndexWriteStore =>
+  typeof store.applyIndexRows === 'function' &&
+  typeof store.getIndexCursor === 'function' &&
+  typeof store.setIndexCursor === 'function';
+
+/** A signing-mailbox store. */
+export const isSigningStore = (store: RelayStore): store is RelayStore & SigningStore =>
+  typeof store.getSignRequest === 'function' &&
+  typeof store.pruneExpiredSignRequests === 'function' &&
+  typeof store.putSignRequest === 'function' &&
+  typeof store.listPendingSignRequests === 'function' &&
+  typeof store.putSignResponse === 'function' &&
+  typeof store.declineSignRequest === 'function';
+
+/** A store holding this package's writer-internal bookkeeping. */
+export const isRelayWriterState = (store: RelayStore): store is RelayStore & RelayWriterState =>
+  typeof store.putRawOp === 'function' &&
+  typeof store.getUnsequencedOps === 'function' &&
+  typeof store.markOpsSequenced === 'function' &&
+  typeof store.markOpRejected === 'function' &&
+  typeof store.countUnsequenced === 'function' &&
+  typeof store.resetSequencer === 'function' &&
+  typeof store.getPeerCursor === 'function' &&
+  typeof store.setPeerCursor === 'function';
 // -----------------------------------------------------------------------------
 // ingestion result
 // -----------------------------------------------------------------------------
@@ -1002,8 +1175,6 @@ export interface IngestionResult {
   kind?: OperationKind;
   /** Chain identifier if applicable */
   chainId?: string;
-  /** Revoked public grant scope; undefined when the credential was not held */
-  revokedGrant?: { wildcard: boolean; contentIds: string[] };
   /**
    * Structured dependency-failure signal. When true, the rejection is due to a
    * missing dependency that may arrive later via sync or gossip, so the
@@ -1012,4 +1183,12 @@ export interface IngestionResult {
    * matching of the human-readable `error` string.
    */
   dependencyMissing?: boolean;
+  /**
+   * Structured store-fault signal. When true, the rejection is not a verdict
+   * about the operation at all: a store call failed, so nothing was decided and
+   * nothing was persisted. Retryable for the same reason and with more urgency
+   * than a missing dependency — a permanent rejection DELETES the raw op, and a
+   * momentary store fault must never be able to destroy a valid operation.
+   */
+  storeFault?: boolean;
 }

@@ -25,7 +25,7 @@ import {
   DEFAULT_PROOF_WINDOW_SECONDS,
 } from './auth';
 import { createHistoricalIdentityResolver, mergeHistoricalIdentity } from './ingest';
-import type { RelayStore, SigningStore, StoredSignRequest } from './types';
+import type { RelayReadStore, SigningStore, StoredSignRequest } from './types';
 
 const MAX_DEPOSIT_BODY_BYTES = 524_288;
 const MAX_RESPONSE_TOKEN_BYTES = 8_192;
@@ -112,7 +112,11 @@ const readCappedJSON = async (
   }
 };
 
-const verifyResponse = async (response: string, request: StoredSignRequest, store: RelayStore) => {
+const verifyResponse = async (
+  response: string,
+  request: StoredSignRequest,
+  store: RelayReadStore,
+) => {
   if (encoder.encode(response).length > MAX_RESPONSE_TOKEN_BYTES) {
     throw new Error('response exceeds maximum size');
   }
@@ -170,10 +174,17 @@ const verifyResponse = async (response: string, request: StoredSignRequest, stor
 
 export const registerSigningRoutes = (options: {
   app: Hono;
-  store: RelayStore;
+  store: RelayReadStore;
+  /**
+   * The mailbox's own state, already narrowed. `null` when the capability is
+   * off — either the deployment did not ask for it, or the store does not
+   * implement it. Passing the narrowed store rather than casting the read store
+   * is what keeps "the mailbox is available" a fact about the type instead of an
+   * assertion the routes discover by calling an absent member.
+   */
+  signingStore: SigningStore | null;
   relayDID: string;
   basePath: string;
-  enabled: boolean;
   /**
    * THE RELAY'S OWN CONFIGURED AUTHORITY — the host binding for the mailbox
    * poll's identity proof. When unset the poll answers 503: the relay cannot
@@ -183,8 +194,8 @@ export const registerSigningRoutes = (options: {
   proofWindowSeconds?: number;
   proofSkewSeconds?: number;
 }): void => {
-  const { app, store, relayDID, basePath, enabled } = options;
-  const signingStore = store as SigningStore;
+  const { app, store, relayDID, basePath, signingStore } = options;
+  const enabled = signingStore !== null;
   const unavailable = (c: Context) => c.json({ error: 'signing mailbox not available' }, 501);
 
   app.post(`${basePath}/requests`, async (c) => {

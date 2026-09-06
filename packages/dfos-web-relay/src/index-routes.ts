@@ -13,7 +13,7 @@ import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { hasPublicStandingAuth } from './auth';
 import type {
   OperationKind,
-  RelayStore,
+  RelayReadStore,
   StoredContentChain,
   StoredCountersignature,
   StoredIdentityChain,
@@ -186,7 +186,7 @@ export const decodeIndexCreditCursor = (raw: string): IndexCreditCursor | null =
 
 export const identityIndexRow = async (
   chain: StoredIdentityChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<IndexIdentityRow> => {
   const profile = await profileProjection(chain, store);
   return {
@@ -202,7 +202,7 @@ export const identityIndexRow = async (
 
 export const contentIndexRow = async (
   chain: StoredContentChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<IndexContentRow> => {
   const { doc, docSchema, publicRead } = await contentProjectionSources(chain, store);
   // Confidentiality is enforced at the application layer by whoever serves: a
@@ -235,7 +235,7 @@ export const contentIndexRow = async (
 /** Complete public-head credit projection for one content chain. */
 export const creditIndexRows = async (
   chain: StoredContentChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<IndexCreditRow[]> => {
   const { doc, docSchema, publicRead } = await contentProjectionSources(chain, store);
   if (chain.state.isDeleted || !publicRead || docSchema !== POST_SCHEMA || !doc) return [];
@@ -310,7 +310,7 @@ export const artifactIndexRow = (
 
 const profileProjection = async (
   chain: StoredIdentityChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<IndexProfile | null> => {
   const candidates = chain.state.services.filter((service) => {
     const entry = service as Record<string, unknown>;
@@ -355,7 +355,7 @@ const profileProjection = async (
 
 const headDocumentProjection = async (
   chain: StoredContentChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<{ doc: Record<string, unknown> | null; docSchema: string | null }> => {
   const documentCID = chain.state.currentDocumentCID;
   if (!documentCID) return { doc: null, docSchema: null };
@@ -378,7 +378,7 @@ const headDocumentProjection = async (
 
 const contentProjectionSources = async (
   chain: StoredContentChain,
-  store: RelayStore,
+  store: RelayReadStore,
 ): Promise<{
   doc: Record<string, unknown> | null;
   docSchema: string | null;
