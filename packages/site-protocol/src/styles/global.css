@@ -415,6 +415,8 @@ img {
 }
 
 .hero-declaration .green {
+  display: block;
+  margin-top: 0.6em;
   color: var(--green);
 }
 
