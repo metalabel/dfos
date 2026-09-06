@@ -946,10 +946,9 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	// referenced it — and it can turn a row's docSchema/title/profile projection
 	// from unknown to known. Nothing on the operation log marks that moment, so
 	// this is the one projection entry point the log does not drive. Bounded by
-	// the reverse lookup, and outside every lock.
-	if r.projection != nil {
-		projectIndexAfterBlob(documentCID, r.projection, r.logger)
-	}
+	// the reverse lookup, outside the ingest lock, and serialized against the
+	// projection worker (see projectIndexForBlob).
+	r.projectIndexForBlob(documentCID)
 
 	writeJSON(w, 200, map[string]any{
 		"status":       "stored",

@@ -1095,7 +1095,7 @@ func TestIndexIdentitiesOrderedEnumeration(t *testing.T) {
 	tieB := "did:dfos:identity-tie-b"
 	ts := "2999-01-01T00:00:00.000Z"
 	for _, did := range []string{tieB, tieA} {
-		if err := putIndexIdentityRow(store, indexIdentityRow{DID: did, HeadCID: "h", GenesisAt: ts, HeadAt: ts}); err != nil {
+		if err := putIndexIdentityRow(store, IndexIdentityRow{DID: did, HeadCID: "h", GenesisAt: ts, HeadAt: ts}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1217,7 +1217,7 @@ func TestIndexOrderedTieBreaksByKey(t *testing.T) {
 	b := "2346789acdefhknrtvz2346789acdee"
 	ts := "2026-01-01T00:00:00.000Z"
 	for _, id := range []string{a, b} {
-		if err := putIndexContentRow(store, indexContentRow{ContentID: id, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(), GenesisAt: ts, HeadAt: ts}); err != nil {
+		if err := putIndexContentRow(store, IndexContentRow{ContentID: id, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(), GenesisAt: ts, HeadAt: ts}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1992,7 +1992,7 @@ func TestSQLiteIndexPointAndDeletedFilters(t *testing.T) {
 	defer store.Close()
 	active := false
 	deleted := true
-	for _, row := range []indexContentRow{
+	for _, row := range []IndexContentRow{
 		{ContentID: "active", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: active},
 		{ContentID: "deleted", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: deleted},
 	} {
@@ -2026,12 +2026,12 @@ func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
 
 	put := func(did, name string, publicRead bool) {
 		t.Helper()
-		var profile *indexProfile
+		var profile *IndexProfile
 		if name != "" {
 			n := name
-			profile = &indexProfile{Anchor: "anchor-" + did, PublicRead: publicRead, Name: &n}
+			profile = &IndexProfile{Anchor: "anchor-" + did, PublicRead: publicRead, Name: &n}
 		}
-		if err := putIndexIdentityRow(store, indexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
+		if err := putIndexIdentityRow(store, IndexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
 			t.Fatalf("PutIndexIdentityRow(%s): %v", did, err)
 		}
 	}
@@ -2166,15 +2166,15 @@ func TestIndexServeTimeRedactsStaleNonPublicRow(t *testing.T) {
 
 	name := "stale"
 	did := "did:dfos:" + strings.Repeat("2", 31)
-	if err := putIndexIdentityRow(store, indexIdentityRow{
+	if err := putIndexIdentityRow(store, IndexIdentityRow{
 		DID: did, HeadCID: "h",
-		Profile: &indexProfile{Anchor: strings.Repeat("3", 31), PublicRead: false, Name: &name},
+		Profile: &IndexProfile{Anchor: strings.Repeat("3", 31), PublicRead: false, Name: &name},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	title := "stale-title"
 	cid := "2346789acdefhknrtvz2346789acdef"
-	if err := putIndexContentRow(store, indexContentRow{
+	if err := putIndexContentRow(store, IndexContentRow{
 		ContentID: cid, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(),
 		PublicRead: false, Title: &title,
 	}); err != nil {

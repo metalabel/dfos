@@ -149,12 +149,31 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	// store that cannot write makes this a pull-only proof node whatever the flag
 	// says, and a store with no index queries serves no /index/v0 whatever the
 	// flag says — advertising otherwise would be a promise the routes cannot keep.
-	indexEnabled := (opts.Index == nil || *opts.Index) && indexRead != nil
-	writeEnabled := (opts.Write == nil || *opts.Write) && writeStore != nil
+	//
+	// Two of these derive from more than the one obvious assertion:
+	//
+	//   - INDEX NEEDS THE LOG. The projection's only input is ReadLog, and a relay
+	//     that publishes no log appends nothing for it to read, so the rows would
+	//     stay empty forever. index: true beside log: false is a capability block
+	//     that lies.
+	//   - WRITE NEEDS THE WRITER STATE. Ingest also needs raw-op and sequencer
+	//     bookkeeping (RelayWriterState); a store with Commit but without it
+	//     rejects every submitted operation, so advertising write: true would
+	//     promise an endpoint that is 100% refusal.
+	indexEnabled := (opts.Index == nil || *opts.Index) && indexRead != nil && logEnabled
+	writeEnabled := (opts.Write == nil || *opts.Write) && writeStore != nil && writerState != nil
 	signingEnabled := opts.Signing != nil && *opts.Signing
 
 	if signingEnabled && signStore == nil {
 		return nil, fmt.Errorf("signing capability requires a store implementing SigningStore")
+	}
+	// An EXPLICIT ask that cannot hold is an error, the same way an explicit
+	// signing ask on a store without SigningStore is. Deriving it away silently is
+	// right when the flag was defaulted (index defaults on, so every operator who
+	// turns the log off would otherwise be refused boot); it is wrong when the
+	// operator wrote both flags down and they contradict each other.
+	if opts.Index != nil && *opts.Index && !logEnabled {
+		return nil, fmt.Errorf("index capability requires the operation log: the projection reads the log and has no other input")
 	}
 	// Retention is independent of the capability flag: sweep courier state at
 	// construction whenever the backing store supports signing.
@@ -346,12 +365,14 @@ func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 // runs out, and reports what it did.
 //
 // EXPORTED BECAUSE THE SCHEDULE IS THE OPERATOR'S. Under the default inline mode
-// the relay kicks this itself after an ingest batch, on its own goroutine and
-// outside ingestMu. A deployment that would rather not pay projection latency
-// beside the accepting path sets IndexProjection: "external" and calls this from
-// a timer or another process. Either way the work is the same budgeted,
-// cursor-resumable walk of the operation log, and a relay whose store maintains
-// its index some other way has nothing to do here.
+// the relay kicks this itself after an ingest batch and after every sequencer
+// pass — synchronously, with ingestMu released. Inline means inline: the caller
+// pays the projection, and a read that follows an accepted write sees the rows
+// it implied. A deployment that would rather not pay that latency beside the
+// accepting path sets IndexProjection: "external" and calls this from a timer or
+// another process. Either way the work is the same budgeted, cursor-resumable
+// walk of the operation log, and a relay whose store maintains its index some
+// other way has nothing to do here.
 func (r *Relay) ProjectIndex() IndexProjectionRun {
 	if r.projection == nil {
 		return IndexProjectionRun{}
@@ -366,12 +387,31 @@ func (r *Relay) ProjectIndex() IndexProjectionRun {
 }
 
 // kickIndexProjection drains the projection after an accepted batch, unless the
-// operator drives it. Never called with ingestMu held.
+// operator drives it. Never called with ingestMu held, and never in a goroutine:
+// see ProjectIndex for why inline mode is synchronous.
 func (r *Relay) kickIndexProjection() {
 	if r.projection == nil || r.projectionMode != IndexProjectionInline {
 		return
 	}
 	r.ProjectIndex()
+}
+
+// projectIndexForBlob recomputes the rows a landed blob changes, under the SAME
+// mutex ProjectIndex holds.
+//
+// A blob upload is the one projection trigger the operation log does not carry,
+// which is exactly what makes the race permanent: an in-flight projection run
+// that read this content row BEFORE the blob landed applies its older snapshot
+// afterwards, and because no log entry names the upload, no later run repairs it
+// — the row keeps docSchema/title unknown until some unrelated operation touches
+// that chain. One lock removes the interleaving.
+func (r *Relay) projectIndexForBlob(documentCID string) {
+	if r.projection == nil {
+		return
+	}
+	r.projectionMu.Lock()
+	defer r.projectionMu.Unlock()
+	projectIndexAfterBlob(documentCID, r.projection, r.logger)
 }
 
 // Ingest stores raw ops, processes a batch for immediate results, and gossips.

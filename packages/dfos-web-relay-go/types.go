@@ -785,30 +785,36 @@ type RelayWriteStore interface {
 // A store implementing this and NOT IndexWriteStore serves the index from rows
 // some other process maintains. That is a supported shape, and the relay does no
 // projection work for it.
+//
+// EVERY TYPE IN THESE SIGNATURES IS EXPORTED, which is what makes "optional
+// profile" true rather than aspirational: a Postgres or Elasticsearch store in
+// another package can implement the whole thing. The row structs used to be
+// package-private, so an outside store could satisfy the method set only by
+// being inside this package.
 type IndexReadStore interface {
 	// QueryIndexIdentities pages identity projection rows ascending by DID,
 	// did > After, length <= Limit. HasPublicProfile (≡ profile != nil &&
 	// profile.publicRead) filters to identities exposing a public profile; DID is
 	// an exact point lookup; Key keeps identities that have EVER PROVED that
 	// public key.
-	QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error)
+	QueryIndexIdentities(q IndexIdentityQuery) ([]IndexIdentityRow, error)
 	// QueryIndexContent pages content projection rows ascending by contentId,
 	// contentId > After, length <= Limit, filtered by any provided
 	// point ID / actor / document / visibility / deletion predicates.
-	QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error)
+	QueryIndexContent(q IndexContentQuery) ([]IndexContentRow, error)
 	// QueryIndexCredits pages public-head credit rows by their composite key.
-	QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error)
-	QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error)
+	QueryIndexCredits(q IndexCreditQuery) ([]IndexCreditRow, error)
+	QueryIndexArtifacts(q IndexArtifactQuery) ([]IndexArtifactRow, error)
 	// QueryIndexCountersignatures pages countersignature projection rows for one
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
 	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
-	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error)
+	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]IndexCountersignatureRow, error)
 	// QueryIndexCredentials pages held public credentials by lexical cid or the
 	// selected recency composite, filtered by issuer, resource, and/or action exact
 	// match. For chain resources, the chain:* bucket is unioned.
-	QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error)
+	QueryIndexCredentials(q IndexCredentialQuery) ([]IndexCredentialRow, error)
 	// QueryIndexOperations pages the accepted operation log by relay or author recency.
-	QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error)
+	QueryIndexOperations(q IndexOperationQuery) ([]IndexOperationRow, error)
 	// GetIndexIdentityDIDsByProfileAnchor is the reverse lookup for the "content
 	// changed → recompute the identities anchored on it" cascade: DIDs of
 	// identity projection rows whose profile.anchor equals contentID.
@@ -823,7 +829,7 @@ type IndexReadStore interface {
 // REPLACES that chain's credit rows.
 type IndexCreditRowSet struct {
 	ContentID string
-	Rows      []indexCreditRow
+	Rows      []IndexCreditRow
 }
 
 // IndexIdentityKeyRow is one has-ever-proved reverse row: the multibase public
@@ -865,11 +871,11 @@ type IndexOperationSignerKey struct {
 
 // IndexRowBatch is one projection run's recomputed rows, applied together.
 type IndexRowBatch struct {
-	Identities          []indexIdentityRow
-	Content             []indexContentRow
+	Identities          []IndexIdentityRow
+	Content             []IndexContentRow
 	Credits             []IndexCreditRowSet
-	Artifacts           []indexArtifactRow
-	Countersignatures   []storedIndexCountersignature
+	Artifacts           []IndexArtifactRow
+	Countersignatures   []StoredIndexCountersignature
 	IdentityKeys        []IndexIdentityKeyRow
 	ContentSigners      []IndexContentSignerRow
 	OperationSignerKeys []IndexOperationSignerKey
@@ -1011,7 +1017,7 @@ type IndexIdentityQuery struct {
 	HasPublicProfile *bool  // nil = no filter
 	NameContains     string // "" = no filter
 	After            string
-	OrderedAfter     *indexOrderedCursor
+	OrderedAfter     *IndexOrderedCursor
 	Order            string
 	Limit            int
 }
@@ -1027,7 +1033,7 @@ type IndexContentQuery struct {
 	IsDeleted     *bool   // nil = no filter
 	TitleContains string  // "" = no filter
 	After         string
-	OrderedAfter  *indexOrderedCursor
+	OrderedAfter  *IndexOrderedCursor
 	Order         string
 	Limit         int
 }
@@ -1036,7 +1042,7 @@ type IndexCreditQuery struct {
 	DID       *string
 	ContentID *string
 	Role      *string
-	After     *indexCreditCursor
+	After     *IndexCreditCursor
 	Limit     int
 }
 
@@ -1045,7 +1051,7 @@ type IndexArtifactQuery struct {
 	Signer       string
 	DocSchema    *string
 	After        string
-	OrderedAfter *indexOrderedCursor
+	OrderedAfter *IndexOrderedCursor
 	Order        string
 	Limit        int
 }
@@ -1056,7 +1062,7 @@ type IndexCountersignatureQuery struct {
 	Witness      string
 	Relation     *string
 	After        string
-	OrderedAfter *indexOrderedCursor
+	OrderedAfter *IndexOrderedCursor
 	Order        string
 	Limit        int
 }
@@ -1067,7 +1073,7 @@ type IndexCredentialQuery struct {
 	Resource     *string // nil = no filter
 	Action       *string // nil = no filter
 	After        string
-	OrderedAfter *indexOrderedCursor
+	OrderedAfter *IndexOrderedCursor
 	Order        string
 	Limit        int
 }
@@ -1082,15 +1088,15 @@ type IndexOperationQuery struct {
 	// a string no accepted operation was signed with is an empty page, not a 400.
 	// A row with no resolved signer key matches no value.
 	SignerKey    string
-	OrderedAfter *indexOrderedCursor
+	OrderedAfter *IndexOrderedCursor
 	Order        string
 	Limit        int
 }
 
-// storedIndexCountersignature is a countersignature projection row plus the
+// StoredIndexCountersignature is a countersignature projection row plus the
 // witness_did column that scopes witness queries. WitnessDID is never part of the
 // wire row (the witness is echoed at the response top level).
-type storedIndexCountersignature struct {
+type StoredIndexCountersignature struct {
 	CID        string
 	TargetCID  string
 	Relation   *string

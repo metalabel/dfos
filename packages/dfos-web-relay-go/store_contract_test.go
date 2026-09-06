@@ -82,27 +82,27 @@ func seedLogEntry(t *testing.T, store RelayWriteStore, entry LogEntry, chainType
 // and noisy for a test that wants a single row in place. These keep the old
 // one-row ergonomics without putting a per-row member back on the contract.
 
-func putIndexIdentityRow(s IndexWriteStore, row indexIdentityRow) error {
-	return s.ApplyIndexRows(IndexRowBatch{Identities: []indexIdentityRow{row}})
+func putIndexIdentityRow(s IndexWriteStore, row IndexIdentityRow) error {
+	return s.ApplyIndexRows(IndexRowBatch{Identities: []IndexIdentityRow{row}})
 }
 
-func putIndexContentRow(s IndexWriteStore, row indexContentRow) error {
-	return s.ApplyIndexRows(IndexRowBatch{Content: []indexContentRow{row}})
+func putIndexContentRow(s IndexWriteStore, row IndexContentRow) error {
+	return s.ApplyIndexRows(IndexRowBatch{Content: []IndexContentRow{row}})
 }
 
-func putIndexArtifactRow(s IndexWriteStore, row indexArtifactRow) error {
-	return s.ApplyIndexRows(IndexRowBatch{Artifacts: []indexArtifactRow{row}})
+func putIndexArtifactRow(s IndexWriteStore, row IndexArtifactRow) error {
+	return s.ApplyIndexRows(IndexRowBatch{Artifacts: []IndexArtifactRow{row}})
 }
 
-func putIndexCountersignatureRow(s IndexWriteStore, row storedIndexCountersignature) error {
-	return s.ApplyIndexRows(IndexRowBatch{Countersignatures: []storedIndexCountersignature{row}})
+func putIndexCountersignatureRow(s IndexWriteStore, row StoredIndexCountersignature) error {
+	return s.ApplyIndexRows(IndexRowBatch{Countersignatures: []StoredIndexCountersignature{row}})
 }
 
 func putIndexContentSigner(s IndexWriteStore, contentID, did string) error {
 	return s.ApplyIndexRows(IndexRowBatch{ContentSigners: []IndexContentSignerRow{{ContentID: contentID, DID: did}}})
 }
 
-func putIndexCreditRows(s IndexWriteStore, contentID string, rows []indexCreditRow) error {
+func putIndexCreditRows(s IndexWriteStore, contentID string, rows []IndexCreditRow) error {
 	return s.ApplyIndexRows(IndexRowBatch{Credits: []IndexCreditRowSet{{ContentID: contentID, Rows: rows}}})
 }
 

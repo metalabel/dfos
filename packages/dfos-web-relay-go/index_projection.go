@@ -243,10 +243,17 @@ func identityKeysDeclaredBy(payload map[string]any) []declaredIdentityKey {
 // the has-ever-proved population and the column stays NULL. The filter's honest
 // answer for a key no chain proved is "no rows", not a row keyed by evidence that
 // never existed.
-func signerKeyForOperation(jwsToken string, store RelayReadStore) string {
+//
+// "" WITH A NIL ERROR IS THAT ANSWER; A STORE ERROR IS NOT IT. A token that will
+// not decode, or a kid nothing proved, resolves to no key permanently and the
+// projection moves on. A failed chain read decided nothing, and swallowing it
+// would write the row with a NULL signer_key and advance the cursor past the one
+// log entry that would ever fill it. It is returned so the run aborts on its
+// cursor and retries.
+func signerKeyForOperation(jwsToken string, store RelayReadStore) (string, error) {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
-		return ""
+		return "", nil
 	}
 	hashIdx := strings.Index(header.Kid, "#")
 	if hashIdx < 0 {
@@ -256,32 +263,35 @@ func signerKeyForOperation(jwsToken string, store RelayReadStore) string {
 		// which is exactly what verification resolves against. No store lookup:
 		// the op is self-describing.
 		if header.Kid == "" || payload == nil {
-			return ""
+			return "", nil
 		}
 		for _, declared := range identityKeysDeclaredBy(payload) {
 			if declared.KeyID == header.Kid {
-				return declared.PublicKey
+				return declared.PublicKey, nil
 			}
 		}
-		return ""
+		return "", nil
 	}
 	did := header.Kid[:hashIdx]
 	keyID := header.Kid[hashIdx+1:]
 	if keyID == "" {
-		return ""
+		return "", nil
 	}
 
 	identity, err := store.GetIdentityChain(did)
-	if err != nil || identity == nil {
-		return ""
+	if err != nil {
+		return "", err
+	}
+	if identity == nil {
+		return "", nil
 	}
 
 	// Has-ever-proved is a superset of head state, so one search covers both a
 	// current key and a rotated-out one.
 	if k, ok := findKeyInKeyState(provedKeyState(identity.State), keyID); ok {
-		return k.PublicKeyMultibase
+		return k.PublicKeyMultibase, nil
 	}
-	return ""
+	return "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -384,8 +394,19 @@ func advanceSweep(sweep IndexSweepState, store IndexReadStore, cap int, dirty *p
 //   - revocation         → ISSUER-SCOPED: resolve the revoked credential through
 //     its own operation, dirty exactly what that grant named, and dirty nothing at
 //     all when the relay never held it or the revoker is not its issuer
-func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowBatch, dirty *projectionDirty) *IndexSweepState {
-	if key := signerKeyForOperation(entry.JWSToken, store); key != "" {
+//
+// A MALFORMED ENTRY DIRTIES NOTHING; A STORE ERROR ABORTS THE RUN. The two look
+// alike at the call site and are opposites: a token that will not decode has a
+// permanent answer, while a failed read has no answer at all, and treating the
+// second like the first advances the cursor past work that was never done. An
+// error here leaves the cursor where it is and the same entry is re-projected on
+// the next run — the same contract projectIndex states for every other failure.
+func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowBatch, dirty *projectionDirty) (*IndexSweepState, error) {
+	key, err := signerKeyForOperation(entry.JWSToken, store)
+	if err != nil {
+		return nil, err
+	}
+	if key != "" {
 		rows.OperationSignerKeys = append(rows.OperationSignerKeys, IndexOperationSignerKey{CID: entry.CID, PublicKey: key})
 	}
 
@@ -403,7 +424,11 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 		// arrays: ProvedKeys is monotonic and the rows are append-only, so writing
 		// the current union while projecting any of the chain's operations
 		// converges on the same table.
-		if chain, err := store.GetIdentityChain(entry.ChainID); err == nil && chain != nil {
+		chain, err := store.GetIdentityChain(entry.ChainID)
+		if err != nil {
+			return nil, err
+		}
+		if chain != nil {
 			for _, key := range keysInKeyState(provedKeyState(chain.State)) {
 				rows.IdentityKeys = append(rows.IdentityKeys, IndexIdentityKeyRow{
 					DID: entry.ChainID, KeyID: key.ID, PublicKey: key.PublicKeyMultibase,
@@ -412,15 +437,15 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 		}
 		_, payload, err := dfos.DecodeJWSUnsafe(entry.JWSToken)
 		if err != nil || payload == nil {
-			return nil
+			return nil, nil
 		}
 		switch payload["type"] {
 		case "delete":
-			return &IndexSweepState{Scope: IndexSweepPublic}
+			return &IndexSweepState{Scope: IndexSweepPublic}, nil
 		case "restore":
-			return &IndexSweepState{Scope: IndexSweepAll}
+			return &IndexSweepState{Scope: IndexSweepAll}, nil
 		}
-		return nil
+		return nil, nil
 
 	case "content-op":
 		dirty.contentIDs[entry.ChainID] = struct{}{}
@@ -429,18 +454,18 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 				rows.ContentSigners = append(rows.ContentSigners, IndexContentSignerRow{ContentID: entry.ChainID, DID: signerDID})
 			}
 		}
-		return nil
+		return nil, nil
 
 	case "artifact":
 		if row := artifactIndexRow(entry.CID, entry.JWSToken, entry.IngestedAt); row != nil {
 			rows.Artifacts = append(rows.Artifacts, *row)
 		}
-		return nil
+		return nil, nil
 
 	case "countersign":
 		header, payload, err := dfos.DecodeJWSUnsafe(entry.JWSToken)
 		if err != nil {
-			return nil
+			return nil, nil
 		}
 		cid := entry.CID
 		if header != nil && header.CID != "" {
@@ -457,7 +482,7 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 			}
 			createdAt, _ = payload["createdAt"].(string)
 		}
-		rows.Countersignatures = append(rows.Countersignatures, storedIndexCountersignature{
+		rows.Countersignatures = append(rows.Countersignatures, StoredIndexCountersignature{
 			CID:        cid,
 			TargetCID:  entry.ChainID,
 			Relation:   relation,
@@ -466,17 +491,17 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 			CreatedAt:  createdAt,
 			IngestedAt: entry.IngestedAt,
 		})
-		return nil
+		return nil, nil
 
 	case "credential":
 		wildcard, contentIds := contentIdsFromCredentialToken(entry.JWSToken)
 		if wildcard {
-			return &IndexSweepState{Scope: IndexSweepAll}
+			return &IndexSweepState{Scope: IndexSweepAll}, nil
 		}
 		for _, contentID := range contentIds {
 			dirty.contentIDs[contentID] = struct{}{}
 		}
-		return nil
+		return nil, nil
 
 	case "revocation":
 		// THE #266 NARROWING. A revocation names a credential CID. That credential
@@ -487,29 +512,39 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 		// signed by anyone other than that credential's issuer.
 		_, payload, err := dfos.DecodeJWSUnsafe(entry.JWSToken)
 		if err != nil || payload == nil {
-			return nil
+			return nil, nil
 		}
 		credentialCID, ok := payload["credentialCID"].(string)
 		if !ok || credentialCID == "" {
-			return nil
+			return nil, nil
 		}
+		// A LOOKUP FAILURE IS NOT A MISS. "This relay never held that credential"
+		// and "the credential table could not be read" arrive at the same call and
+		// mean opposite things: the first legitimately dirties nothing, the second
+		// dirties nothing only because nothing was asked. Swallowing it would leave
+		// the revoked content advertising publicRead: true until some unrelated
+		// operation happens to name that chain again, which for a revoked grant may
+		// be never.
 		credentialOp, err := store.GetOperation(credentialCID)
-		if err != nil || credentialOp == nil || credentialOp.ChainType != "credential" {
-			return nil
+		if err != nil {
+			return nil, err
+		}
+		if credentialOp == nil || credentialOp.ChainType != "credential" {
+			return nil, nil
 		}
 		if credentialOp.ChainID != entry.ChainID {
-			return nil
+			return nil, nil
 		}
 		wildcard, contentIds := contentIdsFromCredentialToken(credentialOp.JWSToken)
 		if wildcard {
-			return &IndexSweepState{Scope: IndexSweepPublic}
+			return &IndexSweepState{Scope: IndexSweepPublic}, nil
 		}
 		for _, contentID := range contentIds {
 			dirty.contentIDs[contentID] = struct{}{}
 		}
-		return nil
+		return nil, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -568,7 +603,12 @@ func projectIndex(store IndexProjectionStore, budget int, logger *slog.Logger) I
 			return IndexProjectionRun{}
 		}
 		for _, entry := range entries {
-			if trigger := projectLogEntry(entry, store, &rows, dirty); trigger != nil {
+			trigger, err := projectLogEntry(entry, store, &rows, dirty)
+			if err != nil {
+				logIndexProjectionError(logger, "projectLogEntry", err)
+				return IndexProjectionRun{}
+			}
+			if trigger != nil {
 				cursor.Sweep = widenSweep(cursor.Sweep, *trigger)
 			}
 			cursor.LogCursor = entry.CID
@@ -694,7 +734,9 @@ func rebuildIndexProjection(store IndexProjectionStore, logger *slog.Logger) err
 		return err
 	}
 	if current == IndexProjectionVersion {
-		return nil // projection already at the current schema — serve as-is
+		// Rows already at the current schema: serve them, and adopt them rather
+		// than re-deriving them (see adoptBuiltProjectionCursor).
+		return adoptBuiltProjectionCursor(store, logger)
 	}
 	logger.Info("index projection: resetting for rebuild", "fromVersion", current, "toVersion", IndexProjectionVersion)
 	if err := rebuildable.ClearIndexProjection(); err != nil {
@@ -708,4 +750,94 @@ func rebuildIndexProjection(store IndexProjectionStore, logger *slog.Logger) err
 	}
 	logger.Info("index projection: reset complete, re-walking the log", "version", IndexProjectionVersion)
 	return nil
+}
+
+// adoptBuiltProjectionCursor seeds the log cursor at the tip for a projection
+// that was already built, at this schema version, by a process that maintained
+// it without one.
+//
+// THE FIRST BOOT AFTER THE PROJECTION CURSOR EXISTED IS THE ONLY CALLER THAT
+// DOES ANYTHING. Index maintenance used to run inside ingestion, so a relay
+// stamped at the current version has correct, complete rows and no
+// projection_cursor key at all. Without this, the zero cursor reads as "never
+// projected" and the worker replays the entire operation log on the boot path
+// to re-derive rows that already say the same thing — convergent, so not wrong,
+// but the replay pays every historical delete, restore, and chain:* grant as a
+// fresh corpus-wide sweep, which on a large public-read corpus is the #266 stall
+// again, on startup instead of on ingest.
+//
+// THE POPULATED CHECK IS THE WHOLE SAFETY ARGUMENT, and it is not decoration. A
+// zero cursor at the current version has exactly two causes: the pre-cursor
+// corpus above, or a rebuild that cleared the rows, stamped the version, and has
+// not drained yet (reachable under IndexProjection "external", where nothing
+// drains at boot). Skipping to the tip in the second case would discard the
+// rebuild permanently. A rebuild always leaves the projection EMPTY, so a
+// populated projection distinguishes them — and an empty one replays from the
+// start, where there are no rows to sweep and the replay is cheap anyway.
+func adoptBuiltProjectionCursor(store IndexProjectionStore, logger *slog.Logger) error {
+	cursor, err := store.GetIndexCursor()
+	if err != nil {
+		return err
+	}
+	if cursor.LogCursor != "" || cursor.Sweep != nil {
+		return nil // a cursor is already being kept — this relay owns the projection
+	}
+	populated, err := indexProjectionPopulated(store)
+	if err != nil {
+		return err
+	}
+	if !populated {
+		return nil
+	}
+	tip, err := logTip(store)
+	if err != nil {
+		return err
+	}
+	if tip == "" {
+		return nil
+	}
+	if err := store.SetIndexCursor(IndexCursor{LogCursor: tip}); err != nil {
+		return err
+	}
+	logger.Info("index projection: adopting rows built without a cursor", "version", IndexProjectionVersion, "cursor", tip)
+	return nil
+}
+
+// indexProjectionPopulated reports whether any projection row exists. Two
+// point-limited queries, not a count: the answer is a boolean and the tables can
+// be large.
+func indexProjectionPopulated(store IndexProjectionStore) (bool, error) {
+	identities, err := store.QueryIndexIdentities(IndexIdentityQuery{Limit: 1})
+	if err != nil {
+		return false, err
+	}
+	if len(identities) > 0 {
+		return true, nil
+	}
+	content, err := store.QueryIndexContent(IndexContentQuery{Limit: 1})
+	if err != nil {
+		return false, err
+	}
+	return len(content) > 0, nil
+}
+
+// logTip pages the operation log to its end and returns the last CID. Reads
+// only: no decode, no recompute, no sweep, which is what makes adopting a built
+// projection cheap where re-projecting it is not.
+func logTip(store RelayReadStore) (string, error) {
+	const page = 10000
+	tip := ""
+	for {
+		entries, _, err := store.ReadLog(tip, page)
+		if err != nil {
+			return "", err
+		}
+		if len(entries) == 0 {
+			return tip, nil
+		}
+		tip = entries[len(entries)-1].CID
+		if len(entries) < page {
+			return tip, nil
+		}
+	}
 }

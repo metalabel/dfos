@@ -18,12 +18,29 @@ type SequenceResult struct {
 
 // RunSequencer acquires the ingest mutex and runs the sequencer loop.
 // Called by the background ticker and SyncFromPeers.
+//
+// THE PROJECTION IS KICKED HERE, NOT INSIDE THE LOOP. The sequencer is the ONLY
+// path by which a peer-pulled operation reaches the log: SyncFromPeers stages
+// raw ops and drains them through here, and a pull-only node (--no-write, or a
+// relay nobody POSTs to) never enters Relay.Ingest at all. Kicking only from
+// the accepting path would freeze such a relay's index at whatever the boot
+// drain reached while /.well-known still advertised index: true. It runs after
+// ingestMu is released, for the same reason the ingest kick does — the whole
+// point of the projection is that it is not inside the write lock.
 func (r *Relay) RunSequencer() ([]string, SequenceResult) {
 	// A relay whose store keeps no writer state has no pending set to drain and
 	// nothing to write it back to.
 	if r.writerState == nil || r.writeStore == nil {
 		return nil, SequenceResult{}
 	}
+	newOps, result := r.runSequencerUnderLock()
+	r.kickIndexProjection()
+	return newOps, result
+}
+
+// runSequencerUnderLock is RunSequencer's locked half, split out so the
+// projection kick above happens with ingestMu released.
+func (r *Relay) runSequencerUnderLock() ([]string, SequenceResult) {
 	r.ingestMu.Lock()
 	defer r.ingestMu.Unlock()
 	return r.runSequencerLocked()

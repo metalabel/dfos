@@ -103,7 +103,7 @@ The relay pulls new operations from each peer on every sync interval and gossips
 its own sequenced operations back. Peering is additive -- adding a peer never
 removes existing data.
 
-## Content following
+## The content plane
 
 A relay syncs the **proof plane** -- identity chains, content chains,
 credentials, and revocations all ride the operation log and gossip between peers.

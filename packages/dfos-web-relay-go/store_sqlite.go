@@ -260,13 +260,15 @@ CREATE TABLE IF NOT EXISTS index_meta (
 );
 `
 
-// SQLiteStore is a durable Store backed by SQLite.
+// SQLiteStore is a durable SQLite implementation of the relay store contracts:
+// RelayReadStore, RelayWriteStore, RelayWriterState, IndexReadStore,
+// IndexWriteStore, RebuildableIndexStore, MigratableStore, and SigningStore.
 //
-// The readOnly flag controls readerDB() behavior. When false (default for the
-// ingestion store), readerDB() returns the active write transaction so that
-// within-batch reads see uncommitted writes. When true (for the HTTP read
-// store), readerDB() always returns the WAL read pool — safe for concurrent
-// use while ingestion holds a write transaction.
+// TWO CONNECTIONS, NO MODE FLAG. One capped write connection and one WAL read
+// pool, and which one a method uses is a property of the method, not of the
+// store: see writerDB and readerDB below. There is no read-only variant and no
+// transaction on the struct, so there is nothing to configure and no way for a
+// read to land inside someone else's open write.
 type SQLiteStore struct {
 	db     *sql.DB // write connection (single writer)
 	readDB *sql.DB // read connection pool (concurrent reads)
@@ -1131,8 +1133,8 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
-	var row indexIdentityRow
+func scanIndexIdentityRow(sc scanner) (IndexIdentityRow, error) {
+	var row IndexIdentityRow
 	var isDeleted int
 	var anchor, docSchema, name sql.NullString
 	var publicRead sql.NullInt64
@@ -1146,7 +1148,7 @@ func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
 	// A projected profile always carries an anchor (profileProjection returns nil
 	// otherwise), so anchor validity is exactly profile presence.
 	if anchor.Valid {
-		profile := &indexProfile{
+		profile := &IndexProfile{
 			Anchor:     anchor.String,
 			PublicRead: publicRead.Valid && publicRead.Int64 != 0,
 		}
@@ -1165,8 +1167,8 @@ func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
 
 const indexIdentityCols = "did, head_cid, op_count, genesis_at, head_at, is_deleted, profile_anchor, profile_public_read, profile_doc_schema, profile_name"
 
-func scanIndexContentRow(sc scanner) (indexContentRow, error) {
-	var row indexContentRow
+func scanIndexContentRow(sc scanner) (IndexContentRow, error) {
+	var row IndexContentRow
 	var isDeleted, publicRead int
 	var currentDocCID, docSchema, title sql.NullString
 	if err := sc.Scan(
@@ -1194,7 +1196,7 @@ func scanIndexContentRow(sc scanner) (indexContentRow, error) {
 
 const indexContentCols = "content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count, genesis_at, head_at, current_document_cid, public_read, doc_schema, title"
 
-func putIndexIdentityRowTx(db dbConn, row indexIdentityRow) error {
+func putIndexIdentityRowTx(db dbConn, row IndexIdentityRow) error {
 	var anchor, docSchema, name any
 	var publicRead any
 	hasPublicProfile := 0
@@ -1218,7 +1220,7 @@ func putIndexIdentityRowTx(db dbConn, row indexIdentityRow) error {
 	return err
 }
 
-func putIndexContentRowTx(db dbConn, row indexContentRow) error {
+func putIndexContentRowTx(db dbConn, row IndexContentRow) error {
 	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_content
 		 (content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count,
@@ -1230,7 +1232,7 @@ func putIndexContentRowTx(db dbConn, row indexContentRow) error {
 	return err
 }
 
-func putIndexCreditRowsTx(db dbConn, contentID string, rows []indexCreditRow) error {
+func putIndexCreditRowsTx(db dbConn, contentID string, rows []IndexCreditRow) error {
 	if _, err := db.Exec("DELETE FROM index_credit WHERE content_id = ?", contentID); err != nil {
 		return err
 	}
@@ -1246,7 +1248,7 @@ func putIndexCreditRowsTx(db dbConn, contentID string, rows []indexCreditRow) er
 	return nil
 }
 
-func putIndexArtifactRowTx(db dbConn, row indexArtifactRow) error {
+func putIndexArtifactRowTx(db dbConn, row IndexArtifactRow) error {
 	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_artifact
 		 (cid, signer_did, created_at, ingested_at, doc_schema) VALUES (?, ?, ?, ?, ?)`,
@@ -1276,7 +1278,7 @@ func putIndexIdentityKeyTx(db dbConn, did string, keyID string, publicKey string
 	return err
 }
 
-func putIndexCountersignatureRowTx(db dbConn, row storedIndexCountersignature) error {
+func putIndexCountersignatureRowTx(db dbConn, row StoredIndexCountersignature) error {
 	_, err := db.Exec(
 		`INSERT OR REPLACE INTO index_countersign
 		 (cid, witness_did, target_cid, relation, jws_token, created_at, ingested_at)
@@ -1286,7 +1288,7 @@ func putIndexCountersignatureRowTx(db dbConn, row storedIndexCountersignature) e
 	return err
 }
 
-func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
+func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]IndexIdentityRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.DID != "" {
@@ -1342,7 +1344,7 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexIdentityRow{}
+	result := []IndexIdentityRow{}
 	for rows.Next() {
 		row, err := scanIndexIdentityRow(rows)
 		if err != nil {
@@ -1353,7 +1355,7 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
+func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]IndexContentRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.ContentID != nil {
@@ -1418,7 +1420,7 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexContentRow{}
+	result := []IndexContentRow{}
 	for rows.Next() {
 		row, err := scanIndexContentRow(rows)
 		if err != nil {
@@ -1429,7 +1431,7 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error) {
+func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]IndexCreditRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.DID != nil {
@@ -1459,9 +1461,9 @@ func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, e
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCreditRow{}
+	result := []IndexCreditRow{}
 	for rows.Next() {
-		var row indexCreditRow
+		var row IndexCreditRow
 		var role sql.NullString
 		var hasClaim int
 		if err := rows.Scan(&row.ContentID, &row.DID, &role, &row.Position, &hasClaim); err != nil {
@@ -1477,7 +1479,7 @@ func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, e
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
+func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]IndexArtifactRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.CID != nil {
@@ -1521,9 +1523,9 @@ func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifact
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexArtifactRow{}
+	result := []IndexArtifactRow{}
 	for rows.Next() {
-		var row indexArtifactRow
+		var row IndexArtifactRow
 		var docSchema sql.NullString
 		if err := rows.Scan(&row.CID, &row.SignerDID, &row.CreatedAt, &row.IngestedAt, &docSchema); err != nil {
 			return nil, err
@@ -1537,7 +1539,7 @@ func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifact
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
+func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]IndexCountersignatureRow, error) {
 	query := "SELECT cid, target_cid, relation, jws_token, created_at, ingested_at FROM index_countersign WHERE witness_did = ?"
 	args := []any{q.Witness}
 	if q.Relation != nil {
@@ -1570,9 +1572,9 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCountersignatureRow{}
+	result := []IndexCountersignatureRow{}
 	for rows.Next() {
-		var row indexCountersignatureRow
+		var row IndexCountersignatureRow
 		var relation sql.NullString
 		if err := rows.Scan(&row.CID, &row.TargetCID, &relation, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
@@ -1586,7 +1588,7 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error) {
+func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]IndexCredentialRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.Issuer != "" {
@@ -1646,9 +1648,9 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexCredentialRow{}
+	result := []IndexCredentialRow{}
 	for rows.Next() {
-		var row indexCredentialRow
+		var row IndexCredentialRow
 		var attJSON string
 		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
@@ -1662,7 +1664,7 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 	return result, rows.Err()
 }
 
-func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error) {
+func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]IndexOperationRow, error) {
 	where := []string{}
 	args := []any{}
 	if q.Kind != "" {
@@ -1703,9 +1705,9 @@ func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 		return nil, err
 	}
 	defer rows.Close()
-	result := []indexOperationRow{}
+	result := []IndexOperationRow{}
 	for rows.Next() {
-		var row indexOperationRow
+		var row IndexOperationRow
 		if err := rows.Scan(&row.CID, &row.Kind, &row.ChainID, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
 		}
