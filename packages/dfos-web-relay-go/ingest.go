@@ -107,6 +107,7 @@ func rejected(cid string, err error) IngestionResult {
 }
 
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
+const signingKeyNotAtBasisError = "signing key is not in the identity's state as of the basis"
 const identityConflictingExtensionError = "identity chains are linear: conflicting extension refused"
 
 type admissionMode int
@@ -476,17 +477,57 @@ func CreateCurrentKeyResolver(store RelayReadStore) dfos.KeyResolver {
 	}
 }
 
+// createFirstAdmissionKeyResolver returns the FIRST-ADMISSION signer resolver:
+// the key must be effective at the head AND effective in the identity's state as
+// of the operation's own createdAt.
+//
+// Freshness alone admits an operation nobody else accepts. A key introduced by a
+// rotation, signing an operation dated before that rotation, passes the head
+// check and then fails peer ingest, fork replay, and every client verifier, all
+// of which resolve at the basis (PROTOCOL, Time basis).
+//
+// The as-of check runs only where it can reach a verdict. When the stored chain
+// ends at or before the basis, head state IS the state as of the basis (the
+// answer is indeterminate) and the head check has already answered.
+func createFirstAdmissionKeyResolver(store RelayReadStore) dfos.KeyResolver {
+	current := CreateCurrentKeyResolver(store)
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
+		key, err := current(kid, basis)
+		if err != nil || basis == "" {
+			return key, err
+		}
+
+		// current already rejected a kid with no fragment, so the split is safe.
+		hashIdx := strings.Index(kid, "#")
+		did := kid[:hashIdx]
+		keyID := kid[hashIdx+1:]
+
+		state, determinate, err := ResolveIdentityAsOf(store, did, basis)
+		if err != nil {
+			return nil, err
+		}
+		if state == nil || !determinate {
+			return key, nil
+		}
+		if _, ok := findKeyInKeyState(effectiveKeyState(*state), keyID); !ok {
+			return nil, fmt.Errorf("%s", signingKeyNotAtBasisError)
+		}
+		return key, nil
+	}
+}
+
 // admissionKeyResolver is the signer resolver for one admission mode.
 //
 // First admission of a NEW operation asks freshness, so the signer must be
-// effective at the head. Replay and peer ingest of committed history ask the
-// basis, so the signer must have been effective at the operation's own
-// createdAt (RELAY, "Ingest asks freshness; re-verification asks the basis").
+// effective at the head, and asks the basis too, so the operation the relay
+// commits is one every other verifier accepts. Replay and peer ingest of
+// committed history ask the basis alone, because the head has moved on (RELAY,
+// "Ingest asks freshness; re-verification asks the basis").
 func admissionKeyResolver(store RelayReadStore, mode admissionMode) dfos.KeyResolver {
 	if mode == historicalAdmission {
 		return CreateAsOfKeyResolver(store)
 	}
-	return CreateCurrentKeyResolver(store)
+	return createFirstAdmissionKeyResolver(store)
 }
 
 // admissionRevocationChecker is the revocation checker for one admission mode.

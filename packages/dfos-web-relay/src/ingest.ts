@@ -103,6 +103,9 @@ export type AdmissionMode = 'current' | 'historical';
 
 export const NONCURRENT_SIGNING_KEY_ERROR = "signing key is not in the identity's current state";
 
+export const SIGNING_KEY_NOT_AT_BASIS_ERROR =
+  "signing key is not in the identity's state as of the basis";
+
 /**
  * Derive the operation CID from a JWS token by re-encoding the decoded payload.
  * Returns the empty string for an undecodable token. Used at verify-failure
@@ -520,15 +523,51 @@ export const createCurrentKeyResolver =
   };
 
 /**
+ * Create the FIRST-ADMISSION signer resolver: the key must be effective at the
+ * head AND effective in the identity's state as of the operation's own
+ * `createdAt`.
+ *
+ * Freshness alone admits an operation nobody else accepts. A key introduced by a
+ * rotation, signing an operation dated before that rotation, passes the head
+ * check and then fails peer ingest, fork replay, and every client verifier, all
+ * of which resolve at the basis (PROTOCOL, Time basis).
+ *
+ * The as-of check runs only where it can reach a verdict. When the stored chain
+ * ends at or before the basis, head state IS the state as of the basis
+ * (`basisDeterminate` is false) and the head check has already answered.
+ */
+const createFirstAdmissionKeyResolver = (store: RelayReadStore) => {
+  const current = createCurrentKeyResolver(store);
+  return async (kid: string, basis?: string): Promise<Uint8Array> => {
+    const keyBytes = await current(kid, basis);
+    if (basis === undefined) return keyBytes;
+
+    // `current` already rejected a kid with no fragment, so the split is safe.
+    const hashIdx = kid.indexOf('#');
+    const did = kid.substring(0, hashIdx);
+    const keyId = kid.substring(hashIdx + 1);
+
+    const identity = await resolveIdentityAsOf(store, did, basis);
+    if (identity?.basisDeterminate !== true) return keyBytes;
+    const effective = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
+    if (!effective.some((candidate) => candidate.id === keyId)) {
+      throw new Error(SIGNING_KEY_NOT_AT_BASIS_ERROR);
+    }
+    return keyBytes;
+  };
+};
+
+/**
  * The signer resolver for one admission mode.
  *
  * First admission of a NEW operation asks freshness, so the signer must be
- * effective at the head. Replay and peer ingest of committed history ask the
- * basis, so the signer must have been effective at the operation's own
- * `createdAt` (RELAY, "Ingest asks freshness; re-verification asks the basis").
+ * effective at the head, and asks the basis too, so the operation the relay
+ * commits is one every other verifier accepts. Replay and peer ingest of
+ * committed history ask the basis alone, because the head has moved on
+ * (RELAY, "Ingest asks freshness; re-verification asks the basis").
  */
 const createAdmissionKeyResolver = (store: RelayReadStore, mode: AdmissionMode) =>
-  mode === 'historical' ? createAsOfKeyResolver(store) : createCurrentKeyResolver(store);
+  mode === 'historical' ? createAsOfKeyResolver(store) : createFirstAdmissionKeyResolver(store);
 
 /**
  * The revocation checker for one admission mode.

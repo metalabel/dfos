@@ -18,6 +18,7 @@ import {
   encodeEd25519Multikey,
   signContentOperation,
   signIdentityOperation,
+  verifyContentChain,
   type ContentOperation,
   type IdentityOperation,
   type MultikeyPublicKey,
@@ -31,7 +32,12 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { hasPublicStandingAuth } from '../src/auth';
-import { createAsOfKeyResolver, ingestOperations, resolveIdentityAsOf } from '../src/ingest';
+import {
+  createAsOfKeyResolver,
+  ingestOperations,
+  resolveIdentityAsOf,
+  SIGNING_KEY_NOT_AT_BASIS_ERROR,
+} from '../src/ingest';
 import { MemoryRelayStore } from '../src/store';
 import { chainKeyProof } from './key-proofs';
 
@@ -396,6 +402,70 @@ describe('a key miss is a verdict only when the stored chain runs past the basis
     expect(verdict.status).toBe('rejected');
     expect(verdict.error).toMatch(/unknown key/);
     expect(verdict.dependencyMissing).not.toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// first admission asks the head AND the basis
+// -----------------------------------------------------------------------------
+
+describe('first admission asks the basis as well as the head', () => {
+  it('refuses a head key backdated past its own introduction and lands it dated after', async () => {
+    const store = new MemoryRelayStore();
+    const { did, k1, k2, genesis, rotation } = await rotatingIdentity();
+    // Two batches, because first admission asks freshness: the early op is
+    // authored while K1 is still the head, and only then does the rotation land.
+    const early = await contentGenesis(did, k1, 'before the rotation', T1);
+    await ingestOperations([genesis.jwsToken, early.jwsToken], store);
+    expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
+    const contentId = (await store.getOperation(early.operationCID))!.chainId;
+
+    const extension = async (title: string, minutesAgo: number) => {
+      const document = await dagCborCanonicalEncode({ type: 'post', title });
+      return signContentOperation({
+        operation: {
+          version: 1,
+          type: 'update',
+          did,
+          previousOperationCID: early.operationCID,
+          documentCID: document.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(minutesAgo),
+          note: null,
+        },
+        signer: k2.signer,
+        kid: `${did}#${k2.keyId}`,
+      });
+    };
+
+    // K2 is the head key, so freshness alone would admit this. It is dated
+    // before K2 became effective, and the relay may not commit an operation
+    // peer ingest, fork replay, and every client verifier reject.
+    const backdated = await extension('backdated past the rotation', 80);
+    const refused = (await ingestOperations([backdated.jwsToken], store))[0]!;
+    expect(refused.status).toBe('rejected');
+    expect(refused.error).toBe(SIGNING_KEY_NOT_AT_BASIS_ERROR);
+    expect(refused.dependencyMissing).not.toBe(true);
+
+    // The same operation dated after the rotation is effective at both times.
+    const late = await extension('after the rotation', T3);
+    expect((await ingestOperations([late.jwsToken], store))[0]!.status).toBe('new');
+
+    // What the relay committed replays clean at each operation's own basis.
+    const peer = new MemoryRelayStore();
+    const replayed = await ingestOperations(
+      [genesis.jwsToken, early.jwsToken, rotation.jwsToken, late.jwsToken],
+      peer,
+      { admissionMode: 'historical' },
+    );
+    expect(replayed.map((r) => r.status)).toEqual(['new', 'new', 'new', 'new']);
+
+    const stored = await store.getContentChain(contentId);
+    const verified = await verifyContentChain({
+      log: stored!.log,
+      resolveKey: createAsOfKeyResolver(store),
+    });
+    expect(verified.headCID).toBe(late.operationCID);
   });
 });
 

@@ -315,8 +315,9 @@ const signerKeyOf = async (entry: LogEntry, store: RelayReadStore): Promise<stri
  *  - any operation      → an operation row + the signer key it verified against
  *  - identity op        → dirty that identity, record its proved keys; `delete`
  *                         sweeps the currently-public content subset, `restore`
- *                         sweeps all content (a suspended row is no longer in the
- *                         public subset)
+ *                         and `update` sweep all content (a suspended row, and a
+ *                         row whose grant died with a rotated-out key, are no
+ *                         longer in the public subset)
  *  - content op         → dirty that content row (+ anchored identities), record
  *                         the accepted signer
  *  - artifact           → the standalone artifact row
@@ -355,6 +356,12 @@ const projectLogEntry = async (
       ];
       if (opType === 'delete') return { scope: 'public', after: null };
       if (opType === 'restore') return { scope: 'all', after: null };
+      // An `update` can change the effective key set, and a standing credential
+      // whose issuer key rotated out stops granting at read time (auth.ts), so
+      // every projected `publicRead` this identity backs is recomputed. The
+      // scope is `all` in both directions: a rotation drops rows out of the
+      // public subset, and re-adding a key brings rows that already left it back.
+      if (opType === 'update') return { scope: 'all', after: null };
       return null;
     }
     case 'content-op': {

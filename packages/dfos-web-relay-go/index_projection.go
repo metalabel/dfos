@@ -384,8 +384,9 @@ func advanceSweep(sweep IndexSweepState, store IndexReadStore, cap int, dirty *p
 // Mapping:
 //   - any operation      → the signer key it verified against
 //   - identity op        → dirty that identity, record its proved keys; "delete"
-//     sweeps the currently-public content subset, "restore" sweeps all content (a
-//     suspended row is no longer in the public subset)
+//     sweeps the currently-public content subset, "restore" and "update" sweep all
+//     content (a suspended row, and a row whose grant died with a rotated-out key,
+//     are no longer in the public subset)
 //   - content op         → dirty that content row (+ anchored identities), record
 //     the accepted signer
 //   - artifact           → the standalone artifact row
@@ -443,6 +444,13 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 		case "delete":
 			return &IndexSweepState{Scope: IndexSweepPublic}, nil
 		case "restore":
+			return &IndexSweepState{Scope: IndexSweepAll}, nil
+		case "update":
+			// An update can change the effective key set, and a standing credential
+			// whose issuer key rotated out stops granting at read time (auth.go), so
+			// every projected PublicRead this identity backs is recomputed. The scope
+			// is all in both directions: a rotation drops rows out of the public
+			// subset, and re-adding a key brings rows that already left it back.
 			return &IndexSweepState{Scope: IndexSweepAll}, nil
 		}
 		return nil, nil

@@ -2315,6 +2315,70 @@ describe('index v0', () => {
     ).not.toContain(subject.did);
   });
 
+  // An identity `update` can change the effective key set, and a standing grant
+  // signed by a rotated-out key stops granting at read time. The projection
+  // follows, or the index keeps serving a title the read path denies.
+  it('recomputes publicRead and the title when the granting identity rotates its key', async () => {
+    const subject = await createIdentity();
+    const doc = { $schema: POST_SCHEMA, title: 'granted by K1' };
+    const content = await createContent(subject, doc);
+    await uploadBlob(subject, content.contentId, content.operationCID, doc);
+    await grantPublicRead(subject, content.contentId);
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: true,
+      title: 'granted by K1',
+    });
+
+    const k2 = makeKey();
+    const rotationOp: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: subject.operationCID,
+      authKeys: [k2.key],
+      assertKeys: [k2.key],
+      controllerKeys: [k2.key],
+      createdAt: ts(2),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: k2.keypair.privateKey,
+          did: subject.did,
+          prevCID: subject.operationCID,
+        }),
+      ],
+    };
+    const rotation = await signIdentityOperation({
+      operation: rotationOp,
+      signer: subject.controller.signer,
+      keyId: subject.controller.keyId,
+      identityDID: subject.did,
+    });
+    expect((await postOps([rotation.jwsToken])).status).toBe(200);
+
+    // The grant died with K1, so the row is private and its title is redacted.
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: false,
+      title: null,
+    });
+
+    // A fresh grant signed by K2 restores it. A credential payload carries no
+    // signer, so this one takes its own expiry to earn its own CID.
+    const now = Math.floor(Date.now() / 1000);
+    const regrant = await createDFOSCredential({
+      issuerDID: subject.did,
+      audienceDID: '*',
+      att: [{ resource: `chain:${content.contentId}`, action: 'read' }],
+      exp: now + 7200,
+      signer: k2.signer,
+      keyId: k2.keyId,
+      iat: now,
+    });
+    expect((await postOps([regrant])).status).toBe(200);
+    expect(await contentRow(content.contentId)).toMatchObject({
+      publicRead: true,
+      title: 'granted by K1',
+    });
+  });
+
   it('narrows named grant revocation maintenance to its att-named chain', async () => {
     const creator = await createIdentity();
     const contentA = await createContent(creator, { $schema: POST_SCHEMA, title: 'a' }, 1);

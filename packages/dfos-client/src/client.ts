@@ -185,9 +185,12 @@ export const createClient = (config: ClientConfig): Client => {
     const issuer = await resolvers.getIdentityChain(iss, options);
     // A read-time credential check is an ephemeral presentation: the basis is
     // now, so the issuer resolves at head state and `exp` runs on this clock.
+    // The clock reaches `exp` alone; an ISO basis built from it would resolve
+    // the issuer at the start of the second and miss an operation committed
+    // inside it (PROTOCOL, Time basis).
     const verified = await verifyDFOSCredential(jws, {
       resolveIdentity: resolvers.callbacks().resolveIdentity,
-      basis: new Date(nowMs()).toISOString(),
+      nowUnix: Math.floor(nowMs() / 1000),
     });
     const revoked = await isRevoked(verified.iss, verified.credentialCID);
 
@@ -243,9 +246,11 @@ export const createClient = (config: ClientConfig): Client => {
       const cb = resolvers.callbacks();
 
       if (typ === 'did:dfos:credential') {
+        // Ephemeral, exactly as `credential` above: head-state resolution, the
+        // clock on `exp` alone.
         const verified = await verifyDFOSCredential(jws, {
           resolveIdentity: cb.resolveIdentity,
-          basis: new Date(nowMs()).toISOString(),
+          nowUnix: Math.floor(nowMs() / 1000),
         });
         const revoked = await isRevoked(verified.iss, verified.credentialCID);
         if (revoked) return { ok: false, error: 'credential revoked', value: verified };

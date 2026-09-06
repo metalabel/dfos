@@ -387,6 +387,75 @@ func TestIssuerGenesisAfterTheBasisIsAPermanentRejection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// first admission asks the head AND the basis
+// ---------------------------------------------------------------------------
+
+// TestFirstAdmissionAsksTheBasisAsWellAsTheHead pins that freshness alone does
+// not admit: a head key signing an operation dated before its own introduction
+// is refused, because peer ingest, fork replay, and every client verifier
+// resolve at the basis and reject it.
+// Twin of the TS "refuses a head key backdated past its own introduction and
+// lands it dated after".
+func TestFirstAdmissionAsksTheBasisAsWellAsTheHead(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryStore()
+	f := newBasisRotationFixture(t, now, 120, 60)
+	id := f.identity()
+
+	// Two batches, because first admission asks freshness: the early op is
+	// authored while K1 is still the head, and only then does the rotation land.
+	early, contentID, earlyCID := signBackdatedContentCreate(t, id, newDocCID(t, "early"), basisTime(now, 100))
+	if res := IngestOperations([]string{f.genesisToken, early}, store); res[0].Status != "new" || res[1].Status != "new" {
+		t.Fatalf("seed: %+v", res)
+	}
+	if res := IngestOperations([]string{f.rotation}, store); res[0].Status != "new" {
+		t.Fatalf("rotation: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// K2 is the head key, so freshness alone would admit this. It is dated before
+	// K2 became effective, and the relay may not commit an operation peer ingest,
+	// fork replay, and every client verifier reject.
+	backdated, _ := signBackdatedContentUpdate(t, id, f.k2, earlyCID, newDocCID(t, "backdated"), basisTime(now, 80))
+	refused := IngestOperations([]string{backdated}, store)[0]
+	if refused.Status != "rejected" {
+		t.Fatalf("a backdated head-key operation must be refused: %+v", refused)
+	}
+	if !strings.Contains(refused.Error, signingKeyNotAtBasisError) {
+		t.Fatalf("error = %q, want it to name %q", refused.Error, signingKeyNotAtBasisError)
+	}
+	if refused.DependencyMissing {
+		t.Fatalf("a key the as-of walk decided about is a verdict, got %+v", refused)
+	}
+
+	// The same operation dated after the rotation is effective at both times.
+	late, lateCID := signBackdatedContentUpdate(t, id, f.k2, earlyCID, newDocCID(t, "late"), basisTime(now, 30))
+	if res := IngestOperations([]string{late}, store); res[0].Status != "new" {
+		t.Fatalf("late op: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// What the relay committed replays clean at each operation's own basis.
+	peer := NewMemoryStore()
+	replayed := IngestOperations([]string{f.genesisToken, early, f.rotation, late}, peer, WithHistoricalAdmission())
+	for i, result := range replayed {
+		if result.Status != "new" {
+			t.Fatalf("replay[%d]: %s (%s)", i, result.Status, result.Error)
+		}
+	}
+
+	stored, err := store.GetContentChain(contentID)
+	if err != nil || stored == nil {
+		t.Fatalf("stored content chain: %v", err)
+	}
+	verified, err := dfos.VerifyContentChain(stored.Log, CreateAsOfKeyResolver(store), false)
+	if err != nil {
+		t.Fatalf("VerifyContentChain: %v", err)
+	}
+	if verified.State.HeadCID != lateCID {
+		t.Fatalf("head = %s, want %s", verified.State.HeadCID, lateCID)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // peer-log ingest of committed history across a rotation
 // ---------------------------------------------------------------------------
 

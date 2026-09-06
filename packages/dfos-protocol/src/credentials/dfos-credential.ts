@@ -257,6 +257,13 @@ export const verifyDFOSCredential = async (
      * Omitted for an ephemeral presentation, where the basis is now.
      */
     basis?: string;
+    /**
+     * The ephemeral clock in integer Unix seconds, for a caller that carries its
+     * own. It reaches `exp` and nothing else: key resolution on the ephemeral
+     * path is head state, which is what "the basis is now" means. Ignored when
+     * `basis` is present, and defaults to `floor(Date.now() / 1000)`.
+     */
+    nowUnix?: number;
   },
 ): Promise<VerifiedDFOSCredential> => {
   // bound credential size — the credential's analog of MAX_OPERATION_SIZE. The
@@ -336,7 +343,9 @@ export const verifyDFOSCredential = async (
   // credential dated after the basis is not a rejection, because the basis, not
   // the issuer's clock, decides when authority applies.
   const basisSeconds =
-    options.basis !== undefined ? basisUnixSeconds(options.basis) : Math.floor(Date.now() / 1000);
+    options.basis !== undefined
+      ? basisUnixSeconds(options.basis)
+      : (options.nowUnix ?? Math.floor(Date.now() / 1000));
   if (payload.exp <= basisSeconds) {
     throw new CredentialVerificationError('credential expired');
   }
@@ -388,6 +397,11 @@ export const verifyDelegationChain = async (
      * timelessly, which is the stricter direction (see `RevocationChecker`).
      */
     basis?: string;
+    /**
+     * The ephemeral clock in integer Unix seconds, threaded to every hop's `exp`
+     * and nothing else. Ignored when `basis` is present.
+     */
+    nowUnix?: number;
   },
 ): Promise<VerifiedDelegationChain> => {
   const chain: VerifiedDFOSCredential[] = [credential];
@@ -423,6 +437,7 @@ export const verifyDelegationChain = async (
     const parent = await verifyDFOSCredential(current.prf[0]!, {
       resolveIdentity: options.resolveIdentity,
       ...(options.basis !== undefined ? { basis: options.basis } : {}),
+      ...(options.nowUnix !== undefined ? { nowUnix: options.nowUnix } : {}),
     });
 
     // Revocation at every level of the chain, on the SAME basis as the leaf: a
