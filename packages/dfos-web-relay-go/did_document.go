@@ -157,8 +157,9 @@ func projectService(did string, entry dfos.ServiceEntry) any {
 	case "DfosRelay":
 		return dfosRelayService{ID: id, Type: typ, ServiceEndpoint: entry["endpoint"]}
 	case "DfosAuthorizationServer":
-		// an authorize origin (SIWD.md): open-namespace type whose `endpoint`
-		// member is the exact DfosRelay mirror, so it projects identically.
+		// an authorize origin (INTEGRATIONS.md, Finding the authorize endpoint):
+		// open-namespace type whose `endpoint` member is the exact DfosRelay mirror,
+		// so it projects identically.
 		return dfosAuthorizationServerService{ID: id, Type: typ, ServiceEndpoint: entry["endpoint"]}
 	case "ContentAnchor":
 		return contentAnchorService{ID: id, Type: typ, ServiceEndpoint: entry["anchor"], Label: entry["label"]}

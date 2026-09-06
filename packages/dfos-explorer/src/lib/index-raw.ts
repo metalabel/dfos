@@ -78,7 +78,8 @@ const INDEX_BASE_PATH = '/index/v0';
 
 const TIMEOUT_MS = 10_000;
 
-/** The recency orderings `/operations` and `/artifacts` share (see WEB-RELAY.md).
+/** The recency orderings `/operations` and `/artifacts` share
+ *  (RELAY.md, Determinism and coverage).
  *  `createdAt` is author-claimed; `ingestedAt` is this relay's acceptance time —
  *  browse chronology, never a consensus clock. */
 export type IndexRecency = 'createdAt.desc' | 'ingestedAt.desc';
@@ -409,7 +410,7 @@ export const fetchOperationsPage = async (params: {
  * relay in `relays` serves the route.
  *
  * `signerKey` is the proof-tier actor filter — an exact multibase match against
- * the public key each row's signature verified against at ingest (WEB-RELAY.md,
+ * the public key each row's signature verified against at ingest (RELAY.md,
  * Operations). It is passed VERBATIM: the relay matches it as opaque bytes, so
  * normalizing it here would silently ask a different question than the one pasted.
  *

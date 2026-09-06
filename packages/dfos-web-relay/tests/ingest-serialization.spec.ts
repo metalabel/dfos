@@ -19,8 +19,9 @@ import { MemoryRelayStore } from '../src/store';
 
   CHAIN-STATE SERIALIZATION
 
-  WEB-RELAY.md requires every chain-state mutation to be serialized. Ingestion
-  is read-verify-write across real yield points (the WebCrypto verify is one),
+  RELAY.md, Buffering and sequencing requires every chain-state mutation to be
+  serialized. Ingestion is read-verify-write across real yield points (the
+  WebCrypto verify is one),
   so two overlapping ingests of children of the SAME parent both read the same
   head, both verify against it, and both write the whole chain back from their
   own stale snapshot — the second silently erasing the first. The Go twin holds

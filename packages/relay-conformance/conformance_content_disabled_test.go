@@ -9,8 +9,8 @@ import (
 // Content-plane-disabled relay: when the well-known response advertises
 // capabilities.content == false, every content-plane (document-gateway) route
 // MUST return 501 Not Implemented — "capability not supported" — and NOT 404
-// ("resource doesn't exist"). The distinction is a Tier-3 MUST in WEB-RELAY.md
-// (§"all content plane routes return 501 Not Implemented — not 404"). The 501
+// ("resource doesn't exist"). The distinction is a Tier-3 MUST in RELAY.md,
+// Capabilities are how a relay honestly declines a family. The 501
 // gate fires before any store lookup, so it holds regardless of whether the
 // content id exists.
 //

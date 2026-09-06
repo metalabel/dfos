@@ -7,8 +7,7 @@
 
   Proof plane READS are public. Authenticated routes consume the API-AUTH
   identity proof (`Authorization: DFOS <jws>`) for AuthN and DFOS credentials for
-  AuthZ; ingestion sits behind the admission ladder (WEB-RELAY.md, Ingestion
-  Admission).
+  AuthZ; ingestion sits behind the admission ladder (RELAY.md, Admission).
 
 */
 
@@ -402,7 +401,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const replayCache: JtiReplayCache = options.replayCache ?? createJtiReplayCache();
 
   // Ingestion admission. Explicit wins; absent derives from the write capability
-  // (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
+  // (RELAY.md, The well-known document). A relay with writes off is closed
   // whatever it asked for — the capability gate fires first and answers 501.
   //
   // An unrecognized spelling is refused HERE rather than serving as its silent
@@ -771,8 +770,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   /**
    * Submit operations for ingestion.
    *
-   * THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (WEB-RELAY.md, Ingestion
-   * Admission): structural caps (400/413) -> proof verification when one is
+   * THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (RELAY.md, Admission):
+   * structural caps (400/413) -> proof verification when one is
    * presented (401 invalid / 503 unverifiable) -> admission policy over
    * (principal | anonymous), a request-level 403 -> full per-item verification.
    * The expensive step is never spent on a submission policy refuses, and a
@@ -1763,8 +1762,8 @@ const readBlob = async (params: {
     //
     // An accompanying `X-Credential` is NOT malformed here, unlike on an
     // `api:<host>` surface: the identity proof is the AuthN half and the DFOS
-    // credential is a separate authorization artifact (WEB-RELAY.md,
-    // Authentication) — two halves of one answer, not two competing claims.
+    // credential is a separate authorization artifact (INTEGRATIONS.md, The
+    // identity proof) — two halves of one answer, not two competing claims.
     const auth = await authenticateIdentityProof({
       authHeader,
       method: params.method,

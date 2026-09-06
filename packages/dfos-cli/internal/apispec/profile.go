@@ -3,7 +3,7 @@ package apispec
 // Profile inference — which artifact of the API-AUTH envelope family a route
 // needs, read out of the document's own security requirements.
 //
-// THE COMBINATION IS THE DISCRIMINATOR (API-AUTH.md, "Requirement
+// THE COMBINATION IS THE DISCRIMINATOR (INTEGRATIONS.md, "Requirement
 // combinations"). Not the component names, which are the host's free choice, and
 // not the action list, which says nothing about which artifact to sign. Schemes
 // are identified STRUCTURALLY — by `type` / `scheme` / header name and the
@@ -179,8 +179,8 @@ func (d *Doc) readRequirement(requirement *base.SecurityRequirement) Alternative
 	case request == 1 && identity == 0 && unmarked == 0 && credential == 1:
 		alt.Profile, alt.Credential = ProfileDelegated, true
 	case request == 1 && credential == 0:
-		// API-AUTH.md: "a request-proof scheme alone advertises a route no
-		// conforming client can call".
+		// INTEGRATIONS.md, Requirement combinations: "a request-proof scheme alone
+		// advertises a route no conforming client can call".
 		alt.Unsatisfiable = "requires a request proof with no credential scheme beside it — " +
 			"a request proof is meaningless without the credential it binds"
 	case unmarked == 1 && identity == 0 && request == 0 && credential == 0:

@@ -246,14 +246,16 @@ describe('validateStructure', () => {
     if (!out.ok) expect(out.errors.join(' ')).toMatch(/missing required member `redirect_uris`/);
   });
 
-  // a nameless document is fully valid — the domain leads (SIWD.md: name is optional)
+  // a nameless document is fully valid — the domain leads
+  // (INTEGRATIONS.md, The app description document: name is optional)
   it('accepts a document with no name', () => {
     expect(validateStructure(readJson('schemas/dfos-app.v1.fixtures/valid/no-name.json')).ok).toBe(
       true,
     );
   });
 
-  // presence-but-empty is malformed, not absent — SIWD.md is explicit
+  // presence-but-empty is malformed, not absent — INTEGRATIONS.md, The app
+  // description document is explicit
   it('rejects a present-but-empty member', () => {
     expect(validateStructure({ name: '', redirect_uris: ['https://x.com/cb'] }).ok).toBe(false);
     expect(validateStructure({ name: 'x', redirect_uris: [] }).ok).toBe(false);

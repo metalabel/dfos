@@ -48,7 +48,7 @@ const (
 	// place on the rows that lack it.
 	//
 	// v9: `key=` becomes has-ever-PROVED rather than has-ever-declared, and
-	// `signerKey=` follows the same rule (KEY-PROOF.md, Holder Obligations). A
+	// `signerKey=` follows the same rule (INTEGRATIONS.md, Holder obligations). A
 	// pre-v9 relay indexed every DECLARATION, which let a chain listing a
 	// stranger's key burn it in the one-key-one-DID oracle — so the identity-key
 	// table must be cleared and re-derived, not merely extended. The rebuild reads

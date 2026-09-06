@@ -1449,8 +1449,8 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
 
 /**
  * The per-store chain-state lock — the TypeScript twin of the Go relay's
- * `ingestMu` (relay.go), and the mechanism behind WEB-RELAY.md's requirement
- * that all chain-state mutations are serialized.
+ * `ingestMu` (relay.go), and the mechanism behind RELAY.md, Buffering and
+ * sequencing's requirement that all chain-state mutations are serialized.
  *
  * SINGLE-THREADED JS IS NOT SERIALIZATION. Applying one operation is a
  * read-verify-write span — read the chain, compare `previousOperationCID` to

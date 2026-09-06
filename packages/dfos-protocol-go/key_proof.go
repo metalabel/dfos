@@ -50,20 +50,20 @@ import (
 //  3. NO RESOLVER SEAM. The signature verifies against the payload's own
 //     publicKeyMultibase. That circularity IS the proof.
 //
-// STEP 6 IS NOT HERE. KEY-PROOF.md's verification algorithm has seven steps;
-// VerifyKeyProof performs 1–5 and 7. Step 6 — the nonce MUST be one this verifier
-// minted, for this ceremony, not yet consumed, checked and consumed ATOMICALLY —
-// is the CALLER'S, because only the caller holds the store the check-and-delete
-// runs against. A verified proof hands back its payload so the caller can do
-// exactly that. A deployment that skips step 6 has a replayable proof for the
-// length of its freshness window.
+// THE NONCE CHECK IS NOT HERE. INTEGRATIONS.md, Presentation verification
+// requires the nonce to be one this verifier minted, for this ceremony, not yet
+// consumed, checked and consumed ATOMICALLY. That check is the CALLER'S, because
+// only the caller holds the store the check-and-delete runs against.
+// VerifyKeyProof performs the remaining presentation checks and hands back its
+// payload so the caller can do exactly that. A deployment that skips the nonce
+// check has a replayable proof for the length of its freshness window.
 //
 // TWO VERIFICATION MODES OVER ONE ENVELOPE. The same bytes are read twice in a
 // key's life, by parties in different positions:
 //
 //   - PRESENTATION-TIME (VerifyKeyProof) — a ceremony operator completing a live
 //     ceremony. It holds a clock, a configured audience, and a nonce store, so it
-//     checks freshness and audience, and its caller runs step 6.
+//     checks freshness and audience, and its caller runs the nonce check.
 //   - CHAIN-WALK (VerifyChainKeyProof) — anyone replaying the chain later. The
 //     ceremony is long over; the operator's authority, clock and nonce store are
 //     not the walker's, and a proof embedded in a signed operation is FIXED
@@ -77,7 +77,7 @@ import (
 // JSON.stringify emits. The cross-language vector set lives in key_proof_test.go
 // and dfos-protocol/tests/key-proof.spec.ts, pinned byte-identically.
 
-// KeyAddJWSTyp is the first registered purpose in KEY-PROOF.md's purpose
+// KeyAddJWSTyp is the registered key-proof purpose in PROTOCOL.md, The envelope:
 // registry: the candidate key presents for addition to a ceremony-named
 // identity's authKeys/assertKeys sets.
 //
@@ -194,8 +194,9 @@ func keyProofMemberValues(payload KeyProofPayload) [][2]string {
 // not this grammar.
 var wholeSecondTimestampRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$`)
 
-// validateKeyProofPayload applies KEY-PROOF.md step 3 and the producer-side
-// member rules in ONE place: exactly the seven members, each a non-empty string.
+// validateKeyProofPayload applies PROTOCOL.md, The envelope's payload rules and
+// the producer-side member rules in ONE place: exactly the seven members, each
+// a non-empty string.
 //
 // The grammar checks past "is a string" are the ones a mismatch would otherwise
 // surface later and less usefully: an audience that is not an authority could
@@ -313,8 +314,8 @@ type SignKeyProofInput struct {
 // members, no kid (the key is in no chain and rides in the payload) and no cid
 // (there is no operation to bind).
 //
-// HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (KEY-PROOF.md, Holder
-// Obligations). A holder MUST show its human — before calling this — the
+// HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (INTEGRATIONS.md, Holder
+// obligations). A holder MUST show its human — before calling this — the
 // audience, the purpose, the adopting identity, and the roles. A proof is
 // consent, and consent that was never displayed was never given.
 //
@@ -391,10 +392,10 @@ type decodedKeyProof struct {
 	typ          string
 }
 
-// decodeKeyProof runs KEY-PROOF.md verification steps 1–3: size cap, header
-// gates, and the closed payload schema over CANONICAL bytes. Everything both
-// modes do identically, because these three steps are about the ARTIFACT and not
-// about the position the reader occupies.
+// decodeKeyProof runs INTEGRATIONS.md, Presentation verification steps 1–3:
+// size cap, header gates, and the closed payload schema over CANONICAL bytes.
+// Everything both modes do identically, because these three steps are about the
+// ARTIFACT and not about the position the reader occupies.
 func decodeKeyProof(proof string, expectedTyp string) (*decodedKeyProof, error) {
 	// 1. Size cap — before any decode. A DoS guard at the header layer.
 	if len(proof) > MaxKeyProofSize {
@@ -426,9 +427,9 @@ func decodeKeyProof(proof string, expectedTyp string) (*decodedKeyProof, error) 
 		return nil, keyProofInvalid(KeyProofFailureHeader, "crit header is not supported")
 	}
 	// Embedded key material, and the references that fetch it. jwk/x5c are the
-	// profile's; jku/x5u are named by KEY-PROOF.md's "an embedded key member
-	// (jwk, jku, x5c, …) rejects" — a URL that FETCHES a key is header key trust
-	// with an extra hop, which is the thing being refused.
+	// profile's; jku/x5u are named by INTEGRATIONS.md, Presentation verification's
+	// "an embedded key member (jwk, jku, x5c, …) rejects" — a URL that FETCHES a
+	// key is header key trust with an extra hop, which is the thing being refused.
 	for _, member := range []string{"jwk", "jku", "x5c", "x5u"} {
 		if _, present := header[member]; present {
 			return nil, keyProofInvalid(KeyProofFailureHeader,
@@ -473,7 +474,7 @@ func decodeKeyProof(proof string, expectedTyp string) (*decodedKeyProof, error) 
 	// header's serialization — so one proof still has more than one envelope
 	// spelling, and a caller must not treat the envelope string as an identity.
 	// Nothing here needs it to be: what a completion spends is the NONCE, consumed
-	// atomically and once by the caller's step 6. Conformant producers already emit
+	// atomically and once by the caller's nonce check. Conformant producers already emit
 	// these bytes, so nothing that could be signed correctly is refused here.
 	payloadBytes, err := Base64urlDecode(parts[1])
 	if err != nil {
@@ -538,10 +539,10 @@ func decodeKeyProof(proof string, expectedTyp string) (*decodedKeyProof, error) 
 	}, nil
 }
 
-// verifyKeyProofSignature runs KEY-PROOF.md verification step 7: the signature,
-// against the payload's OWN publicKeyMultibase. The circularity is the point — a
-// valid envelope is possession demonstrated over bytes the signer did not choose
-// alone.
+// verifyKeyProofSignature runs PROTOCOL.md, Chain-walk verification step 7: the
+// signature, against the payload's OWN publicKeyMultibase. The circularity is
+// the point — a valid envelope is possession demonstrated over bytes the signer
+// did not choose alone.
 func verifyKeyProofSignature(decoded *decodedKeyProof) error {
 	publicKey, err := DecodeMultikey(decoded.payload.PublicKeyMultibase)
 	if err != nil {
@@ -613,7 +614,7 @@ type KeyProofExpectations struct {
 
 // VerifiedKeyProof is what a verified key proof hands back.
 type VerifiedKeyProof struct {
-	// Payload is the validated payload. THE CALLER MUST NOW RUN STEP 6 against
+	// Payload is the validated payload. THE CALLER MUST NOW RUN THE NONCE CHECK against
 	// Payload.Nonce: check that it is a nonce this verifier minted, for this
 	// ceremony, not yet consumed, and consume it ATOMICALLY (check-and-delete) so
 	// two racing completions cannot both pass.
@@ -625,18 +626,18 @@ type VerifiedKeyProof struct {
 	Now int64
 }
 
-// VerifyKeyProof verifies a key proof AT PRESENTATION TIME — KEY-PROOF.md's
-// verification algorithm steps 1–5 and 7: size cap, header gates, the closed
-// payload schema over CANONICAL bytes, the four expectation arms (audience, did,
-// roleSet, prevCID), freshness, and the signature against the payload's OWN
-// publicKeyMultibase.
+// VerifyKeyProof verifies a key proof AT PRESENTATION TIME — INTEGRATIONS.md,
+// Presentation verification except its nonce check: size cap, header gates, the
+// closed payload schema over CANONICAL bytes, the four expectation arms
+// (audience, did, roleSet, prevCID), freshness, and the signature against the
+// payload's OWN publicKeyMultibase.
 //
 // EVERY EXPECTATION IS THE DEPLOYMENT'S OWN VALUE. There is no arm here that
 // compares the envelope to itself. DID, RoleSet and PrevCID are the position the
 // completing authority is about to WRITE; if the envelope names a different one,
 // the holder consented to something else.
 //
-// STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
+// THE NONCE CHECK IS THE CALLER'S, and this function cannot stand in for it. The
 // nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
 // checked and consumed ATOMICALLY — a check-and-delete against the verifier's own
 // store, which is state this pure function does not hold. It is returned on
@@ -654,11 +655,11 @@ func VerifyKeyProof(proof string, expect KeyProofExpectations, now time.Time) (*
 	// gate reads as satisfied while gating nothing. That is a MISCONFIGURATION,
 	// not a verdict about a proof: it returns a plain error like the guards below
 	// and never wraps ErrKeyProofInvalid, so a caller branching on Reason cannot
-	// mistake a broken deployment for a bad envelope. Non-empty is the whole rule —
-	// the purpose registry is KEY-PROOF.md's, and hardcoding its rows here would
-	// make registering a new purpose a library release. SignKeyProof refuses an
-	// empty typ on the producer side for the same reason, and the TS twin's
-	// verifyKeyProof carries this guard byte-for-byte.
+	// mistake a broken deployment for a bad envelope. Non-empty is the whole rule
+	// — the purpose registry is PROTOCOL.md, The envelope's, and hardcoding its
+	// rows here would make registering a new purpose a library release.
+	// SignKeyProof refuses an empty typ on the producer side for the same reason,
+	// and the TS twin's verifyKeyProof carries this guard byte-for-byte.
 	//
 	// The same argument covers the other four expectations, and it is why none of
 	// them is optional: an omitted or empty positional expectation is an arm that

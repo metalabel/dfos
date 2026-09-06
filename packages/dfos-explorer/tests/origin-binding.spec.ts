@@ -64,8 +64,9 @@ describe('isBareHostname', () => {
     }
   });
 
-  // every comparison in ORIGIN-BINDING.md is an exact byte comparison of this
-  // string, so a value that would need normalizing to pass is simply wrong
+  // every comparison in INTEGRATIONS.md, The `DfosOrigin` service entry is an
+  // exact byte comparison of this string, so a value that would need normalizing
+  // to pass is simply wrong
   it('rejects anything that is not already in that exact form', () => {
     for (const h of [
       undefined,
@@ -232,10 +233,10 @@ describe('fetchBindingAttestation', () => {
 // -----------------------------------------------------------------------------
 
 describe('fallbackEligible', () => {
-  // ORIGIN-BINDING.md names all three members of the class: "If
-  // /.well-known/dfos-did yields a non-answer — a 404; a redirect, which is
-  // absence in everything but status code; or a 200 whose trimmed body is not
-  // exactly one DFOS DID … a verifier MUST fall back."
+  // INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did` names all three members of
+  // the class: "If /.well-known/dfos-did yields a non-answer (a 404; a redirect,
+  // which is absence in everything but status code; or a 200 whose trimmed body
+  // is not exactly one DFOS DID …), a verifier MUST fall back."
   it('fires on every member of the non-answer class', () => {
     for (const https of [
       { status: 'none', reason: 'no document (HTTP 404)' },

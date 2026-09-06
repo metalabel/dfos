@@ -589,7 +589,8 @@ export const Identity = (props: { did: string }) => {
     ? keyDirectoryOf(props.did, roleKeys(verified.value.declared ?? verified.value))
     : keyDirectoryOf('', []);
 
-  // the chain half of an origin binding (ORIGIN-BINDING.md). The claim is only
+  // the chain half of an origin binding (INTEGRATIONS.md, Origin binding). The
+  // claim is only
   // ever acted on once the chain has VERIFIED here — a relay-asserted services
   // set is not a signed claim, and the domain half is checked against a signed
   // claim or not at all.
@@ -1645,8 +1646,9 @@ export const bytesFailureKind = (
  *   - a relay fronted by a CDN, a proxy, or a platform-managed CORS config
  *     (function-URL settings, an API gateway) has an expose list that the relay
  *     process does not control, and the header has to be added THERE too;
- *   - a third-party relay need not send the header at all — WEB-RELAY.md does
- *     not name it, so nothing is out of spec if it does not.
+ *   - a third-party relay need not send the header at all — no route in
+ *     RELAY.md, The read contract names it, so nothing is out of spec if it
+ *     does not.
  *
  * Against any of those, `servedDocCid` is `undefined` and a genuine mismatch
  * reads as `skew`. That is the honest direction rather than a lost check: the
@@ -1779,7 +1781,7 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
 // The domain half is checked JIT, in this tab, through `/api/binding` (a browser
 // cannot query DNS, and origins do not reliably send CORS headers on well-knowns).
 //
-// Display discipline here is NORMATIVE (ORIGIN-BINDING.md, "Display Discipline"):
+// Display discipline here is NORMATIVE (INTEGRATIONS.md, Display discipline):
 // a binding proves control of a DOMAIN at verification time — never personhood,
 // endorsement, or notability — so the panel leads with the domain string itself
 // and never collapses the verdict into a bare checkmark divorced from it.
@@ -2241,7 +2243,8 @@ const ServiceTarget = (props: { entry: ServiceEntry }) => {
   if (props.entry.type === 'DfosOrigin') {
     const domain = rec['domain'];
     // the entry's `domain` is an exact byte comparison everywhere in
-    // ORIGIN-BINDING.md, so anything that is not already a bare lowercase
+    // INTEGRATIONS.md, The `DfosOrigin` service entry, so anything that is not
+    // already a bare lowercase
     // hostname claims nothing — and is rendered as the dead letter it is
     if (isBareHostname(domain)) {
       return (

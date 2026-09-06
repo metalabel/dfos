@@ -263,10 +263,10 @@ export const unseal = (purpose: string, sealed: string | undefined): string | nu
   this exact method, host, path, and body. So a captured credential authorizes
   nothing, and this key is the only artifact here that must never leak.
 
-  It lives on the server, never in the browser. API-AUTH.md's Security
-  Considerations say why: a browser cannot hold a key non-extractably, so the
-  supported shape is a backend-for-frontend — the browser holds an ordinary
-  session with this backend, and this backend signs. `api/profile.ts` is that
+  It lives on the server, never in the browser. INTEGRATIONS.md, API security
+  notes says why: a browser cannot hold a key non-extractably, so the supported
+  shape is a backend-for-frontend — the browser holds an ordinary session with
+  this backend, and this backend signs. `api/profile.ts` is that
   seam, and it takes no request coordinates from the browser at all.
 
   Two variables, because the proof needs both halves of a DID URL: which

@@ -5,8 +5,8 @@ package apispec
 //
 // The origin-form target is computed ONCE and used for both: the proof's `path`
 // member and the request line come from the same bytes, so no normalization
-// anywhere can fork the signed request from the sent one (API-AUTH.md: "`path`
-// is the wire string, not a normalization").
+// anywhere can fork the signed request from the sent one (INTEGRATIONS.md,
+// Payload: "`path` is the wire string, not a normalization").
 
 import (
 	"fmt"
@@ -44,7 +44,7 @@ type Request struct {
 //
 // TWIN: client.normalizeAuthority is the same rule for the relay client. They
 // are separate because neither package imports the other, and both implement one
-// paragraph of API-AUTH.md — change them together.
+// paragraph of INTEGRATIONS.md, Payload — change them together.
 func NormalizeAuthority(scheme, hostport string) string {
 	host := strings.ToLower(hostport)
 	switch strings.ToLower(scheme) {

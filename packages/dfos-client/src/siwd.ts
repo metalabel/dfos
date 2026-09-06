@@ -8,8 +8,8 @@
   bytes; a verifier re-derives them. Without it the challenge→JWS encoding lives
   nowhere and the two sides drift silently. See specs/INTEGRATIONS.md.
 
-  Verification follows SIWD.md §Third-Party Verification: the signing key MUST be
-  a CURRENT `authKeys` entry of a non-deleted identity — rotated-out keys and
+  Verification follows INTEGRATIONS.md, Verifying a sign-in: the signing key MUST
+  be a CURRENT `authKeys` entry of a non-deleted identity — rotated-out keys and
   deleted identities MUST NOT verify.
 
 */
@@ -47,7 +47,8 @@ import type { Client, VerifyResult } from './types';
 // -----------------------------------------------------------------------------
 
 /**
- * The normative JWS header `typ` for a signed SIWD challenge (SIWD.md). Signers
+ * The normative JWS header `typ` for a signed SIWD challenge (INTEGRATIONS.md,
+ * Challenge schema). Signers
  * MUST set it; `verifySiwd` rejects anything else — it is also what lets typ-
  * routing dispatchers tell a SIWD proof apart from credentials and chain ops.
  */
@@ -56,7 +57,7 @@ export const SIWD_JWS_TYP = 'did:dfos:siwd';
 /**
  * The normative JWS header `typ` for a client ASK PROOF — the artifact a
  * loopback client signs to prove key control at ask-time, registered alongside
- * `SIWD_JWS_TYP` by SIWD.md §The ask proof.
+ * `SIWD_JWS_TYP` by INTEGRATIONS.md, The ask proof.
  *
  * The two artifacts cover the SAME canonical challenge bytes, so the distinct
  * `typ` is the only thing keeping them from being fungible: without it, an ask
@@ -427,8 +428,8 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
 /**
  * Sign the ask proof for a loopback authorize request: a JWS over the exact
  * canonical bytes of the request's own challenge, under `SIWD_ASK_JWS_TYP`,
- * signed by a CURRENT auth key of the client identity's chain (SIWD.md §The ask
- * proof). It is what makes a `client_did` on a loopback request mean something
+ * signed by a CURRENT auth key of the client identity's chain (INTEGRATIONS.md,
+ * The ask proof). It is what makes a `client_did` on a loopback request mean something
  * — the host verifies it against the chain's current state before rendering any
  * consent, so key control is established at ask-time, not just at spend-time.
  *
@@ -445,11 +446,9 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
  * because a proof that names a key it was not signed with is a lie the wire
  * format has no reason to carry.
  *
- * The `client_proof` param that carries this is the REFERENCE wire surface, not
- * a normative name: SIWD.md defers how the ask proof travels to the hosted
- * endpoint's reference implementation, exactly as it does the endpoint itself.
- * What is normative is that it arrives WITH the ask and verifies BEFORE any
- * consent is rendered.
+ * The `client_proof` param that carries this is the parameter the spec names
+ * (INTEGRATIONS.md, The ask proof): the proof arrives WITH the ask and verifies
+ * BEFORE any consent is rendered.
  */
 export const signSiwdAskProof = async (input: {
   challenge: SiwdChallenge;
@@ -474,7 +473,8 @@ export const signSiwdAskProof = async (input: {
   return `${signingInput}.${base64urlEncode(signature)}`;
 };
 
-/** SIWD.md carriage cap — an identity that has outgrown it has outgrown carriage. */
+/** The carriage cap of INTEGRATIONS.md, `identity_chain`: chain carriage — an
+ *  identity that has outgrown it has outgrown carriage. */
 export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
 
 /**
@@ -485,7 +485,7 @@ export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
  * THIS IS THE LOOPBACK CARRIAGE FORM, and only that. An application that holds a
  * domain encodes nothing: it publishes the very same log as the raw JSON array
  * of the `identity_chain` member of its `/.well-known/dfos-app.json` app
- * description (SIWD.md §`identity_chain` — chain carriage), where the origin
+ * description (INTEGRATIONS.md, `identity_chain`: chain carriage), where the origin
  * serving the file is what associates the domain with the DID. Same chain, same
  * carriage rules — a URL is simply the carrier available to software that holds
  * no origin to publish from.
@@ -493,7 +493,7 @@ export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
  * The DID derived from the genesis operation MUST equal the `client_did` the
  * request names; a request where the two disagree makes no claim at all and the
  * host refuses it WHOLE rather than ingesting the chain and ignoring the
- * mismatch (SIWD.md §Chain residence). Carriage is only needed when the DID is
+ * mismatch (INTEGRATIONS.md, Chain residence). Carriage is only needed when the DID is
  * not already resident on the verifying host.
  *
  * The 100-operation cap is spec-normative and enforced here. Hosts MAY
@@ -502,10 +502,10 @@ export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
  * protocol, so it is not a client-side throw; the practical reading is that a
  * chain anywhere near the op cap belongs on relays, not in a URL.
  *
- * As with the ask proof, the `client_chain` param is the REFERENCE wire surface
- * rather than a normative name — SIWD.md leaves the carriage encoding to the
- * hosted endpoint's reference implementation and pins only that the chain
- * arrives with the ask and verifies before any consent is rendered.
+ * As with the ask proof, the `client_chain` param is the parameter the spec
+ * names (INTEGRATIONS.md, Chain residence): base64url of the JSON array of the
+ * verbatim operation JWS strings, genesis first, arriving with the ask and
+ * verifying before any consent is rendered.
  */
 export const encodeSiwdClientChain = (log: string[]): string => {
   if (!Array.isArray(log)) {
@@ -679,14 +679,16 @@ export interface SiwdLoopbackLoginRequestInput {
  * Build a loopback authorize URL under the LOOPBACK CREDENTIAL TIER — the
  * outbound half of what `createSiwdLoginRequest` alone cannot produce. It is
  * that function plus the two things that back the `client_did` it now carries:
- * an ask proof (SIWD.md §The ask proof) and, unless the DID is already resident
- * on the host, the client's identity chain (SIWD.md §Chain residence).
+ * an ask proof (INTEGRATIONS.md, The ask proof) and, unless the DID is already
+ * resident on the host, the client's identity chain (INTEGRATIONS.md, Chain
+ * residence).
  *
- * `domain` is DERIVED, not accepted. SIWD.md pins a loopback challenge's domain
- * to the BARE loopback host — the port is not part of the binding, because a
- * local application cannot reserve one — and the host compares that value
- * literally against the redirect's host. Taking a `domain` input here would be
- * an invitation to a mismatch that fails only after the redirect.
+ * `domain` is DERIVED, not accepted. INTEGRATIONS.md, Loopback redirect targets
+ * pins a loopback challenge's domain to the BARE loopback host — the port is
+ * not part of the binding, because a local application cannot reserve one — and
+ * the host compares that value literally against the redirect's host. Taking a
+ * `domain` input here would be an invitation to a mismatch that fails only
+ * after the redirect.
  *
  * WHAT THIS PROVES IS KEY CONTROL, NOT PROVENANCE. The chain says which keys
  * the asking party holds; nothing about a loopback client's origin or authorship
@@ -706,10 +708,11 @@ export const createSiwdLoopbackLoginRequest = async (
 ): Promise<SiwdLoginRequest> => {
   const redirect = parseUrlOrThrow(input.redirectUri, 'redirectUri');
   const domain = bareHostname(redirect);
-  // SIWD.md defines the loopback interface as `http://` on these hosts. The
-  // scheme is pinned HERE rather than in the general classifier because this
-  // entrypoint is the one that asserts "I am local software": an `https://` or
-  // `ftp://` target on a loopback name is a misconfiguration, not a tier.
+  // INTEGRATIONS.md, Loopback redirect targets defines the loopback interface
+  // as `http://` on these hosts. The scheme is pinned HERE rather than in the
+  // general classifier because this entrypoint is the one that asserts "I am
+  // local software": an `https://` or `ftp://` target on a loopback name is a
+  // misconfiguration, not a tier.
   if (!SIWD_LOOPBACK_HOSTS.has(domain) || redirect.protocol !== 'http:') {
     throw new Error(
       'invalid SIWD login request: redirectUri must be an http:// loopback target ' +
@@ -836,7 +839,7 @@ const callbackParts = (
  * THAT SAME PROPERTY IS A PROBLEM FOR A CLI, and this tier's primary consumer is
  * a CLI. A browser does not send the fragment to the loopback listener either,
  * so the request line a local HTTP server sees carries the query and nothing
- * else. The standard resolution (SIWD.md §4's loopback note) is for the listener
+ * else. The standard resolution (INTEGRATIONS.md, 4. Callback) is for the listener
  * to answer with a small page whose script reads `location.href` and posts the
  * whole URL back to the local server; feed THAT to this function. A browser RP
  * passes `location.href` directly and needs no relay.
@@ -1062,7 +1065,8 @@ export const verifySiwd = async (
     }
     assertJwsProfile(rawHeader as Record<string, unknown>, (message) => new Error(message));
 
-    // typ gate — normative per SIWD.md; also what client.verify() routes on
+    // typ gate — normative per INTEGRATIONS.md, Challenge schema; also what
+    // client.verify() routes on
     if (decoded.header.typ !== SIWD_JWS_TYP) {
       return fail(`invalid typ: expected ${SIWD_JWS_TYP}, got ${decoded.header.typ}`);
     }

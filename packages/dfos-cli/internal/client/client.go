@@ -157,7 +157,7 @@ func (c *Client) label() string {
 // TWIN: apispec.NormalizeAuthority is the same rule for the generic API client,
 // which reaches arbitrary `api:<host>` surfaces this relay client never touches.
 // They are separate because neither package imports the other, and both
-// implement one paragraph of API-AUTH.md — change them together.
+// implement one paragraph of INTEGRATIONS.md, Payload — change them together.
 func normalizeAuthority(scheme, hostport string) string {
 	host := strings.ToLower(hostport)
 	switch strings.ToLower(scheme) {

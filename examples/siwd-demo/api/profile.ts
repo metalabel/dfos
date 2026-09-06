@@ -18,7 +18,7 @@
   the other's job.
 
   THE CONFUSED-DEPUTY RULE, which is the reason this endpoint takes no
-  parameters at all. API-AUTH.md's Security Considerations: a backend that signs
+  parameters at all. INTEGRATIONS.md, API security notes: a backend that signs
   whatever `{method, path, body}` a browser hands it is an oracle — an XSS on the
   page, or simply a hostile client, would obtain proofs for arbitrary requests
   against every credential this backend holds. So the coordinates are not an
@@ -130,7 +130,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       const { proof } = await signApiRequest({
         method: request.method,
         // `url.host` carries the port when there is one, which is exactly the
-        // authority form API-AUTH.md's `host` member wants.
+        // authority form INTEGRATIONS.md, Payload's `host` member wants.
         host: url.host,
         // Path plus query, byte for byte — no normalization, because the
         // verifier compares against the request target it actually received.

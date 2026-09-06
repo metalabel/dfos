@@ -37,13 +37,14 @@ import (
 //
 // NOTE ON SCOPE: this file implements the byte contract and the PROOF ENVELOPE
 // verification only — size caps, header gates, payload schema, freshness,
-// request binding, and signature (API-AUTH.md steps 1–7). Full credential-chain
-// verification (steps 8–11: chain walk, revocation, the no-public-audience scan,
-// subject selection, attenuation coverage) is TS-side for now. This mirrors the
-// boundary siwd.go already draws: the Go twin carries the canonical bytes and
-// the envelope, and the credential machinery lives in the TypeScript reference.
-// For the IDENTITY proof that boundary is not a boundary at all: steps 1–7 are
-// the entire algorithm, so VerifyIdentityProof here is complete.
+// request binding, and signature (INTEGRATIONS.md, Verification algorithm steps
+// 1–7). Full credential-chain verification (steps 8–11: chain walk, revocation,
+// the no-public-audience scan, subject selection, attenuation coverage) is
+// TS-side for now. This mirrors the boundary siwd.go already draws: the Go twin
+// carries the canonical bytes and the envelope, and the credential machinery
+// lives in the TypeScript reference. For the IDENTITY proof that boundary is
+// not a boundary at all: steps 1–7 are the entire algorithm, so
+// VerifyIdentityProof here is complete.
 
 const RequestProofJWSTyp = "did:dfos:request-proof"
 
@@ -186,10 +187,10 @@ func (p IdentityProofPayload) internal() proofPayload {
 // ProofExtraMembers carries ADDITIVE members, appended AFTER the canonical
 // order.
 //
-// API-AUTH.md's growth rule is additive members on this envelope, never a new
-// envelope: "additional members register additively, appended to the canonical
-// order". jti — the per-request uniqueness member a write-gating deployment
-// requires — is the named one.
+// INTEGRATIONS.md, One envelope, optional credential's growth rule is additive
+// members on this envelope, never a new envelope: "additional members register
+// additively, appended to the canonical order". jti — the per-request
+// uniqueness member a write-gating deployment requires — is the named one.
 //
 // TWO RULES MAKE THIS A BYTE-TWIN of the TS emitter. (1) Extra members are
 // emitted AFTER every canonical member, so a verifier that ignores them still
@@ -263,9 +264,9 @@ func hasCtlOrSpace(s string) bool {
 	return false
 }
 
-// validateProofPayload applies API-AUTH.md's step-3 schema — the SAME member
-// rules for both artifacts, with credentialCID required iff the shape is
-// credentialed.
+// validateProofPayload applies INTEGRATIONS.md, Verification algorithm's
+// payload schema — the SAME member rules for both artifacts, with credentialCID
+// required iff the shape is credentialed.
 func validateProofPayload(payload proofPayload, shape proofShape) error {
 	fields := map[string]string{
 		"method": payload.Method, "host": payload.Host, "path": payload.Path,
@@ -397,7 +398,7 @@ type RequestProofOptions struct {
 	// ExtraMembers are ADDITIVE members, appended after the canonical order in
 	// lexicographic name order. {"jti": ...} is the registered one, and a
 	// WRITE-SHAPED surface — relay ingestion, blob upload — REQUIRES it
-	// (WEB-RELAY.md, Authentication).
+	// (INTEGRATIONS.md, API security notes).
 	ExtraMembers ProofExtraMembers
 }
 
@@ -546,9 +547,10 @@ func (e RequestProofExpectations) bounds() (window, skew int64, err error) {
 	return window, skew, nil
 }
 
-// verifyProofEnvelope is THE PROOF PHASE — API-AUTH.md steps 1–7, shared
-// verbatim by both artifacts: size, header gates with THIS shape's typ, payload
-// schema, freshness, request binding, current-state key resolution, signature.
+// verifyProofEnvelope is THE PROOF PHASE — INTEGRATIONS.md, Verification
+// algorithm steps 1–7, shared verbatim by both artifacts: size, header gates
+// with THIS shape's typ, payload schema, freshness, request binding,
+// current-state key resolution, signature.
 //
 // One implementation, so a check tightened for one artifact is tightened for
 // both — and so the typ gate is provably the only place they diverge.
@@ -781,10 +783,10 @@ type VerifiedIdentityProof struct {
 	Kid string
 }
 
-// VerifyRequestProof verifies the request proof's ENVELOPE in API-AUTH.md's
-// steps 1–7 order: size, header gates, payload schema, freshness, request
-// binding, current-state key resolution, signature. It deliberately stops there
-// — see the scope NOTE at the top of this file.
+// VerifyRequestProof verifies the request proof's ENVELOPE in INTEGRATIONS.md,
+// Verification algorithm's steps 1–7 order: size, header gates, payload schema,
+// freshness, request binding, current-state key resolution, signature. It
+// deliberately stops there — see the scope NOTE at the top of this file.
 //
 // A proof carrying any other typ — an identity proof included — is rejected at
 // the header gate.
@@ -805,11 +807,12 @@ func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
 	}, nil
 }
 
-// VerifyIdentityProof verifies an identity proof — API-AUTH.md's PROOF PHASE
-// with the identity typ, and nothing more. Steps 8–11 do not exist for this
-// artifact: there is no credential to walk, so there is no chain, no revocation
-// lookup, and no attenuation coverage. Unlike the request proof, this is not a
-// partial implementation of a longer algorithm — it is the whole one.
+// VerifyIdentityProof verifies an identity proof — INTEGRATIONS.md, The
+// identity proof's proof phase with the identity typ, and nothing more. The
+// credential-walk checks do not exist for this artifact: there is no credential
+// to walk, so there is no chain, no revocation lookup, and no attenuation
+// coverage. Unlike the request proof, this is not a partial implementation of a
+// longer algorithm — it is the whole one.
 //
 // THE SIGNER IS THE PRINCIPAL. The kid's DID is who the request is from; what
 // that DID may do is the resource's local policy (quotas, reputation,

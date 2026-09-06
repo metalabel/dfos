@@ -116,8 +116,9 @@ const projectService = (
       serviceEndpoint: (entry as Record<string, unknown>)['endpoint'],
     };
   }
-  // an authorize origin (SIWD.md): an open-namespace type whose `endpoint` member
-  // is the exact DfosRelay mirror, so it projects exactly as DfosRelay does
+  // an authorize origin (INTEGRATIONS.md, Finding the authorize endpoint): an
+  // open-namespace type whose `endpoint` member is the exact DfosRelay mirror,
+  // so it projects exactly as DfosRelay does
   if (entry.type === 'DfosAuthorizationServer') {
     return {
       id,

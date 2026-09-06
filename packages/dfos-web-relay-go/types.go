@@ -26,7 +26,7 @@ var Version = "dev"
 // PrivateKey and KeyID are produced by bootstrap and RETAINED on the Relay, for
 // exactly one purpose: signing an IDENTITY PROOF of the relay's own DID so
 // gossip-out announces itself as a named peer rather than anonymously
-// (WEB-RELAY.md, Relay Identity). A relay constructed from a DID and a profile
+// (RELAY.md, Relay identity and profile). A relay constructed from a DID and a profile
 // alone still runs; it simply gossips anonymously.
 type RelayIdentity struct {
 	DID                string
@@ -35,8 +35,7 @@ type RelayIdentity struct {
 	KeyID              string
 }
 
-// IngestionMode is the advertised ingestion admission mode (WEB-RELAY.md,
-// Ingestion Admission).
+// IngestionMode is the advertised ingestion admission mode (RELAY.md, Admission).
 //
 //   - "open"           anonymous submissions admitted, subject to policy
 //   - "proof-required" anonymous refused at the policy step (403)
@@ -113,7 +112,7 @@ type RelayOptions struct {
 	// host against a request header would have no host binding at all.
 	//
 	// MULTI-AUTHORITY DEPLOYMENTS. A relay serving several hostnames "selects the
-	// expected one from its own configuration" (WEB-RELAY.md, Authentication).
+	// expected one from its own configuration" (RELAY.md, Authentication).
 	// This field is that selection, made at construction: run one relay instance
 	// per authority, or have the front door route each authority to the instance
 	// configured for it. There is deliberately no accept-any-of-these list —
@@ -146,7 +145,7 @@ type RelayOptions struct {
 	// the deployment's, not one worker's.
 	JtiCache JtiCache
 	// GossipIdentityProof controls whether gossip-out attaches an identity proof
-	// signed by the relay's OWN DID (WEB-RELAY.md, Relay Identity: "a gossiping
+	// signed by the relay's OWN DID (RELAY.md, Relay identity and profile: "a gossiping
 	// peer authenticates like any client: anonymously, or with an identity proof
 	// signed by its own DID").
 	//

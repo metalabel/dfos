@@ -97,10 +97,11 @@ describe('parseDidBody', () => {
   });
 });
 
-// The status half of the same judgement, and the line ORIGIN-BINDING.md draws
-// through it: a redirect and a 404 are both NON-ANSWERS (the fallback fires on
-// either), while a 5xx is a QUERY FAILURE — the spec's own separate class — and
-// licenses nothing, because a path we never saw never declined to answer.
+// The status half of the same judgement, and the line INTEGRATIONS.md, HTTPS:
+// `/.well-known/dfos-did` draws through it: a redirect and a 404 are both
+// NON-ANSWERS (the fallback fires on either), while a 5xx is a QUERY FAILURE —
+// the spec's own separate class — and licenses nothing, because a path we never
+// saw never declined to answer.
 describe('classifyDidStatus', () => {
   it('reads every redirect as a non-answer carrying its status', () => {
     for (const status of [301, 302, 303, 307, 308]) {

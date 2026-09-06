@@ -3,8 +3,8 @@
   WELL-KNOWN — app description documents, verified honestly
 
   An origin's `/.well-known/dfos-app.json` is the one place a DOMAIN vouches for
-  a DFOS identity: serving the file IS the registration (SIWD.md, "The App
-  Description Document"). This module is the pure logic behind the domain view —
+  a DFOS identity: serving the file IS the registration (INTEGRATIONS.md, The app
+  description document). This module is the pure logic behind the domain view —
   fetch classification, structural validation, chain verification, and the
   ordered-log comparison against what the relays hold. The view owns the async
   orchestration and the rendering; nothing here touches the DOM.
@@ -24,8 +24,9 @@
 
   Beat 3 is where the domain↔DID binding becomes math instead of assertion, and
   it is strictly whole-document: a `client_did` the chain does not derive
-  invalidates the document outright rather than merely the member (SIWD.md — "a
-  document where they disagree makes no claim at all").
+  invalidates the document outright rather than merely the member
+  (INTEGRATIONS.md, `identity_chain`: chain carriage — "reject a document where
+  they disagree, whole-document").
 
 */
 
@@ -188,7 +189,8 @@ export const fetchAppDocument = async (host: string): Promise<FetchOutcome> => {
 // structural validation — against the CANONICAL schema
 // -----------------------------------------------------------------------------
 
-/** The document members, per SIWD.md's closed registry. */
+/** The document members, per the closed registry of INTEGRATIONS.md, The app
+ *  description document. */
 export interface AppDescription {
   name?: string;
   redirect_uris: string[];
@@ -255,8 +257,9 @@ export type ChainVerdict =
  * genesis operation it is handed, so an internally-valid chain for a DIFFERENT
  * identity would otherwise sail through — the same trap dfos-client closes when
  * it resolves a DID against a relay's answer (resolvers.ts, "BIND to the
- * requested id"). A mismatch rejects the WHOLE document, per SIWD.md: the two
- * members make one claim, and a document where they disagree makes none.
+ * requested id"). A mismatch rejects the WHOLE document, per INTEGRATIONS.md,
+ * `identity_chain`: chain carriage: the two members make one claim, and a
+ * document where they disagree makes none.
  */
 export const verifyCarriedChain = async (app: AppDescription): Promise<ChainVerdict> => {
   const log = app.identity_chain ?? [];

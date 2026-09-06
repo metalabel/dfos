@@ -36,7 +36,7 @@ import type { RelayReadStore } from './types';
 
 /**
  * Acceptance window `W` — how old an identity proof may be, in seconds.
- * "The freshness window is the relay's to own" (WEB-RELAY.md, Authentication).
+ * "The freshness window is the relay's to own" (INTEGRATIONS.md, The request proof).
  */
 export const DEFAULT_PROOF_WINDOW_SECONDS = 60;
 
@@ -63,7 +63,7 @@ const JTI_ENCODER = new TextEncoder();
  * Resolve a presenter to its CURRENT identity state, from THIS relay's local
  * store.
  *
- * CURRENT-STATE ONLY, deliberately (WEB-RELAY.md, Key Resolution): after a key
+ * CURRENT-STATE ONLY, deliberately (INTEGRATIONS.md, The request proof): after a key
  * rotation the old key immediately stops authenticating, which is how a
  * presenter whose key is compromised revokes that key's ability to speak in its
  * name. A deleted identity has no live-authentication standing at all — the
@@ -86,8 +86,8 @@ export const createCurrentStateProofResolver =
     if (!identity) return null;
     return {
       isDeleted: identity.state.isDeleted,
-      // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-      // current-state") — auth, assert, or controller. CURRENT means EFFECTIVE:
+      // Any CURRENT key role may sign a proof (INTEGRATIONS.md, The request
+      // proof) — auth, assert, or controller. CURRENT means EFFECTIVE:
       // these arrays carry only memberships a possession proof admitted, so a
       // key the chain declared and nothing proved cannot authenticate. Neither
       // `provedKeys` (has-ever — it would resurrect a rotated-out key) nor
@@ -105,8 +105,8 @@ export const createCurrentStateProofResolver =
 // -----------------------------------------------------------------------------
 
 /**
- * The `jti` replay cache — REQUIRED on every write-shaped proof (WEB-RELAY.md,
- * Authentication).
+ * The `jti` replay cache — REQUIRED on every write-shaped proof (RELAY.md,
+ * Admission).
  *
  * WHY A WRITE-SHAPED SURFACE CANNOT BORROW ITS REPLAY POSTURE FROM DOWNSTREAM
  * IDEMPOTENCY: the admission ladder runs POLICY before full verification, so the
@@ -188,10 +188,11 @@ export interface AuthenticateIdentityProofOptions {
   /** The received body octets. */
   body: Uint8Array;
   /**
-   * THE RELAY'S OWN CONFIGURED AUTHORITY — `undefined` when the operator did not
-   * configure one, which makes every authenticated route answer 503. The host
-   * binding is NEVER read from a request header (WEB-RELAY.md, Authentication):
-   * a relay that fell back to `Host` would have no host binding at all.
+   * THE RELAY'S OWN CONFIGURED AUTHORITY — `undefined` when the operator did
+   * not configure one, which makes every authenticated route answer 503. The
+   * host binding is NEVER read from a request header (INTEGRATIONS.md,
+   * Verification algorithm): a relay that fell back to `Host` would have no
+   * host binding at all.
    */
   authority: string | undefined;
   store: RelayReadStore;

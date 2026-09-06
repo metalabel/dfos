@@ -192,7 +192,7 @@ func TestChallengeExpectationSpendsOnAFailedComparison(t *testing.T) {
 	}
 }
 
-// TestChallengeIsConsumedLast pins the ORDERING SIWD.md §Replay prevention
+// TestChallengeIsConsumedLast pins the ORDERING INTEGRATIONS.md, Replay prevention
 // requires: consumption is the final verification step, so an artifact that
 // fails an earlier gate must never reach the expectation at all. It is asserted
 // functionally — run the command's own sequence and check the expectation is
@@ -374,9 +374,9 @@ func TestAuthorizeEndpointFallsBack(t *testing.T) {
 			[]protocol.ServiceEntry{authServerEntry("auth", "ftp://app.example.com")},
 			"names nothing",
 		},
-		// SIWD.md calls the member the canonical authorize ORIGIN url. These are
-		// not origins, and appending a path to one would send the user somewhere
-		// the identity never published.
+		// INTEGRATIONS.md, Finding the authorize endpoint calls the member the
+		// canonical authorize ORIGIN url. These are not origins, and appending a path
+		// to one would send the user somewhere the identity never published.
 		"endpoint carrying a query": {
 			[]protocol.ServiceEntry{authServerEntry("auth", "https://app.example.com?tenant=a")},
 			"names nothing",

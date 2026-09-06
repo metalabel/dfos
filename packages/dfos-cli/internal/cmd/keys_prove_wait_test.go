@@ -311,10 +311,11 @@ func TestKeysAdd_AnAdoptionNamingAnotherIdentityFilesNothing(t *testing.T) {
 
 // --- the stale head ---
 
-// The chain moved under a live ceremony. The recovery is KEY-PROOF.md's: the
-// SAME code re-resolves against the current head, the SAME key signs again, and
-// the replacement is presented — which a presented ceremony accepts only from
-// the key already on it. It is not a retry: nothing was refused.
+// The chain moved under a live ceremony. The recovery is INTEGRATIONS.md,
+// Carriage and resolution's: the SAME code re-resolves against the current
+// head, the SAME key signs again, and the replacement is presented — which a
+// presented ceremony accepts only from the key already on it. It is not a
+// retry: nothing was refused.
 func TestKeysAdd_AStaleHeadIsReSignedAgainstTheCurrentHead(t *testing.T) {
 	stub := waitingCeremony(t, adoptedBy(stubDID))
 	stub.freshPrevCID = "bafyreifreshfreshfreshfreshfreshfreshfreshfreshfreshfreshf"

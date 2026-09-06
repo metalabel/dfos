@@ -313,8 +313,9 @@ func TestVerdictExitCodes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// redirect policy — ORIGIN-BINDING.md: verifiers "MUST NOT follow redirects",
-// and "a redirect is a non-answer, never a contradiction"
+// redirect policy — INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did`: verifiers
+// "MUST NOT follow redirects", and "a redirect is a non-answer, never a
+// contradiction"
 // ---------------------------------------------------------------------------
 
 // The one rule no fold can check: the client itself must not follow. A same-host

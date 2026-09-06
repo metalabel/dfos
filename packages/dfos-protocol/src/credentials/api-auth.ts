@@ -42,15 +42,16 @@ import {
 // -----------------------------------------------------------------------------
 
 /**
- * The normative JWS header `typ` for a request proof (API-AUTH.md). Signers MUST
- * set it; the request-proof verifier rejects anything else — it is also what lets
- * typ-routing dispatchers tell a proof apart from credentials and chain ops.
+ * The normative JWS header `typ` for a request proof (INTEGRATIONS.md, The
+ * request proof). Signers MUST set it; the request-proof verifier rejects
+ * anything else — it is also what lets typ-routing dispatchers tell a proof
+ * apart from credentials and chain ops.
  */
 export const REQUEST_PROOF_JWS_TYP = 'did:dfos:request-proof';
 
 /**
- * The normative JWS header `typ` for an identity proof (API-AUTH.md) — the
- * request proof's credential-less sibling.
+ * The normative JWS header `typ` for an identity proof (INTEGRATIONS.md, The
+ * identity proof) — the request proof's credential-less sibling.
  *
  * THE TYP GATE IS ABSOLUTE, IN BOTH DIRECTIONS. "Possession of a grant's
  * audience key" and "possession of a bare identity's key" are different claims,
@@ -135,10 +136,10 @@ export interface IdentityProofPayload {
 /**
  * ADDITIVE MEMBERS, appended AFTER the canonical order.
  *
- * API-AUTH.md's growth rule is additive members on this envelope, never a new
- * envelope: "additional members register additively, appended to the canonical
- * order". `jti` — the per-request uniqueness member a write-gating deployment
- * requires — is the named one.
+ * INTEGRATIONS.md, One envelope, optional credential's growth rule is additive
+ * members on this envelope, never a new envelope: "additional members register
+ * additively, appended to the canonical order". `jti` — the per-request
+ * uniqueness member a write-gating deployment requires — is the named one.
  *
  * TWO RULES MAKE THIS A BYTE-TWIN. (1) Extra members are emitted AFTER every
  * canonical member, so a verifier that ignores them still reconstructs the same
@@ -216,14 +217,14 @@ const assertNoLoneSurrogate = (value: string, field: string, label: string): voi
 };
 
 /**
- * Validate a payload against API-AUTH.md's step-3 schema — the SAME member rules
- * for both artifacts, with `credentialCID` required iff the shape is
- * credentialed. Unknown members are IGNORED (the protocol's MUST-ignore-unknown
- * rule) — the canonical rebuild below drops them rather than refusing them, so a
- * future additive member never makes today's verifier reject a well-formed
- * proof. That is also why a stray `credentialCID` on an identity proof is
- * ignored rather than refused: the `typ` gate, not member sniffing, is what tells
- * the two artifacts apart.
+ * Validate a payload against INTEGRATIONS.md, Verification algorithm's payload
+ * schema — the SAME member rules for both artifacts, with `credentialCID`
+ * required iff the shape is credentialed. Unknown members are IGNORED (the
+ * protocol's MUST-ignore-unknown rule) — the canonical rebuild below drops them
+ * rather than refusing them, so a future additive member never makes today's
+ * verifier reject a well-formed proof. That is also why a stray `credentialCID`
+ * on an identity proof is ignored rather than refused: the `typ` gate, not
+ * member sniffing, is what tells the two artifacts apart.
  */
 const validateProofPayload = (value: unknown, shape: ProofShape): ParsedProofPayload => {
   const label = shape.label;
@@ -477,7 +478,7 @@ export interface SignApiRequestInput {
   /**
    * ADDITIVE members, appended after the canonical order in lexicographic name
    * order. `{ jti }` is the registered one — required by a deployment that gates
-   * WRITES with this envelope (API-AUTH.md, Security Considerations).
+   * WRITES with this envelope (INTEGRATIONS.md, API security notes).
    */
   extraMembers?: ProofExtraMembers;
 }
@@ -539,7 +540,7 @@ export interface SignApiIdentityRequestInput {
   /**
    * ADDITIVE members, appended after the canonical order in lexicographic name
    * order. `{ jti }` is the registered one, and a WRITE-SHAPED surface — relay
-   * ingestion, blob upload — REQUIRES it (WEB-RELAY.md, Authentication).
+   * ingestion, blob upload — REQUIRES it (INTEGRATIONS.md, API security notes).
    */
   extraMembers?: ProofExtraMembers;
 }
@@ -599,8 +600,8 @@ export const buildApiAuthHeaders = (input: {
  * On an `api:<host>` surface an accompanying `X-Credential` is MALFORMED: the
  * two headers would assert two different claims at once. A relay content-plane
  * read is NOT that case — there the identity proof is the AuthN half and a DFOS
- * credential presentation is a separate authorization artifact (WEB-RELAY.md,
- * Authentication) — so that refusal belongs to the middleware of the surface
+ * credential presentation is a separate authorization artifact (RELAY.md,
+ * Access) — so that refusal belongs to the middleware of the surface
  * being served, never to this builder.
  */
 export const buildApiIdentityHeaders = (input: { proof: string }): { Authorization: string } => ({
@@ -690,7 +691,7 @@ export type ResolveProofPresenter = (did: string) => Promise<ProofPresenterState
 
 /**
  * What the PROOF PHASE reads — the subset of a verifier's inputs that
- * API-AUTH.md steps 1–7 touch.
+ * INTEGRATIONS.md, Verification algorithm steps 1–7 touch.
  */
 export interface ProofEnvelopeInput {
   /** The proof JWS — the `Authorization: DFOS <token>` token, scheme stripped. */
@@ -720,8 +721,8 @@ export interface ProofEnvelopeInput {
 }
 
 /**
- * API-AUTH.md step 4's CONFIG half, hoisted so a caller can run it BEFORE any
- * request-dependent gate.
+ * INTEGRATIONS.md, Verification algorithm step 4's freshness configuration,
+ * hoisted so a caller can run it BEFORE any request-dependent gate.
  *
  * ORDER IS LOAD-BEARING. A deployment whose freshness span is out of bounds must
  * never verify anything, and its misconfiguration must never be REPORTED as a
@@ -780,10 +781,11 @@ export interface VerifiedProofEnvelope {
 }
 
 /**
- * THE PROOF PHASE — API-AUTH.md steps 1–7, shared verbatim by both artifacts:
- * size cap, the Signature Verification Profile header gates with THIS shape's
- * `typ`, payload schema, freshness, request binding against the verifier's own
- * configured authority, current-state presenter resolution, signature.
+ * THE PROOF PHASE — INTEGRATIONS.md, Verification algorithm steps 1–7, shared
+ * verbatim by both artifacts: size cap, the Signature Verification Profile
+ * header gates with THIS shape's `typ`, payload schema, freshness, request
+ * binding against the verifier's own configured authority, current-state
+ * presenter resolution, signature.
  *
  * For the identity proof this IS the whole algorithm. For the request proof it is
  * the gate to steps 8–11: that work is unbounded and network-touching, and a
@@ -928,9 +930,9 @@ export const verifyIdentityProofEnvelope = (
   verifyProofEnvelope(input, IDENTITY_PROOF_SHAPE, resolvePresenter);
 
 /**
- * Verify a REQUEST proof's envelope — API-AUTH.md steps 1–7 with the request
- * `typ`. The caller then performs steps 8–11 (the credential walk), for which a
- * verified proof signature is the gate.
+ * Verify a REQUEST proof's envelope — INTEGRATIONS.md, Verification algorithm
+ * steps 1–7 with the request `typ`. The caller then performs steps 8–11 (the
+ * credential walk), for which a verified proof signature is the gate.
  */
 export const verifyRequestProofEnvelope = (
   input: ProofEnvelopeInput,

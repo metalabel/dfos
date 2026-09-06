@@ -3,7 +3,8 @@
   KEY STANDING — what one identity's chain says about one key, right now
 
   The relay's `key=` filter is a HAS-EVER-PROVED reverse lookup by design
-  (WEB-RELAY.md, KEY-PROOF.md): an identity matches when any accepted operation
+  (RELAY.md, Identities; PROTOCOL.md, Key possession): an identity matches when
+  any accepted operation
   of its chain ever admitted the key — named it in a role AND carried the key's
   own proof of possession for that role. Whether a later update rotated it out
   makes no difference. That is the right index — a holder recovering from a

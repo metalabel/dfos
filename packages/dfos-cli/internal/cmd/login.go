@@ -10,7 +10,7 @@ package cmd
 // Two properties are worth naming because they are what keep this file honest:
 //
 //   - THE CLI IS ITS OWN VERIFIER. There is no token endpoint to call home to,
-//     so the replay expectation lives in this process — SIWD.md §Replay
+//     so the replay expectation lives in this process — INTEGRATIONS.md, Replay
 //     prevention calls it "consumed verification with a store of size one" —
 //     and every gate the host would apply to a subject's artifact is applied
 //     here too, against a chain re-verified from its operation log rather than
@@ -46,16 +46,16 @@ import (
 )
 
 const (
-	// The bare loopback host is the challenge's domain: SIWD.md pins it to the
-	// host without the port, because a local application cannot reserve one, and
-	// the authorize host compares that value literally against the redirect's
-	// host. 127.0.0.1 rather than "localhost" throughout — the literal is what
-	// both halves compare, and a name that resolves is one more thing to disagree
-	// about.
+	// The bare loopback host is the challenge's domain: INTEGRATIONS.md, Loopback
+	// redirect targets pins it to the host without the port, because a local
+	// application cannot reserve one, and the authorize host compares that value
+	// literally against the redirect's host. 127.0.0.1 rather than "localhost"
+	// throughout — the literal is what both halves compare, and a name that
+	// resolves is one more thing to disagree about.
 	loopbackHost = "127.0.0.1"
 
 	// The DfosAuthorizationServer service type answers "which authorize endpoint
-	// speaks for this DID" (SIWD.md §Finding the authorize endpoint). Like
+	// speaks for this DID" (INTEGRATIONS.md, Finding the authorize endpoint). Like
 	// DfosOrigin it is an extension the core carries verbatim and never
 	// structurally validates, so its rules live in consumers like this one.
 	authorizationServerType = "DfosAuthorizationServer"
@@ -73,7 +73,7 @@ const (
 	loginTimestampLayout = "2006-01-02T15:04:05.000Z"
 )
 
-// loginClient is the per-install client identity of SIWD.md §Loopback Clients:
+// loginClient is the per-install client identity of INTEGRATIONS.md, Loopback clients:
 // one Ed25519 key and a one-operation genesis chain small enough to carry on the
 // authorize request itself. It is deliberately NOT a user identity — it lives
 // outside the config's identity table, because what it represents is this
@@ -277,7 +277,7 @@ func newLoginCmd() *cobra.Command {
 				return err
 			}
 
-			// CONSUMED LAST, per SIWD.md §Replay prevention: everything above has
+			// CONSUMED LAST, per INTEGRATIONS.md, Replay prevention: everything above has
 			// passed, so nothing invalid can spend the expectation, and this is the
 			// final gate before a sign-in is granted.
 			if err := expect.consume(segment); err != nil {
@@ -393,11 +393,11 @@ func withAuthorizePath(base *url.URL) string {
 // authorizeEndpoint folds a services set into the one authorize endpoint it
 // names, or into the reason it names none.
 //
-// SIWD.md's rule is ONE ENTRY, OR NONE: a set carrying more than one
-// DfosAuthorizationServer entry names no discoverable endpoint, and a consumer
-// MUST fall back exactly as if the entry were absent — the same ambiguity rule
-// DfosOrigin follows, chosen so that ambiguity degrades to the fallback and
-// never to a choice.
+// INTEGRATIONS.md, Finding the authorize endpoint's rule is ONE ENTRY, OR NONE:
+// a set carrying more than one DfosAuthorizationServer entry names no
+// discoverable endpoint, and a consumer MUST fall back exactly as if the entry
+// were absent — the same ambiguity rule DfosOrigin follows, chosen so that
+// ambiguity degrades to the fallback and never to a choice.
 //
 // An endpoint that is missing, empty, not an absolute http(s) URL, or not a
 // bare ORIGIN url is ignored the same way. The last of those is the entry's own
@@ -437,10 +437,10 @@ func authorizeEndpoint(services []protocol.ServiceEntry) (endpoint string, reaso
 	return withAuthorizePath(parsed), ""
 }
 
-// resolveAuthorizeURL answers SIWD.md's "which authorize endpoint speaks for
-// this DID". The chain's own entry wins; --authorize-url is the out-of-band
-// fallback the spec provides for when the chain names none, which is legal and
-// is still the common case.
+// resolveAuthorizeURL answers INTEGRATIONS.md, Finding the authorize endpoint's
+// "which authorize endpoint speaks for this DID". The chain's own entry wins;
+// --authorize-url is the out-of-band fallback the spec provides for when the
+// chain names none, which is legal and is still the common case.
 func resolveAuthorizeURL(peer *client.Client, subjectDID, fallback string) (string, error) {
 	verified, err := fetchVerifiedIdentity(peer, subjectDID)
 	if err != nil {
@@ -699,7 +699,7 @@ func loginNonce() (string, error) {
 	return protocol.DeriveID(seed), nil
 }
 
-// encodeClientChain is the carriage encoding of SIWD.md §Chain residence: the
+// encodeClientChain is the carriage encoding of INTEGRATIONS.md, Chain residence: the
 // full ordered operation log, genesis first, as base64url of its JSON array —
 // the same grammar as the challenge param, so one decoder shape serves both. The
 // 100-operation cap is spec-normative; a client identity anywhere near it has
@@ -718,10 +718,10 @@ func encodeClientChain(log []string) (string, error) {
 	return protocol.Base64urlEncode(data), nil
 }
 
-// buildAuthorizeURL assembles the loopback authorize request: SIWD.md §1's wire
-// params plus the two the loopback credential tier adds. It returns the URL and
-// the base64url challenge embedded in it — the value the callback's JWS payload
-// segment must equal byte for byte.
+// buildAuthorizeURL assembles the loopback authorize request: INTEGRATIONS.md,
+// 1. Redirect to authorize's wire params plus the two the loopback credential
+// tier adds. It returns the URL and the base64url challenge embedded in it —
+// the value the callback's JWS payload segment must equal byte for byte.
 //
 // The ask proof and the challenge param are derived from the SAME challenge
 // value, which is what keeps them from drifting: they must cover identical
@@ -782,10 +782,10 @@ func openBrowser(rawURL string) error {
 
 // loginRelayPage is what GET /callback answers with, and it exists because a
 // browser never sends a URL fragment to a server. The credential rides the
-// fragment (SIWD.md §4), so the request line this listener sees carries the
-// query and nothing else; the page's script reads location.href in the browser
-// and posts the WHOLE url back, which is the only path by which the fragment
-// reaches the process that minted the challenge.
+// fragment (INTEGRATIONS.md, 4. Callback), so the request line this listener
+// sees carries the query and nothing else; the page's script reads
+// location.href in the browser and posts the WHOLE url back, which is the only
+// path by which the fragment reaches the process that minted the challenge.
 //
 // No external assets, by construction: this page is served by a CLI on a local
 // port, and a network fetch to render it would be one more thing to fail while
@@ -1041,7 +1041,7 @@ func awaitLoginCallback(urls <-chan string, timeout time.Duration, warn io.Write
 	}
 }
 
-// challengeExpectation is this verifier's entire replay store. SIWD.md §Replay
+// challengeExpectation is this verifier's entire replay store. INTEGRATIONS.md, Replay
 // prevention names the shape for a loopback client: consumed verification with a
 // store of size one — the expectation lives in the process that minted it, held
 // in memory and discarded after one comparison.

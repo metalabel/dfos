@@ -214,12 +214,13 @@ func identityDelete(did, prevCID, keyID, createdAt string, priv ed25519.PrivateK
 
 // pinnedKeyProof mints the possession envelope an introduction carries, with a
 // PINNED timestamp so the whole fixture stays byte-stable run to run. The
-// envelope is signed by the CANDIDATE key itself — that self-proving circularity
-// is the artifact — and `audience` is the target chain's own DID, which is the
-// controller-verified leg of KEY-PROOF.md: a chain's controller introducing a key
-// its own tooling can reach, with no host mediating. Chain-walk verification
-// treats audience as byte-fixed transport and never re-checks it, so the value
-// only has to satisfy the grammar and the leg's did-equality rule.
+// envelope is signed by the CANDIDATE key itself — that self-proving
+// circularity is the artifact — and `audience` is the target chain's own DID,
+// which is the controller-verified leg of PROTOCOL.md, Key possession: a
+// chain's controller introducing a key its own tooling can reach, with no host
+// mediating. Chain-walk verification treats audience as byte-fixed transport
+// and never re-checks it, so the value only has to satisfy the grammar and the
+// leg's did-equality rule.
 func pinnedKeyProof(did, prevCID string, priv ed25519.PrivateKey, roles ...dfos.KeyRole) string {
 	if len(roles) == 0 {
 		roles = dfos.KeyRoles

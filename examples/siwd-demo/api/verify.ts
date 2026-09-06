@@ -282,11 +282,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
  *   4. Does it cover the resource and action that were requested?
  *
  * Revocation is deliberately NOT checked here, and that is a considered
- * omission rather than a gap. API-AUTH.md puts revocation in the VERIFY path —
- * the API re-checks it on every request against its own current knowledge, which
- * is what gives the user a timely lever. A check at receipt would be a snapshot
- * of a fact that changes afterwards, and caching its answer would be worse than
- * not asking.
+ * omission rather than a gap. INTEGRATIONS.md, Verification algorithm puts
+ * revocation in the VERIFY path — the API re-checks it on every request against
+ * its own current knowledge, which is what gives the user a timely lever. A
+ * check at receipt would be a snapshot of a fact that changes afterwards, and
+ * caching its answer would be worse than not asking.
  */
 const checkCredential = async (
   client: ReturnType<typeof createClient>,

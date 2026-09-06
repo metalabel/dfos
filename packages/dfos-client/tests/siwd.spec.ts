@@ -4,8 +4,8 @@
 
   The load-bearing piece is `siwdSigningInput`: the PURE bytes both halves share.
   These tests pin the round-trip (mint → encode → decode → same bytes) and the
-  no-throw verifier, including the SIWD.md rule that only a CURRENT authKey of a
-  non-deleted identity may verify.
+  no-throw verifier, including the INTEGRATIONS.md, Verifying a sign-in rule that
+  only a CURRENT authKey of a non-deleted identity may verify.
 
 */
 
@@ -763,8 +763,9 @@ describe('siwd loopback credential tier', () => {
 
   /*
     The port is not part of the binding — a local application cannot reserve
-    one — so SIWD.md pins the challenge domain to the BARE loopback host, which
-    is what the host compares literally against the redirect's host.
+    one — so INTEGRATIONS.md, Loopback redirect targets pins the challenge domain
+    to the BARE loopback host, which is what the host compares literally against
+    the redirect's host.
   */
   it.each([
     ['http://127.0.0.1:8976/cb', '127.0.0.1'],
@@ -846,9 +847,10 @@ describe('siwd loopback credential tier', () => {
   });
 
   /*
-    SIWD.md defines the loopback interface as `http://` on those hosts. A
-    loopback NAME under another scheme is a misconfiguration, and this
-    entrypoint is where the claim "I am local software" is made.
+    INTEGRATIONS.md, Loopback redirect targets defines the loopback interface as
+    `http://` on those hosts. A loopback NAME under another scheme is a
+    misconfiguration, and this entrypoint is where the claim "I am local
+    software" is made.
   */
   it.each([['https://localhost:9/cb'], ['ftp://127.0.0.1/cb']])(
     'refuses a non-http loopback scheme: %s',
@@ -882,9 +884,9 @@ describe('siwd loopback credential tier', () => {
   /*
     The whole loop, mirroring the profile-A end-to-end test one describe up:
     mint → compose → the host's checks → callback with a fragment credential →
-    verify. The nonce is CONSUMED, not compared: SIWD.md requires consumed
-    verification for every credential-returning scope, and a loopback verifier
-    is that discipline with a store of size one.
+    verify. The nonce is CONSUMED, not compared: INTEGRATIONS.md, Replay
+    prevention requires consumed verification for every credential-returning
+    scope, and a loopback verifier is that discipline with a store of size one.
   */
   it('composes end to end: mint → ask → host checks → callback → verify', async () => {
     const app = await mintSiwdClientIdentity();

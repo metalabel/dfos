@@ -17,7 +17,8 @@
   description — live in the orienting prose with their glossary definitions, where
   a reader who wants the exact term finds it.
 
-  ORIGIN BINDING (ORIGIN-BINDING.md) is the HEADLINE, whatever it says. The domain
+  ORIGIN BINDING (INTEGRATIONS.md, Origin binding) is the HEADLINE, whatever it
+  says. The domain
   attests a DID — a `_dfos` TXT record or `/.well-known/dfos-did` — and that DID's
   chain must name this exact domain back. It is the domain-first walk
   `dfos identity verify-binding <hostname>` runs, and it is the one thing on this
@@ -26,7 +27,8 @@
   and the page's accent speak, and every app-description state below is a
   subordinate claim that colours its own panel and no more.
 
-  APP DESCRIPTION (SIWD.md), four beats, each failing differently:
+  APP DESCRIPTION (INTEGRATIONS.md, The app description document), four beats,
+  each failing differently:
 
     1. the ORIGIN served a document        → unreachable / no-app-description /
                                              redirected
@@ -598,7 +600,7 @@ const appAccent = (verdict: DomainVerdict): 'ok' | 'warn' | 'bad' | undefined =>
 // -----------------------------------------------------------------------------
 // IDENTITY BINDING — the domain-first walk, and the evidence behind the headline
 //
-// Display discipline here is NORMATIVE (ORIGIN-BINDING.md, "Display Discipline"):
+// Display discipline here is NORMATIVE (INTEGRATIONS.md, Display discipline):
 // a binding proves control of a DOMAIN at check time — never personhood,
 // endorsement, or notability — so the panel always shows the domain AND the
 // identity together, and never collapses the verdict into a checkmark divorced

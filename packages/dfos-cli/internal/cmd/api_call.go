@@ -535,7 +535,7 @@ func signAPIRequest(profile *callProfile, request *apispec.Request, headers map[
 	opts := protocol.RequestProofOptions{Body: request.Body}
 	// A jti rides on every write-shaped request. Read-shaped routes ignore an
 	// unknown member, so attaching one is never wrong — and a deployment gating
-	// writes MUST have it (API-AUTH.md, Security Considerations).
+	// writes MUST have it (INTEGRATIONS.md, API security notes).
 	if !isSafeMethod(request.Method) {
 		id, err := newRequestJTI()
 		if err != nil {

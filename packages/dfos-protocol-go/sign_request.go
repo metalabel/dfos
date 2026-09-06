@@ -127,7 +127,8 @@ func validateSignRequestWindow(createdAt, expiresAt time.Time) error {
 	return nil
 }
 
-// VerifySignRequest verifies a sign request in SIGNING.md's exact 1–9 order.
+// VerifySignRequest verifies a sign request in RELAY.md, Envelope
+// verification's exact 1–9 order.
 //
 // resolveKey MUST perform current-state-only resolution: rotated-out keys and
 // deleted identities fail resolution. Resolver failures are unverifiable;
@@ -268,7 +269,7 @@ func VerifySignRequest(jwsToken string, resolveKey KeyResolver,
 	}, nil
 }
 
-// AssertCanonicalSignRequestPayload applies SIGNING.md signer obligations 2–5
+// AssertCanonicalSignRequestPayload applies RELAY.md, Signer obligations 2–5
 // to exact target bytes. SIGNING 0.1 implements only did:dfos:credit-claim;
 // unknown payload types are refused with ErrSignRequestInvalid.
 func AssertCanonicalSignRequestPayload(payloadTyp string, payload []byte,

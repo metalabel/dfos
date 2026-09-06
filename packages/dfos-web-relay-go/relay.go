@@ -219,7 +219,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	}
 
 	// Ingestion admission. Explicit wins; absent derives from the write capability
-	// (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
+	// (RELAY.md, The well-known document). A relay with writes off is closed
 	// whatever it asked for — the capability gate fires first and answers 501.
 	//
 	// An unrecognized spelling is refused HERE rather than serving as its silent
