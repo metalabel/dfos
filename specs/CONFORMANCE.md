@@ -7,7 +7,7 @@ against the existing proving corpora. This document defines no new protocol rule
 points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
-[CREDITS.md](https://protocol.dfos.com/credits),
+[CONTENT-MODEL.md](https://protocol.dfos.com/content-model),
 [RELAY-CONTRACT.md](https://protocol.dfos.com/relay-contract),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
 [DID-METHOD.md](https://protocol.dfos.com/did-method),
@@ -45,7 +45,7 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   **void** — excluded from effective state, surfaced, never a rejection — and both the
   declared and effective readings exposed (PROTOCOL.md "Verification → Identity Chain",
   `specs/PROTOCOL.md`; "Identity Chain Signer Validity" / "Key Possession",
-  `specs/PROTOCOL.md`; KEY-PROOF.md "Chain-Walk Verification", `specs/KEY-PROOF.md`;
+  `specs/PROTOCOL.md`; PROTOCOL.md "Chain-walk verification", `specs/PROTOCOL.md`;
   DID-METHOD.md §5.2.1, `specs/DID-METHOD.md`).
 - **Content chain verification** — valid EdDSA signature, `kid`-DID matches payload `did`,
   CID integrity, chain linkage, terminal state, and creator-sovereignty authorization when
@@ -74,8 +74,8 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   rules are easy to get backwards and are normative: verification MUST NOT consult the
   claimant's `isDeleted` state (a tombstoned claimant's credit still verifies — attribution
   is history, authorization is standing), and the **`invalid` vs `unverifiable`** verdicts
-  MUST stay distinct, with neither rendered as `unclaimed` (CREDITS.md "Verification
-  Algorithm" / "Verification States" / "Two-Way Binding", `specs/CREDITS.md`).
+  MUST stay distinct, with neither rendered as `unclaimed` (CONTENT-MODEL.md "Verification
+  algorithm" / "Verification states" / "The bind", `specs/CONTENT-MODEL.md`).
 - **Sign-request envelope verification** (if it consumes sign requests; SIGNING `0.x`) —
   the 8192-byte token cap checked before any decode, the profile header gates, `typ`
   exactly `did:dfos:sign-request`, payload schema, unpadded-base64url target bytes
@@ -94,8 +94,8 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   controller-verified leg, against the payload's own `did`), the three positional arms
   (`did`, `roleSet`, `prevCID` against the ceremony's chain, role set, and current
   head), the freshness window, **atomic** nonce consumption, and signature verification
-  against the payload's own `publicKeyMultibase` (KEY-PROOF.md "Presentation
-  Verification" / "The Two Legs", `specs/KEY-PROOF.md`). The chain-walk half of
+  against the payload's own `publicKeyMultibase` (PROTOCOL.md "Presentation
+  verification" / "The two legs", `specs/PROTOCOL.md`). The chain-walk half of
   key-proof verification is not conditional — it is part of identity chain
   verification, above.
 
@@ -122,7 +122,7 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
   so a `kid`↔`did` mismatch is unrepresentable, bind to the chain's 31-char `contentId`
   (never a `documentCID` or head CID), omit `asOfDocumentCID` rather than emitting it empty,
   and refuse to emit a token over the 4096-byte cap. A signer MUST NOT mint a claim its own
-  verifier would reject (CREDITS.md "The Credit Claim Envelope", `specs/CREDITS.md`).
+  verifier would reject (CONTENT-MODEL.md "The credit claim envelope", `specs/CONTENT-MODEL.md`).
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
   Canonicalization", `specs/PROTOCOL.md`, `specs/PROTOCOL.md`, `specs/PROTOCOL.md`).
@@ -144,12 +144,14 @@ A relay ingests, sequences, and serves. It implements:
   dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
   "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
 - **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
-  selection, identity-chain linearity and order authority (permanent refusal of
-  conflicting extensions — normative in PROTOCOL.md "Chain Validity",
-  `specs/PROTOCOL.md`), possession-blind admission (door two: an identity operation's
-  key-proof status never gates log membership; void memberships are excluded from every
-  served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
-  WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`),
+  selection, identity-chain admission (a relay keeps its own log linear by admitting the
+  first successor it sees for a chain position and permanently refusing later ones; the
+  refusal is that relay's admission verdict and not a claim that the refused operation is
+  invalid, since two operations at one position are two views of the identity: PROTOCOL.md
+  "Views", `specs/PROTOCOL.md`), possession-blind admission (door two: an identity
+  operation's key-proof status never gates log membership; void memberships are excluded
+  from every served projection instead — PROTOCOL.md "Key Possession", `specs/PROTOCOL.md`;
+  WEB-RELAY.md "Identity Linearity and Admission", `specs/WEB-RELAY.md`),
   ingestion statuses (RELAY-CONTRACT.md "Submission",
   `specs/RELAY-CONTRACT.md`), deletion + restore semantics (WEB-RELAY.md
   "Fork Acceptance" / "Deletion Semantics", `specs/WEB-RELAY.md`).
@@ -221,12 +223,12 @@ served operations alone — which needs no write.
 Each tier maps to an existing test suite. The mapping is deliberately honest about what
 each suite actually exercises.
 
-| Tier              | Corpus                                          | What it proves                                               |
-| ----------------- | ----------------------------------------------- | ------------------------------------------------------------ |
-| Verifier / Signer | `packages/protocol-verify` (5 languages)        | Single-JWS primitives: signature, field equality, derivation |
-| Verifier / Signer | `packages/dfos-protocol/tests` (TS)             | Full chain/authz semantics                                   |
-| Verifier / Signer | PROTOCOL.md "Deterministic Reference Artifacts" | Reproducible reference vectors from fixed seeds              |
-| Relay             | `packages/relay-conformance` (Go)               | HTTP integration against any live relay                      |
+| Tier              | Corpus                                   | What it proves                                               |
+| ----------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| Verifier / Signer | `packages/protocol-verify` (5 languages) | Single-JWS primitives: signature, field equality, derivation |
+| Verifier / Signer | `packages/dfos-protocol/tests` (TS)      | Full chain/authz semantics                                   |
+| Verifier / Signer | PROTOCOL.md "Reference vectors"          | Reproducible reference vectors from fixed seeds              |
+| Relay             | `packages/relay-conformance` (Go)        | HTTP integration against any live relay                      |
 
 ### Verifier / signer corpora
 
@@ -237,7 +239,7 @@ each suite actually exercises.
   fixed seeds and asserted byte-identical by the TypeScript reference suite). See
   `packages/protocol-verify/README.md`.
 - **`packages/dfos-protocol/tests`** — the TypeScript reference test suite.
-- **Deterministic reference artifacts** — PROTOCOL.md "Deterministic Reference Artifacts"
+- **Deterministic reference artifacts** — PROTOCOL.md "Reference vectors"
   (`specs/PROTOCOL.md`) and the "Verification Checklist for Independent Implementers"
   (`specs/PROTOCOL.md`) provide every value an implementer needs to self-check, derived
   from `SHA-256("dfos-protocol-reference-key-N")`.
@@ -246,10 +248,10 @@ each suite actually exercises.
 **single-JWS primitives** — signature verification, field equality, and derivation
 (key, multikey, CID, DID, document CID, credential structure, number-encoding
 determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
-all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md,
-the five `protocol-verify` suites all run the same primitive set (TypeScript 98, Go 22,
-Rust 22, Python 98, Swift 21); the deep stateful chain-tier coverage lives separately in
-the TypeScript reference suite (`dfos-protocol/tests`, 402) and the Go library suite.
+all exercise the stateful chain semantics. The five `protocol-verify` suites run the
+same primitive set, enumerated in `packages/protocol-verify/README.md`; the deep
+stateful chain-tier coverage lives separately in the TypeScript reference suite
+(`dfos-protocol/tests`) and the Go library suite.
 **Chain linking,
 content fork/head-selection, identity linearity, delete/restore semantics, and credential
 expiry/delegation are exercised in the TypeScript and Go suites, not in all five

@@ -819,7 +819,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get('/1.0/identifiers/:did{.+}', async (c) => {
     const did = c.req.param('did');
 
-    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1:63
+    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1
     if (!isValidDfosDid(did)) {
       return c.json(
         {

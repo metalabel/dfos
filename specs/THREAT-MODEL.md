@@ -24,7 +24,7 @@ optional signing mailbox's courier state sits outside both.
 
 ### Proof plane — self-authenticating, trustless
 
-The crypto core is the trust boundary (PROTOCOL.md "Protocol Overview", `specs/PROTOCOL.md`).
+The crypto core is the trust boundary (PROTOCOL.md "Overview", `specs/PROTOCOL.md`).
 Identity chains, content chains, artifacts, countersignatures, credentials,
 and revocations are all signed, content-addressed objects that anyone can verify with
 a public key and any standard EdDSA + dag-cbor library. There is no privileged registry,
@@ -47,7 +47,7 @@ below.
 ### Content plane — honest-host, undisclosed-by-default
 
 The protocol commits to content _hashes_, not plaintext — it does not encrypt
-(README.md, `README.md`; PROTOCOL.md "Philosophy", `specs/PROTOCOL.md`).
+(README.md, `README.md`; PROTOCOL.md "Overview", `specs/PROTOCOL.md`).
 Confidentiality of the underlying documents is enforced at the application layer by
 whoever serves them. **The relay operator can read what it stores.** This is
 undisclosed-by-default, _not_ end-to-end encrypted. The content plane never gossips;
@@ -91,10 +91,9 @@ encounters the document MAY fetch, verify, ingest, and re-serve that chain with 
 registration or approval precondition. Signatures verify identically to a relay-fetched
 chain — forgery is a non-issue — but the source is **controller-attested**: the consumer
 holds identity state fetched on its own clock from an origin the application itself
-controls, with no independent arbiter in the path. An identity whose `services` list
-names no relay has no order authority at all — while a carried chain that does name a
-`DfosRelay` still answers to that relay's committed order, however the chain was
-obtained (PROTOCOL.md "Chain Validity" → Order authority, `specs/PROTOCOL.md`).
+controls, with no independent arbiter in the path. A carried chain is one view of the
+identity, and reading it is a choice of source the way reading a relay is a choice of
+relay (PROTOCOL.md "Views", `specs/PROTOCOL.md`).
 The operational consequences are specified as the five carried-chain disciplines
 (SIWD.md "Carried identity chains", `specs/SIWD.md`):
 
@@ -105,8 +104,8 @@ The operational consequences are specified as the five carried-chain disciplines
 - **Signed divergence.** Two chains sharing a prefix and disagreeing after it both
   verify — the controller's key contradicting itself, indistinguishable from a
   compromised key. Acceptance is operator discretion; observed divergence SHOULD be
-  logged. Where the `services` list names no relay, there is no home-relay order to
-  defer to.
+  logged. Nothing outside the consumer picks a branch: both are views of the same
+  identity.
 - **Staleness in both directions.** A carried chain is a snapshot at fetch time: the
   consumer's re-fetch cadence bounds new-key usability and rotated-key death at once.
 - **Chain substitution at first encounter.** Identity operations are public data:
@@ -188,8 +187,8 @@ the surface is built around:
 
 A key proof is a challenge-bound JWS in which a candidate key signs `{nonce,
 audience, chain DID, role set, chain position, its own public key, timestamp}` to
-demonstrate possession and consent to one named introduction (KEY-PROOF.md "The
-Envelope", `specs/KEY-PROOF.md`) — presented once during a ceremony, then carried
+demonstrate possession and consent to one named introduction (PROTOCOL.md "The envelope",
+`specs/PROTOCOL.md`) — presented once during a ceremony, then carried
 forever by the chain operation that adopted it (PROTOCOL.md "Key Possession").
 The threat consequences the surface is built around:
 
@@ -206,26 +205,25 @@ The threat consequences the surface is built around:
   head the introduction builds on, so no stored proof re-adds a removed key at a
   later head — the chain's own controller included. There is no standing consent
   and nothing to revoke: each introduction costs a fresh signature from the key
-  itself (KEY-PROOF.md "Position binding").
+  itself (PROTOCOL.md "Position binding").
 - **Challenge relay is defeated by audience binding, not carriage secrecy.** The
   signer names the completing authority its human confirmed inside the signed bytes,
   and the verifier compares against its own configured authority — so a phished or
   re-displayed challenge yields a proof that is dead bytes everywhere but the host
-  the victim actually initiated (KEY-PROOF.md "Audience Binding"). The
+  the victim actually initiated (PROTOCOL.md "The two legs"). The
   controller-verified leg has no host, and its audience is the chain's own DID —
   the two value domains never overlap, so neither leg's envelope verifies in the
-  other (KEY-PROOF.md "The Two Legs").
+  other (PROTOCOL.md "The two legs").
 - **The code is the capability, and resolving it names the identity — deliberately.**
   A shoulder-surfed code or intercepted QR yields the ability to resolve one
   short-lived ceremony's context — including which public identity it adopts into —
   and to attempt one presentation, which still requires the candidate key's
   signature plus the operator's own ceremony authorization. The disclosure is the
   price of consent: a holder who cannot see whom they are joining cannot refuse it,
-  and the named facts are public identity facts (KEY-PROOF.md "Carriage",
-  "Security Considerations").
+  and the named facts are public identity facts (PROTOCOL.md "Carriage and resolution").
 - **The payload is closed, so a key proof cannot be socially engineered into
   "signing something".** There is no member in which to smuggle a transaction or an
-  instruction; a proof proves a key and conveys no intent (KEY-PROOF.md pin 1).
+  instruction; a proof proves a key and conveys no intent (PROTOCOL.md "The envelope").
 - **The payload's bytes are a function of its members.** A signature covers whatever
   octets arrived, not member semantics, so the verifier recomputes the canonical signing
   input from the parsed payload and byte-compares it against the octets it was handed — a
@@ -235,23 +233,23 @@ The threat consequences the surface is built around:
   serialization leave one proof more than one envelope spelling, and nothing rests on
   envelope uniqueness — at presentation the nonce is what is spent, atomically and
   once, and on the chain the carrying operation's CID pins one spelling of the whole
-  operation (KEY-PROOF.md "Presentation Verification" steps 3 and 7,
-  "Chain-Walk Verification").
+  operation (PROTOCOL.md "Presentation verification" steps 3 and 8,
+  "Chain-walk verification").
 - **Nothing persists to hijack.** Ceremonies are single-shot: no session, pairing, or
   channel outlives adoption, and the nonce is consumed atomically. The envelope's
   afterlife on the chain is a fact about one introduction, inert at every other
-  position (KEY-PROOF.md pin 2).
+  position (PROTOCOL.md "Position binding").
 - **Cross-DID key reuse is a permanent public link.** The has-ever-proved `key=`
   index survives rotation and deletion, so proving one key into two chains publishes
   their association irreversibly — which is why holder tooling refuses by default
-  before any signature exists (KEY-PROOF.md "Holder Obligations"). An unproved
+  before any signature exists (PROTOCOL.md "Holder obligations"). An unproved
   declaration creates no link: void memberships never index.
 - **The operator may name the pre-flight's oracle, and that adds no trust the ceremony
   does not already extend.** The short-code resolution's optional `relay` member reaches
   only a holder with no configured relay of its own — a holder's own oracle always takes
   precedence, the member is ceremony-scoped, and adopting it as a standing peer is
   refused by rule. The party it defers to is the one that already decides what the
-  adoption effects (KEY-PROOF.md "Carriage", "Security Considerations").
+  adoption effects (PROTOCOL.md "Carriage and resolution").
 
 ### Countersignatures live on the public proof plane
 
@@ -306,7 +304,7 @@ A malicious peer can therefore only impose cost and noise, not corrupt state.
 arbitrary JWS tokens, imposing CPU (verification) and storage (store-then-verify
 buffering, `specs/WEB-RELAY.md`) cost. One aggregate 64 KiB operation-size cap plus
 a small set of cardinality caps bound per-operation abuse — there is deliberately no
-per-field string-length table (PROTOCOL.md "Operation Size and Cardinality Limits",
+per-field string-length table (PROTOCOL.md "Size and cardinality limits",
 `specs/PROTOCOL.md`) — but **protocol-layer rate limiting is explicitly deferred** to
 the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
 
@@ -388,19 +386,18 @@ true?" or "which happened first?". Semantic interpretation of content-chain fork
 (concurrency glitch, intentional recovery) is application-defined (PROTOCOL.md "Chain
 Validity", `specs/PROTOCOL.md`).
 
-**Identity chains are outside this mechanism entirely.** Identity chains are strictly
-linear (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`): a conflicting extension is
-invalid, the head is the last operation of the single timeline, and there is no timestamp
-competition to win — no once-current key can bid the head from an ancestor, whatever its
-`createdAt` claims. Forks are permitted exactly where a merge function exists, and key
-state has none. Undeletion is the explicit
-`restore` operation, signed by a controller key of the deleted head state (WEB-RELAY.md
-"Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5, `specs/DID-METHOD.md`).
-Ordering authority for an identity chain is its services-listed home relay — single-writer
-ordering with multi-relay read replication, arbitration rather than merge (PROTOCOL.md
-"Chain Validity" → Order authority, `specs/PROTOCOL.md`); equivocation by the
-holder is detectable and invalid rather than head-selected (DID-METHOD.md §6.3,
-`specs/DID-METHOD.md`).
+**Identity chains are outside this mechanism entirely.** An identity chain is linear per
+view (PROTOCOL.md "Views", `specs/PROTOCOL.md`): the head is the last operation of the
+sequence one relay serves, and there is no timestamp competition to win. No once-current
+key can bid the head from an ancestor, whatever its `createdAt` claims. Head selection
+runs exactly where a merge function exists, and key state has none. Undeletion is the
+explicit `restore` operation, signed by a controller key of the deleted head state
+(WEB-RELAY.md "Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5,
+`specs/DID-METHOD.md`). A relay keeps its own log linear by admitting the first successor
+it sees for a chain position and refusing later ones. Two operations signed at the same
+position are a divergence between relay views, not a proof of invalidity (DID-METHOD.md
+§6.3, `specs/DID-METHOD.md`). Which view of an identity you follow is a choice of relay,
+and that choice is a trust decision.
 
 ---
 
@@ -411,9 +408,13 @@ These are known and deliberately accepted for v1.
 - **Rotation is not revocation.** Rotating a key ends its authoring window for freshly
   admitted operations, but committed facts it signed re-verify forever — their invalidation
   mechanism is revocation or deletion, never rotation (WEB-RELAY.md "Key Resolution",
-  `specs/WEB-RELAY.md`). The chain itself is not at risk: identity chains are strictly
-  linear (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`), so a rotated-out key has no
-  path back into the chain — there is no ancestor to fork from and no timestamp to bid.
+  `specs/WEB-RELAY.md`). A rotated-out key was effective at every chain position before
+  its removal, so an operation it signs at one of those positions is structurally valid.
+  What stops it is admission, not validity: a relay that already committed a successor at
+  that position refuses a later one (PROTOCOL.md "Views", `specs/PROTOCOL.md`). A relay
+  holding no successor there admits it and serves a different view of the identity, so
+  the remedy for a compromised key is rotation plus reading relays that already hold the
+  extended chain.
 - **Delete is not a substitute for rotation.** `restore` requires only a controller key of
   the **deleted head state** (PROTOCOL.md "Identity Operations", `specs/PROTOCOL.md`). A
   thief holding a still-current controller key can therefore restore a deleted identity —
@@ -421,19 +422,18 @@ These are known and deliberately accepted for v1.
   first, then delete** if desired: deleting while a compromised key is still current
   leaves the chain reopenable by exactly that key. (A key rotated out _before_ the delete
   is not in the deleted state and cannot restore.)
-- **Home-relay write availability (single-writer identity ordering).** The subject's
-  services-listed relay is the order authority for its identity chain; peers replicate
-  its committed order and refuse conflicting extensions (PROTOCOL.md "Chain Validity" →
-  Order authority, `specs/PROTOCOL.md`). An identity write attempted during a
-  home-relay outage is at-risk-until-retry — never arbitrated in later by timestamp. This
-  is the deliberate trade for a non-auctionable authority record: identity writes are rare,
-  reads replicate everywhere, and arbitration beats auction for key state.
+- **Identity resolution is relay-relative.** An identity chain is linear per view, and no
+  rule in the corpus arbitrates between views (PROTOCOL.md "Views", `specs/PROTOCOL.md`).
+  A holder who extends the same chain position through two relays leaves two views
+  standing, each internally linear and each fully signed. A consumer reading one relay
+  sees no sign the other exists, and comparing views is out-of-band work a consumer does
+  or does not do. Which view you follow is a choice of relay.
 
-- **Home-relay order is trusted, not transparency-logged.** The order-authority rule makes the
-  home relay's committed log an identity chain's canonical order — and nothing in the corpus makes
-  that ordering _auditable_: there are no signed tree heads, no inclusion or consistency proofs, no
-  Merkle transparency structure anywhere in the specs. A home relay that equivocates about
-  identity-chain order — serving one committed order to one consumer and another to another — is
+- **Relay-served order is trusted, not transparency-logged.** A relay's committed log is the
+  identity order that relay serves, and nothing in the corpus makes that ordering _auditable_:
+  there are no signed tree heads, no inclusion or consistency proofs, no Merkle transparency
+  structure anywhere in the specs. A relay that equivocates about identity-chain order, serving
+  one committed order to one consumer and another to another, is
   detectable only by out-of-band comparison between consumers, never from any single response.
   Certificate Transparency ([RFC 9162](https://www.rfc-editor.org/rfc/rfc9162)) and the log designs
   built on its construction (Trillian, sigstore's Rekor) are the known mitigation — making a log
@@ -441,10 +441,10 @@ These are known and deliberately accepted for v1.
   honest that choosing relays and peers is a trust decision (see _Authority currency_ above), and
   this bullet names the standard construction that trust decision declines. (Content chains sit
   outside the risk: their order converges by deterministic head selection over signed operations,
-  with no order authority to equivocate.)
+  so no relay's admission order is load-bearing for them.)
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md
-  "Philosophy", `specs/PROTOCOL.md`; WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`).
+  "Overview", `specs/PROTOCOL.md`; WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`).
 - **No protocol-layer rate limiting.** Anti-spam / rate limiting is an operational concern,
   pushed to the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
   Blob size limits are likewise unenforced by the protocol (`specs/WEB-RELAY.md`).

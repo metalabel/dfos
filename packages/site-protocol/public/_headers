@@ -44,6 +44,7 @@
   Cache-Control: public, max-age=0, must-revalidate
 /credentials/
   Cache-Control: public, max-age=0, must-revalidate
+# /credits/, /key-proof/, /extensions/ are redirects, not pages. Keep these rows.
 /credits/
   Cache-Control: public, max-age=0, must-revalidate
 /deploy/
@@ -59,4 +60,8 @@
 /threat-model/
   Cache-Control: public, max-age=0, must-revalidate
 /document-gateway/
+  Cache-Control: public, max-age=0, must-revalidate
+/key-proof/
+  Cache-Control: public, max-age=0, must-revalidate
+/extensions/
   Cache-Control: public, max-age=0, must-revalidate

@@ -34,7 +34,8 @@ between a family that reads as part of the corpus and one that reads as bolted o
    (`/proof/v1`, `/revocations/v1`). The spec's status block and the path must agree.
 2. **Register the name.** A new JWS envelope adds its row — `typ`, owner spec,
    `cid`-header carriage, one-sentence semantics — to the extension registry
-   ([`specs/EXTENSIONS.md`](specs/EXTENSIONS.md)), even when relays never ingest
+   ([`specs/PROTOCOL.md` → Extension registry](specs/PROTOCOL.md#extension-registry)),
+   even when relays never ingest
    it (the credit-claim precedent — registered for typ-routing, no ingestion
    path). A new service type does the same in the registry's service-type table.
    Names are never minted locally: the owner spec defines, the registry indexes.

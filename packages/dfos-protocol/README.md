@@ -40,15 +40,13 @@ import { signKeyProof, verifyKeyProof } from '@metalabel/dfos-protocol/key-proof
 
 | Document                                         | Description                                                                       |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, verification, test vectors                    |
+| [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, key possession, verification, test vectors    |
 | [DID-METHOD.md](../../specs/DID-METHOD.md)       | W3C DID method specification for `did:dfos`                                       |
-| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile)                                          |
+| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile) and verifiable attribution               |
 | [CREDENTIALS.md](../../specs/CREDENTIALS.md)     | UCAN-style authorization credentials for the DFOS protocol                        |
-| [CREDITS.md](../../specs/CREDITS.md)             | Verifiable attribution for DFOS content                                           |
 | [SIGNING.md](../../specs/SIGNING.md)             | A transport-agnostic way for one party to ask another to produce a DFOS signature |
 | [SIWD.md](../../specs/SIWD.md)                   | Sign In With DFOS — cryptographic identity verification for third-party apps      |
 | [API-AUTH.md](../../specs/API-AUTH.md)           | Proof-of-possession authentication for credential-gated HTTP APIs                 |
-| [KEY-PROOF.md](../../specs/KEY-PROOF.md)         | Challenge-bound, single-shot proof that a candidate key is held                   |
 
 Release history lives at https://github.com/metalabel/dfos/releases.
 
