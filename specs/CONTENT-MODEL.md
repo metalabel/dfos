@@ -171,32 +171,6 @@ The standard representation of a reference to external media bytes. Defined once
 
 A media object is the referential case: a document is either _terminal_, where the `{ $schema, … }` blob is the content, or _referential_, where it describes how to fetch external bytes. Resolving a media object, the delivery of the actual media bytes, is outside the protocol. The content plane serves the document that _contains_ the media object as opaque bytes and never dereferences the pointer. There is no media server: media lives at the application and delivery layer, bound to the proof plane only by the signed reference, with `cid` as the optional content hash that lets a consumer verify the bytes it receives.
 
-### Reference content stream (`https://schemas.dfos.com/reference-content-stream/v1`)
-
-The canonical example of the [stream](#stream) interpretation. Each operation appends a new entry to the sequence rather than replacing the previous one. This is a reference schema, not one of the hosted standard schemas, and its `$id` carries the `reference-content-stream/v1` URI to mark it as such.
-
-| Field                | Type   | Required    | Description                                                                    |
-| -------------------- | ------ | ----------- | ------------------------------------------------------------------------------ |
-| `$schema`            | string | yes         | `"https://schemas.dfos.com/reference-content-stream/v1"`                       |
-| `action`             | enum   | yes         | `"create-item"`, `"update-item"`, `"delete-item"`, `"react"`, `"unreact"`      |
-| `createdByDID`       | string | yes         | DID of the content author, distinct from the operation signer                  |
-| `title`              | string | conditional | REQUIRED for `create-item`. Optional on `update-item` and `delete-item`        |
-| `body`               | string | no          | Entry body content, carried on `create-item`, `update-item`, and `delete-item` |
-| `targetOperationCID` | string | conditional | REQUIRED for `update-item`, `delete-item`, `react`, and `unreact`              |
-| `reaction`           | string | conditional | REQUIRED for `react` and `unreact`                                             |
-
-```json
-{
-  "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
-  "action": "create-item",
-  "createdByDID": "did:dfos:alice...",
-  "title": "Hello world",
-  "body": "My first post."
-}
-```
-
-See [`schemas/reference-content-stream.v1.json`](https://github.com/metalabel/dfos/blob/main/schemas/reference-content-stream.v1.json) and the worked chain in [`examples/reference-content-stream/`](https://github.com/metalabel/dfos/tree/main/examples/reference-content-stream).
-
 ---
 
 ## Credits

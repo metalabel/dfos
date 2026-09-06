@@ -881,8 +881,7 @@ complete, and cross-relay operation counts are not comparable.
 
 Artifacts and countersignatures are standalone signed primitives, immutable and
 CID-addressable, specified in
-[PROTOCOL, Artifacts](https://protocol.dfos.com/spec#artifacts) and
-[PROTOCOL, Countersignatures](https://protocol.dfos.com/spec#countersignatures).
+[PROTOCOL, Standalone signed statements](https://protocol.dfos.com/spec#standalone-signed-statements).
 The relay's additions are the stateful checks named under
 [Verification](#verification) and [Deletion and restore](#deletion-and-restore):
 target existence, witness is not author, one countersign per witness per target,
@@ -1999,19 +1998,9 @@ never a relay primitive.
 ### Discovery
 
 A reader finds a content-plane host through the identity's `services` vocabulary
-([PROTOCOL, Services](https://protocol.dfos.com/spec#services)). Two
-open-namespace service types serve it, both indexed in the
-[extension registry](https://protocol.dfos.com/spec#extension-registry):
-
-| Service `type`        | Fields           | Meaning                                                                                        |
-| --------------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `DfosDocumentGateway` | `endpoint` (URL) | Base URL of a content-plane host serving this identity's content                               |
-| `DfosProfile`         | `anchor`         | The identity's profile document: a 31-char contentId (living chain) or a `baf…` CID (artifact) |
-
-A resolver replays the identity chain to current state, reads the
-`DfosDocumentGateway` endpoint, and requests the document. `DfosProfile` dispatches
-by shape exactly as `ContentAnchor` does: a contentId resolves to a content chain,
-a CIDv1 resolves to an artifact. Discovery and authorization stay orthogonal.
+([PROTOCOL, Services](https://protocol.dfos.com/spec#services)). The core
+registers no service type for it, so a host names its own consumer type and
+validates it in its own spec. Discovery and authorization stay orthogonal.
 
 ### Authorization is one routine
 

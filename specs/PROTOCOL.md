@@ -1068,13 +1068,32 @@ The full JWS token is in [`examples/identity-services.json`](https://github.com/
 
 ---
 
-## Artifacts
+## Standalone signed statements
 
-Artifacts are standalone signed inline documents: immutable, CID-addressable
-proof-plane primitives. An artifact is a single signed statement with no
-predecessor and no successor.
+An artifact and a countersignature are each one signed statement with no
+predecessor and no successor: a JWS envelope over a dag-cbor payload, addressed
+by the payload's CID, verified against the signing identity's state as of the
+statement's own `createdAt` ([Time basis](#time-basis)). Neither is a chain
+operation: nothing links to one by `previousOperationCID`, and neither changes
+chain state.
 
-### Artifact payload
+### Payload shape
+
+| Field       | Artifact                                     | Countersignature                                         |
+| ----------- | -------------------------------------------- | -------------------------------------------------------- |
+| `version`   | `1`                                          | `1`                                                      |
+| `type`      | `"artifact"`                                 | `"countersign"`                                          |
+| `did`       | The signing identity                         | The witness identity                                     |
+| body        | `content`: an object with a `$schema` string | `targetCID`: the CID witnessed; `relation`: optional tag |
+| `createdAt` | [Timestamp grammar](#timestamp-grammar)      | Same                                                     |
+
+The JWS `typ` is `did:dfos:artifact` or `did:dfos:countersign`, and the
+envelope carries the [`cid` header](#cid-header).
+
+**Artifact.** `content` is an inline document. Its `$schema` is a free-form
+discriminator with no protocol-level registry; consumers dispatch on it. The
+CBOR-encoded payload MUST NOT exceed 16384 bytes. An artifact is immutable and
+is addressed by its CID.
 
 ```json
 {
@@ -1089,36 +1108,16 @@ predecessor and no successor.
 }
 ```
 
-The `content` object MUST include a `$schema` string identifying the artifact's
-schema. The schema is a discriminator; consumers use it to determine how to
-interpret the content. Schema names are free-form strings with no protocol-level
-registry.
-
-### Constraints
-
-- **JWS `typ` header**: `did:dfos:artifact`
-- **Max payload size**: 16384 bytes CBOR-encoded. Protocol constant, not configurable
-- **Immutability**: once published, an artifact is never updated or replaced
-- **CID-addressable**: each artifact is addressed by the CID of its CBOR-encoded payload
-
-### Artifact verification
-
-1. JWS signature verification against the signing DID's key state at the basis time
-2. CID integrity: `header.cid` matches the CID computed from dag-cbor canonical encoding the raw payload
-3. Payload schema validation: `version`, `type: "artifact"`, `did`, `content` with `$schema`, `createdAt`
-4. Size limit: CBOR-encoded payload does not exceed 16384 bytes
-
----
-
-## Countersignatures
-
-A countersignature is a standalone witness attestation: a signed statement
-referencing a target operation by CID. Each countersignature has its own `typ`
-header (`did:dfos:countersign`), its own payload, and its own CID distinct from
-the target. It is the protocol's one inter-subjective primitive: one subject witnessing
-another.
-
-### Countersignature payload
+**Countersignature.** `targetCID` names any CID-addressed statement: a content
+or identity operation, an artifact, or another countersignature. `relation` is
+an optional open-namespace tag of 1 to 64 characters. Recognized values
+(`endorses`, `coauthors`, `witnessed`, `holds`, `received`) inform clients;
+unrecognized values MUST be preserved and ignored. When present, `relation` is
+part of the canonical payload and so of the CID; absent, the payload encodes
+identically to one that never carried it. A countersignature is permanent.
+There is no withdrawal; a consumer may weight a newer statement by the same
+witness over an older one. Witnessing publicly and permanently links the
+witness DID to the target.
 
 ```json
 {
@@ -1131,39 +1130,23 @@ another.
 }
 ```
 
-The `did` field is the witness identity, the DID signing the attestation. The
-`targetCID` references the operation being attested to. The optional `relation`
-field names the nature of the attestation.
+### Verification
 
-**`relation`** is an open-namespace tag, an arbitrary 1 to 64 character string. A
-handful of values carry conventional social meaning (`endorses`, `coauthors`,
-`witnessed`, `holds`, `received`), and the namespace is unbounded: recognized
-values inform clients, unrecognized values MUST be preserved and ignored. The
-field is optional, so a bare witness attestation encodes identically to one that
-never carried the field (CID-neutral). When present, `relation` is part of the
-canonical payload and therefore changes the countersignature's CID.
+1. Decode the JWS. `typ` MUST be the value registered for the payload `type`.
+2. Validate the payload: `version`, `type`, `did`, `createdAt`, and the body
+   for that type (`content` carrying a `$schema` string, or `targetCID` with a
+   well-formed `relation` when present).
+3. The `kid` DID MUST equal the payload `did`.
+4. Verify the EdDSA signature against the key `kid` names, effective in the
+   signer's state as of `createdAt`.
+5. `header.cid` MUST equal the CID of the dag-cbor canonical encoding of the
+   payload.
+6. Artifact only: the CBOR-encoded payload MUST NOT exceed 16384 bytes.
 
-### Properties
-
-- **JWS `typ` header**: `did:dfos:countersign`
-- **Own CID**: each countersignature has its own CID derived from its own payload, distinct from the target
-- **Stateless verification**: signature, CID integrity, payload schema. No chain state is required to verify cryptographic validity
-- **Composable**: `targetCID` can reference any CID-addressable operation, including content ops, artifacts, identity ops, and other countersignatures
-- **Immutable**: once published, a countersignature is permanent. There is no withdrawal primitive; consumers weight recency and may honor a newer attestation that supersedes an older relation
-
-### Countersignature verification
-
-1. Decode JWS, verify `typ` is `did:dfos:countersign`
-2. Parse and validate the countersign payload (`version`, `type: "countersign"`, `did`, `targetCID`, optional `relation` of 1 to 64 chars when present, `createdAt`)
-3. Verify the `kid` DID matches the payload `did`: the witness signs with their own key
-4. CID integrity: `header.cid` matches the CID computed from dag-cbor canonical encoding the raw payload
-5. Verify the EdDSA JWS signature against the witness's public key
-
-Relay-level semantic checks (target exists, witness is not the author,
-deduplication) are enforcement concerns, not protocol verification.
-
-Countersignatures live on the public proof plane: witnessing a target
-permanently and publicly links the witness DID to it.
+A relay's checks on a countersignature (the target exists, the witness is not
+the target's author, one countersignature per witness per target) are ingest
+rules, specified in
+[RELAY](https://protocol.dfos.com/relay#artifacts-and-countersignatures-on-the-wire).
 
 ---
 
@@ -1217,14 +1200,12 @@ lands by adding its row here in the same PR that specifies it.
 
 ### Service types
 
-| Service `type`            | Owner spec                                                                            | Validation | Semantics                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
-| `DfosRelay`               | [PROTOCOL](#services)                                                                 | core       | Transport locator: where to reach a relay serving this identity.                                  |
-| `ContentAnchor`           | [PROTOCOL](#services)                                                                 | core       | Stable content reference: a contentId or artifact CID under a client-defined semantic label.      |
-| `DfosAuthorizationServer` | [INTEGRATIONS](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint) | consumer   | The canonical authorize origin able to produce this subject's signature under sign-in profile A.  |
-| `DfosOrigin`              | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-dfosorigin-service-entry)   | consumer   | The identity's claimed web domain: the chain half of the bidirectional origin binding.            |
-| `DfosDocumentGateway`     | [RELAY](https://protocol.dfos.com/relay#discovery)                                    | consumer   | Base URL of a content-plane host serving this identity's content.                                 |
-| `DfosProfile`             | [RELAY](https://protocol.dfos.com/relay#discovery)                                    | consumer   | The identity's profile document: a contentId or artifact CID, dispatched by shape as anchors are. |
+| Service `type`            | Owner spec                                                                            | Validation | Semantics                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| `DfosRelay`               | [PROTOCOL](#services)                                                                 | core       | Transport locator: where to reach a relay serving this identity.                                 |
+| `ContentAnchor`           | [PROTOCOL](#services)                                                                 | core       | Stable content reference: a contentId or artifact CID under a client-defined semantic label.     |
+| `DfosAuthorizationServer` | [INTEGRATIONS](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint) | consumer   | The canonical authorize origin able to produce this subject's signature under sign-in profile A. |
+| `DfosOrigin`              | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-dfosorigin-service-entry)   | consumer   | The identity's claimed web domain: the chain half of the bidirectional origin binding.           |
 
 **Validation.** `core`: structurally validated by every conformant verifier, and
 a malformed entry rejects at verification. `consumer`: opaque to the core
@@ -1241,8 +1222,8 @@ envelope carries the protocol's [`cid` header](#cid-header).
 | ------------------------- | ------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `did:dfos:identity-op`    | [PROTOCOL](#typ-header)                                                   | yes   | Identity chain operations.                                                                                                                                                                       |
 | `did:dfos:content-op`     | [PROTOCOL](#typ-header)                                                   | yes   | Content chain operations.                                                                                                                                                                        |
-| `did:dfos:artifact`       | [PROTOCOL](#artifacts)                                                    | yes   | Standalone signed inline documents.                                                                                                                                                              |
-| `did:dfos:countersign`    | [PROTOCOL](#countersignatures)                                            | yes   | Standalone witness attestations.                                                                                                                                                                 |
+| `did:dfos:artifact`       | [PROTOCOL](#standalone-signed-statements)                                 | yes   | Standalone signed statements: inline documents.                                                                                                                                                  |
+| `did:dfos:countersign`    | [PROTOCOL](#standalone-signed-statements)                                 | yes   | Standalone signed statements: witness attestations.                                                                                                                                              |
 | `did:dfos:key-add`        | [PROTOCOL](#key-possession)                                               | no    | Key introduction proofs: the candidate key's position-bound possession-and-consent proof, self-signed, presented to ceremonies and embedded in the introducing identity operation's `keyProofs`. |
 | `did:dfos:credential`     | [CREDENTIALS](https://protocol.dfos.com/credentials)                      | yes   | Authorization credentials; the `cid` is their revocation address.                                                                                                                                |
 | `did:dfos:revocation`     | [CREDENTIALS](https://protocol.dfos.com/credentials)                      | yes   | Credential revocation artifacts.                                                                                                                                                                 |

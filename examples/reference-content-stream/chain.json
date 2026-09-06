@@ -1,83 +1,96 @@
 {
   "description": "Six operations demonstrating reference-content-stream/v1 lifecycle",
   "schema": "https://schemas.dfos.com/reference-content-stream/v1",
+  "contentId": "kcdrkc8da6na348nz8kd8962acf3868",
   "participants": {
-    "alice": "did:dfos:alice",
-    "bob": "did:dfos:bob",
-    "carol": "did:dfos:carol"
+    "alice": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4",
+    "bob": "did:dfos:438ekrfa969dztt74e8td242k747tdf",
+    "carol": "did:dfos:ad762tkff26tav6khvchah44rchccze"
   },
   "operations": [
     {
       "sequence": 0,
-      "operationCID": "op1_create_item_1",
+      "operationCID": "bafyreiafexf45m5f2sia5oj5cc6zrnpwnem7zkcr5tgfycbjvjuy5l4iqm",
+      "documentCID": "bafyreihrzqavbrbvomcsiewkhhxrrhn6lpp7tlwr5yhpbkb5ux3epa5jzm",
       "action": "create-item",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "create-item",
-        "createdByDID": "did:dfos:alice",
+        "createdByDID": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4",
         "title": "Hello world",
         "body": "My first post."
-      }
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczp0OTR0emNlNjc5M2N2ejlrZTg2OWY3YTk5YWNoY2Q0I2tleV9lOWhybnY4a2thYzM5cmZ2dm45ejY2Mzg4NnZyZnRoIiwiY2lkIjoiYmFmeXJlaWFmZXhmNDVtNWYyc2lhNW9qNWNjNnpybnB3bmVtN3prY3I1dGdmeWNianZqdXk1bDRpcW0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6dDk0dHpjZTY3OTNjdno5a2U4NjlmN2E5OWFjaGNkNCIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWhyenFhdmJyYnZvbWNzaWV3a2hoeHJyaG42bHBwN3Rsd3I1eWhwYmtiNXV4M2VwYTVqem0iLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMjVUMDE6MDA6MDAuMDAwWiJ9.50VeNcHTrrT5MlImtGAwJJjejd8z7T20Kyna92sjFXi7gJfsVyqORXgUleOXcSoZV0B-x9C4n1LeG_Ayf5kWDQ"
     },
     {
       "sequence": 1,
-      "operationCID": "op2_create_item_2",
+      "operationCID": "bafyreibajcp7j5s3ymh3uvxf2bdbnd5ct2tdiwcmwyata4qiajun352jf4",
+      "documentCID": "bafyreig4lsfw564l47k474toukf2erkfpgldzqsh4f2j3m7rwpxx6takqi",
       "action": "create-item",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "create-item",
-        "createdByDID": "did:dfos:bob",
+        "createdByDID": "did:dfos:438ekrfa969dztt74e8td242k747tdf",
         "title": "Second item",
         "body": "Bob's contribution."
-      }
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczo0Mzhla3JmYTk2OWR6dHQ3NGU4dGQyNDJrNzQ3dGRmI2tleV9rMzZyMzZha2tlZDR6NzQ0ODZoemY4OTZjdnJhMms4IiwiY2lkIjoiYmFmeXJlaWJhamNwN2o1czN5bWgzdXZ4ZjJiZGJuZDVjdDJ0ZGl3Y213eWF0YTRxaWFqdW4zNTJqZjQifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6NDM4ZWtyZmE5NjlkenR0NzRlOHRkMjQyazc0N3RkZiIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFmZXhmNDVtNWYyc2lhNW9qNWNjNnpybnB3bmVtN3prY3I1dGdmeWNianZqdXk1bDRpcW0iLCJkb2N1bWVudENJRCI6ImJhZnlyZWlnNGxzZnc1NjRsNDdrNDc0dG91a2YyZXJrZnBnbGR6cXNoNGYyajNtN3J3cHh4NnRha3FpIiwiYmFzZURvY3VtZW50Q0lEIjpudWxsLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTI1VDAxOjEwOjAwLjAwMFoiLCJhdXRob3JpemF0aW9uIjoiZXlKaGJHY2lPaUpGWkVSVFFTSXNJblI1Y0NJNkltUnBaRHBrWm05ek9tTnlaV1JsYm5ScFlXd2lMQ0pyYVdRaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSTJ0bGVWOWxPV2h5Ym5ZNGEydGhZek01Y21aMmRtNDVlalkyTXpnNE5uWnlablJvSWl3aVkybGtJam9pWW1GbWVYSmxhV2cwZG5kMmVYTTJZelZwTkhKamJHdHdlSEZ1YlRSalpHRmhkbmx6TW5KMU1uWTBZbW8yYm1ObFl6UmtZM1p2Wm1kdWFIa2lmUS5leUoyWlhKemFXOXVJam94TENKMGVYQmxJam9pUkVaUFUwTnlaV1JsYm5ScFlXd2lMQ0pwYzNNaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSWl3aVlYVmtJam9pWkdsa09tUm1iM002TkRNNFpXdHlabUU1Tmpsa2VuUjBOelJsT0hSa01qUXlhemMwTjNSa1ppSXNJbUYwZENJNlczc2ljbVZ6YjNWeVkyVWlPaUpqYUdGcGJqb3FJaXdpWVdOMGFXOXVJam9pZDNKcGRHVWlmVjBzSW5CeVppSTZXMTBzSW1WNGNDSTZNakE1TURBeE5qQXdNQ3dpYVdGMElqb3hOemMwTXprNE5qQXdmUS5mTXRpQkZ6ZjFLalFRWTFqb2RXOFV4dUMyNjFjRy1GOXdjdnAxT1JITUVxNm9wOFJVMmZGV3JjdGVlSk9zS3RuT0ZNMVNsQVczS3g2cnctSmpuWUZBUSJ9.7mRI4wJFWfjqJJ3x4pcAWhrVbXzj1CvBBBX30_70lsnE9x6cWwDr54JGcTHytkKHxlo3q1Je7f_Tx83iPzWSAg"
     },
     {
       "sequence": 2,
-      "operationCID": "op3_react_thumbsup",
+      "operationCID": "bafyreiba7ccc7nxhd77xlnyzdwn7cauxfwiv2yqjvscjqapjix3siruwoi",
+      "documentCID": "bafyreiebos7a3sxpytlpzcuuq3yr3yqbbqdf5a3dnxiirhdxxjrzvz735a",
       "action": "react",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "react",
-        "createdByDID": "did:dfos:carol",
-        "targetOperationCID": "op1_create_item_1",
+        "createdByDID": "did:dfos:ad762tkff26tav6khvchah44rchccze",
+        "targetOperationCID": "bafyreiafexf45m5f2sia5oj5cc6zrnpwnem7zkcr5tgfycbjvjuy5l4iqm",
         "reaction": "thumbsup"
-      }
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczphZDc2MnRrZmYyNnRhdjZraHZjaGFoNDRyY2hjY3plI2tleV92Nzk3Yzl2NjZlaGN0ODczODdmZHJlZDQ3dG5rZWVlIiwiY2lkIjoiYmFmeXJlaWJhN2NjYzdueGhkNzd4bG55emR3bjdjYXV4ZndpdjJ5cWp2c2NqcWFwaml4M3NpcnV3b2kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6YWQ3NjJ0a2ZmMjZ0YXY2a2h2Y2hhaDQ0cmNoY2N6ZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWJhamNwN2o1czN5bWgzdXZ4ZjJiZGJuZDVjdDJ0ZGl3Y213eWF0YTRxaWFqdW4zNTJqZjQiLCJkb2N1bWVudENJRCI6ImJhZnlyZWllYm9zN2Ezc3hweXRscHpjdXVxM3lyM3lxYmJxZGY1YTNkbnhpaXJoZHh4anJ6dno3MzVhIiwiYmFzZURvY3VtZW50Q0lEIjpudWxsLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTI1VDAxOjIwOjAwLjAwMFoiLCJhdXRob3JpemF0aW9uIjoiZXlKaGJHY2lPaUpGWkVSVFFTSXNJblI1Y0NJNkltUnBaRHBrWm05ek9tTnlaV1JsYm5ScFlXd2lMQ0pyYVdRaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSTJ0bGVWOWxPV2h5Ym5ZNGEydGhZek01Y21aMmRtNDVlalkyTXpnNE5uWnlablJvSWl3aVkybGtJam9pWW1GbWVYSmxhV2QwYW5sMmJ6WjFOMk54YzJWbFlYcDBkelJwWVc4eVozQTBkMmx2YnpKcE5uZzFObUp5YW10eWJIVTJhak16YjNGbVpua2lmUS5leUoyWlhKemFXOXVJam94TENKMGVYQmxJam9pUkVaUFUwTnlaV1JsYm5ScFlXd2lMQ0pwYzNNaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSWl3aVlYVmtJam9pWkdsa09tUm1iM002WVdRM05qSjBhMlptTWpaMFlYWTJhMmgyWTJoaGFEUTBjbU5vWTJONlpTSXNJbUYwZENJNlczc2ljbVZ6YjNWeVkyVWlPaUpqYUdGcGJqb3FJaXdpWVdOMGFXOXVJam9pZDNKcGRHVWlmVjBzSW5CeVppSTZXMTBzSW1WNGNDSTZNakE1TURBeE5qQXdNQ3dpYVdGMElqb3hOemMwTXprNE5qQXdmUS5rZ2Nkd19xR0l1TVJLY1BhMEpKcG5zMnRRLW8yR3FYRkZKWTlWVEViUVBpcXhjeXltN0RPcVhJZzlzcFh0R0R5VHBEVEFWSlJlRERGVkUtZHlzX1VBQSJ9.ca3gVd45DV424IJv19irYkcAUJ8nP0_zuL74J5lA8QpMAW_T7qfqBF17ae7ayYI_tcycp6ZVdXzrW0VmGiDMBg"
     },
     {
       "sequence": 3,
-      "operationCID": "op4_update_item_1",
+      "operationCID": "bafyreih55e2rdyqwuef2ah7uv7pr545ryrp725ci6z2meiveimvob2e7ia",
+      "documentCID": "bafyreiefvqegtevpgy7bf2hbxl54meamxcjsouo5n2ryajrqpep5u3syoi",
       "action": "update-item",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "update-item",
-        "createdByDID": "did:dfos:alice",
-        "targetOperationCID": "op1_create_item_1",
+        "createdByDID": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4",
+        "targetOperationCID": "bafyreiafexf45m5f2sia5oj5cc6zrnpwnem7zkcr5tgfycbjvjuy5l4iqm",
         "title": "Hello world (edited)",
         "body": "My first post, now edited."
-      }
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczp0OTR0emNlNjc5M2N2ejlrZTg2OWY3YTk5YWNoY2Q0I2tleV9lOWhybnY4a2thYzM5cmZ2dm45ejY2Mzg4NnZyZnRoIiwiY2lkIjoiYmFmeXJlaWg1NWUycmR5cXd1ZWYyYWg3dXY3cHI1NDVyeXJwNzI1Y2k2ejJtZWl2ZWltdm9iMmU3aWEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6dDk0dHpjZTY3OTNjdno5a2U4NjlmN2E5OWFjaGNkNCIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWJhN2NjYzdueGhkNzd4bG55emR3bjdjYXV4ZndpdjJ5cWp2c2NqcWFwaml4M3NpcnV3b2kiLCJkb2N1bWVudENJRCI6ImJhZnlyZWllZnZxZWd0ZXZwZ3k3YmYyaGJ4bDU0bWVhbXhjanNvdW81bjJyeWFqcnFwZXA1dTNzeW9pIiwiYmFzZURvY3VtZW50Q0lEIjpudWxsLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTI1VDAxOjMwOjAwLjAwMFoifQ.tMVK3m77JV9d_Grbv-nZlwKnUJd-E31rSaO0fCrA_arG5ixl-MxsIVpDQu3-qBuJM0L63DhwtQcXvH47nALdDg"
     },
     {
       "sequence": 4,
-      "operationCID": "op5_react_fire",
+      "operationCID": "bafyreiee375lnrov2t2hi5cpapv4h5w2ut3f33jlqkod3hhhk2e2zaz4zu",
+      "documentCID": "bafyreifxzquuuwq4ntq3ovdmkigwlnarbdrqip5lvnppi56p5c3qcwo3vm",
       "action": "react",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "react",
-        "createdByDID": "did:dfos:alice",
-        "targetOperationCID": "op2_create_item_2",
+        "createdByDID": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4",
+        "targetOperationCID": "bafyreibajcp7j5s3ymh3uvxf2bdbnd5ct2tdiwcmwyata4qiajun352jf4",
         "reaction": "fire"
-      }
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczp0OTR0emNlNjc5M2N2ejlrZTg2OWY3YTk5YWNoY2Q0I2tleV9lOWhybnY4a2thYzM5cmZ2dm45ejY2Mzg4NnZyZnRoIiwiY2lkIjoiYmFmeXJlaWVlMzc1bG5yb3YydDJoaTVjcGFwdjRoNXcydXQzZjMzamxxa29kM2hoaGsyZTJ6YXo0enUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6dDk0dHpjZTY3OTNjdno5a2U4NjlmN2E5OWFjaGNkNCIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWg1NWUycmR5cXd1ZWYyYWg3dXY3cHI1NDVyeXJwNzI1Y2k2ejJtZWl2ZWltdm9iMmU3aWEiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlmeHpxdXV1d3E0bnRxM292ZG1raWd3bG5hcmJkcnFpcDVsdm5wcGk1NnA1YzNxY3dvM3ZtIiwiYmFzZURvY3VtZW50Q0lEIjpudWxsLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTI1VDAxOjQwOjAwLjAwMFoifQ.QirMVlQ3kWFTmsMbyLoL_8OdttObcQWIucKLwTH3pSQ1rvyyIbzzw_dzvo9EajgtngCWkdq8cjBNZeuzUSM3CA"
     },
     {
       "sequence": 5,
-      "operationCID": "op6_delete_item_2",
+      "operationCID": "bafyreiduqlk3gskf6py4bjjo3evesf5e7o3ow4fnyrxsef6oacc6rhmhnu",
+      "documentCID": "bafyreidcd2ecfp6rjr3pgg6mygjhf6mt4bv36na6vg4gud4ocpics5r5su",
       "action": "delete-item",
       "document": {
         "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
         "action": "delete-item",
-        "createdByDID": "did:dfos:bob",
-        "targetOperationCID": "op2_create_item_2"
-      }
+        "createdByDID": "did:dfos:438ekrfa969dztt74e8td242k747tdf",
+        "targetOperationCID": "bafyreibajcp7j5s3ymh3uvxf2bdbnd5ct2tdiwcmwyata4qiajun352jf4"
+      },
+      "jws": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczo0Mzhla3JmYTk2OWR6dHQ3NGU4dGQyNDJrNzQ3dGRmI2tleV9rMzZyMzZha2tlZDR6NzQ0ODZoemY4OTZjdnJhMms4IiwiY2lkIjoiYmFmeXJlaWR1cWxrM2dza2Y2cHk0YmpqbzNldmVzZjVlN28zb3c0Zm55cnhzZWY2b2FjYzZyaG1obnUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6NDM4ZWtyZmE5NjlkenR0NzRlOHRkMjQyazc0N3RkZiIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWVlMzc1bG5yb3YydDJoaTVjcGFwdjRoNXcydXQzZjMzamxxa29kM2hoaGsyZTJ6YXo0enUiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlkY2QyZWNmcDZyanIzcGdnNm15Z2poZjZtdDRidjM2bmE2dmc0Z3VkNG9jcGljczVyNXN1IiwiYmFzZURvY3VtZW50Q0lEIjpudWxsLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTI1VDAxOjUwOjAwLjAwMFoiLCJhdXRob3JpemF0aW9uIjoiZXlKaGJHY2lPaUpGWkVSVFFTSXNJblI1Y0NJNkltUnBaRHBrWm05ek9tTnlaV1JsYm5ScFlXd2lMQ0pyYVdRaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSTJ0bGVWOWxPV2h5Ym5ZNGEydGhZek01Y21aMmRtNDVlalkyTXpnNE5uWnlablJvSWl3aVkybGtJam9pWW1GbWVYSmxhV2cwZG5kMmVYTTJZelZwTkhKamJHdHdlSEZ1YlRSalpHRmhkbmx6TW5KMU1uWTBZbW8yYm1ObFl6UmtZM1p2Wm1kdWFIa2lmUS5leUoyWlhKemFXOXVJam94TENKMGVYQmxJam9pUkVaUFUwTnlaV1JsYm5ScFlXd2lMQ0pwYzNNaU9pSmthV1E2WkdadmN6cDBPVFIwZW1ObE5qYzVNMk4yZWpsclpUZzJPV1kzWVRrNVlXTm9ZMlEwSWl3aVlYVmtJam9pWkdsa09tUm1iM002TkRNNFpXdHlabUU1Tmpsa2VuUjBOelJsT0hSa01qUXlhemMwTjNSa1ppSXNJbUYwZENJNlczc2ljbVZ6YjNWeVkyVWlPaUpqYUdGcGJqb3FJaXdpWVdOMGFXOXVJam9pZDNKcGRHVWlmVjBzSW5CeVppSTZXMTBzSW1WNGNDSTZNakE1TURBeE5qQXdNQ3dpYVdGMElqb3hOemMwTXprNE5qQXdmUS5mTXRpQkZ6ZjFLalFRWTFqb2RXOFV4dUMyNjFjRy1GOXdjdnAxT1JITUVxNm9wOFJVMmZGV3JjdGVlSk9zS3RuT0ZNMVNsQVczS3g2cnctSmpuWUZBUSJ9.Nd1V9gXIzzGxvJy6oc0UdO10Kl35Yx7jiptfzKLr5UUNz69G1Wx2fvVFWHFNVDE5Hgh5hP443bkfYdX8dKcMBA"
     }
   ]
 }

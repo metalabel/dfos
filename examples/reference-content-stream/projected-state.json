@@ -2,33 +2,33 @@
   "description": "Expected state after folding all 6 operations from chain.json",
   "items": [
     {
-      "operationCID": "op4_update_item_1",
-      "originalOperationCID": "op1_create_item_1",
+      "operationCID": "bafyreih55e2rdyqwuef2ah7uv7pr545ryrp725ci6z2meiveimvob2e7ia",
+      "originalOperationCID": "bafyreiafexf45m5f2sia5oj5cc6zrnpwnem7zkcr5tgfycbjvjuy5l4iqm",
       "title": "Hello world (edited)",
       "body": "My first post, now edited.",
-      "createdByDID": "did:dfos:alice"
+      "createdByDID": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4"
     }
   ],
   "deletedItems": [
     {
-      "operationCID": "op2_create_item_2",
-      "deletedByOperationCID": "op6_delete_item_2",
+      "operationCID": "bafyreibajcp7j5s3ymh3uvxf2bdbnd5ct2tdiwcmwyata4qiajun352jf4",
+      "deletedByOperationCID": "bafyreiduqlk3gskf6py4bjjo3evesf5e7o3ow4fnyrxsef6oacc6rhmhnu",
       "title": "Second item",
-      "createdByDID": "did:dfos:bob"
+      "createdByDID": "did:dfos:438ekrfa969dztt74e8td242k747tdf"
     }
   ],
   "reactions": [
     {
-      "targetOperationCID": "op1_create_item_1",
+      "targetOperationCID": "bafyreiafexf45m5f2sia5oj5cc6zrnpwnem7zkcr5tgfycbjvjuy5l4iqm",
       "reaction": "thumbsup",
-      "createdByDID": "did:dfos:carol"
+      "createdByDID": "did:dfos:ad762tkff26tav6khvchah44rchccze"
     }
   ],
   "droppedReactions": [
     {
-      "targetOperationCID": "op2_create_item_2",
+      "targetOperationCID": "bafyreibajcp7j5s3ymh3uvxf2bdbnd5ct2tdiwcmwyata4qiajun352jf4",
       "reaction": "fire",
-      "createdByDID": "did:dfos:alice",
+      "createdByDID": "did:dfos:t94tzce6793cvz9ke869f7a99achcd4",
       "reason": "target item was deleted"
     }
   ],
