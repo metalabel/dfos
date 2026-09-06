@@ -2,7 +2,7 @@
 
   The verifier's own state — the store the CONSUMED replay discipline needs.
 
-  specs/SIWD.md requires consumed verification for every credential-returning
+  specs/INTEGRATIONS.md requires consumed verification for every credential-returning
   scope: each minted nonce is held server-side and spent by an ATOMIC
   check-and-delete, so a signed challenge redeems exactly once anywhere, not
   once per channel. `api/_lib.ts`'s sealed cookie cannot do that job — it is the

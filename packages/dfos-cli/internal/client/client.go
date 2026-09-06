@@ -26,7 +26,7 @@ const proofBasePath = "/proof/v1"
 //
 // ONE PROOF PER REQUEST. An identity proof binds one (method, host, path,
 // bodyHash, iat), so there is no mint-once token to cache and re-present — the
-// client signs each authenticated request as it makes it. See specs/API-AUTH.md.
+// client signs each authenticated request as it makes it. See specs/INTEGRATIONS.md.
 type Signer struct {
 	// Kid is the signing key's full DID URL. Its DID portion IS the principal:
 	// the identity proof names no other party.

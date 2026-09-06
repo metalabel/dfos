@@ -13,8 +13,8 @@
   replayable credential for any request to any route, where an identity proof
   binds ONE method, host, path, and body inside a window the RELAY owns.
 
-  See specs/WEB-RELAY.md "Authentication" and specs/API-AUTH.md
-  "The Identity Proof".
+  See specs/RELAY.md "Authentication" and specs/INTEGRATIONS.md
+  "The identity proof".
 
 */
 

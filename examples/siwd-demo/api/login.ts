@@ -16,7 +16,7 @@
                      this channel.
     credential set — written to the shared store. Success also hands back a
                      CREDENTIAL, which is portable and outlives this browser, so
-                     specs/SIWD.md requires the consumed discipline: the nonce
+                     specs/INTEGRATIONS.md requires the consumed discipline: the nonce
                      must be spendable exactly once, globally, by an atomic
                      delete that no second presentation can win.
 
@@ -103,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       });
       return;
     }
-    // specs/SIWD.md: `client_did` is REQUIRED for every credential-returning
+    // specs/INTEGRATIONS.md: `client_did` is REQUIRED for every credential-returning
     // scope, because a credential is issued TO a named DID. No key, no DID to
     // issue to, no scope.
     if (APP_KEY_ERROR !== null || APP_DID === null) {

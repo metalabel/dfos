@@ -3,7 +3,7 @@
   "info": {
     "title": "DFOS Web Relay",
     "version": "0.50.0",
-    "description": "HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves\nidentity chains, content chains, countersignatures, and content blobs.\n\nTwo data planes:\n- **Proof plane** (public): signed chain operations, countersignatures\n- **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials\n"
+    "description": "HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves\nidentity chains, content chains, countersignatures, and content blobs.\n\nTwo data planes:\n- **Proof plane** (public): signed chain operations, countersignatures\n- **Content plane** (authenticated): raw content blobs gated by identity proofs and DFOS credentials\n"
   },
   "paths": {
     "/.well-known/dfos-relay": {
@@ -2889,7 +2889,7 @@
         "type": "http",
         "scheme": "DFOS",
         "x-dfos-typ": "did:dfos:identity-proof",
-        "description": "An API-AUTH identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.\nThe scheme token is `DFOS`, matched case-insensitively; it is deliberately\nNOT `Bearer`, because nothing carried here is a bearer token. The proof\nbinds one exact request (method, the relay's own configured authority,\norigin-form path, body hash) inside a freshness window the relay owns, and\nresolves the signer's key against CURRENT identity state. On a write-shaped\nroute (blob upload, operation ingestion) the proof MUST also carry a `jti`\nmember, recorded in the relay's replay cache.\n"
+        "description": "An identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.\nThe scheme token is `DFOS`, matched case-insensitively; it is deliberately\nNOT `Bearer`, because nothing carried here is a bearer token. The proof\nbinds one exact request (method, the relay's own configured authority,\norigin-form path, body hash) inside a freshness window the relay owns, and\nresolves the signer's key against CURRENT identity state. On a write-shaped\nroute (blob upload, operation ingestion) the proof MUST also carry a `jti`\nmember, recorded in the relay's replay cache.\n"
       },
       "Credential": {
         "type": "apiKey",

@@ -3,8 +3,8 @@
   KEY-PROOF ENVELOPES FOR THE RELAY'S TEST FIXTURES
 
   Every key-role membership past a chain's genesis is admitted by an embedded
-  KEY-PROOF envelope and by nothing else (specs/KEY-PROOF.md § Chain-Walk
-  Verification). So any fixture here that introduces a key to a role — a
+  KEY-PROOF envelope and by nothing else (specs/PROTOCOL.md § Chain-walk
+  verification). So any fixture here that introduces a key to a role — a
   rotation, an added assert key, a promotion — has to carry one, or the
   membership is void and the key does not resolve.
 

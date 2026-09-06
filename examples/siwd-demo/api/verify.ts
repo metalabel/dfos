@@ -13,7 +13,7 @@
                      started the flow.
     credential set — the shared store, spent by an atomic GETDEL. Success hands
                      back a credential that outlives this browser, so
-                     specs/SIWD.md requires the artifact be retired globally, not
+                     specs/INTEGRATIONS.md requires the artifact be retired globally, not
                      merely bound to a channel. `consumeNonce` is that one-field
                      difference.
 

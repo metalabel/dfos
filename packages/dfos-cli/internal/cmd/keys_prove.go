@@ -1,7 +1,8 @@
 package cmd
 
 // `dfos keys add` (alias `keys prove`) — the holder's half of a key-add ceremony
-// (specs/KEY-PROOF.md).
+// (specs/PROTOCOL.md § Key possession, specs/INTEGRATIONS.md § Key
+// ceremonies).
 //
 // A ceremony operator displays a code on one screen; this command is what the
 // human runs on the machine that actually holds a key. It resolves the code,
@@ -710,7 +711,7 @@ func heldCandidate(selector string) (*candidateKey, error) {
 // A VOID MEMBERSHIP IS NOT A LINK, so it is not this refusal. A chain that
 // declared the key without a covering proof never proved it: the membership is
 // excluded from effective state, it never enters the index, and it never
-// obligates the true holder (specs/KEY-PROOF.md, Holder Obligations). Refusing on
+// obligates the true holder (specs/INTEGRATIONS.md, Holder obligations). Refusing on
 // it would let anyone freeze a key out of its own ceremony by declaring it and
 // proving nothing — the hostile-listing move the possession rule exists to
 // defang. The ledger reads effective state, so a key held under a void

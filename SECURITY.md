@@ -60,8 +60,8 @@ upstream, though we welcome a heads-up), and issues that require a compromised
 host or a user's own private keys.
 
 For the consolidated adversary model and trust-boundary reference — adversary
-classes, the trustless proof plane vs. honest-host content plane split, and the
-explicitly-accepted v1 residual risks — see
+classes, the self-authenticating proof plane vs. honest-host content plane
+split, and the explicitly-accepted residual risks — see
 [specs/THREAT-MODEL.md](specs/THREAT-MODEL.md).
 
 ## Safe harbor

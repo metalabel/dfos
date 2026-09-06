@@ -167,9 +167,9 @@ The standard representation of a reference to external media bytes. Defined once
 - **`cid`** (OPTIONAL) is a verifiable commitment to the bytes: a CIDv1 with the **raw codec (`0x55`)** and **sha2-256**, encoded base32 lowercase (a 59-char `bafkrei…` string), computed over the media bytes **exactly as stored and served**. Media bytes are opaque binary, so a consumer verifies by hashing the fetched bytes directly; unlike document blobs, no re-canonicalization is involved. `cid` is optional because some media has no cid computed for it. When `cid` is present, a consumer SHOULD verify the bytes it receives against it.
 - **`href`** (OPTIONAL) is an implementation-dependent fallback: a plain URL where the bytes may currently be fetched. It is non-normative, carries no integrity promise, and MAY rot. Consumers resolve `uri` and verify with `cid`; `href` is a hint, never the reference.
 
-**The `attachment://` ref is opaque and host-scoped.** `<id>` is an identifier meaningful to the host that committed the document, and nothing about the bytes is derivable from the ref itself. Resolution, turning the ref into fetchable bytes, is host- or gateway-dependent: a [document-gateway](https://protocol.dfos.com/web-relay#content-plane--document-gateway) deployment resolves it out of protocol, for example via a signed-CDN API. **The ref carries no integrity. `cid` is the only integrity commitment a media object makes**, and a media object with no `cid` gives a consumer nothing to check the bytes against.
+**The `attachment://` ref is opaque and host-scoped.** `<id>` is an identifier meaningful to the host that committed the document, and nothing about the bytes is derivable from the ref itself. Resolution, turning the ref into fetchable bytes, is host- or gateway-dependent: a [content-plane](https://protocol.dfos.com/relay#content-plane-capability-content) host resolves it out of protocol, for example via a signed-CDN API. **The ref carries no integrity. `cid` is the only integrity commitment a media object makes**, and a media object with no `cid` gives a consumer nothing to check the bytes against.
 
-A media object is the referential case: a document is either _terminal_, where the `{ $schema, … }` blob is the content, or _referential_, where it describes how to fetch external bytes. Resolving a media object, the delivery of the actual media bytes, is outside the protocol. The document gateway serves the document that _contains_ the media object as opaque bytes and never dereferences the pointer. There is no media gateway: media lives at the application and delivery layer, bound to the proof plane only by the signed reference, with `cid` as the optional content hash that lets a consumer verify the bytes it receives.
+A media object is the referential case: a document is either _terminal_, where the `{ $schema, … }` blob is the content, or _referential_, where it describes how to fetch external bytes. Resolving a media object, the delivery of the actual media bytes, is outside the protocol. The content plane serves the document that _contains_ the media object as opaque bytes and never dereferences the pointer. There is no media server: media lives at the application and delivery layer, bound to the proof plane only by the signed reference, with `cid` as the optional content hash that lets a consumer verify the bytes it receives.
 
 ### Reference content stream (`https://schemas.dfos.com/reference-content-stream/v1`)
 
@@ -189,7 +189,7 @@ The canonical example of the [stream](#stream) interpretation. Each operation ap
 {
   "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
   "action": "create-item",
-  "createdByDID": "did:dfos:alice",
+  "createdByDID": "did:dfos:alice...",
   "title": "Hello world",
   "body": "My first post."
 }

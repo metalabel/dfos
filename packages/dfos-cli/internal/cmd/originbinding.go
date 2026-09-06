@@ -1,6 +1,6 @@
 package cmd
 
-// Origin binding — the CLI half of specs/ORIGIN-BINDING.md
+// Origin binding — the CLI half of specs/INTEGRATIONS.md
 // (https://protocol.dfos.com/origin-binding).
 //
 // A DfosOrigin services entry names a domain inside the signed identity chain;

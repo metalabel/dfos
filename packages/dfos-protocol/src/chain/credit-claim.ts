@@ -20,7 +20,7 @@
   The bind is two-way. The space-signed document asserts the entry (assertion by
   commitment); the claimant signs the claim (assertion by signature); the two are
   bound by the exact match of (contentId, did, role) between the entry plaintext
-  and the signed payload. See `specs/CREDITS.md` for the four verification states
+  and the signed payload. See `specs/CONTENT-MODEL.md` for the four verification states
   and the full algorithm.
 
   Verification deliberately does NOT consult the claimant's isDeleted state —
@@ -63,7 +63,7 @@ export interface VerifiedCreditClaim {
 }
 
 /**
- * The four states a `credits[]` entry resolves to (see `specs/CREDITS.md`).
+ * The four states a `credits[]` entry resolves to (see `specs/CONTENT-MODEL.md`).
  *
  * `invalid` and `unverifiable` are deliberately distinct and MUST NOT be
  * collapsed: `invalid` means "checked and failed" (a positive signal that

@@ -8,7 +8,7 @@ info:
 
     Two data planes:
     - **Proof plane** (public): signed chain operations, countersignatures
-    - **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials
+    - **Content plane** (authenticated): raw content blobs gated by identity proofs and DFOS credentials
 
 # NO `servers` MEMBER, DELIBERATELY. This document describes the wire surface of
 # every DFOS relay, not the address of any one of them, so there is no host it
@@ -1940,7 +1940,7 @@ paths:
 
 components:
   securitySchemes:
-    # API-AUTH "Advertising in OpenAPI". Component NAMES are this host's choice —
+    # INTEGRATIONS "Advertising in OpenAPI". Component NAMES are this host's choice —
     # a consumer identifies a scheme structurally, by type / scheme / header name
     # and the x-dfos-typ marker, never by the name below.
     IdentityProof:
@@ -1948,7 +1948,7 @@ components:
       scheme: DFOS
       x-dfos-typ: did:dfos:identity-proof
       description: |
-        An API-AUTH identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.
+        An identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.
         The scheme token is `DFOS`, matched case-insensitively; it is deliberately
         NOT `Bearer`, because nothing carried here is a bearer token. The proof
         binds one exact request (method, the relay's own configured authority,

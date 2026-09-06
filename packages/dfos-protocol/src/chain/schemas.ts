@@ -214,7 +214,7 @@ const IdentityUpdate = z.looseObject({
   createdAt: Iso8601,
   /**
    * POSSESSION PROOFS FOR THE KEYS THIS OPERATION INTRODUCES — compact key-proof
-   * JWS strings (specs/KEY-PROOF.md), each signed by the key it speaks for.
+   * JWS strings (specs/PROTOCOL.md § Key possession), each signed by the key it speaks for.
    *
    * Optional, and optional in the CID-neutral sense: omitting it encodes
    * identically to an operation that never had it (undefined strips under
@@ -488,7 +488,7 @@ export const MAX_CREDIT_CLAIM_SIZE = 4096;
  * Credit claim: a claimant's signed assertion that it holds a named role on a
  * content chain. A document-plane artifact — it is NOT gossiped and relays are not
  * credit-claim aware; a claim travels inside the document bytes that embed it (see
- * `specs/CREDITS.md`).
+ * `specs/CONTENT-MODEL.md`).
  *
  * `contentId` is the binder — the STABLE 31-char content chain id, never a
  * documentCID or a chain head CID. Binding to the chain (not a document) is what

@@ -1,8 +1,8 @@
 # DFOS Credentials
 
-[UCAN](https://github.com/ucan-wg/spec)-style authorization credentials for the DFOS protocol. Replaces VC-JWTs with a simpler, more powerful model: CID-addressable JWS tokens with embedded delegation chains, monotonic attenuation enforcement, and first-class public credential semantics.
+Authorization credentials for the DFOS protocol: CID-addressable JWS tokens that carry a resource grant, a linear delegation chain, and an expiry. They answer one question, "does this DID have permission to do this thing?", and they are the artifact a non-creator presents to write a content chain or to read a gated resource.
 
-> **Status — Protocol v1: feature-complete and frozen.** The credential model — the JWS envelope, linear delegation, monotonic attenuation, revocation, and the validity bounds — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is frozen but not yet final: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [DFOS](https://nce.dfos.com) space.
+The shape is [UCAN](https://github.com/ucan-wg/spec) 0.10's: a compact-JWS token whose payload carries `att` attenuations and a `prf` proof chain. Three deltas from UCAN are deliberate. `prf` carries at most one parent, so delegation is linear. There is no `nnc`, `fct`, or `nbf` member: a credential is a standing grant, request binding is the API request proof's job, and `exp` against the basis time is the whole temporal window. Revocation is a first-class signed artifact on the proof plane.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/credentials) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
@@ -10,20 +10,14 @@
 
 ## Overview
 
-DFOS credentials are signed authorization tokens. They answer the question: "does this DID have permission to do this thing?" A credential is a JWS-encoded payload where the issuer grants the audience specific permissions over specific resources, with an expiry.
+Two mechanisms make credentials composable:
 
-Two mechanisms make credentials composable, and both are [UCAN](https://github.com/ucan-wg/spec)'s:
+1. **Delegation chains.** A credential embeds its parent credential in its `prf` field, forming a verifiable linear chain of authority from a root issuer down to the leaf holder.
+2. **Monotonic attenuation.** Each hop in a delegation chain narrows scope and never widens it: fewer resources, fewer actions, shorter expiry.
 
-1. **Delegation chains** — a credential can embed its parent credential in a `prf` (proof) field, forming a verifiable linear chain of authority from a root issuer down to the leaf holder.
-2. **Monotonic attenuation** — each hop in a delegation chain can only narrow scope, never widen it. Fewer resources, fewer actions, shorter expiry.
+Credentials are content-addressed via CID, using the same `dagCborCanonicalEncode` plus SHA-256 scheme as all protocol objects. The CID is carried in the JWS header, which makes each credential a stable artifact and gives revocation an address.
 
-The lineage is specific, and worth pinning because UCAN itself has two eras. DFOS credentials take the **UCAN 0.10** shape — a compact-JWS token whose payload carries `att` attenuations and a `prf` proof chain — not [UCAN 1.0](https://github.com/ucan-wg/spec)'s restructuring into separate invocation/delegation/revocation tokens over dag-cbor + [varsig](https://github.com/ChainAgnostic/varsig) envelopes with `sub`/`cmd`/`args` semantics: adopting that envelope for credentials alone would fork the JWS-compact discipline every DFOS envelope family shares. Past the envelope, the deltas from UCAN in either era are deliberate:
-
-- **`prf` is a single parent, never an array.** UCAN admits multi-proof delegation; DFOS delegation is linear by rule ([Delegation Chains](#delegation-chains)) — attenuating a child against the union of several parents while rooting the walk through one is an authority-escalation class removed by construction.
-- **No `nnc`, `fct`, or `nbf`.** There is no nonce member (a credential is a standing grant, not an invocation — request binding is [API-AUTH](https://protocol.dfos.com/api-auth)'s artifact), no facts member (a credential carries authority and nothing else), and no separate not-before (`iat` opens the validity window — [Expiry Basis](#expiry-basis-normative)).
-- **Revocation is a first-class signed artifact, gossiped on the proof plane** (`did:dfos:revocation` — [Revocation](#revocation)), where UCAN 1.0 leaves revocation to a RECOMMENDED sub-specification.
-
-Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-256 scheme as all protocol objects). The CID appears in the JWS header, making each credential a stable, revocable artifact.
+Every credential is verified against a **basis time**, defined once in [PROTOCOL, Time basis](https://protocol.dfos.com/spec#time-basis): the operation's own `createdAt` for a credential carried inline in a committed operation, and now for a credential presented at read time. Every temporal and key-resolution rule in this document resolves at that basis. Signature checking follows [PROTOCOL, Signature verification profile](https://protocol.dfos.com/spec#signature-verification-profile), which is normative for credentials and revocations and is not restated here.
 
 ---
 
@@ -31,7 +25,7 @@ Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-2
 
 ### DFOSCredentialPayload
 
-The credential payload is validated against the schema below. Unknown top-level fields are preserved-and-ignored (forward-compat, per the protocol's MUST-ignore-unknown rule), not rejected; the CID still commits to the exact bytes.
+The credential payload is validated against the schema below. Unknown top-level fields are preserved and ignored rather than rejected; the CID still commits to the exact bytes.
 
 ```json
 {
@@ -46,18 +40,20 @@ The credential payload is validated against the schema below. Unknown top-level 
 }
 ```
 
-| Field     | Type               | Description                                                               |
-| --------- | ------------------ | ------------------------------------------------------------------------- |
-| `version` | `1`                | Schema version (literal `1`)                                              |
-| `type`    | `"DFOSCredential"` | Literal discriminator                                                     |
-| `iss`     | string             | Issuer DID — the authority granting permission                            |
-| `aud`     | string             | Audience DID, or `"*"` for public credentials                             |
-| `att`     | Attenuation[]      | Resource + action pairs (min 1, max 32)                                   |
-| `prf`     | string[]           | Parent credential JWS token — at most 1 (linear delegation), default `[]` |
-| `exp`     | number             | Expiration — unix seconds (positive integer)                              |
-| `iat`     | number             | Issued-at — unix seconds (positive integer)                               |
+| Field     | Type               | Description                                                              |
+| --------- | ------------------ | ------------------------------------------------------------------------ |
+| `version` | `1`                | Schema version (literal `1`)                                             |
+| `type`    | `"DFOSCredential"` | Literal discriminator                                                    |
+| `iss`     | string             | Issuer DID, the authority granting permission                            |
+| `aud`     | string             | Audience DID, or `"*"` for public credentials                            |
+| `att`     | Attenuation[]      | Resource + action pairs (min 1, max 32)                                  |
+| `prf`     | string[]           | Parent credential JWS token, at most 1 (linear delegation), default `[]` |
+| `exp`     | number             | Expiration, unix seconds (positive integer)                              |
+| `iat`     | number             | Issued-at, unix seconds (positive integer). Informational                |
 
-### Attenuation Entry
+`iat` records when the issuer minted the credential. It is not a verification gate: a credential is temporally authorized by `exp` against the basis time and by nothing else.
+
+### Attenuation entry
 
 Each attenuation entry is an object with two non-empty string fields:
 
@@ -70,9 +66,9 @@ Each attenuation entry is an object with two non-empty string fields:
 | `resource` | string | Resource identifier (`type:id` format) |
 | `action`   | string | Comma-separated action list            |
 
-### Size and Cardinality Limits
+### Size and cardinality limits
 
-A credential is bounded by **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. The validity rules that `iss`, `aud`, `resource`, and `action` participate in (issuer-key resolution, `aud → iss` delegation linkage, attenuation subset coverage) are enforced directly and identically in both implementations, so no per-field length cap is needed — and a per-field cap would only risk forking validity across implementations.
+A credential is bounded by one aggregate size cap plus a small set of cardinality caps, never a per-field string-length table. A per-field cap would only risk forking validity across implementations.
 
 **Aggregate credential size:**
 
@@ -80,16 +76,16 @@ A credential is bounded by **one aggregate size cap** plus a small set of **card
 | -------------------- | -------------------------- | ------------------------- |
 | credential JWS token | **262144 bytes** (256 KiB) | the serialized credential |
 
-Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 bytes, checked before any decode. The leaf token embeds the entire nested delegation chain (each parent is carried verbatim in `prf`), so this single cap bounds the whole chain. Credentials carry their own ceiling — larger than the 64 KiB operation cap ([PROTOCOL.md](https://protocol.dfos.com/spec)) — precisely because a maximum-depth delegation chain legitimately exceeds 64 KiB; the credential is exempt from the operation cap and bounded by this one instead.
+Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 bytes, checked before any decode. The leaf token embeds the entire nested delegation chain, each parent carried verbatim in `prf`, so this single cap bounds the whole chain. The ceiling is larger than the 64 KiB operation cap ([PROTOCOL](https://protocol.dfos.com/spec#size-and-cardinality-limits)) because a maximum-depth delegation chain legitimately exceeds 64 KiB; a credential is excluded from the operation cap and bounded by this one instead.
 
 **Cardinality caps:**
 
-| Field | Max      | Rationale                                                                          |
+| Field | Max      | Note                                                                               |
 | ----- | -------- | ---------------------------------------------------------------------------------- |
 | `att` | 32 items | Generous for multi-resource grants; min 1 (a zero-`att` credential grants nothing) |
 | `prf` | 1 item   | Single-parent (linear) delegation                                                  |
 
-### CID Derivation
+### CID derivation
 
 The credential payload is content-addressed using the same scheme as all protocol objects:
 
@@ -97,17 +93,17 @@ The credential payload is content-addressed using the same scheme as all protoco
 dagCborCanonicalEncode(payload) -> SHA-256 -> CIDv1 (dag-cbor + SHA-256)
 ```
 
-The resulting CID is embedded in the JWS protected header as `cid`. This makes the credential a stable, addressable artifact — used for revocation references and audit trails.
+The resulting CID is embedded in the JWS protected header as `cid`. This makes the credential a stable, addressable artifact, used for revocation references and audit trails.
 
-**CID integrity check:** During verification, the payload is re-encoded and the derived CID is compared against the `cid` header value. Mismatch is a verification failure.
+**CID integrity check:** during verification, the payload is re-encoded and the derived CID is compared against the `cid` header value. Mismatch is a verification failure.
 
-### JWS Encoding
+### JWS encoding
 
-The credential is signed as a JWS Compact Serialization token (`header.payload.signature`). The payload is JSON-encoded (not dag-cbor) in the JWS body, following standard JWS conventions. dag-cbor is used only for CID derivation.
+The credential is signed as a JWS Compact Serialization token (`header.payload.signature`). The payload is JSON-encoded, not dag-cbor, in the JWS body, following standard JWS conventions. dag-cbor is used only for CID derivation.
 
 ---
 
-## JWS Header
+## JWS header
 
 ```json
 {
@@ -118,93 +114,87 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 }
 ```
 
-| Field | Value                   | Description                                          |
-| ----- | ----------------------- | ---------------------------------------------------- |
-| `alg` | `"EdDSA"`               | Ed25519 signature algorithm                          |
-| `typ` | `"did:dfos:credential"` | Protocol-specific type discriminator                 |
-| `kid` | DID URL                 | `did:dfos:<id>#<keyId>` — identifies the signing key |
-| `cid` | CID string              | Content address of the payload (for revocation)      |
+| Field | Value                   | Description                                         |
+| ----- | ----------------------- | --------------------------------------------------- |
+| `alg` | `"EdDSA"`               | Ed25519 signature algorithm                         |
+| `typ` | `"did:dfos:credential"` | Protocol-specific type discriminator                |
+| `kid` | DID URL                 | `did:dfos:<id>#<keyId>`, identifies the signing key |
+| `cid` | CID string              | Content address of the payload (for revocation)     |
 
-**kid format:** The `kid` MUST be a DID URL containing `#`. The DID portion (before `#`) MUST match the `iss` field in the payload. The key fragment (after `#`) identifies which key on the issuer's identity was used to sign.
+**typ.** The protected header `typ` MUST equal the exact string `did:dfos:credential`. A JWS carrying any other `typ` is not a credential and is rejected before any credential rule runs, which is what keeps a JWS signed for one purpose from being presented as another.
 
-**Key resolution:** The signing key is resolved from the issuer's identity chain using **historical key resolution** — all keys that have ever appeared in the identity chain's create and update operations are considered valid signing keys, not just the current state. This means credentials survive key rotation: a credential signed before a key rotation remains valid even after the signing key is no longer in the issuer's current state. Revocation (not key rotation) is the invalidation mechanism for credentials. Any key role (auth, assert, controller) is accepted — the protocol does not restrict which key role may sign credentials.
+**kid format.** The `kid` MUST be a DID URL containing `#`. The DID portion (before `#`) MUST match the `iss` field in the payload. The key fragment (after `#`) identifies which key on the issuer's identity signed.
 
-This is distinct from live authentication ([API-AUTH](https://protocol.dfos.com/api-auth)'s identity and request proofs), which uses **current-state-only** key resolution (rotated-out keys are immediately rejected). The difference reflects the different lifetimes: proofs are ephemeral (seconds), while credentials are long-lived (hours to months) and their validity is managed through explicit revocation.
+**Key resolution.** The signing key is resolved from `kid` against the issuer's identity chain, in that identity's effective state as of the [basis time](https://protocol.dfos.com/spec#time-basis). A credential carried inline in a committed operation therefore still verifies after the issuer rotates that key out, and the same key signs nothing new once it is gone. Any key role (auth, assert, controller) may sign a credential; the protocol does not restrict which role.
+
+Revocation, not rotation, is how an issuer kills a credential ahead of its expiry.
 
 ---
 
-## Delegation Chains
+## Delegation chains
 
-Delegation chains enable transitive authorization. A root authority issues a credential to an intermediary, who can then issue a narrower credential to a downstream party, embedding the parent credential as proof.
+Delegation chains enable transitive authorization. A root authority issues a credential to an intermediary, who issues a narrower credential to a downstream party, embedding the parent credential as proof.
 
-### `prf` Semantics
+### `prf` semantics
 
-The `prf` field contains an array of full JWS compact tokens — the complete parent credentials, not references or CIDs. This makes each credential self-contained: a verifier can walk the entire chain without external lookups (beyond identity resolution).
+The `prf` field carries full JWS compact tokens, the complete parent credentials, not references or CIDs. Each credential is therefore self-contained: a verifier walks the entire chain with no external lookups beyond identity resolution.
 
-- `prf: []` — root credential. The issuer is the original authority.
-- `prf: ["<parent JWS>"]` — delegated credential. The single parent credential proves the issuer was authorized.
+- `prf: []` is a root credential. The issuer is the original authority.
+- `prf: ["<parent JWS>"]` is a delegated credential. The single parent proves the issuer was authorized.
 
-**Delegation is linear (single-parent).** A credential's `prf` MUST contain at most one entry. Verifiers MUST reject any credential whose `prf` has more than one element. (Attenuating a child against the _union_ of several parents while rooting the walk through only the first would let a self-issued secondary parent contribute authority never rooted at the expected creator — an authority escalation. Linear delegation removes the class by construction.)
+**Delegation is linear (single-parent).** A credential's `prf` MUST contain at most one entry, and verifiers MUST reject any credential whose `prf` has more than one element. Attenuating a child against the union of several parents while rooting the walk through one of them is an authority escalation, removed here by construction.
 
-### Verification Walk
+### Verification walk
 
 Chain verification proceeds from the leaf credential upward:
 
-1. **Verify the leaf credential** — signature, schema, expiry, CID integrity.
-2. **Reject multi-parent** — if `prf` has more than one entry, reject.
-3. **Verify the parent in `prf`** — same checks, recursively.
-4. **Audience linkage** — the child's `iss` MUST match the parent's `aud` (or the parent's `aud` MUST be `"*"`). This prevents a DID from using a credential not addressed to it.
-5. **Expiry narrowing** — the child's `exp` MUST NOT exceed the parent's `exp`.
-6. **Attenuation check** — the child's `att` MUST be a valid attenuation of the parent's `att` (see [Attenuation Rules](#attenuation-rules)).
-7. **Root check** — when a credential has `prf: []`, its `iss` MUST equal the expected root DID (e.g., the content chain creator).
+1. **Verify the leaf credential:** signature, schema, `exp` against the basis, CID integrity.
+2. **Reject multi-parent:** if `prf` has more than one entry, reject.
+3. **Verify the parent in `prf`:** same checks, at the same basis, recursively.
+4. **Audience linkage:** the child's `iss` MUST match the parent's `aud` (or the parent's `aud` MUST be `"*"`). This prevents a DID from using a credential not addressed to it.
+5. **Expiry narrowing:** the child's `exp` MUST NOT exceed the parent's `exp`.
+6. **Attenuation check:** the child's `att` MUST be a valid attenuation of the parent's `att` (see [Attenuation rules](#attenuation-rules)).
+7. **Root check:** when a credential has `prf: []`, its `iss` MUST equal the expected root DID (for example the content chain creator).
 
-**Depth limit:** A delegation chain MUST contain at most **16 credentials**, counting the leaf and the root inclusive (i.e. at most 15 delegation hops). A verifier walks from the leaf (counted as the first credential) toward the root; the **17th credential is rejected** ("delegation chain too deep"). This boundary is exact and normative — verifiers MUST agree on it (a verifier that accepts a 17-credential chain forks authorization validity). Conformance: a 16-credential chain verifies; a 17-credential chain is rejected.
+Every level of the walk uses the one basis time of the verification, the leaf's and each parent's alike.
 
-**Revocation at every level:** Revocation is checked at every level of the delegation chain — the leaf credential AND each parent — not just the leaf (MUST — see Revocation / Relay Enforcement).
+**Depth limit.** A delegation chain MUST contain at most **16 credentials**, counting the leaf and the root inclusive, so at most 15 delegation hops. A verifier walks from the leaf, counted as the first credential, toward the root; the **17th credential is rejected** ("delegation chain too deep"). This boundary is exact and normative: a verifier that accepts a 17-credential chain forks authorization validity. Conformance: a 16-credential chain verifies, a 17-credential chain is rejected.
+
+**Revocation at every level.** Revocation is checked at every level of the delegation chain, the leaf credential AND each parent, not just the leaf (MUST, see [Relay enforcement](#relay-enforcement)).
 
 ---
 
-## Attenuation Rules
+## Attenuation rules
 
 Every delegation hop enforces monotonic attenuation. The child credential's scope MUST be a subset of the parent's scope. Two dimensions are attenuated independently: resources and actions.
 
-### Scope Narrowing
+### Scope narrowing
 
 Every entry in the child's `att` array must be covered by at least one entry in the parent's `att` array.
 
-Valid narrowing examples:
+Valid narrowing:
 
-- Parent grants `chain:X` and `chain:Y` -- child requests only `chain:X` (subset of resources)
-- Parent grants `read,write` -- child requests only `read` (subset of actions)
-- Parent grants `chain:*` -- child requests `chain:X` (wildcard to specific)
+- Parent grants `chain:X` and `chain:Y`, child requests only `chain:X` (subset of resources)
+- Parent grants `read,write`, child requests only `read` (subset of actions)
+- Parent grants `chain:*`, child requests `chain:X` (wildcard to specific)
 
 Invalid widening:
 
-- Parent grants `chain:X` -- child requests `chain:X` and `chain:Y` (new resource)
-- Parent grants `read` -- child requests `read,write` (new action)
-- Parent grants `chain:X` -- child requests `chain:*` (specific to wildcard)
+- Parent grants `chain:X`, child requests `chain:X` and `chain:Y` (new resource)
+- Parent grants `read`, child requests `read,write` (new action)
+- Parent grants `chain:X`, child requests `chain:*` (specific to wildcard)
 
-### Action Coverage
+### Action coverage
 
-An action is a **comma-separated list** of action tokens. To compare two action
-strings, each is **canonicalized to a set** of tokens by the following rules,
-applied identically by every verifier:
+An action is a **comma-separated list** of action tokens. To compare two action strings, each is **canonicalized to a set** of tokens by the following rules, applied identically by every verifier:
 
 1. **Split on comma** (`,`).
 2. **Trim** ASCII leading/trailing whitespace from each element.
-3. **Drop empty elements.** An element that is empty after trimming contributes
-   nothing to the set. Leading, trailing, and doubled commas are therefore
-   insignificant — `read`, `read,`, `,read`, and `read,,read` all canonicalize
-   to `{read}`.
-4. **Collect into a set.** Order and duplication are insignificant; `write,read`
-   and `read,write` both canonicalize to `{read, write}`.
-5. **Compare tokens by exact, case-sensitive byte equality.** `read` and `Read`
-   are distinct actions. There is **no action wildcard** — a `*` token is an
-   ordinary, literal action token, not a match-all.
+3. **Drop empty elements.** An element that is empty after trimming contributes nothing to the set. Leading, trailing, and doubled commas are therefore insignificant: `read`, `read,`, `,read`, and `read,,read` all canonicalize to `{read}`.
+4. **Collect into a set.** Order and duplication are insignificant; `write,read` and `read,write` both canonicalize to `{read, write}`.
+5. **Compare tokens by exact, case-sensitive byte equality.** `read` and `Read` are distinct actions. There is **no action wildcard**: a `*` token is an ordinary, literal action token, not a match-all.
 
-The child's canonical action set MUST be a **subset** of the parent's canonical
-action set for the matched resource entry. Equivalently, every token in the
-child's set MUST appear in the parent's set.
+The child's canonical action set MUST be a **subset** of the parent's canonical action set for the matched resource entry. Equivalently, every token in the child's set MUST appear in the parent's set.
 
 | Parent action | Child action  | Canonical child set | Covered? |
 | ------------- | ------------- | ------------------- | -------- |
@@ -215,59 +205,23 @@ child's set MUST appear in the parent's set.
 | `read`        | `read,write`  | `{read, write}`     | No       |
 | `read`        | `Read`        | `{Read}`            | No       |
 
-**Empty action set (canonical bottom).** An action string that canonicalizes to
-the empty set `{}` (e.g. `""` or `","`) is the bottom of the action lattice: it
-is **vacuously a subset of any parent set**, so it never widens scope and passes
-the attenuation check, but it **grants nothing** — a request always carries a
-concrete action token, which is never a member of `{}`, so an `att` entry with
-an empty action set authorizes no operation. Such an entry is inert, not
-separately rejected.
+**Empty action set (canonical bottom).** An action string that canonicalizes to the empty set `{}`, for example `""` or `","`, is the bottom of the action lattice: it is vacuously a subset of any parent set, so it never widens scope and passes the attenuation check, but it grants nothing, because a request always carries a concrete action token and no token is a member of `{}`. Such an entry is inert, not separately rejected.
 
-### Expiry Narrowing
+### Expiry narrowing
 
 The child's `exp` MUST be less than or equal to every parent's `exp`. A delegated credential cannot outlive its authority.
 
-### Expiry Basis (Normative)
+### Expiry against the basis
 
-`exp` is **signer-discretionary**: the issuer chooses how long a credential is valid, and there is no protocol-imposed maximum in v1. Verifiers compare `exp` against a **deterministic time basis**, NOT a free-running wall clock:
-
-- **At ingest** (a delegated content operation carrying an inline `authorization`): `exp` is compared against the operation's own `createdAt`. A relay MUST NOT add an ingest-time wall-clock `exp` check. Each relay reads its own clock at a different instant, so a wall-clock check would make ingest verdicts diverge across relays and break convergence — the same content op would be accepted on one relay and rejected on another.
-- **At read** (standing authorization / per-request credential checks): `exp` is compared against the current time, because reads are local, ephemeral decisions that never enter the replicated log.
-
-#### Time Basis Conversion and Boundaries (Normative)
-
-The ingest time basis is derived from the operation's `createdAt` (a string in the [timestamp grammar](https://protocol.dfos.com/spec#timestamp-grammar)) by converting to **integer Unix seconds**:
-
-```
-now_s = floor(createdAt_epoch_ms / 1000)
-```
-
-where `createdAt_epoch_ms` is the number of milliseconds since the Unix epoch parsed from the `createdAt` string. The conversion MUST truncate (floor) the millisecond remainder; it MUST NOT round. For the `.000Z` millisecond form used by all conforming operations this is exact, but implementations MUST floor unconditionally so that any sub-second component is discarded rather than rounded up.
-
-A credential's `iat` and `exp` are integer Unix seconds (JWT `NumericDate`). At ingest, a credential is temporally authorized **if and only if**:
-
-```
-iat <= now_s  AND  now_s < exp
-```
-
-This is the half-open interval `[iat, exp)`. The two boundaries are not symmetric and MUST be enforced exactly as stated:
-
-- **`iat` boundary is inclusive (open-accepting).** A credential MUST be accepted when `iat == now_s`. A credential MUST be rejected as not-yet-valid only when `iat > now_s`.
-- **`exp` boundary is exclusive (closed-rejecting).** A credential MUST be rejected as expired when `exp <= now_s`, including the exact instant `exp == now_s`. A credential is temporally valid only while `now_s < exp`.
-
-Conversely, an `exp` strictly greater than `now_s` (i.e. in the future relative to the operation's `createdAt`) MUST be accepted on the temporal check — even if that `exp` is already in the past relative to the verifier's own wall clock.
-
-This conversion and these boundaries are evaluated against the operation's `createdAt`, never against the verifier's wall clock (see the ingest bullet above). Two relays processing the same content operation therefore reach the same temporal verdict regardless of when each one ingests it.
-
-Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future); that is deployment policy, out of scope for the wire protocol — v1 defines no maximum-`exp` cap.
+`exp` is signer-discretionary: the issuer chooses how long a credential is valid, and the protocol imposes no maximum. A credential is temporally authorized when its `exp` is strictly greater than the [basis time](https://protocol.dfos.com/spec#time-basis), which is where the conversion of a committed operation's `createdAt` to integer Unix seconds and the exclusive `exp` boundary are specified. A relay MAY additionally refuse credentials whose `exp` is implausibly far in the future; that is deployment policy, not the wire protocol.
 
 ---
 
-## Resource Types
+## Resource types
 
-The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. (Never _matches_ — it may still be carried down a delegation chain under the exact-equality rule in [Attenuation Between Forms](#attenuation-between-forms); matching a request and surviving the attenuation walk are different questions, and only registered forms are ever matched.) Two additive forms are registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x) and [`api:<host>`](#apihost----credential-gated-api-access-additive-api-auth-0x), below.
+Two resource forms are defined under the `chain:` prefix, and two more forms are registered by the specs that consume them: [`mailbox:<id>`](#mailboxid-signing-mailbox-deposit) and [`api:<host>`](#apihost-credential-gated-api-access), below. The resource grammar (`type:id`) is open by construction, and an unrecognized resource type never matches a request. It may still be carried down a delegation chain under the exact-equality rule in [Attenuation between forms](#attenuation-between-forms): matching a request and surviving the attenuation walk are different questions, and only registered forms are ever matched.
 
-### `chain:<contentId>` -- Exact Match
+### `chain:<contentId>`, exact match
 
 Grants access to a specific content chain identified by its 31-character content ID.
 
@@ -277,9 +231,9 @@ Grants access to a specific content chain identified by its 31-character content
 
 Matching: `chain:X` matches only `chain:X`. Exact content ID comparison.
 
-### `chain:*` -- Wildcard Match
+### `chain:*`, wildcard match
 
-Grants access to all content chains owned by the credential's root authority. The wildcard covers all present and future content without enumerating specific chain IDs.
+Grants access to all content chains owned by the credential's root authority. The wildcard covers all of the issuer's content without enumerating specific chain IDs.
 
 ```json
 { "resource": "chain:*", "action": "read" }
@@ -287,9 +241,9 @@ Grants access to all content chains owned by the credential's root authority. Th
 
 Matching: `chain:*` matches any `chain:<contentId>` request for content where the delegation chain roots at the expected creator DID.
 
-This is the broadest resource scope. Common use case: granting a collaborator access to all of a creator's content.
+This is the broadest resource scope. Common use: granting a collaborator access to all of a creator's content.
 
-### Attenuation Between Forms
+### Attenuation between forms
 
 | Parent    | Child     | Valid? | Reason                                    |
 | --------- | --------- | ------ | ----------------------------------------- |
@@ -298,48 +252,44 @@ This is the broadest resource scope. Common use case: granting a collaborator ac
 | `chain:X` | `chain:X` | Yes    | Exact match                               |
 | `chain:X` | `chain:*` | No     | Widening from specific to wildcard        |
 
-The resource hierarchy from broadest to narrowest is: `chain:*` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
+The resource hierarchy from broadest to narrowest is `chain:*` > `chain:X`. Each delegation hop moves down this hierarchy, never up.
 
-Two of these rules are general — normative for **every** resource form, present and future, not just `chain:`:
+Two of these rules are general, normative for **every** resource form, not just `chain:`:
 
-- **Coverage never crosses resource types.** A `chain:` entry never covers a `mailbox:` request (nor any other pairing), in the delegation walk and in request matching alike.
-- **For every non-`chain:` form, attenuation narrows by exact byte equality of the full resource string.** The wildcard is a `chain:`-only concept: a literal `*` id in any other type is an ordinary id covering only itself. A verifier that generalized the wildcard would widen every future resource form's delegation semantics unilaterally; exact equality is the default a newly registered form gets unless its own registration states otherwise (none does).
+- **Coverage never crosses resource types.** A `chain:` entry never covers a `mailbox:` request, nor any other pairing, in the delegation walk and in request matching alike.
+- **For every non-`chain:` form, attenuation narrows by exact byte equality of the full resource string.** The wildcard is a `chain:`-only concept: a literal `*` id in any other type is an ordinary id covering only itself. Exact equality is what a registered form gets unless its own registration says otherwise, and none does.
 
-### `mailbox:<id>` -- Signing Mailbox Deposit (additive, SIGNING 0.x)
+### `mailbox:<id>`, signing mailbox deposit
 
-> **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with the [signing mailbox](https://protocol.dfos.com/signing) capability and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
-
-Grants the audience the right to **deposit** sign requests into the subject's relay mailbox. `<id>` is the subject DID's 31-character identifier (the `did:dfos:` prefix stripped, exactly as `chain:<contentId>` does not repeat its scheme).
+Grants the audience the right to **deposit** sign requests into the subject's relay mailbox. `<id>` is the subject DID's 31-character identifier, the `did:dfos:` prefix stripped, exactly as `chain:<contentId>` does not repeat its scheme.
 
 ```json
 { "resource": "mailbox:cnnnft9f8a2rn938d6nkz38r847v2kr", "action": "deposit" }
 ```
 
-- **`deposit` is the only action.** There is deliberately no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential — credentials delegate authority to _others_, and being yourself is not a delegation. See [SIGNING.md](https://protocol.dfos.com/signing) for the reasoning; a credential attenuated to any other action on a `mailbox:` resource grants nothing.
-- **Exact match only — in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit. Delegation follows the general non-`chain:` rule in [Attenuation Between Forms](#attenuation-between-forms): coverage for a `mailbox:` entry is exact byte equality of the full resource string, and coverage never crosses resource types.
-- **The consuming rule lives in SIGNING.md**, including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID** — only the subject is original authority over its own mailbox.
+- **`deposit` is the only action.** There is no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential. A credential attenuated to any other action on a `mailbox:` resource grants nothing.
+- **Exact match only, in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*`, or any non-exact form, as covering a deposit. Delegation follows the general non-`chain:` rule in [Attenuation between forms](#attenuation-between-forms).
+- **The consuming rules live with the signing mailbox** ([RELAY, Deposit authorization](https://protocol.dfos.com/relay#deposit-authorization)), including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID**, because only the subject is original authority over its own mailbox.
 
-### `api:<host>` -- Credential-Gated API Access (additive, API-AUTH 0.x)
+### `api:<host>`, credential-gated API access
 
-> **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with [API authentication](https://protocol.dfos.com/api-auth) and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
-
-Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's lowercase authority — the bare hostname on the default HTTPS port, `host:port` otherwise; never a scheme or path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere. The full byte semantics (why the port is bound only when non-default, and how it must equal the request proof's `host`) live in [API-AUTH.md](https://protocol.dfos.com/api-auth).
+Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's lowercase authority: the bare hostname on the default HTTPS port, `host:port` otherwise, never a scheme or path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere.
 
 ```json
 { "resource": "api:api.dfos.com", "action": "read:profile" }
 ```
 
-- **Actions are enumerated registry tokens**, defined in [API-AUTH.md](https://protocol.dfos.com/api-auth) (v0 registers three: `read:profile`, `read:email`, and `read:memberships`). Growth is enumeration — a grant carrying several tokens is an ordinary comma-separated list, narrowed by dropping tokens. Per the [action lattice](#action-coverage) there is **no action wildcard**: `read:*` is a literal token that no route ever requires, so an entry carrying it grants nothing at verification. (It is not a match-all in attenuation either — `{read:*}` narrows only from a parent that also carries `read:*`, per the [subset rule](#action-coverage); it can never widen to `read:profile`.)
-- **Exact match only.** Delegation follows the general non-`chain:` rule in [Attenuation Between Forms](#attenuation-between-forms): coverage is exact byte equality of the full resource string, no wildcard form is defined (`api:*` is an ordinary id covering only itself, which is never a served host), and coverage never crosses resource types.
-- **The consuming rules live in API-AUTH.md**, including the ones that give the form its teeth: a credential is exercised only alongside a **request proof** signed by the leaf audience's key (proof-of-possession — a bare credential authorizes nothing on this surface); **no credential in the presented chain may carry `aud: "*"`** (public audience is refused at every level, not just the leaf — a public parent would otherwise let a stranger self-issue a passing leaf); and the chain's **root `iss` is the subject whose data is served** — the credential selects the subject (for v0 `read:profile`, the user who consented and issued it), so unlike `mailbox:` there is no externally-known owner to pin against.
+- **Actions are enumerated registry tokens**, defined in [INTEGRATIONS](https://protocol.dfos.com/integrations#the-apihost-resource-and-its-actions), which registers `read:profile`, `read:email`, and `read:memberships`. Growth is enumeration: a grant carrying several tokens is an ordinary comma-separated list, narrowed by dropping tokens. Per the [action lattice](#action-coverage) there is no action wildcard, so `read:*` is a literal token no route requires and an entry carrying it grants nothing. It does not widen in attenuation either: `{read:*}` narrows only from a parent that also carries `read:*`.
+- **Exact match only.** Delegation follows the general non-`chain:` rule in [Attenuation between forms](#attenuation-between-forms). No wildcard form is defined, `api:*` is an ordinary id covering only itself and is never a served host, and coverage never crosses resource types.
+- **The consuming rules live in [INTEGRATIONS](https://protocol.dfos.com/integrations#verification-algorithm)**, including the ones that give the form its teeth: a credential is exercised only alongside a **request proof** signed by the leaf audience's key, so a bare credential authorizes nothing on that surface; **no credential in the presented chain may carry `aud: "*"`**, refused at every level and not just the leaf, because a public parent would let a stranger self-issue a passing leaf; and the chain's **root `iss` is the subject whose data is served**, so the credential selects the subject.
 
 ---
 
-## Public Credentials
+## Public credentials
 
-### `aud: "*"` Semantics
+### `aud: "*"` semantics
 
-A credential with `aud` set to `"*"` is a **public credential**. It is not addressed to a specific DID -- it is a standing authorization that anyone can use.
+A credential with `aud` set to `"*"` is a **public credential**. It is not addressed to a specific DID: it is a standing authorization anyone can use.
 
 ```json
 {
@@ -354,33 +304,33 @@ A credential with `aud` set to `"*"` is a **public credential**. It is not addre
 }
 ```
 
-### Relay Ingestion
+### Relay ingestion
 
-Public credentials are ingested into the relay and stored as standing authorizations. When a request arrives for a resource, the relay checks its stored public credentials for matching `att` entries. The caller does not need to present the credential per-request -- the relay already has it.
+Public credentials are ingested by a relay and stored as standing authorizations. When a request arrives for a resource, the relay checks its stored public credentials for matching `att` entries. The caller does not present the credential per request; the relay already holds it.
 
-### Private Credentials
+### Private credentials
 
-A credential with a specific DID as `aud` is a **private credential**. It is presented per-request by the holder. The relay does not store it -- the holder includes it with each request that requires authorization.
+A credential with a specific DID as `aud` is a **private credential**. The holder presents it per request. The relay does not store it.
 
-### Delegation Chain Interaction
+### Delegation chain interaction
 
-A parent credential with `aud: "*"` satisfies the audience linkage check for any child issuer. This means a public credential can serve as a parent in a delegation chain -- any DID can issue a narrower child credential using the public credential as proof.
+A parent credential with `aud: "*"` satisfies the audience linkage check for any child issuer, so a public credential can serve as a parent in a delegation chain: any DID can issue a narrower child credential using it as proof.
 
-### Security: `aud: "*"` + write = a world-writable bearer grant
+### `aud: "*"` plus write is a bearer grant
 
-Because `aud: "*"` matches **any** operation signer, a public credential that grants a **write** action is a **bearer token anyone can present**. Any DID can attach the public credential inline as a content operation's `authorization` field and author writes to the covered chain(s) — the credential authorizes the bearer, not a named audience. A public `chain:*` write credential is effectively world-writable across every chain rooted at the issuer.
+Because `aud: "*"` matches any operation signer, a public credential granting a **write** action is a bearer token anyone can present: any DID can attach it as a content operation's inline `authorization` and author writes to the covered chains. A public `chain:*` write credential is world-writable across every chain rooted at the issuer.
 
-Public credentials SHOULD therefore be **read-scoped**. Reserve `write` (and `chain:*`) for **private** credentials with a specific `aud`, where the relay also verifies that the operation signer matches the audience. If a public write credential is issued and later regretted, revocation is the remedy — but the exposure window is every relay that ingested it.
+Public credentials SHOULD therefore be read-scoped. Reserve `write` and `chain:*` for private credentials with a specific `aud`, where the relay also checks that the operation signer matches the audience. Revocation is the remedy for a public write credential the issuer regrets, and the exposure runs until every relay that ingested it has the revocation.
 
 ---
 
 ## Revocation
 
-### Revocation Artifact
+### Revocation artifact
 
-A revocation is a standalone signed artifact that permanently invalidates a credential. It uses the artifact type `did:dfos:revocation`.
+A revocation is a standalone signed artifact that permanently invalidates a credential. Its protected header `typ` MUST equal the exact string `did:dfos:revocation`, and a JWS carrying any other `typ` is not a revocation.
 
-**JWS Header:**
+**JWS header:**
 
 ```json
 {
@@ -415,86 +365,62 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 
 - **Issuer-only.** Only the credential's issuer DID can revoke it. The `kid` DID in the JWS header MUST match the `did` field in the payload.
 - **Permanent.** There is no un-revoke operation. To restore access, issue a new credential.
-- **CID-addressed.** The revocation artifact itself has a CID (derived from the payload, embedded in the header), making it a content-addressable artifact.
-- **Gossiped.** Revocations are propagated across the relay network on the proof plane like any other signed operation.
+- **CID-addressed.** The revocation artifact has its own CID, derived from the payload and embedded in the header.
+- **Gossiped.** Revocations propagate across relays on the proof plane like any other signed operation.
 
-### Relay Enforcement
+### Relay enforcement
 
-Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During credential verification, the relay checks whether the credential's CID appears in the revocation set for that credential's issuer. This scoping prevents a rogue DID from revoking credentials it did not issue. A revoked credential fails verification regardless of its expiry or signature validity.
+Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During credential verification the relay checks whether the credential's CID appears in the revocation set **for that credential's issuer**. This scoping is what stops a rogue DID from revoking credentials it did not issue. A revoked credential fails verification regardless of its expiry or signature validity.
 
-Revocation MUST be checked at **every level** of a presented credential — the **leaf** credential AND each **parent** in its delegation chain. Checking only parents is insufficient: a revoked leaf credential, if its leaf-level revocation is not checked, would still authorize access. This applies to **both** authorization surfaces: the **read/route** path (standing authorization and per-request credential checks) and the **write** path (the inline `authorization` on a delegated content operation, verified at ingest). Without an explicit leaf check on the write path, revocation is not a timely lever for the leaf case.
+Revocation MUST be checked at **every level** of a presented credential, the **leaf** AND each **parent** in its delegation chain. Checking only parents is insufficient: an unchecked revoked leaf would still authorize access. This applies to **both** authorization surfaces: the read path (standing authorization and per-request credential checks) and the write path (the inline `authorization` on a delegated content operation, verified at ingest).
 
-### Revocation Scope
+### Revocation against the basis
 
-Revocation is **forward-looking**: it prevents future use of a credential but does not retroactively invalidate operations already committed to the content chain. Once a delegated content operation (create, update, delete) has been ingested and verified by a relay, revoking the authorizing credential does not undo that operation — the operation is permanently part of the content chain's log.
-
-This is consistent with the content chain's append-only semantics: operations are immutable once committed. Revocation controls future access (standing authorization checks, per-request credential verification) but not the historical record.
-
-#### Acceptance vs Validity (Normative)
-
-Honoring that promise requires separating two questions asked of the same revocation set. **Acceptance is a freshness decision; verification of committed history is a validity decision.** Conflating them is exactly what makes revocation _feel_ retroactive: a verifier that asks the timeless question ("is this credential revoked?") while folding a chain will reject operations that were unimpeachable when they were signed.
-
-- **Acceptance** — "should I admit this NEW operation?" A relay answers from what it **currently** knows: if it holds a revocation for the authorizing credential, it refuses the operation regardless of the operation's `createdAt`. This is a local, timely gate. It is deliberately **not** convergent — two relays ingesting the same operation on either side of a revocation's arrival legitimately reach different verdicts — and that is harmless, because nothing in the replicated log depends on _when_ a relay chose to admit an operation.
-- **Validity** — "is this operation, already in the log, authorized?" Every verifier must reach the same answer forever, so the question is asked **as of the operation's own `createdAt`** — the same deterministic basis expiry uses (see [Expiry Basis](#expiry-basis-normative)), never the verifier's wall clock.
-
-**The as-of rule.** A revocation `R` invalidates an operation `O` **if and only if**:
+Revocation is **forward-looking against the basis**. A revocation `R` covers an artifact verified at basis time `T` if and only if:
 
 ```
-R.createdAt <= O.createdAt
+R.createdAt <= T
 ```
 
-The boundary is **inclusive**: a revocation signed at the same second as the operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it — a caller that re-verifies the revocation JWS (as it must; see [Revocation Status](https://protocol.dfos.com/web-relay#revocation-status)) reads the boundary out of the verified bytes.
+The boundary is **inclusive**: a revocation signed at the same second as an operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it; a caller that re-verifies the revocation JWS reads the boundary out of the verified bytes. The rule applies at every level of the presented credential, leaf and each parent, all evaluated at that one basis.
 
-The rule applies at **every level** of the presented credential — leaf and each parent in the delegation chain — all evaluated at that one instant, so a parent revoked after the operation no longer invalidates it either.
+For a committed operation the basis is the operation's `createdAt`, so revoking a credential does not undo operations already in the log: an operation authorized when it was signed keeps verifying, and a parent revoked after the operation does not invalidate it either. That is the append-only semantics of a content chain, and it makes every verifier reach the same verdict forever.
 
-A verifier that cannot ask the as-of question (no revocation source, or a source that answers only timelessly) MUST fall back to the timeless answer. That is the strictly stricter direction: it can only reject history the as-of rule would accept, never admit an operation the as-of rule would reject.
+**Admission is separate.** Whether to admit a NEW operation is a local freshness decision, not a validity decision: a relay that holds a revocation for the authorizing credential refuses the operation whatever its `createdAt` claims. Two relays on either side of a revocation's arrival reach different admission verdicts, and nothing in the log depends on when a relay chose to admit an operation.
 
-**Backdating is bounded.** `op.createdAt` is signer-asserted, so a delegate whose credential is about to be revoked will try to date operations before the revocation. Three independent bounds make that a non-lever:
+A verifier with no revocation source, or one that answers only timelessly, MUST fall back to the timeless answer. That is the stricter direction: it can reject history the basis rule would accept, never admit what the basis rule rejects.
 
-1. **Chain monotonicity.** Each operation's `createdAt` MUST be strictly after that of the operation it **extends**. Note this binds against the predecessor, **not** the chain head: an operation forking from an earlier point is bounded only by that fork point, so it may legitimately carry a `createdAt` earlier than the current head. The floor is therefore the fork point being extended, not the chain's latest operation.
-2. **The credential's own window.** An operation dated outside `[iat, exp)` fails the temporal check regardless of revocation.
-3. **Ingest-time freshness.** An honest relay that already holds the revocation refuses the operation however it is dated, so a backdated operation must find a relay that has not yet heard about the revocation.
+### Deleted issuers
 
-Net effect: a revoked delegate can at most mint operations dated inside the window in which it was **already legitimately authorized**, and only at relays that have not yet received the revocation. It gains no authority it did not already have, and no window it was not already inside.
+Identity deletion is the one credential rule that does not run against the basis. While an identity is deleted, the credentials it issued are invalidated **retroactively**: a credential from a deleted issuer authorizes nothing, on any surface, at any point in history, and verification of committed history rejects operations that relied on it. Revocation withdraws one grant and leaves the record that grant authorized standing; deletion withdraws the authority itself.
 
-#### Identity Deletion Is Absolute (While It Stands)
-
-Identity deletion is the deliberate exception. While an identity is deleted, the credentials it issued are invalidated **retroactively**: a credential from a deleted issuer authorizes nothing, on any surface, at any point in history, and verification of committed history rejects operations that relied on it. There is no as-of basis for deletion and none is intended.
-
-The asymmetry is deliberate. Revocation withdraws **one grant** and leaves the record that grant authorized standing — which is what makes it a routine, low-stakes operation an issuer can perform freely. Deletion withdraws **the authority itself**, the strongest statement an identity can make about its own history; a deleted identity whose credentials still authorized reachable operations would make deletion cosmetic.
-
-Deletion is absolute, not permanent: it is the identity chain's **deleted state**, and the controller may leave that state via an explicit `restore` operation (PROTOCOL.md "Terminal States and Special Operations"; WEB-RELAY.md "Deletion Semantics"). While restored (active), the identity's previously-issued, unrevoked credentials are honored again — deletion suspends the issuer's authority; **revocation remains the permanent, per-grant kill** and survives any number of delete/restore transitions.
+Deletion is absolute, not permanent: it is the identity chain's deleted state, and the controller leaves that state with an explicit `restore` operation ([PROTOCOL, Terminal states](https://protocol.dfos.com/spec#terminal-states)). Once restored, the identity's previously issued, unrevoked credentials are honored again. Deletion suspends the issuer's authority; revocation is the permanent, per-grant kill and survives any number of delete and restore transitions.
 
 ---
 
-## Relationship to Request Authentication
+## Relationship to request authentication
 
-The credential system serves a different purpose than the request-authentication proofs of [API-AUTH](https://protocol.dfos.com/api-auth). All are DID-signed Ed25519 JWS artifacts, but they answer different questions.
+Credentials and the request-authentication proofs of [INTEGRATIONS](https://protocol.dfos.com/integrations#api-authentication) are all DID-signed Ed25519 JWS artifacts, and they answer different questions.
 
-| Concern           | API-AUTH proof (identity / request)                  | DFOS Credential                             |
-| ----------------- | ---------------------------------------------------- | ------------------------------------------- |
-| Question answered | "Is this DID making exactly this request, now?"      | "Does this DID have permission to do this?" |
-| Role              | AuthN (authentication)                               | AuthZ (authorization)                       |
-| JWS `typ`         | `did:dfos:identity-proof` / `did:dfos:request-proof` | `did:dfos:credential`                       |
-| Lifetime          | Seconds (the verifier-owned freshness window)        | Long (hours to months)                      |
-| Binding           | One exact request at one host                        | Specific DID or `"*"` audience              |
-| Content-addressed | No (`cid` not in header)                             | Yes (`cid` in header)                       |
-| Revocable         | No (expires in seconds)                              | Yes (via revocation artifact)               |
-| Delegation        | None                                                 | Via `prf` chains                            |
-| Key resolution    | Current-state only                                   | Historical (survives key rotation)          |
+| Concern           | Request / identity proof                             | DFOS credential                                     |
+| ----------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| Question answered | "Is this DID making exactly this request, now?"      | "Does this DID have permission to do this?"         |
+| Role              | Authentication                                       | Authorization                                       |
+| JWS `typ`         | `did:dfos:identity-proof` / `did:dfos:request-proof` | `did:dfos:credential`                               |
+| Lifetime          | Seconds (the verifier-owned freshness window)        | Long (hours to months)                              |
+| Binding           | One exact request at one host                        | Specific DID or `"*"` audience                      |
+| Content-addressed | No (`cid` not in header)                             | Yes (`cid` in header)                               |
+| Revocable         | No (expires in seconds)                              | Yes (via revocation artifact)                       |
+| Delegation        | None                                                 | Via `prf` chains                                    |
+| Basis time        | Now (always an ephemeral presentation)               | `createdAt` when committed inline, now at read time |
 
-A typical gated relay request:
-
-1. An **identity proof** proves the caller controls a DID (AuthN).
-2. A **credential** proves the DID has access to the requested resource (AuthZ).
-
-Proofs are ephemeral request bindings — they establish identity for one exact request. Credentials are durable authorization grants — they establish access rights.
+A typical gated request carries both: an **identity proof** proving the caller controls a DID, and a **credential** proving that DID has access to the requested resource.
 
 ---
 
-## Worked Examples
+## Worked examples
 
-### Simple Credential
+### Simple credential
 
 Alice (`did:dfos:alice...`) grants Bob (`did:dfos:bob...`) write access to a content chain:
 
@@ -522,9 +448,9 @@ Alice (`did:dfos:alice...`) grants Bob (`did:dfos:bob...`) write access to a con
 }
 ```
 
-Alice is the root authority (`prf: []`). Bob presents this credential to a relay when writing to content chain `cv7n8vkvr64cctf3294h9k4eanhff8z`. The relay verifies Alice's signature, confirms the credential is not expired or revoked, and checks that the requested resource and action match an `att` entry.
+Alice is the root authority (`prf: []`). Bob presents this credential to a relay when writing to content chain `cv7n8vkvr64cctf3294h9k4eanhff8z`. The relay verifies Alice's signature against her key as effective at the basis, confirms the credential is neither expired nor revoked at that basis, and checks that the requested resource and action match an `att` entry.
 
-### 2-Hop Delegation
+### 2-hop delegation
 
 A space DID grants a member write access, and the member delegates to their device:
 
@@ -532,7 +458,7 @@ A space DID grants a member write access, and the member delegates to their devi
 Space (root) -> Member -> Device (leaf)
 ```
 
-**Hop 1 -- Space issues root credential to Member:**
+**Hop 1, space issues a root credential to the member:**
 
 ```json
 {
@@ -547,7 +473,7 @@ Space (root) -> Member -> Device (leaf)
 }
 ```
 
-**Hop 2 -- Member delegates to Device (with narrower expiry):**
+**Hop 2, the member delegates to the device with a narrower expiry:**
 
 ```json
 {
@@ -562,18 +488,18 @@ Space (root) -> Member -> Device (leaf)
 }
 ```
 
-Verification walk for the Device's credential:
+Verification walk for the device's credential:
 
-1. Verify Device credential signature (signed by Member).
-2. Verify parent in `prf` (signed by Space).
-3. Audience linkage: Device credential's `iss` (`member`) matches parent's `aud` (`member`).
-4. Expiry: Device credential's `exp` does not exceed parent's `exp`.
-5. Attenuation: `chain:content1/write` is covered by parent's `chain:content1/write`.
-6. Parent has `prf: []` -- it is the root. Parent's `iss` (`space`) must match the expected root DID.
+1. Verify the device credential signature (signed by the member).
+2. Verify the parent in `prf` (signed by the space).
+3. Audience linkage: the device credential's `iss` (`member`) matches the parent's `aud` (`member`).
+4. Expiry: the device credential's `exp` does not exceed the parent's `exp`, and both exceed the basis.
+5. Attenuation: `chain:content1/write` is covered by the parent's `chain:content1/write`.
+6. The parent has `prf: []`, so it is the root. Its `iss` (`space`) must match the expected root DID.
 
-### Public Credential
+### Public credential
 
-A space DID issues a public read credential for a content chain. Any DID can read without presenting the credential per-request:
+A space DID issues a public read credential for a content chain. Any DID reads without presenting the credential per request:
 
 ```json
 {
@@ -588,6 +514,18 @@ A space DID issues a public read credential for a content chain. Any DID can rea
 }
 ```
 
-This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:cv7n8vkvr64cctf3294h9k4eanhff8z`, the relay matches it against stored public credentials — no identity proof or per-request credential needed.
+The relay ingests this credential as a standing authorization. When any caller requests read access to `chain:cv7n8vkvr64cctf3294h9k4eanhff8z`, the relay matches the request against its stored public credentials, with no identity proof and no per-request credential.
 
-Because `aud` is `"*"`, any DID can also use this credential as a parent in a delegation chain -- e.g., to issue a narrower credential to a specific collaborator with a shorter expiry.
+Because `aud` is `"*"`, any DID can also use this credential as a parent in a delegation chain, for example to issue a narrower credential to a specific collaborator with a shorter expiry.
+
+---
+
+## Source
+
+The reference TypeScript implementation is [`packages/dfos-protocol/src/credentials/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/credentials), published as [`@metalabel/dfos-protocol`](https://www.npmjs.com/package/@metalabel/dfos-protocol). Its Go twin is [`packages/dfos-protocol-go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol-go).
+
+### Related specifications
+
+- [Protocol](https://protocol.dfos.com/spec): encoding, chains, the time basis, and the signature verification profile
+- [Relay](https://protocol.dfos.com/relay): the HTTP surface that ingests credentials and revocations and enforces them
+- [Integrations](https://protocol.dfos.com/integrations): sign-in, API request authentication, and the `api:<host>` action registry

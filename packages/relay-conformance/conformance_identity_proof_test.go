@@ -11,7 +11,7 @@
 // What is here is the gate itself: which routes require a proof, which shape of
 // proof each requires, and what the relay advertises about who may submit.
 //
-// See specs/WEB-RELAY.md "Authentication" and specs/API-AUTH.md "The Identity Proof".
+// See specs/RELAY.md "Authentication" and specs/INTEGRATIONS.md "The identity proof".
 package conformance
 
 import (

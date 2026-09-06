@@ -44,10 +44,10 @@ Verification lives in `api/verify.ts`, because that is where the session is
 granted. The only network hop is to a public relay, to resolve the signer's
 identity chain — the relay is untrusted; the crypto is what convinces us.
 Replay prevention follows
-[SIWD § Replay prevention](https://protocol.dfos.com/siwd#replay-prevention);
+[INTEGRATIONS § Replay prevention](https://protocol.dfos.com/integrations#replay-prevention);
 each gated route signs one fixed request via the seam in `api/_gated.ts`
 (`api/profile.ts` is the same seam written out long-form), per
-[API-AUTH](https://protocol.dfos.com/api-auth).
+[INTEGRATIONS § API authentication](https://protocol.dfos.com/integrations#api-authentication).
 
 ## Configuration
 
@@ -96,8 +96,8 @@ endpoint.
 There is no developer portal and no client secret: serving this file over https
 from the domain you control **is** the registration, and `redirect_uris` is an
 exact-match allowlist, trailing slash included. See
-[SIWD § Redirect URI validation](https://protocol.dfos.com/siwd#redirect-uri-validation-profile-a)
-and [SIWD § chain carriage](https://protocol.dfos.com/siwd#identity_chain--chain-carriage).
+[INTEGRATIONS § Redirect URI validation](https://protocol.dfos.com/integrations#redirect-uri-validation)
+and [INTEGRATIONS § chain carriage](https://protocol.dfos.com/integrations#identity_chain-chain-carriage).
 The CLI writes the identity members for you:
 `dfos identity well-known --patch public/.well-known/dfos-app.json`.
 
@@ -168,7 +168,7 @@ The identity flow works locally with no well-known file at all:
 `http://localhost:5173/` is accepted for `scope=identity` under SIWD's
 loopback tier. The credential scope cannot run on a loopback host in this demo
 — it is a hosted web relying party and does not implement the
-[loopback credential tier](https://protocol.dfos.com/siwd#loopback-clients) —
+[loopback credential tier](https://protocol.dfos.com/integrations#loopback-clients) —
 so exercising the credential scope means deploying to a domain.
 
 There is no `vercel` CLI in the loop: `vite.config.ts` mounts the same handler
@@ -179,6 +179,6 @@ drift.
 
 - [Setup guide](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup) — integrate sign-in into your own app
 - [Why signed requests](https://docs.dfos.com/docs/developers/sign-in-with-dfos/why-signed-requests) — the security model this demo exercises
-- [SIWD specification](https://protocol.dfos.com/siwd) · [API-AUTH specification](https://protocol.dfos.com/api-auth)
+- [Sign-in specification](https://protocol.dfos.com/integrations#sign-in) · [API authentication specification](https://protocol.dfos.com/integrations#api-authentication)
 - [`@metalabel/dfos-client`](../../packages/dfos-client) — the relying-party kit this demo consumes
 - [Chain explorer](https://explore.dfos.com) — inspect any identity chain, this app's included

@@ -95,20 +95,17 @@ async function highlight(code: string, lang?: string): Promise<string> {
   }
 }
 
-// Local spec links in the markdown source → site routes. Union of every form
-// that appears across the specs (./FOO.md, ../dfos-protocol/FOO.md, legacy
-// RELAY.md). Each is a no-op when its pattern is absent, so applying the full
-// set to every page is safe.
+// Local spec links in the markdown source → site routes. One entry per document
+// in the corpus, in the forms that appear across it (./FOO.md,
+// ../dfos-protocol/FOO.md). Each is a no-op when its pattern is absent, so
+// applying the full set to every page is safe.
 const LINK_REWRITES: Array<[RegExp, string]> = [
   [/href="(?:\.\/|\.\.\/dfos-protocol\/)PROTOCOL\.md"/g, 'href="/spec"'],
   [/href="(?:\.\/|\.\.\/dfos-protocol\/)DID-METHOD\.md"/g, 'href="/did-method"'],
   [/href="(?:\.\/|\.\.\/dfos-protocol\/)CONTENT-MODEL\.md"/g, 'href="/content-model"'],
-  [/href="(?:\.\/WEB-RELAY|\.\/RELAY|\.\.\/dfos-web-relay\/RELAY)\.md"/g, 'href="/web-relay"'],
-  [/href="\.\/DOCUMENT-GATEWAY\.md"/g, 'href="/web-relay#content-plane--document-gateway"'],
+  [/href="(?:\.\/|\.\.\/dfos-web-relay\/)RELAY\.md"/g, 'href="/relay"'],
+  [/href="\.\/INTEGRATIONS\.md"/g, 'href="/integrations"'],
   [/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"'],
-  [/href="\.\/SIWD\.md"/g, 'href="/siwd"'],
-  [/href="\.\/SIGNING\.md"/g, 'href="/signing"'],
-  [/href="\.\/API-AUTH\.md"/g, 'href="/api-auth"'],
   [/href="\.\/THREAT-MODEL\.md"/g, 'href="/threat-model"'],
   [/href="\.\/CONFORMANCE\.md"/g, 'href="/conformance"'],
   // SECURITY.md lives at the repo root (not a site route); point the rendered

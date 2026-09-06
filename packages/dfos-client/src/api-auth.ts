@@ -12,7 +12,7 @@
   An IDENTITY PROOF is the same envelope minus `credentialCID`: it binds the same
   exact request to a bare DID, proving only WHO IS ASKING. Authentication with no
   grant attached, for surfaces whose own policy decides what a proven identity may
-  do. See specs/API-AUTH.md.
+  do. See specs/INTEGRATIONS.md.
 
   WHERE THE BYTE CONTRACT LIVES. `apiRequestSigningInput` /
   `apiIdentitySigningInput`, the producer half, and the PROOF PHASE (API-AUTH

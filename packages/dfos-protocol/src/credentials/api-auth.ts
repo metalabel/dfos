@@ -6,7 +6,7 @@
   credential was issued to, that binds ONE exact HTTP request (method, host,
   path, body) to that credential, right now. An IDENTITY PROOF is the same
   envelope minus `credentialCID`: it binds the same exact request to a bare DID,
-  proving only WHO IS ASKING. See specs/API-AUTH.md.
+  proving only WHO IS ASKING. See specs/INTEGRATIONS.md.
 
   WHY THIS LIVES IN dfos-protocol AND NOT IN dfos-client. `@metalabel/dfos-client`
   peer-depends on `@metalabel/dfos-web-relay`, so a relay that imported the
@@ -831,7 +831,7 @@ const verifyProofEnvelope = async (
   // decodeJwsUnsafe's lossy view — but NOT re-canonicalized: the presenter
   // self-signs and the signature covers the received bytes, so there is no
   // third-party byte substitution to defend against. The canonical rule binds
-  // PRODUCERS (see specs/API-AUTH.md, Canonical Signing Input).
+  // PRODUCERS (see specs/INTEGRATIONS.md, Proof canonical signing input).
   const payloadSegment = input.proof.split('.')[1];
   if (payloadSegment === undefined) throw invalidProof(`failed to decode ${shape.label} payload`);
   let payload: ParsedProofPayload;

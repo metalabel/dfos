@@ -97,7 +97,7 @@ dfos skill install --global      # write ~/.claude/skills/dfos/SKILL.md
   claims, and `DfosAuthorizationServer`, the authorize origin that speaks for
   this DID (where a client holding only the DID finds the sign-in server its
   person authenticates to, registered by
-  [SIWD.md](https://protocol.dfos.com/siwd)).
+  [INTEGRATIONS.md](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint)).
 - **Credential** — a signed grant of scoped **read** or **write** access to
   content, issued by the content creator to a delegate DID.
 - **Countersignature** — a public witness attestation referencing an operation by
@@ -225,7 +225,7 @@ with exit 1 when no relay could answer — silence is never agreement) · `keys`
 `publish` · `fetch` · `verify` · `remove`
 
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
-**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (present a key to a key-add ceremony: a carriage is an authority and a code, and the identity, roles, chain head and nonce all come from resolving it; mints or names a key, shows the identity and the roles being consented to, refuses a key any identity has ever proved, posts one seven-member KEY-PROOF envelope and never retries. Presenting is not adoption — the key stays a local candidate until a chain declares it)
+**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (present a key to a key-add ceremony: a carriage is an authority and a code, and the identity, roles, chain head and nonce all come from resolving it; mints or names a key, shows the identity and the roles being consented to, refuses a key any identity has ever proved, posts one seven-member key-possession envelope and never retries. Presenting is not adoption — the key stays a local candidate until a chain declares it)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `repin` · `remove` · `list` · `info` · `gc`
@@ -459,7 +459,7 @@ the introduction, so a second device's key is **proved from the device that hold
 it**: the operator custodying the chain displays a key-add code, and on that device
 `dfos keys add <authority>/<CODE>` (alias `keys prove`) resolves the code, shows
 the identity, the roles being consented to, and the key's six-word fingerprint,
-signs a KEY-PROOF envelope with the candidate key itself — the private half never
+signs a key-possession envelope with the candidate key itself — the private half never
 leaves that device — presents it, and waits for the human's decision on the
 operator's surface. `dfos identity add-key` signs only for a key this machine
 already holds; where no operator custodies the chain, the CLI carries no challenge

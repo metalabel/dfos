@@ -128,7 +128,7 @@ Three consequences worth knowing before you wire it up:
 - **It does not follow redirects** (`redirect: 'manual'`): a 3xx comes back to you as-is, because following it would re-issue the request at coordinates the proof does not cover and carry `X-Credential` to whatever authority the `Location` names.
 - **It buffers the request body before sending.** The proof covers the whole body, so there is nothing to sign until the last octet is in hand — size-bounded requests only. An unbounded or live stream cannot be proof-signed, in any implementation.
 
-**A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser describes the one request it is willing to make — never signing coordinates the browser supplies ([API-AUTH § Security Considerations](https://protocol.dfos.com/api-auth#security-considerations)) — so there is no `Request` for the adapter above to cover:
+**A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser describes the one request it is willing to make — never signing coordinates the browser supplies ([INTEGRATIONS § API security notes](https://protocol.dfos.com/integrations#api-security-notes)) — so there is no `Request` for the adapter above to cover:
 
 ```typescript
 import { buildApiAuthHeaders, signApiRequest } from '@metalabel/dfos-client/api-auth';
@@ -160,7 +160,7 @@ await verifyApiRequest(client, {
 
 It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
 
-`verifyApiIdentityRequest` is the same verifier for the envelope's credential-less sibling, the [identity proof](https://protocol.dfos.com/api-auth#the-identity-proof) — it establishes only which DID is asking, leaving what that DID may do to the resource's own policy.
+`verifyApiIdentityRequest` is the same verifier for the envelope's credential-less sibling, the [identity proof](https://protocol.dfos.com/integrations#the-identity-proof) — it establishes only which DID is asking, leaving what that DID may do to the resource's own policy.
 
 `apiRequestSigningInput(payload)` is the pure byte contract both halves share, and the one place per language the canonical bytes are built.
 
@@ -179,7 +179,7 @@ import {
 
 Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
 
-The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) maps one field each to the spec's two replay disciplines — which discipline a given scope obliges, and why, is [SIWD § Replay prevention](https://protocol.dfos.com/siwd#replay-prevention)'s argument to make:
+The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) maps one field each to the spec's two replay disciplines — which discipline a given scope obliges, and why, is [INTEGRATIONS § Replay prevention](https://protocol.dfos.com/integrations#replay-prevention)'s argument to make:
 
 **`expect.nonce` — flow-bound login.** For a backend granting only a browser session (`scope=identity`), source the expected nonce from state you bound to that browser at mint time — a server-side session, or the nonce sealed under your own key in an `httpOnly` cookie — and compare:
 
@@ -202,7 +202,7 @@ Under either discipline `verifySiwd` checks the nonce at most once, and only aft
 
 `createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect that names no client identity.
 
-**Loopback redirects** — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port — come in two shapes: the **anonymous** one (no `client_did`, `scope=identity` only) and the **key-proven** one, the [loopback credential tier](https://protocol.dfos.com/siwd#loopback-clients), which is what lets local software receive a credential — the spec defines both. The one integration consequence to know: a credential comes back in the URL **fragment**, which a browser sends to no server — your loopback listener's request line included — so a CLI answers the callback with a small page whose script reads `location.href` and posts the whole URL back, then feeds _that_ to `readSiwdCallback`. A browser relying party just passes `location.href`.
+**Loopback redirects** — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port — come in two shapes: the **anonymous** one (no `client_did`, `scope=identity` only) and the **key-proven** one, the [loopback credential tier](https://protocol.dfos.com/integrations#loopback-clients), which is what lets local software receive a credential — the spec defines both. The one integration consequence to know: a credential comes back in the URL **fragment**, which a browser sends to no server — your loopback listener's request line included — so a CLI answers the callback with a small page whose script reads `location.href` and posts the whole URL back, then feeds _that_ to `readSiwdCallback`. A browser relying party just passes `location.href`.
 
 ```typescript
 import {
@@ -247,7 +247,7 @@ if (result.kind === 'success') {
 }
 ```
 
-`siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [SIWD.md](../../specs/SIWD.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
+`siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [INTEGRATIONS.md](../../specs/INTEGRATIONS.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
 
 ## License
 

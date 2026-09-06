@@ -20,7 +20,7 @@ import (
 // key ITSELF, scoped by a registered typ to exactly one ceremony purpose. It
 // proves one fact: the named key was held, and consented to THIS POSITION — this
 // chain, these roles, this head — at this verifier, inside this window. It never
-// conveys intent, content, or authority. See specs/KEY-PROOF.md.
+// conveys intent, content, or authority. See specs/PROTOCOL.md § Key possession.
 //
 // WHAT THE THREE POSITIONAL MEMBERS BUY. nonce, audience and timestamp bind a
 // proof to one ceremony at one verifier in one window; they say nothing about

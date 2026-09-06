@@ -9,9 +9,9 @@ folding, head selection — via [`@metalabel/dfos-client`](../dfos-client). You
 trust your own verification, never the relay.
 
 It browses via the relay index
-([Web Relay § Index](https://protocol.dfos.com/web-relay#index-v0)) and its
+([RELAY § Index](https://protocol.dfos.com/relay#index-capability-index)) and its
 domain lookup checks both origin-binding attest-back methods
-([Origin Binding](https://protocol.dfos.com/origin-binding)). Two stateless
+([INTEGRATIONS § Origin binding](https://protocol.dfos.com/integrations#origin-binding)). Two stateless
 serverless routes proxy well-known fetches and DNS lookups a browser cannot do
 itself; every verdict is still computed in the tab. Building against the
 protocol yourself? Start at the

@@ -2,7 +2,7 @@ package cmd
 
 // LOGIN — Sign In With DFOS under the loopback credential tier.
 //
-// The flow is specs/SIWD.md profile A driven from a machine that holds no
+// The flow is specs/INTEGRATIONS.md profile A driven from a machine that holds no
 // domain: discover the subject's authorize endpoint from the subject's OWN
 // chain, ask with a client identity whose key control is proven at ask-time,
 // receive the signed challenge on a loopback listener, and verify it here.

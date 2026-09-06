@@ -1,8 +1,8 @@
 # dfos-web-relay-go
 
-Go relay for the [DFOS protocol](https://protocol.dfos.com). Single binary, SQLite persistence, built-in peering. Verifies everything on ingestion, trusts nothing.
+Go relay for the [DFOS protocol](https://protocol.dfos.com). Single binary, SQLite persistence, built-in peering. Verifies everything on ingestion; authorship is verifiable without trusting any server.
 
-See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
+See [RELAY.md](../../specs/RELAY.md) for the full relay specification.
 
 ## Quick Start
 
@@ -54,7 +54,7 @@ All configuration is via environment variables:
 is checked against — configuration, never taken from a request header. Without it the
 authenticated routes (blob upload, non-public blob download, the mailbox poll) answer 503. Behind TLS on 443 it is the bare hostname; locally it includes the port. `INGESTION`
 sets who may submit operations, per
-[Web Relay § Ingestion Admission](https://protocol.dfos.com/web-relay#ingestion-admission),
+[RELAY § Admission](https://protocol.dfos.com/relay#admission),
 and is advertised in the well-known.
 
 When embedding this library, signing is available through `RelayOptions.Signing`; it is not exposed by `dfos serve`.
@@ -75,7 +75,7 @@ PEERS='[{"url":"http://relay-b:8080"},{"url":"http://relay-c:8080","gossip":fals
 
 Per-peer flags (all default to `true`): `gossip`, `readThrough`, `sync` — the
 three peering behaviors specified in
-[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering). Operator
+[RELAY § Peering](https://protocol.dfos.com/relay#peering-convention). Operator
 guidance for peered deployments is at
 [protocol.dfos.com/deploy](https://protocol.dfos.com/deploy).
 
@@ -101,8 +101,8 @@ at boot rather than degrading into peers that error on every sync tick.
 ### Content following
 
 `CONTENT_FOLLOW` controls whether this relay also pulls the document blobs it
-holds a standing public-read grant for, per
-[Web Relay § Content Following](https://protocol.dfos.com/web-relay#content-following):
+holds a standing public-read grant for. Content following is a Go-relay
+behavior, not part of the relay contract:
 
 - `none` (default) — proof plane only; byte-identical to a non-following node.
 - `eager` — convergent sweep pulls granted public blobs on each sync interval.

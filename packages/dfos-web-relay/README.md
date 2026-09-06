@@ -1,8 +1,8 @@
 # @metalabel/dfos-web-relay
 
-Relays verify everything they receive and serve everything they've verified. No trust between relays, no hierarchy, no central authority. Topology is emergent. Portable HTTP relay for the [DFOS protocol](https://protocol.dfos.com).
+Relays verify everything they receive and serve everything they've verified. Authorship is verifiable without trusting any server, and which view of an identity you follow is a choice of relay. No hierarchy, no central authority, topology is emergent. Portable HTTP relay for the [DFOS protocol](https://protocol.dfos.com).
 
-See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
+See [RELAY.md](../../specs/RELAY.md) for the full relay specification.
 
 ## Install
 
@@ -44,7 +44,7 @@ Set `authority` to the `host[:port]` callers reach this relay at. It is what eve
 it is configuration, never read from a request header — without it the authenticated
 routes answer 503. `ingestion` (`open` | `proof-required` | `closed`) and an injectable
 `admissionPolicy` set who may submit operations
-([Web Relay § Ingestion Admission](https://protocol.dfos.com/web-relay#ingestion-admission)).
+([RELAY § Admission](https://protocol.dfos.com/relay#admission)).
 
 ### Advertising an OpenAPI document
 
@@ -113,15 +113,15 @@ behind it are the spec's to define, not this README's. DID resolution
 (`/1.0/identifiers/:did`) follows the normative mapping in
 [DID-METHOD.md](https://protocol.dfos.com/did-method) §4; revocation status
 (`/revocations/v1/*`) is specified in
-[Relay Contract § Revocation Status](https://protocol.dfos.com/relay-contract#revocation-status);
+[RELAY § Revocation status](https://protocol.dfos.com/relay#revocation-status);
 blob upload/download authorization is
-[Web Relay § Access](https://protocol.dfos.com/web-relay#access).
+[RELAY § Access](https://protocol.dfos.com/relay#access).
 
 ## Peering
 
 Relays replicate operations via three composable per-peer behaviors —
 gossip-out, read-through, sync-in — specified in
-[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering); operator
+[RELAY § Peering](https://protocol.dfos.com/relay#peering-convention); operator
 guidance for running a peered relay is at
 [protocol.dfos.com/deploy](https://protocol.dfos.com/deploy).
 
@@ -169,7 +169,7 @@ interface PeerClient {
 A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The
 `'invalid-cursor'` outcome (a peer's 400 cursor rejection, distinct from
 transport failure) is load-bearing for the sync loop's self-heal — see
-[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering).
+[RELAY § Peering](https://protocol.dfos.com/relay#peering-convention).
 
 ## Implementing a store
 

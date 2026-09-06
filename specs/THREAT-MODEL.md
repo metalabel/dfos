@@ -6,12 +6,9 @@ A consolidated map of the DFOS adversary model and trust boundaries. This docume
 does not introduce new protocol rules — it assembles the threat surface that is
 already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
-[WEB-RELAY.md](https://protocol.dfos.com/web-relay),
-[DID-METHOD.md](https://protocol.dfos.com/did-method),
-[SIGNING.md](https://protocol.dfos.com/signing),
-[SIWD.md](https://protocol.dfos.com/siwd),
-[API-AUTH.md](https://protocol.dfos.com/api-auth), and
-[ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding), and links each claim back to its source.
+[RELAY.md](https://protocol.dfos.com/relay),
+[DID-METHOD.md](https://protocol.dfos.com/did-method), and
+[INTEGRATIONS.md](https://protocol.dfos.com/integrations), and links each claim back to its source.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
@@ -22,7 +19,7 @@ This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com)
 DFOS has two replicated planes with fundamentally different trust models. The
 optional signing mailbox's courier state sits outside both.
 
-### Proof plane — self-authenticating, trustless
+### Proof plane — self-authenticating
 
 The crypto core is the trust boundary (PROTOCOL.md "Overview", `specs/PROTOCOL.md`).
 Identity chains, content chains, artifacts, countersignatures, credentials,
@@ -32,7 +29,7 @@ blockchain, or consensus layer; the identifier _is_ the trust anchor (DID-METHOD
 "Abstract", `specs/DID-METHOD.md`). Verification is against the chain, not the source
 — a `did:dfos` is verified by re-deriving it from the genesis CID (DID-METHOD.md §5.2.3,
 `specs/DID-METHOD.md`). All proof-plane relay routes are unauthenticated; the
-operations carry their own authentication (WEB-RELAY.md "Proof Plane", `specs/WEB-RELAY.md`).
+operations carry their own authentication (RELAY.md "Two planes", `specs/RELAY.md`).
 
 Everything below the crypto core is cryptographically verified. Nothing above it needs
 to be trusted to verify a proof.
@@ -41,8 +38,8 @@ One property is deliberately **not** carried by the crypto core alone: **currenc
 signature proves who signed and that the bytes are intact — forever, from anywhere. Whether
 a key is _still_ the signer's current key, or a head is _still_ the chain's current head, is
 a statement about the freshest state a resolver has seen, and freshness is served, not
-proven. Authenticity is trustless; currency is host-mediated — see _Authority currency_
-below.
+proven. Authorship is verifiable without trusting any server; currency is host-mediated — see
+_Authority currency_ below.
 
 ### Content plane — honest-host, undisclosed-by-default
 
@@ -52,10 +49,10 @@ Confidentiality of the underlying documents is enforced at the application layer
 whoever serves them. **The relay operator can read what it stores.** This is
 undisclosed-by-default, _not_ end-to-end encrypted. The content plane never gossips;
 blobs are stored by the relay that received them and served only to authorized readers
-(WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`). Content-plane access is
-gated by an API-AUTH identity proof plus (for non-creators) a read credential
-(WEB-RELAY.md "Authentication" / "Content Plane — Document Gateway",
-`specs/WEB-RELAY.md`).
+(RELAY.md "Content plane", `specs/RELAY.md`). Content-plane access is
+gated by an identity proof plus (for non-creators) a read credential
+(RELAY.md "Authentication" / "Content plane",
+`specs/RELAY.md`).
 
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
@@ -63,16 +60,16 @@ operator that holds it.
 ### Authority currency — honest-host arbitrated
 
 The same honest-host split that governs content confidentiality governs **how current an
-identity's authority is**. An identity chain's proofs verify trustlessly, but its _current
-state_ — which keys are live, whether it is deleted — is resolved from whatever log the
-chosen relay serves, as fresh as that relay's ingestion (SIWD.md "Staleness caveat",
-`specs/SIWD.md`). The subject's own `services` relay list is the designated trust anchor:
+identity's authority is**. An identity chain's proofs verify without trusting any
+server, but its _current state_ — which keys are live, whether it is deleted — is resolved from whatever log the
+chosen relay serves, as fresh as that relay's ingestion (INTEGRATIONS.md "Verifying a sign-in",
+`specs/INTEGRATIONS.md`). The subject's own `services` relay list is the designated trust anchor:
 resolving a subject through the relays it lists yields the currency the subject stands
 behind, and running your own relay makes your authority fully self-sovereign — the
 "own your data" escape hatch is structural, not aspirational.
 
 Hosts enforce currency at the door: first admission of a new operation resolves its signer
-against **current state** (WEB-RELAY.md "Key Resolution", `specs/WEB-RELAY.md`), so a
+against **current state** (RELAY.md "Authentication", `specs/RELAY.md`), so a
 rotated-out key's authoring window ends at rotation, while committed history re-verifies
 historically forever. Peer-log ingestion inherits the peer's admission discipline —
 choosing peers is a trust decision, which is the model working as intended: this protocol
@@ -86,7 +83,7 @@ different trust texture, covered next.
 ### Carried identity chains — controller-attested currency
 
 SIWD's app description MAY carry the application identity's full operation log in place
-(SIWD.md "`identity_chain` — chain carriage", `specs/SIWD.md`), and any consumer that
+(INTEGRATIONS.md "`identity_chain`: chain carriage", `specs/INTEGRATIONS.md`), and any consumer that
 encounters the document MAY fetch, verify, ingest, and re-serve that chain with no
 registration or approval precondition. Signatures verify identically to a relay-fetched
 chain — forgery is a non-issue — but the source is **controller-attested**: the consumer
@@ -95,7 +92,7 @@ controls, with no independent arbiter in the path. A carried chain is one view o
 identity, and reading it is a choice of source the way reading a relay is a choice of
 relay (PROTOCOL.md "Views", `specs/PROTOCOL.md`).
 The operational consequences are specified as the five carried-chain disciplines
-(SIWD.md "Carried identity chains", `specs/SIWD.md`):
+(INTEGRATIONS.md "Carried identity chains", `specs/INTEGRATIONS.md`):
 
 - **Rollback by prefix omission.** Serving yesterday's shorter chain resurrects a
   rotated-out key by omitting the rotation. The defense is monotonicity compared on the
@@ -122,66 +119,66 @@ The operational consequences are specified as the five carried-chain disciplines
 
 Signing mailbox state is on neither plane: it is never gossiped, never folded, and
 its retention is bounded by each request's own expiry. See
-[SIGNING.md "Security Considerations"](https://protocol.dfos.com/signing#security-considerations)
+[RELAY.md "Signing mailbox"](https://protocol.dfos.com/relay#signing-mailbox-capability-signing)
 for the detailed analysis.
 
 ### API request authentication — possession proves audience, not the credential
 
-The credential-gated API surface (API-AUTH.md, an optional `0.x` capability) splits
+The credential-gated API surface (INTEGRATIONS.md "API authentication") splits
 authorization from authentication deliberately: a [DFOS credential](https://protocol.dfos.com/credentials)
 names the grant, and a per-request **request proof** — a short-lived JWS signed by the
 credential's audience key, binding `{method, host, path, bodyHash, credentialCID, iat}`
 — proves the presenter _is_ that audience, making the credential useless as a bearer
-token (API-AUTH.md "Motivation", `specs/API-AUTH.md`). The threat consequences the
+token (INTEGRATIONS.md "API authentication", `specs/INTEGRATIONS.md`). The threat consequences the
 surface is built around:
 
 - **A stolen credential is a metadata leak, not an access leak.** Without the audience
   key, a captured credential authorizes nothing; the artifact that must never leak is
-  the key, which never crosses a channel (API-AUTH.md "Security Considerations").
+  the key, which never crosses a channel (INTEGRATIONS.md "API security notes").
 - **Public audience is refused at every level of the chain.** A single `aud: "*"`
   credential anywhere in the presented delegation chain would let a stranger self-issue
   a passing leaf audienced to their own key — a full proof-of-possession bypass — so the
-  verifier scans the whole chain, not just the leaf (API-AUTH.md verification step 9).
+  verifier scans the whole chain, not just the leaf (INTEGRATIONS.md verification step 9).
 - **Within-window identical-request replay is an explicitly-accepted bound**, which is
   why the v0 registry is read-only; write-bearing actions require a per-request
-  uniqueness seam (API-AUTH.md "Within-window replay").
+  uniqueness seam (INTEGRATIONS.md "API security notes").
 - **The host binding is only as strong as its source.** The verifier compares against
   its own configured hostname, never a request-supplied `Host`/`X-Forwarded-Host`; a
   verifier that derived the host from the request would have no cross-host binding at
-  all (API-AUTH.md verification step 5).
+  all (INTEGRATIONS.md verification step 5).
 - **The browser BFF is a signing surface, not a blind oracle** — a backend that signs
-  the coordinates a browser hands it is a confused deputy (API-AUTH.md "The browser is
+  the coordinates a browser hands it is a confused deputy (INTEGRATIONS.md "The browser is
   not a keyholder").
 
 ### Origin binding — domain control is the web-side half, nothing more
 
-Origin binding (ORIGIN-BINDING.md, an optional `0.x` capability) ties an identity to a
+Origin binding (INTEGRATIONS.md "Origin binding") ties an identity to a
 domain bidirectionally: a `DfosOrigin` services entry inside the signed chain, answered
 by a well-known HTTPS document or DNS TXT record the domain serves back
-(ORIGIN-BINDING.md "Attest-Back", `specs/ORIGIN-BINDING.md`). The threat consequences
+(INTEGRATIONS.md "Attest-back: the domain's half", `specs/INTEGRATIONS.md`). The threat consequences
 the surface is built around:
 
 - **Compromising the domain compromises the attestation, never the identity.** A
   registrant, registrar, DNS, or hosting attacker can silence or contradict the
   web-side half — rendering the binding `stale` or `broken`, both visible verdicts —
   but cannot extend the bound identity's chain or transfer the binding to themselves
-  silently (ORIGIN-BINDING.md "Lapse, Transfer, and Re-binding").
+  silently (INTEGRATIONS.md "Lapse, transfer, and re-binding").
 - **A lapsed domain's new registrant claiming it breaks the old binding visibly.**
   Their fresh identity may verify `bound`; the old identity's binding verifies
   `broken` the moment the domain attests a different DID. The old identity and its
-  history survive untouched (ORIGIN-BINDING.md "Lapse, Transfer, and Re-binding").
+  history survive untouched (INTEGRATIONS.md "Lapse, transfer, and re-binding").
 - **Silence and contradiction are machine-distinguishable verdicts** — `stale`
   ("could not check") versus `broken` ("checked and contradicted"), the corpus's
   standing invalid/unverifiable split. Conflating them either turns hosting blips
-  into public accusations or hides hijacks behind shrugs (ORIGIN-BINDING.md
-  "Verification").
+  into public accusations or hides hijacks behind shrugs (INTEGRATIONS.md
+  "Binding verification").
 - **A binding proves domain control at verification time, never personhood.**
   Consumers MUST render the domain itself, never a generic verified badge — the
   display layer is where the binding's meaning is most easily laundered into implied
-  identity vetting (ORIGIN-BINDING.md "Display Discipline").
+  identity vetting (INTEGRATIONS.md "Display discipline").
 - **DNS answers are resolver-trust; HTTPS answers are TLS-trust.** A spoofed resolver
   can forge the DNS half for that verifier; the HTTPS method is unaffected by
-  resolver spoofing beyond denial (ORIGIN-BINDING.md "Security Considerations").
+  resolver spoofing beyond denial (INTEGRATIONS.md "Origin-binding security notes").
 
 ### Key proofs — possession is the whole claim
 
@@ -200,7 +197,7 @@ The threat consequences the surface is built around:
   preemptive-claim and hostile-listing class (declare a victim's key to pollute
   recovery, forge association, or spend its one-key-one-DID slot) produces
   nothing but a loudly-surfaced dead claim (PROTOCOL.md "Key Possession",
-  WEB-RELAY.md's has-ever-proved `key=` index).
+  RELAY.md's has-ever-proved `key=` index).
 - **Consent is spent at the position it names.** The envelope binds the chain
   head the introduction builds on, so no stored proof re-adds a removed key at a
   later head — the chain's own controller included. There is no standing consent
@@ -265,14 +262,14 @@ If the fact of the attestation is itself sensitive, do not countersign.
 
 ## Adversary Classes
 
-| Adversary                   | Can                                                                                                                                                                      | Cannot                                                                                                                    | Pointer                                                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs                                                                                | Forge a chain or operation                                                                                                | DID-METHOD.md §6.4 `specs/DID-METHOD.md`                                                                             |
-| Malicious peer              | Push invalid/spam operations to peers                                                                                                                                    | Have invalid operations accepted (each peer re-verifies, no trust)                                                        | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md`                                                                          |
-| Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; publish a carried chain and let encounter-triggered fetch ingest it (a write path with no POST); impose CPU + storage cost | Have malformed/unsigned ops accepted                                                                                      | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md`; SIWD.md "`identity_chain` — chain carriage" `specs/SIWD.md` |
-| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                                                                                                        | Be detected on-chain (signature is valid Ed25519)                                                                         | SIWD.md "The custodial signer agent" `specs/SIWD.md`                                                                 |
-| Loopback port-squatter      | Listen on the port a local SIWD client named; capture the callback (signed challenge, credential bytes)                                                                  | Redeem the credential (PoP-bound to the ask-proven `client_did`); pass the ask-time client proof without the client's key | SIWD.md "Loopback Clients" / "Loopback port-squatting" `specs/SIWD.md`                                               |
-| Lost key                    | —                                                                                                                                                                        | — (1-of-N availability vs. total loss)                                                                                    | DID-METHOD.md §6.2 `specs/DID-METHOD.md`                                                                             |
+| Adversary                   | Can                                                                                                                                                                      | Cannot                                                                                                                    | Pointer                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs                                                                                | Forge a chain or operation                                                                                                | DID-METHOD.md §6.4 `specs/DID-METHOD.md`                                                                                   |
+| Malicious peer              | Push invalid/spam operations to peers                                                                                                                                    | Have invalid operations accepted (each peer re-verifies)                                                                  | RELAY.md "Peering" `specs/RELAY.md`                                                                                        |
+| Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; publish a carried chain and let encounter-triggered fetch ingest it (a write path with no POST); impose CPU + storage cost | Have malformed/unsigned ops accepted                                                                                      | RELAY.md "The write contract" `specs/RELAY.md`; INTEGRATIONS.md "`identity_chain`: chain carriage" `specs/INTEGRATIONS.md` |
+| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                                                                                                        | Be detected on-chain (signature is valid Ed25519)                                                                         | INTEGRATIONS.md "The signing agent" `specs/INTEGRATIONS.md`                                                                |
+| Loopback port-squatter      | Listen on the port a local SIWD client named; capture the callback (signed challenge, credential bytes)                                                                  | Redeem the credential (PoP-bound to the ask-proven `client_did`); pass the ask-time client proof without the client's key | INTEGRATIONS.md "Loopback clients" `specs/INTEGRATIONS.md`                                                                 |
+| Lost key                    | —                                                                                                                                                                        | — (1-of-N availability vs. total loss)                                                                                    | DID-METHOD.md §6.2 `specs/DID-METHOD.md`                                                                                   |
 
 ### Malicious / Byzantine relay
 
@@ -282,54 +279,52 @@ different clients), and **censor** operations it dislikes. It can also **read** 
 content-plane blob it stores (see Trust Boundaries).
 
 What it **cannot** do is **forge**. Every ingest path re-derives the operation CID and
-verifies the Ed25519 signature over the signed bytes (WEB-RELAY.md "Verification",
-`specs/WEB-RELAY.md`); peers verify independently with no trust (WEB-RELAY.md
-"Peering", `specs/WEB-RELAY.md`). An attacker who intercepts a chain request can
+verifies the Ed25519 signature over the signed bytes (RELAY.md "Verification",
+`specs/RELAY.md`); peers verify independently (RELAY.md
+"Peering", `specs/RELAY.md`). An attacker who intercepts a chain request can
 withhold, serve a stale chain, or serve a completely different chain — but a modified
 or forged chain fails the self-certification check (DID-METHOD.md §6.4,
 `specs/DID-METHOD.md`).
 
 ### Malicious peer
 
-Peering carries no inter-relay trust: "No trust between relays, no coordination required"
-(WEB-RELAY.md "Philosophy", `specs/WEB-RELAY.md`). A peer that gossips, is read
+Authorship is verifiable without trusting any server, and which view of an identity a
+relay follows is its choice of peers (RELAY.md "What a relay is", `specs/RELAY.md`). A peer that gossips, is read
 through, or is synced from has its operations fully re-verified locally before storage
-(WEB-RELAY.md "Peering" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
+(RELAY.md "Peering", `specs/RELAY.md`, `specs/RELAY.md`).
 A malicious peer can therefore only impose cost and noise, not corrupt state.
 
 ### Malicious / unauthenticated submitter
 
-`POST /proof/v1/operations` is unauthenticated (WEB-RELAY.md "Quick Start" route table,
-`specs/WEB-RELAY.md`); operations self-authenticate. An attacker can submit
+`POST /proof/v1/operations` is unauthenticated (RELAY.md "Full route surface",
+`specs/RELAY.md`); operations self-authenticate. An attacker can submit
 arbitrary JWS tokens, imposing CPU (verification) and storage (store-then-verify
-buffering, `specs/WEB-RELAY.md`) cost. One aggregate 64 KiB operation-size cap plus
+buffering, `specs/RELAY.md`) cost. One aggregate 64 KiB operation-size cap plus
 a small set of cardinality caps bound per-operation abuse — there is deliberately no
 per-field string-length table (PROTOCOL.md "Size and cardinality limits",
 `specs/PROTOCOL.md`) — but **protocol-layer rate limiting is explicitly deferred** to
-the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
+the deployment layer (RELAY.md "Not defined here", `specs/RELAY.md`).
 
 The same class reaches ingestion **without POSTing anything**: SIWD chain carriage is
 encounter-triggered — a consumer that meets an app description MAY fetch and ingest its
 carried chain on the consumer's own initiative, so the write path is the consumer's
-outbound fetch, not an inbound submission (SIWD.md "`identity_chain` — chain carriage",
-`specs/SIWD.md`). The submitter's cost-imposition surface is the same — every carried
+outbound fetch, not an inbound submission (INTEGRATIONS.md "`identity_chain`: chain carriage",
+`specs/INTEGRATIONS.md`). The submitter's cost-imposition surface is the same — every carried
 operation is verified like any other — and it is bounded by the 100-operation carriage
 cap (a consumer MAY refuse a longer chain unexamined) with ingestion and retention
-entirely at the consumer's discretion, including abuse removal (SIWD.md "Carried
-identity chains", `specs/SIWD.md`).
+entirely at the consumer's discretion, including abuse removal (INTEGRATIONS.md "Carried
+identity chains", `specs/INTEGRATIONS.md`).
 
 ### Compromised custody / KMS key
 
 Where a hosting platform holds the user's key material and signs on their behalf — the
 custodial posture profile A works against, and the custodial signer agent that
-polls a mailbox for a keyless subject under profile B (SIWD.md "Profile A — Web
-Redirect" / "The custodial signer agent", `specs/SIWD.md`) — a compromise of that
+polls a mailbox for a keyless subject under profile B (INTEGRATIONS.md "Profile A: web redirect" / "The signing agent", `specs/INTEGRATIONS.md`) — a compromise of that
 custody is **full impersonation** and is **indistinguishable on-chain**: the signature
 is a valid Ed25519 signature by a key declared in the identity chain, so it verifies
-identically to a self-custodied one (SIWD.md "Overview", `specs/SIWD.md`). Self-custody
+identically to a self-custodied one (INTEGRATIONS.md "Sign in", `specs/INTEGRATIONS.md`). Self-custody
 avoids this by never letting the platform touch the key: the subject holds the key and
-polls the mailbox, so the signature is produced where the key lives (SIWD.md "Profile B
-— Sign-Request Mailbox", `specs/SIWD.md`).
+polls the mailbox, so the signature is produced where the key lives (INTEGRATIONS.md "Profile B: sign-request mailbox", `specs/INTEGRATIONS.md`).
 
 ### Lost key
 
@@ -375,12 +370,12 @@ the birthday-collision cost of ≈ 2^65.8 is the accepted consequence. See PROTO
 Deterministic head selection — highest `createdAt`, lexicographic-highest-CID tiebreak —
 applies to **content chains** and guarantees that any implementation with the same set of
 operations computes the same head, regardless of ingestion order (PROTOCOL.md "Chain
-Validity", `specs/PROTOCOL.md`; WEB-RELAY.md "Fork Acceptance", `specs/WEB-RELAY.md`).
+Validity", `specs/PROTOCOL.md`; RELAY.md "Content-chain forks and head selection", `specs/RELAY.md`).
 That is its entire job: **convergence across implementations.**
 
 It is **not** a canonical-truth or causal-ordering mechanism. `createdAt` is signer-asserted
 and bounded only by the relay-enforced +24h future bound (PROTOCOL.md "Future timestamp
-bound", `specs/PROTOCOL.md`; WEB-RELAY.md "Future timestamp guard", `specs/WEB-RELAY.md`).
+bound", `specs/PROTOCOL.md`; RELAY.md "The 24-hour future bound", `specs/RELAY.md`).
 Head selection answers "which tip do all honest verifiers agree on?" — not "which tip is
 true?" or "which happened first?". Semantic interpretation of content-chain forks
 (concurrency glitch, intentional recovery) is application-defined (PROTOCOL.md "Chain
@@ -392,7 +387,7 @@ sequence one relay serves, and there is no timestamp competition to win. No once
 key can bid the head from an ancestor, whatever its `createdAt` claims. Head selection
 runs exactly where a merge function exists, and key state has none. Undeletion is the
 explicit `restore` operation, signed by a controller key of the deleted head state
-(WEB-RELAY.md "Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5,
+(RELAY.md "Deletion and restore", `specs/RELAY.md`; DID-METHOD.md §5.5,
 `specs/DID-METHOD.md`). A relay keeps its own log linear by admitting the first successor
 it sees for a chain position and refusing later ones. Two operations signed at the same
 position are a divergence between relay views, not a proof of invalidity (DID-METHOD.md
@@ -407,8 +402,8 @@ These are known and deliberately accepted for v1.
 
 - **Rotation is not revocation.** Rotating a key ends its authoring window for freshly
   admitted operations, but committed facts it signed re-verify forever — their invalidation
-  mechanism is revocation or deletion, never rotation (WEB-RELAY.md "Key Resolution",
-  `specs/WEB-RELAY.md`). A rotated-out key was effective at every chain position before
+  mechanism is revocation or deletion, never rotation (RELAY.md "Authentication",
+  `specs/RELAY.md`). A rotated-out key was effective at every chain position before
   its removal, so an operation it signs at one of those positions is structurally valid.
   What stops it is admission, not validity: a relay that already committed a successor at
   that position refuses a later one (PROTOCOL.md "Views", `specs/PROTOCOL.md`). A relay
@@ -444,21 +439,21 @@ These are known and deliberately accepted for v1.
   so no relay's admission order is load-bearing for them.)
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md
-  "Overview", `specs/PROTOCOL.md`; WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`).
+  "Overview", `specs/PROTOCOL.md`; RELAY.md "Content plane", `specs/RELAY.md`).
 - **No protocol-layer rate limiting.** Anti-spam / rate limiting is an operational concern,
-  pushed to the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
-  Blob size limits are likewise unenforced by the protocol (`specs/WEB-RELAY.md`).
+  pushed to the deployment layer (RELAY.md "Not defined here", `specs/RELAY.md`).
+  Blob size limits are likewise unenforced by the protocol (`specs/RELAY.md`).
 - **Public (`aud: "*"`) write credential is a world-writable bearer.** Because `aud: "*"`
   matches any signer, a public credential granting `write` authorizes the _bearer_, not a
   named audience — anyone can attach it inline and write to the covered chains. Public
   credentials SHOULD be read-scoped (CREDENTIALS.md "Security: `aud: "*"` + write",
   `specs/CREDENTIALS.md`).
-- **Within-window replay of an identical proven request.** An API-AUTH proof replays only
+- **Within-window replay of an identical proven request.** A request proof replays only
   as the byte-identical request, against the same host, inside the verifier-owned
-  freshness window — the accepted bound for read-shaped surfaces (API-AUTH.md "Security
-  Considerations", `specs/API-AUTH.md`). Write-shaped relay surfaces (ingestion, blob
-  upload) close even that with the REQUIRED `jti` replay cache (WEB-RELAY.md
-  "Authentication", `specs/WEB-RELAY.md`).
+  freshness window — the accepted bound for read-shaped surfaces (INTEGRATIONS.md "API security
+  notes", `specs/INTEGRATIONS.md`). Write-shaped relay surfaces (ingestion, blob
+  upload) close even that with the REQUIRED `jti` replay cache (RELAY.md
+  "Admission", `specs/RELAY.md`).
 - **SIWD security controls live in the relying party.** Replay prevention (nonce),
   redirect-URI validation, challenge-DID binding, and timestamp windows are obligations
   on the verifying third party — no relay and no signer can enforce them on its behalf.
@@ -466,31 +461,31 @@ These are known and deliberately accepted for v1.
   `readSiwdCallback`, `verifySiwd` in
   [`@metalabel/dfos-client/siwd`](https://www.npmjs.com/package/@metalabel/dfos-client)); a
   relying party that hand-rolls verification instead forfeits these controls silently,
-  and nothing on the wire reveals that it did (SIWD.md "Security Considerations",
-  `specs/SIWD.md`).
+  and nothing on the wire reveals that it did (INTEGRATIONS.md "Replay prevention",
+  `specs/INTEGRATIONS.md`).
 - **Loopback client provenance is unverifiable.** The loopback credential tier proves
   ask-time control of the client identity's keys, never what the software is: malicious
   local software holding its own legitimately minted DID passes every check the tier
   defines. The accepted controls are honest consent language (the host is required to say
   origin and authorship are unverifiable) and the hard credential-expiry ceiling — not
-  provenance, which no loopback flow can establish (SIWD.md "Loopback Clients" /
-  "Consent provenance", `specs/SIWD.md`).
+  provenance, which no loopback flow can establish (INTEGRATIONS.md "Loopback clients" /
+  "Consent provenance", `specs/INTEGRATIONS.md`).
 - **Cursor validation is a cheap membership signal over already-public sets.** The
   list routes' 400-on-unknown-cursor answers "does this relay hold X at this position"
   with one status code — information already derivable by paging the same public
   enumeration, so no new disclosure, but a lower-cost probe than the enumeration it
-  shortcuts (WEB-RELAY.md "Error Responses", `specs/WEB-RELAY.md`).
+  shortcuts (RELAY.md "Error body", `specs/RELAY.md`).
 - **The signing-mailbox courier reads pending payloads, and bundle deposits admit on
-  depositor-attested state** (SIGNING `0.x` — optional capability, default-off; listed
-  here because it adds adversary surface wherever enabled). A relay serving
-  `capabilities.signing` can read every pending sign-request payload in the clear
-  (encrypt-to-device is the named future seam), and a deposit `chain` bundle for a
+  depositor-attested state** (the signing mailbox is an optional capability,
+  default-off; listed here because it adds adversary surface wherever enabled). A relay
+  serving `capabilities.signing` can read every pending sign-request payload in the
+  clear, and a deposit `chain` bundle for a
   foreign requester can hide a rotation, deletion, or revocation from the **relay** — a
   chain prefix verifies, and head-ness is unprovable from the chain alone. The exposure
   is bounded to **relay spam-admission** by the subject-rooted, expiring deposit
   credential; integrity holds at the signer, which independently re-resolves the
-  requester to current state (SIGNING.md "Courier, Not Ledger"; the bundle
-  trust-boundary paragraphs under "POST /signing/v0/requests", `specs/SIGNING.md`).
+  requester to current state (RELAY.md "Courier, not ledger"; the bundle
+  trust-boundary paragraphs under "POST /signing/v0/requests", `specs/RELAY.md`).
 
 ---
 

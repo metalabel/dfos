@@ -334,16 +334,14 @@ same head everywhere.
 
 ### Comparison basis
 
-Both ordering comparisons, `createdAt` for timestamp ordering and head selection
-and the CID for the head-selection tiebreak, MUST be performed as a byte-wise
-(Unicode code-point) comparison of the raw strings, equivalent to comparing the
-UTF-8 byte sequences left to right. An implementation MUST NOT parse `createdAt`
-to an epoch, a floating-point value, or a broken-down time before comparing, and
-MUST NOT apply any locale-aware or collation-aware comparison (for example ICU
-collation or JavaScript `String.prototype.localeCompare`) to either field. The
-`createdAt` grammar is fixed-width and zero-padded and a CID is a base32-lower
-multibase string, so byte-wise order is chronological order for the first and
-byte order for the second.
+Both ordering comparisons, `createdAt` and the head-selection CID tiebreak, MUST
+compare the raw strings byte-wise (Unicode code point, left to right). An
+implementation MUST NOT parse `createdAt` to an epoch, a floating-point value, or
+a broken-down time before comparing, and MUST NOT apply a locale-aware or
+collation-aware comparison (for example ICU collation or
+`String.prototype.localeCompare`) to either field. The `createdAt` grammar is
+fixed-width and zero-padded and a CID is a base32-lower multibase string, so byte
+order is chronological order for the first and byte order for the second.
 
 ### Timestamp ordering
 
@@ -404,17 +402,10 @@ creator DID.
 operations from countersignatures: if the `kid` DID differs from the payload
 `did`, it is a countersignature, not a chain operation.
 
-What the protocol enforces:
-
-- The EdDSA signature on each operation is valid against the key returned by `resolveKey(kid)`
-- Chain integrity (CID links, timestamp ordering, terminal state)
-- The `kid` DID matches the payload `did` for chain operations
-- Creator-sovereignty authorization (when `enforceAuthorization` is enabled): non-creator signers must present a valid DFOS credential with `action: "write"` issued by the creator
-
-What the protocol leaves to applications:
-
-- Which key role (auth, assert, controller) the signing key must have
-- Ownership or attribution semantics beyond creator sovereignty
+Which key role (auth, assert, controller) a signing key must hold, and any
+ownership or attribution semantics beyond creator sovereignty, are application
+concerns. What the protocol itself checks is
+[Content chain verification](#content-chain).
 
 ### Terminal states
 
@@ -662,145 +653,34 @@ one position:
 #### The two legs
 
 An introduction is verified by whoever appends it, and `audience` names that
-party in the value domain the flow has:
+party in the value domain the flow has. On the **hosted ceremony leg** a ceremony
+operator custodying the chain mints the nonce and `audience` is that host's
+authority, which the verifier byte-compares against its own configured authority,
+never against anything request-derived. On the **controller-verified leg** the
+chain's own controller mints the nonce and delivers `{did, roleSet, prevCID,
+nonce}` to wherever the candidate key lives, and `audience` MUST byte-equal the
+payload's `did`. A host authority is never a DID, so the two value domains never
+overlap and an envelope signed for one leg cannot verify in the other.
 
-- **The hosted ceremony leg.** A ceremony operator custodying the chain mints the
-  nonce, and `audience` is that host's authority. The verifier byte-compares
-  `audience` against its **own configured authority**, never against anything
-  request-derived, and rejects on mismatch. A proof audienced to one host does not verify at any other.
-- **The controller-verified leg.** A chain's own controller introduces a key its
-  human's custody can reach, with no host mediating. The controller's tool mints
-  the nonce, delivers `{did, roleSet, prevCID, nonce}` to wherever the candidate
-  key lives, and the key signs and returns the envelope. Here `audience` MUST
-  byte-equal the payload's `did`.
-
-A host authority is never a DID, so the two value domains never overlap and an
-envelope signed for one leg cannot verify in the other.
-
-#### Carriage and resolution
-
-A hosted ceremony reaches its holder as a **carriage**: an authority and a
-code, and nothing else. The code is the ceremony's identifier. It selects the
-ceremony at resolution and travels beside the envelope at presentation. The
-signing context is not in the carriage; a tool resolves the code before signing.
-
-**Short code.** The human-typeable form is `<authority>/<code>`. The code is
-operator-minted. Codes SHOULD be drawn from the 32-symbol alphabet
-`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, uppercase letters and digits with the
-confusable glyphs (`0`/`O`, `1`/`I`) removed, and SHOULD carry at least 8
-characters. An operator using a different charset SHOULD hold entropy at or
-above `32^8`. Grouping punctuation belongs to the display: an operator SHOULD
-strip characters outside the code alphabet and normalize case before comparing,
-so `ABCD-2345`, `abcd 2345`, and `ABCD2345` name one code. A code lives exactly
-as long as its ceremony, and an operator SHOULD rate-limit resolution and
-presentation per code and per source.
-
-**URI carriage.** One HTTPS URL naming the same resolution, the resolution
-endpoint below with its `code` member. A QR code and a deep link are that URI
-verbatim and land at the same resolution as a typed code.
-
-**Resolution.** A tool resolves with
-`GET https://<authority>/.well-known/dfos-key-proof?code=<code>`. A live code
-answers the signing context:
-
-```jsonc
-{
-  "present": "…", // absolute URL of the presentation endpoint
-  "nonce": "…", // the verifier-minted challenge the payload carries
-  "audience": "…", // the authority the envelope names
-  "purpose": "did:dfos:key-add",
-  "adopts": { "did": "…", "handle": "…", "displayName": "…" },
-  "roleSet": "…", // canonical role-set string the ceremony introduces
-  "prevCID": "…", // the chain's current head
-  "expiresAt": "…",
-  "relay": "…", // OPTIONAL, an advisory oracle, below
-}
-```
-
-The resolved `audience` MUST byte-equal the resolving authority, and the
-`present` URL's authority MUST byte-equal it too, so a resolution cannot
-redirect a ceremony off the host the human typed. `adopts` names the identity
-the introduction targets; a tool MUST NOT sign on a resolution that omits any of
-its three members. A holder that signs against a stale `prevCID` re-resolves the
-same ceremony for the current head and re-signs.
-
-The `relay` member, when present, is an absolute `https` URL of a relay serving
-the `key=` reverse index. It is the operator naming an oracle for the
-one-key-one-DID pre-flight below: a holder with no oracle of its own SHOULD
-check against it for that ceremony only and MUST NOT adopt it as a standing
-peer. A tool ignores resolution members it does not recognize.
-
-A code is consumed with its ceremony. Neither the code, the nonce, nor any
-resolution member is a session, a pairing, or a credential.
-
-#### Holder obligations
-
-- **Render before signing.** A holder MUST show its human, before signing, the
-  `audience`, the ceremony purpose, the adopting identity (DID, handle, and
-  display name from the resolution), and the `roleSet`. It MUST refuse to sign
-  when any of these is absent from the resolution, and MUST refuse an audience
-  its human did not initiate. A proof is consent, and consent that was never
-  displayed was never given.
-- **One key, one DID.** A holder SHOULD refuse to sign a key proof for a key
-  any identity's chain has ever declared and proved, its own DID included. A
-  relay's `key=` reverse index is has-ever-proved across all three key sets and
-  its rows survive rotation and deletion, so proving one key into two chains
-  publishes a permanent public link between them. An unproved declaration of the
-  key in another chain is void, never indexes, and obligates nobody.
-- **Fresh bytes only.** A holder signs a payload it constructed itself from a
-  carriage it resolved, never payload bytes supplied ready-made by anyone else.
-- **Comparable fingerprints.** Where a human compares a key across two
-  surfaces, both SHOULD render the same **word fingerprint**: the first six
-  bytes of `SHA-256` over the key's multikey string (the UTF-8 bytes of the `z…`
-  form), each byte rendered through the
-  [PGP Word List](https://en.wikipedia.org/wiki/PGP_word_list), the even list
-  for bytes at even offsets and the odd list for odd offsets. The multikey
-  string stays the identifier everywhere bytes are matched; the word form is for
-  eyes.
-
-### Presentation verification
-
-A verifier receiving an envelope at presentation:
-
-1. **Size cap.** Reject an envelope over 4 KiB before parsing.
-2. **Header gates.** `typ` MUST be exactly the registered value the ceremony
-   requires; `alg` MUST be the algorithm of the payload key's Multikey type; a
-   `crit` member rejects; an embedded key member rejects; a present `kid` rejects.
-3. **Payload schema, over canonical bytes.** Exactly the seven members above,
-   each a string, `roleSet` in the canonical grammar; any absent, any extra, any
-   non-string, or any non-canonical `roleSet` member rejects. The verifier then
-   recomputes the canonical signing input from the parsed members and
-   byte-compares it against the payload octets presented; a mismatch rejects. A
-   signature covers whatever octets arrived, so this is what makes the payload a
-   function of its members.
-4. **Audience.** On the hosted leg, `audience` MUST byte-equal the verifier's own
-   configured authority. On the controller-verified leg, `audience` MUST
-   byte-equal the payload's `did`.
-5. **Position.** `did` MUST name the chain this ceremony introduces to; `roleSet`
-   MUST equal the role set the ceremony grants; `prevCID` MUST equal the chain's
-   current head. A `prevCID` mismatch is a stale envelope, refused without
-   prejudice; the holder re-signs against the current head.
-6. **Freshness.** `timestamp` MUST fall within the verifier's acceptance window
-   (RECOMMENDED: 300 seconds, either side).
-7. **Nonce.** The nonce MUST be one this verifier minted, for this ceremony, not
-   yet consumed, checked and consumed **atomically** so two racing presentations
-   cannot both pass.
-8. **Signature.** The JWS MUST verify against the payload's `publicKeyMultibase`.
-
-A proof that passes all eight is exactly one fact: the named key was held, and
-consented to joining the named chain in the named roles at the named position, at
-this verifier, inside this window. The operator that adopts it embeds the bytes
-verbatim in the introducing operation's `keyProofs` member: the artifact verified
-at presentation is the artifact the chain carries.
+Everything between minting a nonce and adopting the returned envelope is an
+integration convention rather than a chain rule, and it is specified in
+[INTEGRATIONS, Key ceremonies](https://protocol.dfos.com/integrations#key-ceremonies):
+the short-code and URI carriage, the `/.well-known/dfos-key-proof` resolution
+endpoint and its JSON, the holder's obligations, and the presentation check a
+verifier runs before embedding the bytes. A chain walker re-runs none of it; what
+a walker checks is below.
 
 ### Chain-walk verification
 
 A verifier walking an identity chain checks, for each embedded envelope:
 
-1. **Header gates**, as at presentation: `typ` MUST be `did:dfos:key-add`; `alg`
-   per the key's Multikey type; `crit`, embedded key members, and `kid` reject.
-2. **Payload schema, over canonical bytes**: the same closed seven-member schema,
-   canonical `roleSet` grammar, and byte-compare as presentation step 3.
+1. **Header gates.** `typ` MUST be `did:dfos:key-add`; `alg` MUST be the
+   algorithm of the payload key's Multikey type; `crit`, embedded key members,
+   and a present `kid` reject.
+2. **Payload schema, over canonical bytes.** Exactly the closed seven-member
+   schema, each member a string, `roleSet` in the canonical grammar; the walker
+   recomputes the canonical signing input from the parsed members and
+   byte-compares it against the payload octets, and a mismatch rejects.
 3. **Key.** `publicKeyMultibase` MUST equal the introduced key's multikey.
 4. **Chain.** `did` MUST equal the chain's own DID.
 5. **Position.** `prevCID` MUST equal the carrying operation's
@@ -1048,24 +928,17 @@ L = 2^252 + 27742317777372353535851937790883648493
 ```
 
 A signature whose `S >= L` MUST be rejected. A signature that does not decode to
-exactly 64 bytes MUST also be rejected. Most Ed25519 libraries enforce `S < L`
-already; implementations on libraries that do not, notably `ed25519-dalek` where
-even `verify_strict` accepts non-canonical `S`, MUST add an explicit
-constant-time `S < L` gate.
+exactly 64 bytes MUST also be rejected. An implementation on an Ed25519 library
+that accepts a non-canonical `S` MUST add an explicit constant-time `S < L`
+gate.
 
 ### Axes outside this profile
 
-Verifiers inherit whatever behavior their Ed25519 library provides on these axes:
-
-- **Cofactorless verification equation pinning**, requiring the specific
-  `[S]B == R + [k]A` equation rather than the batch or cofactored form.
-- **Full-order public key check**, the out-of-band `[L]A == identity` torsion test.
-- **Canonical point encoding (`y < p`)**, rejecting non-canonical `y`-coordinate
-  encodings of `R` and `A`.
-- **Small-order public key rejection** beyond what the underlying library rejects.
-- **Strict base64url tightening** beyond what the decoder enforces.
-
-These axes are reachable only with adversarially constructed keys.
+Verifiers inherit whatever their Ed25519 library does on these axes: cofactorless
+verification equation pinning (the specific `[S]B == R + [k]A` equation rather
+than the batch or cofactored form), the full-order public key check
+(`[L]A == identity`), canonical point encoding (`y < p`) for `R` and `A`,
+small-order public key rejection, and strict base64url tightening.
 
 ---
 
@@ -1344,14 +1217,14 @@ lands by adding its row here in the same PR that specifies it.
 
 ### Service types
 
-| Service `type`            | Owner spec                                                                                               | Validation | Semantics                                                                                         |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
-| `DfosRelay`               | [PROTOCOL](#services)                                                                                    | core       | Transport locator: where to reach a relay serving this identity.                                  |
-| `ContentAnchor`           | [PROTOCOL](#services)                                                                                    | core       | Stable content reference: a contentId or artifact CID under a client-defined semantic label.      |
-| `DfosAuthorizationServer` | [SIWD](https://protocol.dfos.com/siwd#finding-the-authorize-endpoint--the-dfosauthorizationserver-entry) | consumer   | The canonical authorize origin able to produce this subject's signature under SIWD profile A.     |
-| `DfosOrigin`              | [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding)                                               | consumer   | The identity's claimed web domain: the chain half of the bidirectional origin binding.            |
-| `DfosDocumentGateway`     | [WEB-RELAY](https://protocol.dfos.com/web-relay#discovery)                                               | consumer   | Base URL of a document gateway serving this identity's content.                                   |
-| `DfosProfile`             | [WEB-RELAY](https://protocol.dfos.com/web-relay#discovery)                                               | consumer   | The identity's profile document: a contentId or artifact CID, dispatched by shape as anchors are. |
+| Service `type`            | Owner spec                                                                            | Validation | Semantics                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| `DfosRelay`               | [PROTOCOL](#services)                                                                 | core       | Transport locator: where to reach a relay serving this identity.                                  |
+| `ContentAnchor`           | [PROTOCOL](#services)                                                                 | core       | Stable content reference: a contentId or artifact CID under a client-defined semantic label.      |
+| `DfosAuthorizationServer` | [INTEGRATIONS](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint) | consumer   | The canonical authorize origin able to produce this subject's signature under sign-in profile A.  |
+| `DfosOrigin`              | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-dfosorigin-service-entry)   | consumer   | The identity's claimed web domain: the chain half of the bidirectional origin binding.            |
+| `DfosDocumentGateway`     | [RELAY](https://protocol.dfos.com/relay#discovery)                                    | consumer   | Base URL of a content-plane host serving this identity's content.                                 |
+| `DfosProfile`             | [RELAY](https://protocol.dfos.com/relay#discovery)                                    | consumer   | The identity's profile document: a contentId or artifact CID, dispatched by shape as anchors are. |
 
 **Validation.** `core`: structurally validated by every conformant verifier, and
 a malformed entry rejects at verification. `consumer`: opaque to the core
@@ -1364,55 +1237,47 @@ are the owner spec's.
 Every DFOS JWS envelope is typ-scoped. The `cid` column marks whether the
 envelope carries the protocol's [`cid` header](#cid-header).
 
-| `typ` value               | Owner spec                                               | `cid` | Semantics                                                                                                                                                                                        |
-| ------------------------- | -------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `did:dfos:identity-op`    | [PROTOCOL](#typ-header)                                  | yes   | Identity chain operations.                                                                                                                                                                       |
-| `did:dfos:content-op`     | [PROTOCOL](#typ-header)                                  | yes   | Content chain operations.                                                                                                                                                                        |
-| `did:dfos:artifact`       | [PROTOCOL](#artifacts)                                   | yes   | Standalone signed inline documents.                                                                                                                                                              |
-| `did:dfos:countersign`    | [PROTOCOL](#countersignatures)                           | yes   | Standalone witness attestations.                                                                                                                                                                 |
-| `did:dfos:key-add`        | [PROTOCOL](#key-possession)                              | no    | Key introduction proofs: the candidate key's position-bound possession-and-consent proof, self-signed, presented to ceremonies and embedded in the introducing identity operation's `keyProofs`. |
-| `did:dfos:credential`     | [CREDENTIALS](https://protocol.dfos.com/credentials)     | yes   | Authorization credentials; the `cid` is their revocation address.                                                                                                                                |
-| `did:dfos:revocation`     | [CREDENTIALS](https://protocol.dfos.com/credentials)     | yes   | Credential revocation artifacts.                                                                                                                                                                 |
-| `did:dfos:credit-claim`   | [CONTENT-MODEL](https://protocol.dfos.com/content-model) | yes   | Document-plane credit claims: registered for `typ` routing, never relay-ingested.                                                                                                                |
-| `did:dfos:sign-request`   | [SIGNING](https://protocol.dfos.com/signing)             | yes   | Sign-request envelopes: travel the signing-mailbox courier, never `POST /proof/v1/operations`.                                                                                                   |
-| `did:dfos:siwd`           | [SIWD](https://protocol.dfos.com/siwd)                   | no    | Sign In With DFOS challenge proofs: delivered by web redirect or the signing mailbox, never relay-ingested.                                                                                      |
-| `did:dfos:siwd-ask`       | [SIWD](https://protocol.dfos.com/siwd#the-ask-proof)     | no    | Loopback client ask proofs: the client's key-control proof over its own authorize request.                                                                                                       |
-| `did:dfos:request-proof`  | [API-AUTH](https://protocol.dfos.com/api-auth)           | no    | API request proofs: ride the `Authorization` header of a credential-gated API request and die with the freshness window.                                                                         |
-| `did:dfos:identity-proof` | [API-AUTH](https://protocol.dfos.com/api-auth)           | no    | API identity proofs: bind one exact request to a bare DID, authentication only.                                                                                                                  |
+| `typ` value               | Owner spec                                                                | `cid` | Semantics                                                                                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `did:dfos:identity-op`    | [PROTOCOL](#typ-header)                                                   | yes   | Identity chain operations.                                                                                                                                                                       |
+| `did:dfos:content-op`     | [PROTOCOL](#typ-header)                                                   | yes   | Content chain operations.                                                                                                                                                                        |
+| `did:dfos:artifact`       | [PROTOCOL](#artifacts)                                                    | yes   | Standalone signed inline documents.                                                                                                                                                              |
+| `did:dfos:countersign`    | [PROTOCOL](#countersignatures)                                            | yes   | Standalone witness attestations.                                                                                                                                                                 |
+| `did:dfos:key-add`        | [PROTOCOL](#key-possession)                                               | no    | Key introduction proofs: the candidate key's position-bound possession-and-consent proof, self-signed, presented to ceremonies and embedded in the introducing identity operation's `keyProofs`. |
+| `did:dfos:credential`     | [CREDENTIALS](https://protocol.dfos.com/credentials)                      | yes   | Authorization credentials; the `cid` is their revocation address.                                                                                                                                |
+| `did:dfos:revocation`     | [CREDENTIALS](https://protocol.dfos.com/credentials)                      | yes   | Credential revocation artifacts.                                                                                                                                                                 |
+| `did:dfos:credit-claim`   | [CONTENT-MODEL](https://protocol.dfos.com/content-model)                  | yes   | Document-plane credit claims: registered for `typ` routing, never relay-ingested.                                                                                                                |
+| `did:dfos:sign-request`   | [RELAY](https://protocol.dfos.com/relay#the-sign-request-envelope)        | yes   | Sign-request envelopes: travel the signing-mailbox courier, never `POST /proof/v1/operations`.                                                                                                   |
+| `did:dfos:siwd`           | [INTEGRATIONS](https://protocol.dfos.com/integrations#sign-in)            | no    | Sign In With DFOS challenge proofs: delivered by web redirect or the signing mailbox, never relay-ingested.                                                                                      |
+| `did:dfos:siwd-ask`       | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-ask-proof)      | no    | Loopback client ask proofs: the client's key-control proof over its own authorize request.                                                                                                       |
+| `did:dfos:request-proof`  | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-request-proof)  | no    | API request proofs: ride the `Authorization` header of a credential-gated API request and die with the freshness window.                                                                         |
+| `did:dfos:identity-proof` | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-identity-proof) | no    | API identity proofs: bind one exact request to a bare DID, authentication only.                                                                                                                  |
 
 Names whose grammar is inseparable from their owner's machinery register there:
-credential resource forms and API action tokens in
-[CREDENTIALS](https://protocol.dfos.com/credentials) and
-[API-AUTH](https://protocol.dfos.com/api-auth), SIWD scope tokens and app
-description members in [SIWD](https://protocol.dfos.com/siwd), sign-request
-`payloadTyp` families in [SIGNING](https://protocol.dfos.com/signing), and
-content schemas in [CONTENT-MODEL](https://protocol.dfos.com/content-model),
-hosted at [schemas.dfos.com](https://schemas.dfos.com).
+credential resource forms in
+[CREDENTIALS](https://protocol.dfos.com/credentials); API action tokens, sign-in
+scope tokens, and app description members in
+[INTEGRATIONS](https://protocol.dfos.com/integrations); sign-request
+`payloadTyp` families in [RELAY](https://protocol.dfos.com/relay); and content
+schemas in [CONTENT-MODEL](https://protocol.dfos.com/content-model), hosted at
+[schemas.dfos.com](https://schemas.dfos.com).
 
 ### External registrations
 
-The corpus also mints names in two global namespaces DFOS does not own.
-[RFC 8615 §3](https://www.rfc-editor.org/rfc/rfc8615#section-3) requires that an
-application minting a well-known URI register its suffix in the IANA
-[Well-Known URIs registry](https://www.iana.org/assignments/well-known-uris/),
-and [RFC 8552 §4.1.5](https://www.rfc-editor.org/rfc/rfc8552#section-4.1.5)
-requires that a public specification calling for a global underscored DNS node
-name enter it in the IANA
-[Underscored and Globally Scoped DNS Node Names registry](https://www.iana.org/assignments/dns-parameters/).
-This table tracks those registrations.
+The corpus also mints names in two global namespaces DFOS does not own, and
+[RFC 8615 §3](https://www.rfc-editor.org/rfc/rfc8615#section-3) and
+[RFC 8552 §4.1.5](https://www.rfc-editor.org/rfc/rfc8552#section-4.1.5) require
+each to be entered in its IANA registry. A spec that mints a well-known path or
+an underscored name adds its row here in the same PR that specifies it;
+registration itself is an act of the project's stewards.
 
-| Name                          | Registry                                                                             | Owner spec                                                                                    | Registered |
-| ----------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ---------- |
-| `/.well-known/dfos-relay`     | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [WEB-RELAY](https://protocol.dfos.com/web-relay#well-known-endpoint-get-well-knowndfos-relay) | not listed |
-| `/.well-known/dfos-app.json`  | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [SIWD](https://protocol.dfos.com/siwd#the-app-description-document)                           | not listed |
-| `/.well-known/dfos-did`       | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding#https--well-knowndfos-did)          | not listed |
-| `/.well-known/dfos-key-proof` | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [PROTOCOL](#carriage-and-resolution)                                                          | not listed |
-| `_dfos` (TXT)                 | IANA Underscored DNS Node Names ([RFC 8552](https://www.rfc-editor.org/rfc/rfc8552)) | [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding#dns--txt-at-_dfosdomain)            | not listed |
-
-Registration is an act of the project's stewards, outside any PR. What a PR owns
-is this table's accuracy and the registration note in each minting spec. A spec
-that mints a well-known path or an underscored name adds its row here in the
-same PR that specifies it, exactly as internal names do.
+| Name                          | Registry                                                                             | Owner spec                                                                          | Registered |
+| ----------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ---------- |
+| `/.well-known/dfos-relay`     | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [RELAY](https://protocol.dfos.com/relay#the-well-known-document)                    | not listed |
+| `/.well-known/dfos-app.json`  | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [INTEGRATIONS](https://protocol.dfos.com/integrations#the-app-description-document) | not listed |
+| `/.well-known/dfos-did`       | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [INTEGRATIONS](https://protocol.dfos.com/integrations#https-well-knowndfos-did)     | not listed |
+| `/.well-known/dfos-key-proof` | IANA Well-Known URIs ([RFC 8615](https://www.rfc-editor.org/rfc/rfc8615))            | [INTEGRATIONS](https://protocol.dfos.com/integrations#key-ceremonies)               | not listed |
+| `_dfos` (TXT)                 | IANA Underscored DNS Node Names ([RFC 8552](https://www.rfc-editor.org/rfc/rfc8552)) | [INTEGRATIONS](https://protocol.dfos.com/integrations#dns-txt-at-_dfosdomain)       | not listed |
 
 ---
 
@@ -1831,64 +1696,15 @@ Head CID:     bafyreied5cjgjjt2pdz52k6pgipcjg3i4xl7txbrbdedscejvqhtgltxdi
 
 ---
 
-## Verification checklist for independent implementers
+## Independent verification
 
-Given the artifacts above, verify:
-
-1. **Multikey decode**: strip `z`, base58btc decode, strip `[0xed, 0x01]` prefix → raw public key:
-
-   ```
-   z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
-   → ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
-   ```
-
-2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true. The header contains `cid` alongside `alg`, `typ`, and `kid`.
-
-3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be:
-
-   ```
-   bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
-   ```
-
-4. **CID header**: verify each operation JWS header contains `cid` matching the derived operation CID
-
-5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 31 bytes → `byte % 19` → alphabet lookup → should be `cnnnft9f8a2rn938d6nkz38r847v2kr` → DID = `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`
-
-5b. **Rotation key proof**: base64url-decode the single entry of the rotation operation's `keyProofs`; its payload octets MUST byte-equal the canonical signing input shown in [Reference key proof](#reference-key-proof-key-2s-introduction); verify its EdDSA signature with **key 2's** public key (the payload's own `publicKeyMultibase`); check `did` equals the derived DID, `prevCID` equals the genesis CID (the rotation's `previousOperationCID`), and `roleSet` is `auth,assert,controller`, covering all three roles the rotation introduces key 2 to.
-
-6. **Rotation JWS**: signed by OLD controller key (key 1). Verify with key 1's public key. kid:
-
-   ```
-   did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe
-   ```
-
-7. **Content create JWS**: signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key. kid:
-
-   ```
-   did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8
-   ```
-
-8. **Document CID**: dag-cbor canonical encode the flat content object → SHA-256 → CIDv1 → should be:
-
-   ```
-   bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu
-   ```
-
-9. **Content operation `did` field**: verify the `did` field in each content operation matches the `kid` DID in the JWS header
-
-10. **Content chain integrity**: the update's `previousOperationCID` matches the create's operation CID
-
-11. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end to end.
-
-12. **Credential verify**: using the issuer's public key, verify a DFOS credential with write or read access: EdDSA signature, expiration, `kid` DID URL format, `kid` DID matches `iss`, credential type matches the expected DFOS type. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
-
-13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain whose genesis is signed by the creator and whose subsequent update is signed by a delegate with an embedded DFOS write credential in the `authorization` field. The credential is issued by the creator DID, with `aud` matching the delegate DID.
-
-14. **Number encoding determinism**: dag-cbor encode `{"version": 1, "type": "test"}` and verify:
-    - CBOR hex is `a2647479706564746573746776657273696f6e01` (20 bytes)
-    - CID is `bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa`
-    - Byte at offset 19 is `0x01` (CBOR integer 1), NOT `0xf9` (CBOR float header)
-    - If your implementation decodes this payload from JSON (for example from a JWS token) and then re-encodes to dag-cbor, the CID MUST still match. This catches the JSON `float64` to CBOR float trap.
+The checklist is executable. The suites in
+[`packages/protocol-verify/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify)
+load [`vectors.json`](https://github.com/metalabel/dfos/blob/main/packages/protocol-verify/vectors.json)
+and re-derive every value above in five languages: multikey decoding, JWS
+verification, CID and DID derivation, the rotation's key proof, dag-cbor number
+encoding, and the credential and delegated-chain examples in
+[`packages/dfos-protocol/examples/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/examples).
 
 ---
 
@@ -1908,7 +1724,5 @@ The five-language cross-verification suites are
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method): the W3C DID method registration for identity chains
 - [Content Model](https://protocol.dfos.com/content-model): document schemas and the credit vocabulary
 - [Credentials](https://protocol.dfos.com/credentials): authorization credentials and revocation
-- [Sign In With DFOS](https://protocol.dfos.com/siwd): identity verification for third-party applications
-- [API Auth](https://protocol.dfos.com/api-auth): request authentication
-- [Origin Binding](https://protocol.dfos.com/origin-binding): the bidirectional domain binding
-- [Web Relay](https://protocol.dfos.com/web-relay): the HTTP relay: ingestion, state, and the content plane
+- [Relay](https://protocol.dfos.com/relay): the HTTP relay: read and write contracts, ingestion, profiles, and the content plane
+- [Integrations](https://protocol.dfos.com/integrations): sign-in, API authentication, origin binding, and key ceremonies

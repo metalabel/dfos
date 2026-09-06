@@ -4,7 +4,7 @@
 
   This page never decides whether to believe a signed challenge. It hands the
   JWS to `/api/verify`, where the session is granted, and renders the answer.
-  specs/SIWD.md requires that: a bare DID is an address, not a proof, so the
+  specs/INTEGRATIONS.md requires that: a bare DID is an address, not a proof, so the
   JWS MUST be verified wherever a session is granted.
 
   The browser's half is three moves:
@@ -46,7 +46,7 @@
   credential arrives in the callback's URL fragment, is handed straight to the
   backend, and is never stored here. A browser cannot hold a signing key safely,
   so the backend holds it and signs — the backend-for-frontend shape
-  specs/API-AUTH.md describes.
+  specs/INTEGRATIONS.md describes.
 
   The JWS is decoded here for display only. `decodeJwsUnsafe` does no
   verification — the panel says so, and so does the name.
@@ -69,9 +69,9 @@ const REPO = 'https://github.com/metalabel/dfos/blob/main';
  * README says how the two subpaths this demo uses are meant to be wired.
  */
 const DOCS = {
-  siwd: 'https://protocol.dfos.com/siwd',
-  replayPrevention: 'https://protocol.dfos.com/siwd#replay-prevention',
-  apiAuth: 'https://protocol.dfos.com/api-auth',
+  siwd: 'https://protocol.dfos.com/integrations#sign-in',
+  replayPrevention: 'https://protocol.dfos.com/integrations#replay-prevention',
+  apiAuth: 'https://protocol.dfos.com/integrations#api-authentication',
   credentials: 'https://protocol.dfos.com/credentials',
   clientSiwd: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientsiwd`,
   clientApiAuth: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientapi-auth`,

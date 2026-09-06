@@ -7,7 +7,7 @@
   same self-certified state the proof plane serves at
   `${PROOF_BASE_PATH}/identities/:did`.
 
-  The mapping is NORMATIVELY specified and FROZEN in specs/DID-METHOD.md §4:
+  The mapping is NORMATIVELY specified in specs/DID-METHOD.md §4:
     - §4.1 document structure + @context
     - §4.2 verification-method mapping (authKeys→authentication,
       assertKeys→assertionMethod, controllerKeys→capabilityInvocation),
