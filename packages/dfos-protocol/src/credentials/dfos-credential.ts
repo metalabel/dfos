@@ -46,6 +46,25 @@ export interface VerifiedDFOSCredential {
   signerKeyId: string;
 }
 
+/**
+ * The identity a resolver answers with, plus the one fact about that answer only
+ * the resolver knows: whether it is FINAL for the basis it was asked about.
+ *
+ * A resolver whose copy of the chain runs past the basis answers determinately,
+ * and a key missing from that state is a verdict. A resolver answering from a
+ * copy that ends at or before the basis does not: an operation dated at or
+ * before the basis can still arrive and add the key, so the miss is a dependency
+ * miss the caller retries. Absent is the retryable reading, which is the safe
+ * default: only a resolver that can say its answer is final gets a verdict.
+ */
+export type ResolvedIdentity = VerifiedIdentity & {
+  /**
+   * True when no operation dated at or before the basis can still arrive and
+   * change this key state.
+   */
+  basisDeterminate?: boolean;
+};
+
 export interface VerifiedDelegationChain {
   /** The leaf credential */
   credential: VerifiedDFOSCredential;
@@ -106,8 +125,8 @@ export type RevocationChecker = (
 const resolveKeyFromIdentity = (
   identity: VerifiedIdentity,
   kid: string,
-  /** True when the caller resolved this identity against an explicit basis. */
-  atBasis: boolean,
+  /** True when the resolver's answer is final for the basis it was asked about. */
+  determinate: boolean,
 ): Uint8Array => {
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new CredentialVerificationError('kid must be a DID URL');
@@ -119,10 +138,11 @@ const resolveKeyFromIdentity = (
     const miss = new CredentialVerificationError(
       `key ${keyId} not found on identity ${identity.did}`,
     );
-    // At a basis the identity's key state is determinate, so the miss is a
-    // verdict. Without one the caller resolved head state, where a fuller chain
-    // can still change the answer — see `markDependencyMissing`.
-    throw atBasis ? miss : markDependencyMissing(miss);
+    // A determinate answer makes the miss a verdict. An indeterminate one is a
+    // retryable dependency miss: a fuller chain can still change it, and a
+    // verdict deletes the operation that carries the credential — see
+    // `markDependencyMissing`.
+    throw determinate ? miss : markDependencyMissing(miss);
   }
 
   const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
@@ -225,9 +245,10 @@ export const verifyDFOSCredential = async (
     /**
      * Resolve a DID to its verified identity state AS OF `basis`. Called with
      * the basis this verification runs at, or with none when the presentation is
-     * ephemeral and the answer is head state.
+     * ephemeral and the answer is head state. A resolver that knows its answer
+     * is final for the basis says so on the result (`ResolvedIdentity`).
      */
-    resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+    resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
     /**
      * The basis time, in the `createdAt` grammar — the operation's own
      * `createdAt` for a credential carried inline in a committed operation.
@@ -290,7 +311,7 @@ export const verifyDFOSCredential = async (
     throw new CredentialVerificationError(`issuer identity is deleted: ${payload.iss}`);
   }
 
-  const publicKey = resolveKeyFromIdentity(identity, kid, options.basis !== undefined);
+  const publicKey = resolveKeyFromIdentity(identity, kid, identity.basisDeterminate === true);
 
   // verify JWS signature
   try {
@@ -354,7 +375,7 @@ export const verifyDelegationChain = async (
   credential: VerifiedDFOSCredential,
   options: {
     /** Resolve a DID to its verified identity state as of `basis`. */
-    resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+    resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
     /** The expected root authority DID (e.g., content chain creator) */
     rootDID: string;
     /** Check if a credential has been revoked (checked at every level of the chain) */

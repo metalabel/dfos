@@ -37,7 +37,7 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { identityToDidDocument } from '../src/did-document';
-import { ingestOperations } from '../src/ingest';
+import { createAsOfKeyResolver, ingestOperations } from '../src/ingest';
 import { createRelay } from '../src/relay';
 import { MemoryRelayStore } from '../src/store';
 import { chainKeyProof } from './key-proofs';
@@ -303,22 +303,22 @@ describe('void keys never reach a resolution surface', () => {
     expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
 
     // Historical admission resolves the signer AS OF the operation's own
-    // createdAt, so the same key that signed `early` still verifies it after the
-    // rotation: replay the committed op and it lands again, idempotently.
-    const [replayed] = await ingestOperations([early.jwsToken], store, {
-      admissionMode: 'historical',
-    });
-    expect(replayed!.status).toBe('duplicate');
+    // createdAt, so the key that signed `early` still resolves at `early`'s
+    // basis after the rotation. Asked at the resolver rather than through a
+    // replay, which short-circuits as a duplicate before any resolver runs.
+    const asOf = createAsOfKeyResolver(store);
+    await expect(asOf(`${root.did}#${root.key.keyId}`, ts(1))).resolves.toBeInstanceOf(Uint8Array);
 
     // A key rotated out at the basis resolves nowhere: an op dated after the
     // rotation and signed by the retired key is refused on the historical path
-    // too, and the refusal is a verdict rather than a missing dependency.
+    // too. The refusal is retryable, because the stored chain ends at or before
+    // that basis and an operation the basis names can still arrive.
     const late = await contentGenesis(root.did, root.key, 'after the rotation', 3);
     const [historical] = await ingestOperations([late.jwsToken], store, {
       admissionMode: 'historical',
     });
     expect(historical!.status).toBe('rejected');
-    expect(historical!.dependencyMissing).not.toBe(true);
+    expect(historical!.dependencyMissing).toBe(true);
 
     // A key nothing ever proved does not, even historically: it never spoke for
     // this identity, so there is nothing for its signature to have been.

@@ -243,8 +243,9 @@ func TestForwardIssuanceClosesAtTheOperationBasis(t *testing.T) {
 	rotateExistingTestIdentity(t, r, creator)
 
 	// After it, the same credential authorizes nothing: its issuer key is no
-	// longer effective at the new op's basis. The rejection is a verdict, not a
-	// missing dependency — the relay holds the whole issuer chain.
+	// longer effective at the new op's basis. The refusal is RETRYABLE, because
+	// the issuer's stored chain ends at or before that basis and the relay cannot
+	// rule out an operation the basis names still arriving.
 	time.Sleep(2 * time.Millisecond)
 	late, _, err := dfos.SignContentUpdateWithOptions(delegate.did, earlyCID,
 		newDocCID(t, "after the rotation"), delegate.did+"#"+delegate.auth.keyID, delegate.auth.priv,
@@ -256,8 +257,8 @@ func TestForwardIssuanceClosesAtTheOperationBasis(t *testing.T) {
 	if result.Status != "rejected" {
 		t.Fatalf("delegated write after the rotation: %s (%s)", result.Status, result.Error)
 	}
-	if result.DependencyMissing {
-		t.Fatalf("a rotated-out credential issuer key is a verdict, got %+v", result)
+	if !result.DependencyMissing {
+		t.Fatalf("a key miss under head state must stay retryable, got %+v", result)
 	}
 
 	// The committed early write still verifies on replay, at its own basis.

@@ -345,12 +345,13 @@ func findKeyInKeyState(state dfos.DeclaredKeyState, keyID string) (dfos.Multikey
 // CreateKeyResolver returns a KeyResolver over every key an identity chain has
 // EVER PROVED, rotated-out keys included.
 //
-// HAS-EVER-PROVED IS THE CREDIT-CLAIM CARVE-OUT, and the only place this package
-// asks it: a credit claim runs no temporal check at all, so it resolves the
-// claimant's key against every key that chain has held (PROTOCOL, Time basis).
-// Every other surface here has a basis and takes CreateAsOfKeyResolver. The
-// `key=` reverse index reads ProvedKeys for the same reason and reads it
-// directly, through index_projection.go.
+// HAS-EVER-PROVED IS THE CREDIT-CLAIM CARVE-OUT: a credit claim runs no temporal
+// check at all, so it resolves the claimant's key against every key that chain
+// has held (PROTOCOL, Time basis). This resolver is the has-ever-proved reading
+// the package offers a caller that needs it, the credit-claim path included.
+// Every surface inside the relay has a basis and takes CreateAsOfKeyResolver,
+// and the `key=` reverse index reads ProvedKeys directly, through
+// index_projection.go.
 //
 // HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. A declared-but-unproved membership is
 // VOID: no possession proof ever admitted it, so nothing it signed was ever
@@ -395,38 +396,48 @@ func CreateKeyResolver(store RelayReadStore) dfos.KeyResolver {
 }
 
 // ResolveIdentityAsOf returns an identity's verified state AS OF basis, from
-// this store's copy of its chain (PROTOCOL, Time basis).
+// this store's copy of its chain (PROTOCOL, Time basis), and whether that answer
+// is DETERMINATE for the basis.
 //
 // TWO BRANCHES, ONE ANSWER. When the stored chain's last operation is dated at
-// or before the basis, head state IS the state as of the basis and no walk runs.
-// Otherwise the log is re-verified with the basis, which folds the prefix the
-// basis names. Both branches return the same key set for the same basis. An
-// empty basis is ephemeral and takes head state.
+// or before the basis, head state IS the state as of the basis for the log this
+// store holds, and no walk runs. Otherwise the log is re-verified with the
+// basis, which folds the prefix the basis names. Both branches return the same
+// key set for the same basis. An empty basis is ephemeral and takes head state.
+//
+// ONLY THE RE-WALK BRANCH IS DETERMINATE, and the second return says which one
+// answered. A stored operation dated after the basis proves this store holds
+// every operation the basis names: the chain is linear and its createdAt
+// strictly increases, so anything still to arrive is dated after the stored
+// head. A chain that ends at or before the basis proves nothing of the sort,
+// because the next operation to arrive can still be dated at or before the basis
+// and add a key. A key missing from an indeterminate answer is a dependency miss
+// rather than a verdict.
 //
 // DELETION READS HEAD STATE, never the as-of state: a deleted issuer's
 // credentials are invalid retroactively, so the deletion a later operation
 // recorded reaches back past the basis (CREDENTIALS, Deleted issuers).
 //
 // A nil chain with a nil error means this store does not hold it.
-func ResolveIdentityAsOf(store RelayReadStore, did string, basis string) (*dfos.IdentityState, error) {
+func ResolveIdentityAsOf(store RelayReadStore, did string, basis string) (state *dfos.IdentityState, determinate bool, err error) {
 	identity, err := store.GetIdentityChain(did)
 	if err != nil {
-		return nil, storeFault(err)
+		return nil, false, storeFault(err)
 	}
 	if identity == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	if basis == "" || identity.LastCreatedAt <= basis {
-		state := identity.State
-		return &state, nil
+		head := identity.State
+		return &head, false, nil
 	}
 	result, err := dfos.VerifyIdentityChainAsOf(identity.Log, basis)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	state := result.State
-	state.IsDeleted = identity.State.IsDeleted
-	return &state, nil
+	asOf := result.State
+	asOf.IsDeleted = identity.State.IsDeleted
+	return &asOf, true, nil
 }
 
 // CreateAsOfKeyResolver returns a KeyResolver that resolves a kid in the
@@ -434,10 +445,13 @@ func ResolveIdentityAsOf(store RelayReadStore, did string, basis string) (*dfos.
 // when the artifact was signed. An empty basis is ephemeral and takes head
 // state.
 //
-// A key absent from that state is a VERDICT, not a retryable miss: the basis
-// fixes which state answers, so a fuller chain does not change it. An unknown
-// chain stays retryable, because sync may still deliver it, and a store error is
-// a store fault, because it decided nothing.
+// A key absent from that state is a VERDICT only when the answer is determinate:
+// the stored chain runs past the basis, so no operation the basis names can
+// still arrive. Otherwise the miss is retryable, because sync may still deliver
+// the operation that adds the key, and a verdict DELETES the raw op. An unknown
+// chain stays retryable for the same reason, and a store error is a store fault,
+// because it decided nothing. The message is one string either way, so the
+// classification never shows up on the wire.
 func CreateAsOfKeyResolver(store RelayReadStore) dfos.KeyResolver {
 	return func(kid string, basis string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -451,7 +465,7 @@ func CreateAsOfKeyResolver(store RelayReadStore) dfos.KeyResolver {
 			return nil, err
 		}
 
-		state, err := ResolveIdentityAsOf(store, did, basis)
+		state, determinate, err := ResolveIdentityAsOf(store, did, basis)
 		if err != nil {
 			return nil, err
 		}
@@ -463,7 +477,10 @@ func CreateAsOfKeyResolver(store RelayReadStore) dfos.KeyResolver {
 			return dfos.DecodeMultikey(k.PublicKeyMultibase)
 		}
 
-		return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
+		if determinate {
+			return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
+		}
+		return nil, dependencyMissingf("unknown key %s on identity %s", keyID, did)
 	}
 }
 

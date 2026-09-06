@@ -11,8 +11,8 @@ import (
 // ===========================================================================
 // PARENT CREDENTIAL EXPIRY BASIS (Go twin)
 //
-// CREDENTIALS.md "Expiry Basis": at ingest, a credential's exp is compared
-// against the operation's own createdAt, and a relay MUST NOT add an
+// CREDENTIALS.md "Expiry against the basis": at ingest, a credential's exp is
+// compared against the operation's own createdAt, and a relay MUST NOT add an
 // ingest-time wall-clock exp check. The rule covers the whole presented
 // credential — leaf AND every parent in its delegation chain. A chain judged on
 // two different clocks is not judged at one point in time.

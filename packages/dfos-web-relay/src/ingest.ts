@@ -27,11 +27,11 @@ import {
   verifyIdentityExtensionFromTrustedState,
   verifyRevocation,
   type VerifiedCountersignature,
-  type VerifiedIdentity,
   type VerifiedRevocation,
 } from '@metalabel/dfos-protocol/chain';
 import {
   verifyDFOSCredential,
+  type ResolvedIdentity,
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -347,12 +347,13 @@ const classify = (jwsToken: string): ClassifiedOperation => {
  * Create a key resolver over every key an identity chain has EVER PROVED,
  * rotated-out keys included.
  *
- * HAS-EVER-PROVED IS THE CREDIT-CLAIM CARVE-OUT, and the only place the relay
- * asks it: a credit claim runs no temporal check at all, so it resolves the
- * claimant's key against every key that chain has held (PROTOCOL, Time basis).
- * Every other surface in this package has a basis and takes
- * `createAsOfKeyResolver`. The `key=` reverse index reads `provedKeys` for the
- * same reason and reads it directly, through `resolveSignerKeyMultibase`.
+ * HAS-EVER-PROVED IS THE CREDIT-CLAIM CARVE-OUT: a credit claim runs no temporal
+ * check at all, so it resolves the claimant's key against every key that chain
+ * has held (PROTOCOL, Time basis). This resolver is the has-ever-proved reading
+ * the package offers a caller that needs it, the credit-claim path included.
+ * Every surface inside the relay has a basis and takes `createAsOfKeyResolver`,
+ * and the `key=` reverse index reads `provedKeys` directly, through
+ * `resolveSignerKeyMultibase`.
  *
  * HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. A key no possession proof ever
  * admitted never spoke for this identity, so it never resolves here (see
@@ -385,9 +386,19 @@ export const createKeyResolver =
  * chain (PROTOCOL, Time basis).
  *
  * TWO BRANCHES, ONE ANSWER. When the stored chain's last operation is dated at
- * or before the basis, head state IS the state as of the basis and no walk runs.
- * Otherwise the log is re-verified with the basis, which folds the prefix the
- * basis names. Both branches return the same key set for the same basis.
+ * or before the basis, head state IS the state as of the basis for the log this
+ * store holds, and no walk runs. Otherwise the log is re-verified with the
+ * basis, which folds the prefix the basis names. Both branches return the same
+ * key set for the same basis.
+ *
+ * ONLY THE RE-WALK BRANCH IS DETERMINATE, and the answer carries which one it
+ * is. A stored operation dated after the basis proves this store holds every
+ * operation the basis names: the chain is linear and its `createdAt` strictly
+ * increases, so anything still to arrive is dated after the stored head. A chain
+ * that ends at or before the basis proves nothing of the sort, because the next
+ * operation to arrive can still be dated at or before the basis and add a key.
+ * A key missing from an indeterminate answer is a dependency miss rather than a
+ * verdict (`basisDeterminate`).
  *
  * DELETION READS HEAD STATE, never the as-of state: a deleted issuer's
  * credentials are invalid retroactively, so the deletion a later operation
@@ -400,12 +411,12 @@ export const resolveIdentityAsOf = async (
   store: RelayReadStore,
   did: string,
   basis?: string,
-): Promise<VerifiedIdentity | undefined> => {
+): Promise<ResolvedIdentity | undefined> => {
   const chain = await store.getIdentityChain(did);
   if (!chain) return undefined;
   if (basis === undefined || chain.lastCreatedAt <= basis) return chain.state;
   const asOf = await verifyIdentityChain({ didPrefix: 'did:dfos', log: chain.log, asOf: basis });
-  return { ...asOf, isDeleted: chain.state.isDeleted };
+  return { ...asOf, isDeleted: chain.state.isDeleted, basisDeterminate: true };
 };
 
 /**
@@ -414,16 +425,18 @@ export const resolveIdentityAsOf = async (
  */
 export const createIdentityResolver =
   (store: RelayReadStore) =>
-  (did: string, basis?: string): Promise<VerifiedIdentity | undefined> =>
+  (did: string, basis?: string): Promise<ResolvedIdentity | undefined> =>
     resolveIdentityAsOf(store, did, basis);
 
 /**
  * Create a key resolver that resolves a kid in the identity's EFFECTIVE state as
  * of the basis it is handed — the state that held when the artifact was signed.
  *
- * A key absent from that state is a VERDICT, not a retryable miss: the basis
- * fixes which state answers, so a fuller chain does not change it. An unknown
- * chain stays retryable, because sync may still deliver it.
+ * A key absent from that state is a VERDICT only when the answer is determinate:
+ * the stored chain runs past the basis, so no operation the basis names can
+ * still arrive. Otherwise the miss is retryable, because sync may still deliver
+ * the operation that adds the key, and a verdict DELETES the raw op. An unknown
+ * chain stays retryable for the same reason.
  */
 export const createAsOfKeyResolver =
   (store: RelayReadStore) =>
@@ -440,7 +453,10 @@ export const createAsOfKeyResolver =
     const key = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys].find(
       (candidate) => candidate.id === keyId,
     );
-    if (!key) throw new Error(`unknown key ${keyId} on identity ${did}`);
+    if (!key) {
+      const miss = new Error(`unknown key ${keyId} on identity ${did}`);
+      throw identity.basisDeterminate === true ? miss : markDependencyMissing(miss);
+    }
     return decodeMultikey(key.publicKeyMultibase).keyBytes;
   };
 

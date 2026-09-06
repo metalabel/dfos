@@ -1491,6 +1491,9 @@ describe('index v0', () => {
     ).toEqual([c.did, b.did, a.did]);
     const identityPage = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=1'));
     expect(identityPage.identities).toHaveLength(1);
+    // The first page is the first row of that ordering, whichever identity holds
+    // the position.
+    expect(identityPage.identities[0].did).toBe(identityGenesisDesc.identities[0].did);
     expect(identityPage.next).toEqual(expect.any(String));
 
     const allIdentities = await json(

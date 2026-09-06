@@ -8,7 +8,7 @@ import (
 )
 
 // ===================================================================
-// CREDENTIALS.md Expiry Basis (Normative) — ingest-time exp basis
+// CREDENTIALS.md "Expiry against the basis" — ingest-time exp basis
 //
 // "At ingest (a delegated content operation carrying an inline authorization):
 //  exp is compared against the operation's own createdAt. A relay MUST NOT add
@@ -151,11 +151,12 @@ func buildWallClockExpiredDelegatedWrite(t *testing.T) (seed []string, delegated
 }
 
 // TestIngestAcceptsWallClockExpiredCredentialFutureRelativeToOpCreatedAt is the
-// CREDENTIALS.md Expiry Basis positive guard: at ingest, a delegated write whose
-// inline authorization is wall-clock-expired but still valid relative to the op's
-// OWN createdAt MUST be ACCEPTED. If anyone adds an ingest-time wall-clock exp
-// check (verify.go verifyContentAuthorization → jwt.go VerifyCredentialAt), this
-// flips RED — that is the regression this test exists to catch.
+// CREDENTIALS.md "Expiry against the basis" positive guard: at ingest, a
+// delegated write whose inline authorization is wall-clock-expired but is still
+// valid relative to the op's OWN createdAt MUST be ACCEPTED. If anyone adds an
+// ingest-time wall-clock exp check (verify.go verifyContentAuthorization →
+// jwt.go VerifyCredentialAt), this flips RED — that is the regression this test
+// exists to catch.
 func TestIngestAcceptsWallClockExpiredCredentialFutureRelativeToOpCreatedAt(t *testing.T) {
 	seed, delegatedWrite, now := buildWallClockExpiredDelegatedWrite(t)
 

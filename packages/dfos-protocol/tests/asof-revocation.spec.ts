@@ -22,7 +22,7 @@ import {
   Acceptance is a freshness decision; verification of committed history is a
   validity decision. A timeless `isRevoked` conflates the two: it makes revoking a
   credential today retroactively invalidate every operation it ever authorized,
-  which contradicts CREDENTIALS.md "Revocation Scope" ("does not retroactively
+  which contradicts CREDENTIALS.md "Revocation against the basis" ("does not retroactively
   invalidate operations already committed to the content chain").
 
   These tests pin the fold side of that split: the verifier calls `isRevoked` with

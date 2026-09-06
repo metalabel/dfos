@@ -195,6 +195,38 @@ describe('identity state as of a basis', () => {
 });
 
 // -----------------------------------------------------------------------------
+// the basis in whole seconds
+// -----------------------------------------------------------------------------
+
+describe('the basis converts to whole seconds by truncation', () => {
+  it('never rounds a sub-second remainder up onto exp', async () => {
+    const issuer = await rotatingIdentity();
+    const resolveIdentity = asOfResolver(issuer.did, issuer.log);
+    const credential = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:*', action: 'read' }],
+      exp: unix(T1),
+      iat: unix(T0),
+      signer: issuer.k1.signer,
+      keyId: issuer.k1.keyId,
+    });
+
+    // A basis whose whole-second floor is exp-1 is inside the window; the .999
+    // remainder is truncated away rather than rounded up onto exp.
+    const inside = new Date((unix(T1) - 1) * 1000 + 999).toISOString();
+    await expect(
+      verifyDFOSCredential(credential, { resolveIdentity, basis: inside }),
+    ).resolves.toMatchObject({ iss: issuer.did });
+
+    // A basis whose floor is exp is expired.
+    await expect(
+      verifyDFOSCredential(credential, { resolveIdentity, basis: ts(T1) }),
+    ).rejects.toThrow(/credential expired/);
+  });
+});
+
+// -----------------------------------------------------------------------------
 // forward issuance
 // -----------------------------------------------------------------------------
 

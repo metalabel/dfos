@@ -22,6 +22,7 @@ import {
   matchesResource,
   verifyDelegationChain,
   verifyDFOSCredential,
+  type ResolvedIdentity,
   type RevocationChecker,
 } from '../credentials';
 import { MAX_CREDENTIAL_SIZE } from '../credentials/schemas';
@@ -29,7 +30,7 @@ import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '.
 import { carryDependencyMissing } from '../dependency';
 import { deriveContentId } from './derivation';
 import { ContentOperation, MAX_OPERATION_SIZE } from './schemas';
-import type { Signer, VerifiedIdentity } from './schemas';
+import type { Signer } from './schemas';
 
 /**
  * Byte length of a content operation for the op-size cap, EXCLUDING any embedded
@@ -127,7 +128,7 @@ const verifyOperationAuthorization = async (input: {
   contentId: string;
   /** The operation's own `createdAt` — the basis for this verification. */
   createdAt: string;
-  resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+  resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
   /**
    * Check whether a credential has been revoked. Threaded onto the WRITE path
    * so a revoked LEAF credential no longer authorizes writes (verifyDelegationChain
@@ -224,11 +225,11 @@ export const verifyContentChain = async (input: {
    */
   enforceAuthorization?: boolean;
   /**
-   * Resolve a DID to a VerifiedIdentity as of `basis`. Required when
+   * Resolve a DID to a ResolvedIdentity as of `basis`. Required when
    * `enforceAuthorization` is true, as credential verification needs identity
    * resolution.
    */
-  resolveIdentity?: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+  resolveIdentity?: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
   /**
    * Check whether a credential (leaf or parent) has been revoked. Called with
    * `asOfUnix` = each operation's own `createdAt`, so a fold of committed
@@ -423,8 +424,8 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
   /** Enforce creator-sovereignty authorization (see verifyContentChain) */
   enforceAuthorization?: boolean;
-  /** Resolve a DID to a VerifiedIdentity as of `basis`. Required when enforceAuthorization is true. */
-  resolveIdentity?: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+  /** Resolve a DID to a ResolvedIdentity as of `basis`. Required when enforceAuthorization is true. */
+  resolveIdentity?: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
   /**
    * Check whether a credential (leaf or parent) has been revoked. Called with
    * `asOfUnix` = the new operation's own `createdAt`. See `RevocationChecker`.

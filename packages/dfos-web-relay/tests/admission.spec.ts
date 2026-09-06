@@ -284,8 +284,10 @@ describe('current-state first admission', () => {
     });
     const lateResult = (await ingestOperations([late.jwsToken], store))[0]!;
     expect(lateResult.status).toBe('rejected');
-    // A verdict, not a missing dependency — the relay holds the whole chain.
-    expect(lateResult.dependencyMissing).not.toBe(true);
+    // Refused, and refused RETRYABLY: the issuer's stored chain ends at or
+    // before this operation's basis, so the relay cannot rule out an operation
+    // the basis names still arriving, and a verdict deletes the raw op.
+    expect(lateResult.dependencyMissing).toBe(true);
 
     // The committed early write still replays, at its own basis.
     const replayed = await store.getContentStateAtCID(contentID, early.operationCID);

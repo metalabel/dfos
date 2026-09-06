@@ -266,6 +266,117 @@ describe('an issuer that did not exist at the basis', () => {
 });
 
 // -----------------------------------------------------------------------------
+// which key misses are verdicts
+// -----------------------------------------------------------------------------
+
+describe('a key miss is a verdict only when the stored chain runs past the basis', () => {
+  it('buffers an operation whose identity dependency has not synced, and lands it once it does', async () => {
+    const store = new MemoryRelayStore();
+    const { did, k1, k2, genesis, rotation } = await rotatingIdentity();
+    const early = await contentGenesis(did, k1, 'before the rotation', T1);
+    expect((await ingestOperations([genesis.jwsToken, early.jwsToken], store))[0]!.status).toBe(
+      'new',
+    );
+
+    // The rotation is NOT in this store yet, so the chain ends at the genesis
+    // and head state has never held K2.
+    const document = await dagCborCanonicalEncode({ type: 'post', title: 'signed by K2' });
+    const late = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did,
+        previousOperationCID: early.operationCID,
+        documentCID: document.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(T3),
+        note: null,
+      },
+      signer: k2.signer,
+      kid: `${did}#${k2.keyId}`,
+    });
+    const buffered = (
+      await ingestOperations([late.jwsToken], store, { admissionMode: 'historical' })
+    )[0]!;
+    expect(buffered.status).toBe('rejected');
+    // RETRYABLE: the stored chain ends at or before the basis, so an operation
+    // the basis names can still arrive. A verdict here DELETES the raw op.
+    expect(buffered.dependencyMissing).toBe(true);
+    expect(buffered.error).toMatch(/unknown key/);
+
+    // The dependency arrives, and the same operation lands.
+    expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
+    expect(
+      (await ingestOperations([late.jwsToken], store, { admissionMode: 'historical' }))[0]!.status,
+    ).toBe('new');
+  });
+
+  it('is a verdict once an operation dated after the basis is stored', async () => {
+    const store = new MemoryRelayStore();
+    const { did, k1, k2, genesis, rotation } = await rotatingIdentity();
+    const early = await contentGenesis(did, k1, 'before the rotation', T1);
+    // Two batches, because first admission asks freshness: the early op is
+    // authored while K1 is still the head, and only then does the rotation land.
+    await ingestOperations([genesis.jwsToken, early.jwsToken], store);
+    expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
+
+    // A second rotation, dated AFTER the basis the next operation carries: the
+    // stored chain now proves it holds every operation that basis names.
+    const k3 = makeKey();
+    const rotationEncoded = await dagCborCanonicalEncode(
+      (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(rotation.jwsToken)!.payload,
+    );
+    const secondOp: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: rotationEncoded.cid.toString(),
+      authKeys: [k3.key],
+      assertKeys: [k3.key],
+      controllerKeys: [k3.key],
+      createdAt: ts(10),
+      keyProofs: [
+        await chainKeyProof({
+          privateKey: k3.keypair.privateKey,
+          did,
+          prevCID: rotationEncoded.cid.toString(),
+        }),
+      ],
+    };
+    const second = await signIdentityOperation({
+      operation: secondOp,
+      signer: k2.signer,
+      keyId: k2.keyId,
+      identityDID: did,
+    });
+    expect((await ingestOperations([second.jwsToken], store))[0]!.status).toBe('new');
+
+    // K1 was retired at T_r, and the basis sits between T_r and the second
+    // rotation, so the as-of walk answers about a complete prefix.
+    const document = await dagCborCanonicalEncode({ type: 'post', title: 'by a retired key' });
+    const byRetiredKey = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did,
+        previousOperationCID: early.operationCID,
+        documentCID: document.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(20),
+        note: null,
+      },
+      signer: k1.signer,
+      kid: `${did}#${k1.keyId}`,
+    });
+    const verdict = (
+      await ingestOperations([byRetiredKey.jwsToken], store, { admissionMode: 'historical' })
+    )[0]!;
+    expect(verdict.status).toBe('rejected');
+    expect(verdict.error).toMatch(/unknown key/);
+    expect(verdict.dependencyMissing).not.toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
 // peer-log ingest of a rotation and the content chain across it
 // -----------------------------------------------------------------------------
 

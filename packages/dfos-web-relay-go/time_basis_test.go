@@ -68,6 +68,29 @@ func signBackdatedIdentityUpdate(t *testing.T, did, previousCID string, keys []d
 	return token, cidStr
 }
 
+// signBackdatedIdentityDelete hand-builds an identity delete op with a
+// caller-chosen createdAt.
+func signBackdatedIdentityDelete(t *testing.T, did, previousCID, signerKid string,
+	signerPriv ed25519.PrivateKey, createdAt time.Time) string {
+	t.Helper()
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "delete",
+		"previousOperationCID": previousCID,
+		"createdAt":            createdAt.UTC().Format(expBasisTimeFormat),
+	}
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID(delete): %v", err)
+	}
+	header := dfos.JWSHeader{Alg: "EdDSA", Typ: "did:dfos:identity-op", Kid: signerKid, CID: cidStr}
+	token, err := dfos.CreateJWS(header, payload, signerPriv)
+	if err != nil {
+		t.Fatalf("CreateJWS(delete): %v", err)
+	}
+	return token
+}
+
 // signBackdatedContentUpdate hand-builds a plain (non-delegated) content update.
 func signBackdatedContentUpdate(t *testing.T, id testIdentity, key testKeypair,
 	previousCID, docCID string, createdAt time.Time) (token, cid string) {
@@ -128,18 +151,24 @@ func TestResolveIdentityAsOfBranches(t *testing.T) {
 
 	// SHORTCUT: the stored chain's last operation is at or before the basis, so
 	// head state IS the state as of the basis and no walk runs.
-	shortcut, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 30).UTC().Format(expBasisTimeFormat))
+	shortcut, determinate, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 30).UTC().Format(expBasisTimeFormat))
 	if err != nil || shortcut == nil {
 		t.Fatalf("shortcut branch: %v", err)
 	}
 	if _, ok := findKeyInKeyState(effectiveKeyState(*shortcut), f.k2.keyID); !ok {
 		t.Fatal("the shortcut branch must answer with head state")
 	}
+	if determinate {
+		t.Fatal("a chain that ends at or before the basis cannot claim a final answer")
+	}
 
 	// RE-WALK: the basis names a prefix, so the log is re-verified.
-	rewalk, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 100).UTC().Format(expBasisTimeFormat))
+	rewalk, determinate, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 100).UTC().Format(expBasisTimeFormat))
 	if err != nil || rewalk == nil {
 		t.Fatalf("re-walk branch: %v", err)
+	}
+	if !determinate {
+		t.Fatal("a chain that runs past the basis holds every operation the basis names")
 	}
 	if _, ok := findKeyInKeyState(effectiveKeyState(*rewalk), f.k1.keyID); !ok {
 		t.Fatal("the re-walk branch must answer with the prefix the basis names")
@@ -149,7 +178,7 @@ func TestResolveIdentityAsOfBranches(t *testing.T) {
 	}
 
 	// An empty basis is the head, which is the state as of now.
-	head, err := ResolveIdentityAsOf(store, f.did, "")
+	head, _, err := ResolveIdentityAsOf(store, f.did, "")
 	if err != nil || head == nil {
 		t.Fatalf("head: %v", err)
 	}
@@ -158,9 +187,34 @@ func TestResolveIdentityAsOfBranches(t *testing.T) {
 	}
 
 	// An unknown chain is a miss this store may answer differently later.
-	missing, err := ResolveIdentityAsOf(store, "did:dfos:6zc46ka3rn6dt9hkccrvt4dtzha8c8t", "")
+	missing, _, err := ResolveIdentityAsOf(store, "did:dfos:6zc46ka3rn6dt9hkccrvt4dtzha8c8t", "")
 	if err != nil || missing != nil {
 		t.Fatalf("unknown chain: state=%v err=%v", missing, err)
+	}
+}
+
+func TestResolveIdentityAsOfReportsDeletionFromHeadState(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryStore()
+	f := newBasisRotationFixture(t, now, 120, 60)
+	if res := IngestOperations([]string{f.genesisToken, f.rotation}, store); res[0].Status != "new" || res[1].Status != "new" {
+		t.Fatalf("seed rotation: %+v", res)
+	}
+
+	deletion := signBackdatedIdentityDelete(t, f.did, f.rotationCID,
+		f.did+"#"+f.k2.keyID, f.k2.priv, basisTime(now, 30))
+	if res := IngestOperations([]string{deletion}, store); res[0].Status != "new" {
+		t.Fatalf("deletion: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// The as-of state at T1 predates the deletion, and still reports it: a
+	// deleted issuer authorizes nothing at any point in history.
+	state, _, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 100).UTC().Format(expBasisTimeFormat))
+	if err != nil || state == nil {
+		t.Fatalf("as-of state: %v", err)
+	}
+	if !state.IsDeleted {
+		t.Fatal("deletion reads HEAD state at every basis")
 	}
 }
 
@@ -170,7 +224,7 @@ func TestResolveIdentityAsOfBeforeGenesisIsAVerdict(t *testing.T) {
 	f := newBasisRotationFixture(t, now, 120, 60)
 	IngestOperations([]string{f.genesisToken, f.rotation}, store)
 
-	_, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 200).UTC().Format(expBasisTimeFormat))
+	_, _, err := ResolveIdentityAsOf(store, f.did, basisTime(now, 200).UTC().Format(expBasisTimeFormat))
 	if err == nil {
 		t.Fatal("a basis earlier than the genesis names no state")
 	}
@@ -179,6 +233,90 @@ func TestResolveIdentityAsOfBeforeGenesisIsAVerdict(t *testing.T) {
 	}
 	if errors.Is(err, ErrDependencyMissing) {
 		t.Fatal("an identity that did not exist at the basis is a verdict, not a dependency miss")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// which key misses are verdicts
+// ---------------------------------------------------------------------------
+
+// TestUnsyncedKeyMissStaysRetryable pins the classification a key miss takes
+// when the stored chain ends at or before the basis: the store cannot rule out
+// an operation the basis names still arriving, so the operation is buffered
+// rather than deleted, and it lands once the dependency arrives.
+// Twin of the TS "buffers an operation whose identity dependency has not
+// synced".
+func TestUnsyncedKeyMissStaysRetryable(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryStore()
+	f := newBasisRotationFixture(t, now, 120, 60)
+	id := f.identity()
+
+	// The rotation is NOT in this store yet, so the chain ends at the genesis and
+	// head state has never held K2.
+	early, _, earlyCID := signBackdatedContentCreate(t, id, newDocCID(t, "early"), basisTime(now, 100))
+	if res := IngestOperations([]string{f.genesisToken, early}, store); res[0].Status != "new" || res[1].Status != "new" {
+		t.Fatalf("seed: %+v", res)
+	}
+
+	late, _ := signBackdatedContentUpdate(t, id, f.k2, earlyCID, newDocCID(t, "signed by K2"), basisTime(now, 30))
+	buffered := IngestOperations([]string{late}, store, WithHistoricalAdmission())[0]
+	if buffered.Status != "rejected" || !strings.Contains(buffered.Error, "unknown key") {
+		t.Fatalf("an operation signed by an unsynced key must be refused: %+v", buffered)
+	}
+	if !buffered.DependencyMissing {
+		t.Fatalf("a key miss under head state must stay retryable, got %+v", buffered)
+	}
+
+	// The dependency arrives, and the same operation lands.
+	if res := IngestOperations([]string{f.rotation}, store); res[0].Status != "new" {
+		t.Fatalf("rotation: %s (%s)", res[0].Status, res[0].Error)
+	}
+	if res := IngestOperations([]string{late}, store, WithHistoricalAdmission()); res[0].Status != "new" {
+		t.Fatalf("the buffered operation must land once its dependency is held: %s (%s)", res[0].Status, res[0].Error)
+	}
+}
+
+// TestKeyMissPastTheBasisIsAVerdict pins the other branch: a stored operation
+// dated after the basis proves the store holds every operation the basis names,
+// so a key missing from the as-of state is final.
+// Twin of the TS "is a verdict once an operation dated after the basis is
+// stored".
+func TestKeyMissPastTheBasisIsAVerdict(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryStore()
+	f := newBasisRotationFixture(t, now, 120, 60)
+	id := f.identity()
+
+	// Two batches, because first admission asks freshness: the early op is
+	// authored while K1 is still the head, and only then does the rotation land.
+	early, _, earlyCID := signBackdatedContentCreate(t, id, newDocCID(t, "early"), basisTime(now, 100))
+	if res := IngestOperations([]string{f.genesisToken, early}, store); res[0].Status != "new" || res[1].Status != "new" {
+		t.Fatalf("seed: %+v", res)
+	}
+	if res := IngestOperations([]string{f.rotation}, store); res[0].Status != "new" {
+		t.Fatalf("rotation: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// A second rotation, dated AFTER the basis the next operation carries.
+	k3 := newTestKeypair()
+	second, _ := signBackdatedIdentityUpdate(t, f.did, f.rotationCID,
+		[]dfos.MultikeyPublicKey{k3.mk},
+		[]string{testKeyProof(t, k3.priv, f.did, f.rotationCID)},
+		f.did+"#"+f.k2.keyID, f.k2.priv, basisTime(now, 10))
+	if res := IngestOperations([]string{second}, store); res[0].Status != "new" {
+		t.Fatalf("second rotation: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// K1 was retired at T_r, and the basis sits between T_r and the second
+	// rotation, so the as-of walk answers about a complete prefix.
+	byRetiredKey, _ := signBackdatedContentUpdate(t, id, f.k1, earlyCID, newDocCID(t, "by a retired key"), basisTime(now, 20))
+	verdict := IngestOperations([]string{byRetiredKey}, store, WithHistoricalAdmission())[0]
+	if verdict.Status != "rejected" || !strings.Contains(verdict.Error, "unknown key") {
+		t.Fatalf("an operation signed by a retired key must be refused: %+v", verdict)
+	}
+	if verdict.DependencyMissing {
+		t.Fatalf("a key miss the as-of walk decided is a verdict, got %+v", verdict)
 	}
 }
 
