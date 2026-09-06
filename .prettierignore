@@ -14,3 +14,9 @@ packages/dfos-explorer/src/lib/generated
 # compared against a fresh run by packages/dfos-web-relay/tests/openapi.spec.ts —
 # same reason: reformatting it would report drift on every check
 packages/dfos-web-relay/openapi.json
+
+# packages/protocol-verify/vectors.json — generated from the protocol's fixed seeds and
+# byte-compared against a fresh generation by
+# packages/dfos-protocol/tests/protocol-reference.spec.ts, so reformatting it would
+# report drift on every check
+packages/protocol-verify/vectors.json

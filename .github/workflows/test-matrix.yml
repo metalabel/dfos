@@ -299,6 +299,41 @@ jobs:
         working-directory: packages/relay-conformance
         run: ./scripts/run-signing.sh
 
+  vectors:
+    # The shared vector artifact gate. Two halves, both needed: the generator
+    # check proves packages/protocol-verify/vectors.json is byte-identical to a
+    # fresh generation from the spec's fixed seeds, and the inline check proves
+    # no suite has pasted a vector back into its own source. Without the second,
+    # a suite can quietly re-fork the way services-genesis and content-create
+    # did — two self-consistent sets, five green suites, no signal.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Vectors match a fresh generation from the seeds
+        run: pnpm --filter @metalabel/dfos-protocol exec vitest run tests/protocol-reference.spec.ts
+
+      - name: No suite hardcodes a shared vector
+        run: node packages/protocol-verify/scripts/check-inline-vectors.mjs
+
   verify-ts:
     # `tsx` strips types without checking them, so this reference verifier —
     # the one third parties read to reimplement the protocol — could drift into

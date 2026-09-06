@@ -1,6 +1,6 @@
 // DFOS Protocol — Independent verification in Swift
 //
-// Verifies all deterministic reference artifacts from the TypeScript implementation.
+// Verifies all deterministic reference artifacts from the protocol specification.
 // Uses Apple's swift-crypto for Ed25519.
 //
 // Run: swift test
@@ -10,36 +10,112 @@ import Foundation
 import Testing
 
 // =============================================================================
+// Shared reference vectors
+// =============================================================================
+//
+// Every expected value below is read from the package's vectors.json — the one
+// artifact all five suites share, generated from the protocol's fixed seeds by
+// packages/dfos-protocol/tests/protocol-reference.spec.ts, which asserts the
+// checked-in file is byte-identical to a fresh generation.
+//
+// Reading a JSON fixture is not a library import. This suite still uses only
+// the language's native Ed25519, CBOR and SHA-256, and a third party can run it
+// with nothing but this file and vectors.json.
+
+private func loadVectors() -> [String: [String: Any]] {
+    let vectorsURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // VerifyProtocolTests/
+        .deletingLastPathComponent()  // Tests/
+        .deletingLastPathComponent()  // swift/
+        .deletingLastPathComponent()  // protocol-verify/
+        .appendingPathComponent("vectors.json")
+    guard let data = try? Data(contentsOf: vectorsURL),
+        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let entries = parsed["vectors"] as? [[String: Any]]
+    else {
+        fatalError("cannot read \(vectorsURL.path)")
+    }
+    var byID: [String: [String: Any]] = [:]
+    for entry in entries {
+        guard let id = entry["id"] as? String, let values = entry["values"] as? [String: Any] else {
+            fatalError("malformed vector entry in vectors.json")
+        }
+        byID[id] = values
+    }
+    return byID
+}
+
+// Read once at first use and never mutated afterwards, so the unchecked global
+// is safe: every accessor below only reads it.
+nonisolated(unsafe) let vectorsByID = loadVectors()
+
+/// All values of one vector, by id.
+func vectorValues(_ id: String) -> [String: Any] {
+    guard let values = vectorsByID[id] else {
+        fatalError("vectors.json has no vector \"\(id)\"")
+    }
+    return values
+}
+
+/// One string field of one vector.
+func vec(_ id: String, _ field: String) -> String {
+    guard let value = vectorValues(id)[field] as? String else {
+        fatalError("vectors.json \(id).\(field) is not a string")
+    }
+    return value
+}
+
+/// One object field of one vector (a document, an operation payload).
+func vecObject(_ id: String, _ field: String) -> [String: Any] {
+    guard let value = vectorValues(id)[field] as? [String: Any] else {
+        fatalError("vectors.json \(id).\(field) is not an object")
+    }
+    return value
+}
+
+/// One string-array field of one vector.
+func vecStrings(_ id: String, _ field: String) -> [String] {
+    guard let value = vectorValues(id)[field] as? [String] else {
+        fatalError("vectors.json \(id).\(field) is not a string array")
+    }
+    return value
+}
+
+/// One string→string map field of one vector, as id-sorted pairs.
+func vecStringPairs(_ id: String, _ field: String) -> [(String, String)] {
+    guard let value = vectorValues(id)[field] as? [String: String] else {
+        fatalError("vectors.json \(id).\(field) is not a string map")
+    }
+    return value.keys.sorted().map { ($0, value[$0]!) }
+}
+
+// =============================================================================
 // Constants from the reference doc
 // =============================================================================
 
-let genesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
+let genesisJWS = vec("identity-genesis", "jws")
+let rotationJWS = vec("identity-rotation", "jws")
+let deleteJWS = vec("identity-delete", "jws")
+let restoreJWS = vec("identity-restore", "jws")
+let contentCreateJWS = vec("content-create", "jws")
+let jwtToken = vec("jwt", "token")
 
-let rotationJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA"
-
-let deleteJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA"
-let restoreJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA"
-
-let contentCreateJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA"
-
-let jwtToken = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ"
-
-let expectedGenCID = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
-let expectedDID = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
-let expectedMultikey1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
-let expectedMultikey2 = "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+let expectedGenCID = vec("identity-genesis", "cid")
+let expectedDID = vec("identity-genesis", "did")
+let expectedMultikey1 = vec("key-1", "multikey")
+let expectedMultikey2 = vec("key-2", "multikey")
 
 /// The possession proof the rotation carries. The envelope's payload is CLOSED:
-/// exactly these seven members, in exactly this order — and the octets below are
-/// the only serialization those members are ever signed as. The envelope is
-/// signed by key 2 (the key being introduced) while the operation carrying it is
-/// signed by key 1.
-let keyProofMembers = ["nonce", "audience", "did", "roleSet", "prevCID", "publicKeyMultibase", "timestamp"]
-let keyProofRoleSet = "auth,assert,controller"
-let keyProofCanonicalPayload = #"{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}"#
+/// exactly these seven members, in exactly this order — and the octets are the
+/// only serialization those members are ever signed as. The envelope is signed
+/// by key 2 (the key being introduced) while the operation carrying it is signed
+/// by key 1.
+let keyProofMembers = vecStrings("key-proof", "members")
+let keyProofRoleSet = vec("key-proof", "roleSet")
+let keyProofCanonicalPayload = vec("key-proof", "canonicalPayload")
 
-let expectedCBORHex = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
-let expectedCIDHex = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
+let expectedCBORHex = vec("identity-genesis", "cborHex")
+let expectedCIDHex = vec("identity-genesis", "cidBytesHex")
 
 let alphabet = "2346789acdefhknrtvz"
 let idLength = 31
@@ -257,16 +333,16 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
     let pub1 = Array(priv1.publicKey.rawRepresentation)
 
-    #expect(hexEncode(seed1) == "132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac")
-    #expect(hexEncode(pub1) == "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32")
+    #expect(hexEncode(seed1) == vec("key-1", "privateKeyHex"))
+    #expect(hexEncode(pub1) == vec("key-1", "publicKeyHex"))
 
     // Key 2
     let seed2 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-2".utf8)))
     let priv2 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed2)
     let pub2 = Array(priv2.publicKey.rawRepresentation)
 
-    #expect(hexEncode(seed2) == "384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8")
-    #expect(hexEncode(pub2) == "0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c")
+    #expect(hexEncode(seed2) == vec("key-2", "privateKeyHex"))
+    #expect(hexEncode(pub2) == vec("key-2", "publicKeyHex"))
 }
 
 @Test func multikeyEncoding() {
@@ -287,8 +363,8 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 
     let (header, payload) = verifyJWS(genesisJWS, pubKey: priv1.publicKey)
     #expect(header["alg"] as? String == "EdDSA")
-    #expect(header["typ"] as? String == "did:dfos:identity-op")
-    #expect(header["kid"] as? String == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+    #expect(header["typ"] as? String == vec("identity-genesis", "typ"))
+    #expect(header["kid"] as? String == vec("identity-genesis", "kid"))
     #expect(header["cid"] as? String == expectedGenCID)
     #expect(payload["type"] as? String == "create")
     #expect(payload["version"] as? Int == 1)
@@ -299,8 +375,8 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
 
     let (header, payload) = verifyJWS(rotationJWS, pubKey: priv1.publicKey)
-    #expect(header["kid"] as? String == "\(expectedDID)#key_r9ev34fvc23z999veaaft83nn29zvhe")
-    #expect(header["cid"] as? String == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
+    #expect(header["kid"] as? String == vec("identity-rotation", "kid"))
+    #expect(header["cid"] as? String == vec("identity-rotation", "cid"))
     #expect(payload["type"] as? String == "update")
     #expect(payload["previousOperationCID"] as? String == expectedGenCID)
 }
@@ -376,17 +452,19 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 
     let (deleteHeader, deletePayload) = verifyJWS(deleteJWS, pubKey: priv2.publicKey)
     #expect(deletePayload["type"] as? String == "delete")
-    #expect(deletePayload["previousOperationCID"] as? String == "bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy")
+    #expect(
+        deletePayload["previousOperationCID"] as? String
+            == vec("identity-delete", "previousOperationCID"))
     let deleteCID = cidToBase32(makeCIDBytes(encodeCBOR(deletePayload)))
     #expect(deleteCID == deleteHeader["cid"] as? String)
-    #expect(deleteCID == "bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm")
+    #expect(deleteCID == vec("identity-delete", "cid"))
 
     let (restoreHeader, restorePayload) = verifyJWS(restoreJWS, pubKey: priv2.publicKey)
     #expect(restorePayload["type"] as? String == "restore")
     #expect(restorePayload["previousOperationCID"] as? String == deleteCID)
     let restoreCID = cidToBase32(makeCIDBytes(encodeCBOR(restorePayload)))
     #expect(restoreCID == restoreHeader["cid"] as? String)
-    #expect(restoreCID == "bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq")
+    #expect(restoreCID == vec("identity-restore", "cid"))
 }
 
 @Test func jwsContentCreateVerification() {
@@ -394,9 +472,9 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
     let priv2 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed2)
 
     let (header, payload) = verifyJWS(contentCreateJWS, pubKey: priv2.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:content-op")
-    #expect(header["kid"] as? String == "\(expectedDID)#key_ez9a874tckr3dv933d3ckdn7z6zrct8")
-    #expect(header["cid"] as? String == "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy")
+    #expect(header["typ"] as? String == vec("content-create", "typ"))
+    #expect(header["kid"] as? String == vec("content-create", "kid"))
+    #expect(header["cid"] as? String == vec("content-create", "cid"))
     #expect(payload["type"] as? String == "create")
 }
 
@@ -435,18 +513,17 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 // Services-genesis and credential tests
 // =========================================================================
 
-/// servicesGenesisJWS is the canonical services-genesis identity-op: a create
-/// op carrying a full-state services array (relay locator + content/artifact
-/// anchors). Signed by reference key 1. Sourced from
-/// packages/dfos-protocol/examples/identity-services.json chain[0].
-let servicesGenesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw"
+/// The canonical services-genesis identity-op: a create op carrying a full-state
+/// services array (relay locator + content/artifact anchors), signed by
+/// reference key 1.
+let servicesGenesisJWS = vec("services-genesis", "jws")
 
-let expectedServicesGenCID = "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze"
-let expectedServicesDID = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+let expectedServicesGenCID = vec("services-genesis", "cid")
+let expectedServicesDID = vec("services-genesis", "did")
 
-let broadWriteVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
+let broadWriteVC = vec("credential-write", "jws")
 
-let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw"
+let readVC = vec("credential-read", "jws")
 
 /// Verify the canonical services-genesis identity-op: signature check with
 /// reference key 1, then an independent recomputation of the operation CID over
@@ -458,8 +535,8 @@ let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOi
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
 
     let (header, payload) = verifyJWS(servicesGenesisJWS, pubKey: priv1.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:identity-op")
-    #expect(header["kid"] as? String == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+    #expect(header["typ"] as? String == vec("services-genesis", "typ"))
+    #expect(header["kid"] as? String == vec("services-genesis", "kid"))
     #expect(header["cid"] as? String == expectedServicesGenCID)
     #expect(payload["type"] as? String == "create")
 
@@ -479,34 +556,40 @@ let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOi
     let seed1 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-1".utf8)))
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
 
-    let (header, payload) = verifyJWS(broadWriteVC, pubKey: priv1.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:credential")
-    #expect(header["kid"] as? String == "\(expectedDID)#key_r9ev34fvc23z999veaaft83nn29zvhe")
-    #expect(payload["type"] as? String == "DFOSCredential")
-    #expect(payload["iss"] as? String == expectedDID)
-    #expect(payload["aud"] as? String == "did:dfos:94ah7963n223k8c9884hh27ekh42nea")
-
-    let att = payload["att"] as! [[String: Any]]
-    #expect(att.count == 1)
-    #expect(att[0]["resource"] as? String == "chain:*")
-    #expect(att[0]["action"] as? String == "write")
+    expectCredential(broadWriteVC, pubKey: priv1.publicKey, id: "credential-write")
 }
 
 @Test func readCredentialVerification() {
     let seed1 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-1".utf8)))
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
 
-    let (header, payload) = verifyJWS(readVC, pubKey: priv1.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:credential")
-    #expect(header["kid"] as? String == "\(expectedDID)#key_r9ev34fvc23z999veaaft83nn29zvhe")
+    expectCredential(readVC, pubKey: priv1.publicKey, id: "credential-read")
+}
+
+/// Check one credential JWS against the shared vector of the given id: signature
+/// under the issuer key, then every published header and payload field.
+func expectCredential(_ token: String, pubKey: Curve25519.Signing.PublicKey, id: String) {
+    let (header, payload) = verifyJWS(token, pubKey: pubKey)
+    #expect(header["typ"] as? String == vec(id, "typ"))
+    #expect(header["kid"] as? String == vec(id, "kid"))
+    #expect(header["cid"] as? String == vec(id, "cid"))
     #expect(payload["type"] as? String == "DFOSCredential")
-    #expect(payload["iss"] as? String == expectedDID)
-    #expect(payload["aud"] as? String == "did:dfos:94ah7963n223k8c9884hh27ekh42nea")
+    #expect(payload["iss"] as? String == vec(id, "iss"))
+    #expect(payload["aud"] as? String == vec(id, "aud"))
 
     let att = payload["att"] as! [[String: Any]]
     #expect(att.count == 1)
-    #expect(att[0]["resource"] as? String == "chain:*")
-    #expect(att[0]["action"] as? String == "read")
+    #expect(att[0]["resource"] as? String == vec(id, "resource"))
+    #expect(att[0]["action"] as? String == vec(id, "action"))
+}
+
+/// Re-derive the CID of the content document the create operation commits to.
+/// The document itself is the shared vector: encode it as canonical dag-cbor and
+/// the published CID must come back out.
+@Test func documentCIDVerification() {
+    let document = vecObject("document", "value")
+    let cid = cidToBase32(makeCIDBytes(encodeCBOR(document)))
+    #expect(cid == vec("document", "cid"))
 }
 
 // =============================================================================
@@ -601,11 +684,11 @@ func cborHead(major: UInt8, length: UInt64) -> [UInt8] {
     let payload: [String: Any] = ["version": 1, "type": "test"]
     let cborBytes = encodeCBOR(payload)
 
-    #expect(hexEncode(cborBytes) == "a2647479706564746573746776657273696f6e01")
+    #expect(hexEncode(cborBytes) == vec("number-integer", "cborHex"))
 
     let cidBytes = makeCIDBytes(cborBytes)
     let cid = cidToBase32(cidBytes)
-    #expect(cid == "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa")
+    #expect(cid == vec("number-integer", "cid"))
 }
 
 @Test func testNumberEncodingFromJSON() {
@@ -619,21 +702,16 @@ func cborHead(major: UInt8, length: UInt64) -> [UInt8] {
     let cborBytes = encodeCBOR(parsed)
     let cidBytes = makeCIDBytes(cborBytes)
     let cid = cidToBase32(cidBytes)
-    #expect(cid == "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa")
+    #expect(cid == vec("number-integer", "cid"))
 }
 
 @Test func testNumberEncodingFloatProducesWrongCID() {
-    // Explicitly using Double 1.0 produces a different (wrong) CID — documents the failure mode.
-    // The exact wrong CID depends on float precision (float16/32/64) which varies by CBOR library.
-    // The important invariant: float encoding MUST NOT produce the correct (integer) CID.
-    let correctCID = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
-
-    let payload: [String: Any] = ["version": Double(1.0), "type": "test"]
-    let cborBytes = encodeCBOR(payload)
-    let cidBytes = makeCIDBytes(cborBytes)
-    let cid = cidToBase32(cidBytes)
-
-    #expect(cid != correctCID)
+    // The float serialization a conforming encoder MUST NOT emit, and the CID it
+    // yields — the shared vector every suite pins as the known-wrong answer.
+    let floatCBOR = hexDecode(vec("number-integer", "floatCborHex"))
+    let floatCID = cidToBase32(makeCIDBytes(floatCBOR))
+    #expect(floatCID == vec("number-integer", "floatCid"))
+    #expect(floatCID != vec("number-integer", "cid"))
 }
 
 // =============================================================================
@@ -641,19 +719,9 @@ func cborHead(major: UInt8, length: UInt64) -> [UInt8] {
 // Byte-identical inputs across all five language suites. Reference key 1 signs.
 // =============================================================================
 
-let rejectPub1Hex = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
+let rejectPub1Hex = vec("reject-corpus", "publicKeyHex")
 
-let rejectVectors: [(String, String)] = [
-    ("RV-LEN-SHORT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2"),
-    ("RV-LEN-LONG", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA"),
-    ("RV-S-NONCANON-PLUSL", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ"),
-    ("RV-S-NONCANON-FF", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w"),
-    ("RV-ALG-NONE", "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-    ("RV-ALG-CASE", "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-    ("RV-CRIT-PRESENT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-    ("RV-HEADER-KEY-TRUST", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
-    ("RV-SIG-BITFLIP", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA"),
-]
+let rejectVectors: [(String, String)] = vecStringPairs("reject-corpus", "tokens")
 
 @Test func rejectCorpus() {
     let pubBytes = hexDecode(rejectPub1Hex)
@@ -689,7 +757,7 @@ func assertCanonicalNumber(_ val: Double) -> Bool {
     let payload: [String: Any] = ["n": maxSafeCanonicalInteger]
     let cborBytes = encodeCBOR(payload)
     let cid = cidToBase32(makeCIDBytes(cborBytes))
-    #expect(cid == "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq")
+    #expect(cid == vec("number-max-safe", "cid"))
 }
 
 @Test func testNumberPolicyRejects() {
@@ -709,5 +777,5 @@ func assertCanonicalNumber(_ val: Double) -> Bool {
     ]
     let cborBytes = encodeCBOR(payload)
     let cid = cidToBase32(makeCIDBytes(cborBytes))
-    #expect(cid == "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue")
+    #expect(cid == vec("number-null-vector", "cid"))
 }

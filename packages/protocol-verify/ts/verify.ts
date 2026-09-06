@@ -8,11 +8,79 @@
  */
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as dagCbor from '@ipld/dag-cbor';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { base32 } from 'multiformats/bases/base32';
 import { base58btc } from 'multiformats/bases/base58';
+
+// =============================================================================
+// Shared reference vectors
+// =============================================================================
+//
+// Every expected value below is read from ../vectors.json — the one artifact
+// all five suites share, generated from the protocol's fixed seeds by
+// packages/dfos-protocol/tests/protocol-reference.spec.ts, which asserts the
+// checked-in file is byte-identical to a fresh generation.
+//
+// Reading a JSON fixture is not a library import. This suite still uses only
+// the language's native Ed25519, dag-cbor and SHA-256, and a third party can
+// run it with nothing but this file and vectors.json.
+
+interface Vector {
+  id: string;
+  description: string;
+  values: Record<string, unknown>;
+}
+
+interface VectorsFile {
+  version: number;
+  description: string;
+  generator: string;
+  vectors: Vector[];
+}
+
+const VECTORS_PATH = fileURLToPath(new URL('../vectors.json', import.meta.url));
+const VECTORS_BY_ID = new Map<string, Record<string, unknown>>(
+  (JSON.parse(readFileSync(VECTORS_PATH, 'utf-8')) as VectorsFile).vectors.map((v) => [
+    v.id,
+    v.values,
+  ]),
+);
+
+/** All values of one vector, by id. */
+function vectorValues(id: string): Record<string, unknown> {
+  const values = VECTORS_BY_ID.get(id);
+  if (!values) throw new Error(`vectors.json has no vector "${id}"`);
+  return values;
+}
+
+/** One string field of one vector. */
+function vec(id: string, field: string): string {
+  const value = vectorValues(id)[field];
+  if (typeof value !== 'string') throw new Error(`vectors.json ${id}.${field} is not a string`);
+  return value;
+}
+
+/** One object field of one vector (a document, an operation payload, a token map). */
+function vecObject(id: string, field: string): Record<string, unknown> {
+  const value = vectorValues(id)[field];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`vectors.json ${id}.${field} is not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/** One string-array field of one vector. */
+function vecStrings(id: string, field: string): string[] {
+  const value = vectorValues(id)[field];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    throw new Error(`vectors.json ${id}.${field} is not a string array`);
+  }
+  return value as string[];
+}
 
 // =============================================================================
 // Constants from the reference spec
@@ -21,64 +89,39 @@ import { base58btc } from 'multiformats/bases/base58';
 const ALPHABET = '2346789acdefhknrtvz';
 const ID_LENGTH = 31;
 
-const GENESIS_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg';
-
-const ROTATION_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWlhcmM3bXY2ZnZoYW9lMm1tazR1anBza2dxcGVzdjY2cHpkNWp1cWxnNWJ6bXJpZGlra3F5In0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIiwia2V5UHJvb2ZzIjpbImV5SmhiR2NpT2lKRlpFUlRRU0lzSW5SNWNDSTZJbVJwWkRwa1ptOXpPbXRsZVMxaFpHUWlmUS5leUp1YjI1alpTSTZJbVJtYjNNdGNISnZkRzlqYjJ3dGNtVm1aWEpsYm1ObExXNXZibU5sTFRFaUxDSmhkV1JwWlc1alpTSTZJbXRsZVhNdVpHWnZjeTVqYjIwaUxDSmthV1FpT2lKa2FXUTZaR1p2Y3pwamJtNXVablE1WmpoaE1uSnVPVE00WkRadWEzb3pPSEk0TkRkMk1tdHlJaXdpY205c1pWTmxkQ0k2SW1GMWRHZ3NZWE56WlhKMExHTnZiblJ5YjJ4c1pYSWlMQ0p3Y21WMlEwbEVJam9pWW1GbWVYSmxhV052WjJoMmFucHVkbXhwZFd4dmVIaHRZbVkxTkhSd2VuRjNZV2h1Y1hCcGJHczNibU40WlhCcWFXNWxaSEJyWjJFemJtVWlMQ0p3ZFdKc2FXTkxaWGxOZFd4MGFXSmhjMlVpT2lKNk5rMXJabFZrTmpWS2NrRm9abVJuUm5WTlEyTmpWVGxVYUZGMmFrSXlaa3BCVFZWSWEzVjFZV3BHT1RreVowc2lMQ0owYVcxbGMzUmhiWEFpT2lJeU1ESTJMVEF6TFRBM1ZEQXdPakF3T2pNd0xqQXdNRm9pZlEuOG5nMTBIYmJzMkJGQ3NZb1NZTkhTMVQwMDIwLUhYbTRhRDEwUXJIbHB5c08xc3FteTFVX2RqOXlFejBDSlNNQ1lOd2hUWk1iVGlhbmhKOENIMUx0QXciXX0.13or_X7zDOezkSFHdWBLwPcNyIaG3XlHAb9mHpgG8zVDldz0wGP0X8WiVIHPLQ-20ZsCOvsh8Y6BbgxdbIvMBA';
-
-const DELETE_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlhaXk1bTRmaXludGRyeWlremZ3enlub2p3aWdsa3Fyd2llZnVsYjRkbDM2ZXFlZWZicHdtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYXJjN212NmZ2aGFvZTJtbWs0dWpwc2tncXBlc3Y2NnB6ZDVqdXFsZzViem1yaWRpa2txeSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.QIh-HRD-YEV84yg1X3Lwz-tXJEGPCLruTssWC6Igb5j_QG0aGPjJ6sAqFE1VM8KURYlmFkaLgYZV6O2831YBCA';
-const RESTORE_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljZnhwNjVtM2pzNHRlbGxiM29wdHduNTRnaW5xdjdwcDRsZGlmY251dnJ5N2dsdW5oN2FxIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFpeTVtNGZpeW50ZHJ5aWt6Znd6eW5vandpZ2xrcXJ3aWVmdWxiNGRsMzZlcWVlZmJwd20iLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.JiIAXKZqIZnDpZUrbd4S7F7tEoBEjEeIKcGg3WReYXAFJii960wpZLFfyrc3yAKONsMw9hT5aFRivos4kthuBA';
-
-const CONTENT_CREATE_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.BpUjMx3_zq5q-bxOQN0pl4tfgf_uZIt97r7fM_dukJr--zB0g7sxG9IcBsy0RR3P_DtIK4GB17ikwDUDDHnuAw';
-
-const JWT_TOKEN =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4In0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.VdrDMOQoFAboxK165ZDOe5YXTgILUDO_bHuGHinupqEd4dptibATmyI9YrjseMaJHS4gggzX1st9qO5eoVJdCQ';
-
-const BROAD_WRITE_VC =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg';
-
-const READ_VC =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw';
+const GENESIS_JWS = vec('identity-genesis', 'jws');
+const ROTATION_JWS = vec('identity-rotation', 'jws');
+const DELETE_JWS = vec('identity-delete', 'jws');
+const RESTORE_JWS = vec('identity-restore', 'jws');
+const CONTENT_CREATE_JWS = vec('content-create', 'jws');
+const JWT_TOKEN = vec('jwt', 'token');
+const BROAD_WRITE_VC = vec('credential-write', 'jws');
+const READ_VC = vec('credential-read', 'jws');
 
 // Services genesis: an identity create whose payload carries a full-state
 // services discovery array (relay locator + content/artifact anchors). The
 // services fields ride along in the payload map — no services-validation logic
 // is required here; the verifier re-derives the operation CID over the decoded
 // payload and the services entries participate automatically.
-const SERVICES_GENESIS_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYXNqZzN2cXM0YjN2ZXB3eTVxYzRveTRmNHZwa2NhaG13aTY0anR1ZWk1Y2Y3enFwZHhqeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiOG44Zm56aHJyZWZrcmRlNmg3MmtmdmZmNDNyOGM2MyJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.TPPGB4Yig_AUoxKKXwBAPXLqMDg6XMnbspZcZh0OijfnxXYgOs8EdXq6EiVjLbWeiczrg-uAZAHYpw3shRb5Cw';
+const SERVICES_GENESIS_JWS = vec('services-genesis', 'jws');
 
-const EXPECTED_GENESIS_CID = 'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne';
-const EXPECTED_SERVICES_CID = 'bafyreiasjg3vqs4b3vepwy5qc4oy4f4vpkcahmwi64jtuei5cf7zqpdxjy';
-const EXPECTED_SERVICES_DID = 'did:dfos:krhcznk98f7r2r4a6ktafcv77f7k6e2';
-const EXPECTED_DID = 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr';
-const EXPECTED_MULTIKEY1 = 'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb';
-const EXPECTED_MULTIKEY2 = 'z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK';
+const EXPECTED_GENESIS_CID = vec('identity-genesis', 'cid');
+const EXPECTED_SERVICES_CID = vec('services-genesis', 'cid');
+const EXPECTED_SERVICES_DID = vec('services-genesis', 'did');
+const EXPECTED_DID = vec('identity-genesis', 'did');
+const EXPECTED_MULTIKEY1 = vec('key-1', 'multikey');
+const EXPECTED_MULTIKEY2 = vec('key-2', 'multikey');
 
 // The possession proof the rotation carries. Its payload is CLOSED: exactly
 // these seven members, in exactly this order — and the octets below are the only
 // serialization those members are ever signed as. The envelope is signed by
 // key 2 (the key being introduced) while the operation carrying it is signed by
 // key 1.
-const KEY_PROOF_MEMBERS = [
-  'nonce',
-  'audience',
-  'did',
-  'roleSet',
-  'prevCID',
-  'publicKeyMultibase',
-  'timestamp',
-];
-const KEY_PROOF_ROLE_SET = 'auth,assert,controller';
-const KEY_PROOF_CANONICAL_PAYLOAD =
-  '{"nonce":"dfos-protocol-reference-nonce-1","audience":"keys.dfos.com","did":"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr","roleSet":"auth,assert,controller","prevCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","publicKeyMultibase":"z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK","timestamp":"2026-03-07T00:00:30.000Z"}';
-const EXPECTED_CBOR_HEX =
-  'a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62';
-const EXPECTED_CID_HEX = '017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69';
+const KEY_PROOF_MEMBERS = vecStrings('key-proof', 'members');
+const KEY_PROOF_ROLE_SET = vec('key-proof', 'roleSet');
+const KEY_PROOF_CANONICAL_PAYLOAD = vec('key-proof', 'canonicalPayload');
+const EXPECTED_CBOR_HEX = vec('identity-genesis', 'cborHex');
+const EXPECTED_CID_HEX = vec('identity-genesis', 'cidBytesHex');
 
 // =============================================================================
 // Helpers
@@ -215,25 +258,13 @@ console.log('='.repeat(70));
 console.log('\n1. Key Derivation');
 const seed1 = sha256(new TextEncoder().encode('dfos-protocol-reference-key-1'));
 const pub1 = ed25519.getPublicKey(seed1);
-check(
-  'Key 1 private',
-  hexEncode(seed1) === '132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac',
-);
-check(
-  'Key 1 public',
-  hexEncode(pub1) === 'ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32',
-);
+check('Key 1 private', hexEncode(seed1) === vec('key-1', 'privateKeyHex'));
+check('Key 1 public', hexEncode(pub1) === vec('key-1', 'publicKeyHex'));
 
 const seed2 = sha256(new TextEncoder().encode('dfos-protocol-reference-key-2'));
 const pub2 = ed25519.getPublicKey(seed2);
-check(
-  'Key 2 private',
-  hexEncode(seed2) === '384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8',
-);
-check(
-  'Key 2 public',
-  hexEncode(pub2) === '0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c',
-);
+check('Key 2 private', hexEncode(seed2) === vec('key-2', 'privateKeyHex'));
+check('Key 2 public', hexEncode(pub2) === vec('key-2', 'publicKeyHex'));
 
 // --- 2. Multikey encoding ---
 console.log('\n2. Multikey Encoding');
@@ -244,32 +275,7 @@ check('Multikey 1 decode', hexEncode(decodedPub1) === hexEncode(pub1));
 
 // --- 3. dag-cbor canonical encoding ---
 console.log('\n3. dag-cbor Canonical Encoding');
-const genesisPayload = {
-  version: 1,
-  type: 'create',
-  authKeys: [
-    {
-      id: 'key_r9ev34fvc23z999veaaft83nn29zvhe',
-      type: 'Multikey',
-      publicKeyMultibase: EXPECTED_MULTIKEY1,
-    },
-  ],
-  assertKeys: [
-    {
-      id: 'key_r9ev34fvc23z999veaaft83nn29zvhe',
-      type: 'Multikey',
-      publicKeyMultibase: EXPECTED_MULTIKEY1,
-    },
-  ],
-  controllerKeys: [
-    {
-      id: 'key_r9ev34fvc23z999veaaft83nn29zvhe',
-      type: 'Multikey',
-      publicKeyMultibase: EXPECTED_MULTIKEY1,
-    },
-  ],
-  createdAt: '2026-03-07T00:00:00.000Z',
-};
+const genesisPayload = vecObject('identity-genesis', 'payload');
 const cborBytes = dagCbor.encode(genesisPayload);
 check('CBOR bytes match', hexEncode(cborBytes) === EXPECTED_CBOR_HEX);
 
@@ -285,12 +291,11 @@ console.log('\n5. DID Derivation');
 const didHash = sha256(cidBytes);
 check(
   'DID hash',
-  hexEncode(didHash) === 'c66d21f27dceea0b05534c225ad7018ac7d4dfded0609dcd18022a3739a5488c',
+  hexEncode(didHash) === vec('identity-genesis', 'didHashHex'),
+  `got ${hexEncode(didHash)}`,
 );
-const didSuffix = encodeId(didHash);
-check('DID suffix', didSuffix === 'cnnnft9f8a2rn938d6nkz38r847v2kr', `got ${didSuffix}`);
-const fullDid = `did:dfos:${didSuffix}`;
-check('Full DID', fullDid === EXPECTED_DID);
+const fullDid = `did:dfos:${encodeId(didHash)}`;
+check('Full DID', fullDid === EXPECTED_DID, `got ${fullDid}`);
 
 // --- 6. JWS verification: genesis ---
 console.log('\n6. JWS Verification: Genesis (key 1)');
@@ -298,7 +303,7 @@ let result = verifyJws(GENESIS_JWS, pub1);
 check('Genesis signature valid', true);
 check('Genesis header alg', result.header.alg === 'EdDSA');
 check('Genesis header typ', result.header.typ === 'did:dfos:identity-op');
-check('Genesis header kid', result.header.kid === 'key_r9ev34fvc23z999veaaft83nn29zvhe');
+check('Genesis header kid', result.header.kid === vec('identity-genesis', 'kid'));
 check('Genesis header cid', result.header.cid === EXPECTED_GENESIS_CID);
 check('Genesis payload type', result.payload.type === 'create');
 check('Genesis payload version', result.payload.version === 1);
@@ -307,14 +312,8 @@ check('Genesis payload version', result.payload.version === 1);
 console.log('\n7. JWS Verification: Rotation (key 1 signs rotation to key 2)');
 result = verifyJws(ROTATION_JWS, pub1);
 check('Rotation signature valid', true);
-check(
-  'Rotation kid is DID URL',
-  result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe`,
-);
-check(
-  'Rotation header cid',
-  result.header.cid === 'bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy',
-);
+check('Rotation kid is DID URL', result.header.kid === vec('identity-rotation', 'kid'));
+check('Rotation header cid', result.header.cid === vec('identity-rotation', 'cid'));
 check('Rotation payload type', result.payload.type === 'update');
 check(
   'Rotation previousOperationCID',
@@ -325,14 +324,10 @@ check(
 console.log('\n7b. JWS Verification: Delete + Restore (key 2)');
 result = verifyJws(DELETE_JWS, pub2);
 check('Delete payload type', result.payload.type === 'delete');
-check(
-  'Delete header cid',
-  result.header.cid === 'bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm',
-);
+check('Delete header cid', result.header.cid === vec('identity-delete', 'cid'));
 check(
   'Delete parent is rotation',
-  result.payload.previousOperationCID ===
-    'bafyreiarc7mv6fvhaoe2mmk4ujpskgqpesv66pzd5juqlg5bzmridikkqy',
+  result.payload.previousOperationCID === vec('identity-delete', 'previousOperationCID'),
 );
 check(
   'Delete CID re-derived',
@@ -340,14 +335,10 @@ check(
 );
 result = verifyJws(RESTORE_JWS, pub2);
 check('Restore payload type', result.payload.type === 'restore');
-check(
-  'Restore header cid',
-  result.header.cid === 'bafyreicfxp65m3js4tellb3optwn54ginqv7pp4ldifcnuvry7glunh7aq',
-);
+check('Restore header cid', result.header.cid === vec('identity-restore', 'cid'));
 check(
   'Restore parent is delete',
-  result.payload.previousOperationCID ===
-    'bafyreiaiy5m4fiyntdryikzfwzynojwiglkqrwiefulb4dl36eqeefbpwm',
+  result.payload.previousOperationCID === vec('identity-restore', 'previousOperationCID'),
 );
 check(
   'Restore CID re-derived',
@@ -422,14 +413,8 @@ console.log('\n8. JWS Verification: Content Create (key 2)');
 result = verifyJws(CONTENT_CREATE_JWS, pub2);
 check('Content create signature valid', true);
 check('Content create typ', result.header.typ === 'did:dfos:content-op');
-check(
-  'Content create kid',
-  result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`,
-);
-check(
-  'Content create header cid',
-  result.header.cid === 'bafyreibs3vlvainfjfuet6x4uds3pivbmbohy7f64iegbuw3gpsuqtma6i',
-);
+check('Content create kid', result.header.kid === vec('content-create', 'kid'));
+check('Content create header cid', result.header.cid === vec('content-create', 'cid'));
 check('Content create payload type', result.payload.type === 'create');
 
 // --- 9. JWT verification (signed by key 2) ---
@@ -437,28 +422,17 @@ console.log('\n9. JWT Verification (key 2)');
 result = verifyJws(JWT_TOKEN, pub2);
 check('JWT signature valid', true);
 check('JWT header alg', result.header.alg === 'EdDSA');
-check('JWT payload iss', result.payload.iss === 'dfos');
-check('JWT payload sub', result.payload.sub === EXPECTED_DID);
-check('JWT payload aud', result.payload.aud === 'dfos-api');
+check('JWT payload iss', result.payload.iss === vec('jwt', 'iss'));
+check('JWT payload sub', result.payload.sub === vec('jwt', 'sub'));
+check('JWT payload aud', result.payload.aud === vec('jwt', 'aud'));
 
 // --- 10. Document CID ---
 console.log('\n10. Document CID Verification');
-const document = {
-  $schema: 'https://schemas.dfos.com/post/v1',
-  format: 'short-post',
-  publishedAt: '2026-03-07T00:02:00.000Z',
-  title: 'Hello World',
-  body: 'First post on the protocol.',
-  credits: [{ did: EXPECTED_DID, label: 'author' }],
-};
+const document = vecObject('document', 'value');
 const docCbor = dagCbor.encode(document);
 const docCidBytes = makeCidBytes(docCbor);
 const docCid = cidToBase32(docCidBytes);
-check(
-  'Document CID',
-  docCid === 'bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu',
-  `got ${docCid}`,
-);
+check('Document CID', docCid === vec('document', 'cid'), `got ${docCid}`);
 
 // --- 11. Services genesis JWS verification ---
 // An identity create whose payload carries a full-state services discovery
@@ -469,7 +443,7 @@ console.log('\n11. Services Genesis JWS Verification (key 1)');
 result = verifyJws(SERVICES_GENESIS_JWS, pub1);
 check('Services genesis signature valid', true);
 check('Services genesis header typ', result.header.typ === 'did:dfos:identity-op');
-check('Services genesis header kid', result.header.kid === 'key_r9ev34fvc23z999veaaft83nn29zvhe');
+check('Services genesis header kid', result.header.kid === vec('services-genesis', 'kid'));
 check('Services genesis header cid', result.header.cid === EXPECTED_SERVICES_CID);
 check('Services genesis payload type', result.payload.type === 'create');
 
@@ -497,39 +471,51 @@ console.log('\n12. DFOS Credential Verification (key 1)');
 result = verifyJws(BROAD_WRITE_VC, pub1);
 check('Write credential signature valid', true);
 check('Write credential header typ', result.header.typ === 'did:dfos:credential');
-check(
-  'Write credential header kid',
-  result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe`,
-);
-check(
-  'Write credential header cid',
-  typeof result.header.cid === 'string' && (result.header.cid as string).startsWith('bafyrei'),
-);
+check('Write credential header kid', result.header.kid === vec('credential-write', 'kid'));
+check('Write credential header cid', result.header.cid === vec('credential-write', 'cid'));
 check('Write credential payload type', result.payload.type === 'DFOSCredential');
 check('Write credential payload iss', result.payload.iss === EXPECTED_DID);
+check('Write credential payload aud', result.payload.aud === vec('credential-write', 'aud'));
 check(
-  'Write credential payload aud',
-  result.payload.aud === 'did:dfos:94ah7963n223k8c9884hh27ekh42nea',
+  'Write credential att resource',
+  (result.payload.att as any[])[0].resource === vec('credential-write', 'resource'),
 );
-check('Write credential att resource', (result.payload.att as any[])[0].resource === 'chain:*');
-check('Write credential att action', (result.payload.att as any[])[0].action === 'write');
+check(
+  'Write credential att action',
+  (result.payload.att as any[])[0].action === vec('credential-write', 'action'),
+);
 
 result = verifyJws(READ_VC, pub1);
 check('Read credential signature valid', true);
-check('Read credential att action', (result.payload.att as any[])[0].action === 'read');
+check(
+  'Read credential att action',
+  (result.payload.att as any[])[0].action === vec('credential-read', 'action'),
+);
 
 // --- 13. Number encoding determinism ---
 console.log('\n13. Number Encoding Determinism');
 
 // Integer encoding
-const intPayload = { version: 1, type: 'test' };
+const intPayload = vecObject('number-integer', 'value');
 const intCbor = dagCbor.encode(intPayload);
-const expectedIntHex = 'a2647479706564746573746776657273696f6e01';
+const expectedIntHex = vec('number-integer', 'cborHex');
 check('Integer CBOR hex', hexEncode(intCbor) === expectedIntHex, `got ${hexEncode(intCbor)}`);
 const intCidBytes = makeCidBytes(intCbor);
 const intCid = cidToBase32(intCidBytes);
-const expectedIntCid = 'bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa';
+const expectedIntCid = vec('number-integer', 'cid');
 check('Integer CID', intCid === expectedIntCid, `got ${intCid}`);
+
+// The float serialization a conforming encoder MUST NOT emit, and the CID it
+// yields — the shared vector every suite pins as the known-wrong answer.
+const nonCanonicalFloatCid = cidToBase32(
+  makeCidBytes(hexDecode(vec('number-integer', 'floatCborHex'))),
+);
+check(
+  'Float CBOR yields the known-wrong CID',
+  nonCanonicalFloatCid === vec('number-integer', 'floatCid'),
+  `got ${nonCanonicalFloatCid}`,
+);
+check('Float CID differs from the integer CID', nonCanonicalFloatCid !== expectedIntCid);
 
 // JSON parse preserves integers
 const jsonPayload = JSON.parse('{"version": 1, "type": "test"}');
@@ -557,29 +543,9 @@ check(
 // across all five language suites. Reference key 1 signs the base vector.
 console.log('\n14. Reject Corpus (all MUST be rejected)');
 
-const REJECT_PUB1_HEX = 'ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32';
-const rejectPub = hexDecode(REJECT_PUB1_HEX);
+const rejectPub = hexDecode(vec('reject-corpus', 'publicKeyHex'));
 
-const REJECT_VECTORS: Record<string, string> = {
-  'RV-LEN-SHORT':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2',
-  'RV-LEN-LONG':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA',
-  'RV-S-NONCANON-PLUSL':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ',
-  'RV-S-NONCANON-FF':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w',
-  'RV-ALG-NONE':
-    'eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
-  'RV-ALG-CASE':
-    'eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
-  'RV-CRIT-PRESENT':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
-  'RV-HEADER-KEY-TRUST':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
-  'RV-SIG-BITFLIP':
-    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA',
-};
+const REJECT_VECTORS = vecObject('reject-corpus', 'tokens') as Record<string, string>;
 
 for (const [name, token] of Object.entries(REJECT_VECTORS)) {
   let rejected = false;
@@ -623,7 +589,7 @@ function numberCid(value: unknown): string {
 // accept: 2^53-1
 check(
   'accept int 2^53-1',
-  numberCid({ n: MAX_SAFE }) === 'bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq',
+  numberCid(vecObject('number-max-safe', 'value')) === vec('number-max-safe', 'cid'),
   'wrong CID',
 );
 
@@ -647,8 +613,7 @@ for (const [name, bad] of [
 // null vector: { documentCID: null, note: null, prf: [] }
 check(
   'null vector CID',
-  numberCid({ documentCID: null, note: null, prf: [] }) ===
-    'bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue',
+  numberCid(vecObject('number-null-vector', 'value')) === vec('number-null-vector', 'cid'),
   'wrong CID',
 );
 

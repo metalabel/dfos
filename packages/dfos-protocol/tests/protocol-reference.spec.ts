@@ -32,8 +32,10 @@ import {
   verifyIdentityChain,
 } from '../src/chain';
 import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
+import { createDFOSCredential } from '../src/credentials';
 import {
   base64urlDecode,
+  base64urlEncode,
   createJwt,
   dagCborCanonicalEncode,
   generateId,
@@ -115,12 +117,14 @@ interface ReferenceArtifacts {
   restoreSignatureHex: string;
   restoreHeader: Record<string, unknown>;
   // content chain
+  contentCreateDocument: Record<string, unknown>;
   documentCID: string;
   contentCreateOp: ContentOperation;
   contentCreateJws: string;
   contentCreateCID: string;
   contentCreateSignatureHex: string;
   contentCreateHeader: Record<string, unknown>;
+  contentUpdateDocument: Record<string, unknown>;
   documentCID2: string;
   contentUpdateOp: ContentOperation;
   contentUpdateJws: string;
@@ -401,12 +405,14 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     restoreCID,
     restoreSignatureHex: resParts.signatureHex,
     restoreHeader: resParts.header,
+    contentCreateDocument: document,
     documentCID,
     contentCreateOp: createContentOp,
     contentCreateJws,
     contentCreateCID,
     contentCreateSignatureHex: ccParts.signatureHex,
     contentCreateHeader: ccParts.header,
+    contentUpdateDocument: document2,
     documentCID2,
     contentUpdateOp: updateContentOp,
     contentUpdateJws,
@@ -418,6 +424,422 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     jwtSubject: jwtResult.payload.sub,
   };
 }
+
+// =============================================================================
+// The shared cross-language vector artifact
+// =============================================================================
+//
+// packages/protocol-verify/vectors.json is the ONE place the five standalone
+// verification suites and the Go twin's reference tests read their expected
+// values from. This file is its generator: every field below is DERIVED from
+// the fixed reference seeds, never transcribed. The check at the bottom asserts
+// the checked-in artifact is byte-identical to a fresh generation, so the
+// artifact can never drift from the TypeScript reference — and, because every
+// suite reads it, no suite can drift into a private copy of a vector.
+//
+// Regenerate intentionally (after deliberately changing a vector) with:
+//   UPDATE_VECTORS=1 pnpm --filter @metalabel/dfos-protocol exec vitest run tests/protocol-reference.spec.ts
+
+/** Fixed iat/exp for the deterministic credential vectors. */
+const REFERENCE_CREDENTIAL_IAT = Math.floor(new Date('2026-03-07T00:00:00.000Z').getTime() / 1000);
+const REFERENCE_CREDENTIAL_EXP = Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000);
+
+/** Ed25519 group order L, little-endian — the S < L canonical bound. */
+const ED25519_L = new Uint8Array([
+  0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+]);
+
+interface VectorEntry {
+  id: string;
+  description: string;
+  values: Record<string, unknown>;
+}
+
+interface VectorsDocument {
+  version: number;
+  description: string;
+  generator: string;
+  vectors: VectorEntry[];
+}
+
+/** CIDv1 (dag-cbor codec, sha2-256) over arbitrary bytes, as a base32lower string. */
+const cidOverBytes = async (bytes: Uint8Array): Promise<string> => {
+  const { CID } = await import('multiformats/cid');
+  const { sha256: mfSha256 } = await import('multiformats/hashes/sha2');
+  return CID.createV1(0x71, await mfSha256.digest(bytes)).toString();
+};
+
+const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+
+/**
+ * Generate the complete shared-vector document from the reference seeds. Takes
+ * the already-generated chain artifacts and adds the vectors the five
+ * standalone suites also assert: the services genesis, the two credentials, the
+ * reject corpus, and the WP-0 number-policy CIDs.
+ */
+async function generateSharedVectors(a: ReferenceArtifacts): Promise<VectorsDocument> {
+  const digest = async (input: string) =>
+    new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
+
+  const keypair1 = importEd25519Keypair(await digest('dfos-protocol-reference-key-1'));
+  const keypair2 = importEd25519Keypair(await digest('dfos-protocol-reference-key-2'));
+  const keypair3 = importEd25519Keypair(await digest('dfos-protocol-reference-key-3'));
+  const signer1 = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair1.privateKey);
+  const signer3 = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair3.privateKey);
+
+  const keyId1 = generateId('key', { seed: keypair1.publicKey });
+  const keyId3 = generateId('key', { seed: keypair3.publicKey });
+  const multikey3 = encodeEd25519Multikey(keypair3.publicKey);
+  const key1: MultikeyPublicKey = {
+    id: keyId1,
+    type: 'Multikey',
+    publicKeyMultibase: a.multikey1,
+  };
+  const key3: MultikeyPublicKey = { id: keyId3, type: 'Multikey', publicKeyMultibase: multikey3 };
+
+  // --- key 3: the delegate identity the credentials are issued TO ---
+  const { jwsToken: key3GenesisJws } = await signIdentityOperation({
+    operation: {
+      version: 1,
+      type: 'create',
+      authKeys: [key3],
+      assertKeys: [key3],
+      controllerKeys: [key3],
+      createdAt: '2026-03-07T00:09:00.000Z',
+    },
+    signer: signer3,
+    keyId: keyId3,
+  });
+  const identity3 = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [key3GenesisJws] });
+
+  // --- services genesis: a create carrying a full-state services array ---
+  const servicesGenesisOp: IdentityOperation = {
+    version: 1,
+    type: 'create',
+    authKeys: [key1],
+    assertKeys: [key1],
+    controllerKeys: [key1],
+    services: [
+      { id: 'relay', type: 'DfosRelay', endpoint: 'https://relay.dfos.com' },
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: a.contentId },
+      { id: 'avatar', type: 'ContentAnchor', label: 'avatar', anchor: a.documentCID },
+    ],
+    createdAt: '2026-03-07T00:05:00.000Z',
+  };
+  const { jwsToken: servicesGenesisJws, operationCID: servicesGenesisCID } =
+    await signIdentityOperation({ operation: servicesGenesisOp, signer: signer1, keyId: keyId1 });
+  const servicesIdentity = await verifyIdentityChain({
+    didPrefix: 'did:dfos',
+    log: [servicesGenesisJws],
+  });
+
+  // --- credentials: key 1 (controller) authorizes key 3's DID ---
+  const credential = (action: 'write' | 'read') =>
+    createDFOSCredential({
+      issuerDID: a.did,
+      audienceDID: identity3.did,
+      att: [{ resource: 'chain:*', action }],
+      exp: REFERENCE_CREDENTIAL_EXP,
+      iat: REFERENCE_CREDENTIAL_IAT,
+      keyId: keyId1,
+      signer: signer1,
+    });
+  const writeCredentialJws = await credential('write');
+  const readCredentialJws = await credential('read');
+
+  // --- reject corpus: one valid base vector, then nine targeted mutations ---
+  // Every conformant verifier MUST reject all nine. The base vector itself is
+  // valid, so each rejection isolates exactly one profile or signature gate.
+  const rejectHeader = {
+    alg: 'EdDSA',
+    typ: 'did:dfos:reject-vector',
+    kid: 'key_r9ev34fvc23z999veaaft8',
+  };
+  const encodeSegment = (value: unknown) => base64urlEncode(JSON.stringify(value));
+  const rejectHeaderB64 = encodeSegment(rejectHeader);
+  const rejectPayloadB64 = encodeSegment({ v: 1 });
+  const rejectSignature = await signPayloadEd25519(
+    new TextEncoder().encode(`${rejectHeaderB64}.${rejectPayloadB64}`),
+    keypair1.privateKey,
+  );
+  const rejectToken = (headerB64: string, signature: Uint8Array) =>
+    `${headerB64}.${rejectPayloadB64}.${base64urlEncode(signature)}`;
+  const mutateSignature = (mutate: (sig: Uint8Array) => Uint8Array) =>
+    rejectToken(rejectHeaderB64, mutate(new Uint8Array(rejectSignature)));
+  const mutateHeader = (extra: Record<string, unknown>) =>
+    rejectToken(encodeSegment({ ...rejectHeader, ...extra }), rejectSignature);
+
+  const sPlusL = (sig: Uint8Array) => {
+    const out = new Uint8Array(sig);
+    let carry = 0;
+    for (let i = 0; i < 32; i++) {
+      const sum = sig[32 + i]! + ED25519_L[i]! + carry;
+      out[32 + i] = sum & 0xff;
+      carry = sum >> 8;
+    }
+    return out;
+  };
+
+  const rejectVectors: Record<string, string> = {
+    'RV-LEN-SHORT': mutateSignature((sig) => sig.slice(0, 63)),
+    'RV-LEN-LONG': mutateSignature((sig) => new Uint8Array([...sig, 0x00])),
+    'RV-S-NONCANON-PLUSL': mutateSignature(sPlusL),
+    'RV-S-NONCANON-FF': mutateSignature(
+      (sig) => new Uint8Array([...sig.slice(0, 32), ...new Uint8Array(32).fill(0xff)]),
+    ),
+    'RV-ALG-NONE': mutateHeader({ alg: 'none' }),
+    'RV-ALG-CASE': mutateHeader({ alg: 'eddsa' }),
+    'RV-CRIT-PRESENT': mutateHeader({ crit: ['exp'] }),
+    'RV-HEADER-KEY-TRUST': mutateHeader({ jwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' } }),
+    'RV-SIG-BITFLIP': mutateSignature((sig) => {
+      const out = new Uint8Array(sig);
+      out[63] = out[63]! ^ 0x01;
+      return out;
+    }),
+  };
+
+  // --- WP-0 number policy ---
+  const integerValue = { version: 1, type: 'test' };
+  const integerBlock = await dagCborCanonicalEncode(integerValue);
+  // The serialization a conforming encoder MUST NOT emit: the same map with
+  // `version` as a CBOR float16 1.0 (0xf9 0x3c00 — what a deterministic CBOR
+  // encoder emits for a whole-number float) in place of the integer 1. Derived
+  // from the canonical bytes by replacing the trailing integer byte, so it stays
+  // tied to the canonical encoding rather than transcribed. This is the byte at
+  // offset 19 the spec calls the discriminator.
+  const floatVersionCbor = new Uint8Array([
+    ...integerBlock.bytes.slice(0, integerBlock.bytes.length - 1),
+    0xf9,
+    0x3c,
+    0x00,
+  ]);
+  const maxSafeValue = { n: Number.MAX_SAFE_INTEGER };
+  const maxSafeBlock = await dagCborCanonicalEncode(maxSafeValue);
+  const nullValue = { documentCID: null, note: null, prf: [] };
+  const nullBlock = await dagCborCanonicalEncode(nullValue);
+
+  const vectors: VectorEntry[] = [
+    {
+      id: 'key-1',
+      description: 'Reference key 1 — the genesis controller. Seed is SHA-256 of the seed phrase.',
+      values: {
+        seedPhrase: 'dfos-protocol-reference-key-1',
+        privateKeyHex: a.privateKey1Hex,
+        publicKeyHex: a.publicKey1Hex,
+        multikey: a.multikey1,
+        keyId: a.keyId1,
+      },
+    },
+    {
+      id: 'key-2',
+      description: 'Reference key 2 — the key the rotation introduces.',
+      values: {
+        seedPhrase: 'dfos-protocol-reference-key-2',
+        privateKeyHex: a.privateKey2Hex,
+        publicKeyHex: a.publicKey2Hex,
+        multikey: a.multikey2,
+        keyId: a.keyId2,
+      },
+    },
+    {
+      id: 'key-3',
+      description:
+        'Reference key 3 — a separate identity, the audience of both credential vectors.',
+      values: {
+        seedPhrase: 'dfos-protocol-reference-key-3',
+        privateKeyHex: toHex(keypair3.privateKey),
+        publicKeyHex: toHex(keypair3.publicKey),
+        multikey: multikey3,
+        keyId: keyId3,
+        did: identity3.did,
+      },
+    },
+    {
+      id: 'identity-genesis',
+      description:
+        'Identity chain genesis (create, signed by key 1). Carries the canonical dag-cbor bytes, the CID bytes, the SHA-256 of those bytes, and the DID derived from them.',
+      values: {
+        jws: a.genesisJws,
+        payload: a.genesisOp,
+        cborHex: a.genesisCborHex,
+        cidBytesHex: a.genesisCidBytesHex,
+        cid: a.genesisCID,
+        didHashHex: toHex(
+          new Uint8Array(
+            await crypto.subtle.digest('SHA-256', Buffer.from(a.genesisCidBytesHex, 'hex')),
+          ),
+        ),
+        did: a.did,
+        kid: a.keyId1,
+        typ: 'did:dfos:identity-op',
+      },
+    },
+    {
+      id: 'identity-rotation',
+      description:
+        'Identity chain update (key rotation to key 2, operation signed by key 1). Carries the possession proof.',
+      values: {
+        jws: a.updateJws,
+        cid: a.updateCID,
+        kid: `${a.did}#${a.keyId1}`,
+        previousOperationCID: a.genesisCID,
+      },
+    },
+    {
+      id: 'key-proof',
+      description:
+        'The possession proof the rotation carries: a did:dfos:key-add envelope signed by key 2, whose payload is closed to exactly seven members in one order.',
+      values: {
+        jws: a.keyProof,
+        typ: KEY_ADD_JWS_TYP,
+        canonicalPayload: a.keyProofCanonical,
+        members: Object.keys(a.keyProofPayload),
+        roleSet: a.keyProofPayload.roleSet,
+        publicKeyMultibase: a.keyProofPayload.publicKeyMultibase,
+        prevCID: a.keyProofPayload.prevCID,
+        did: a.keyProofPayload.did,
+      },
+    },
+    {
+      id: 'identity-delete',
+      description: 'Identity chain delete (signed by key 2), parented on the rotation.',
+      values: { jws: a.deleteJws, cid: a.deleteCID, previousOperationCID: a.updateCID },
+    },
+    {
+      id: 'identity-restore',
+      description: 'Identity chain restore (signed by key 2), parented on the delete.',
+      values: { jws: a.restoreJws, cid: a.restoreCID, previousOperationCID: a.deleteCID },
+    },
+    {
+      id: 'document',
+      description:
+        'The content document the create operation commits to. Encode this map as canonical dag-cbor and the CID must come out byte-identical.',
+      values: { value: a.contentCreateDocument, cid: a.documentCID },
+    },
+    {
+      id: 'document-updated',
+      description: 'The edited document the content update operation commits to.',
+      values: { value: a.contentUpdateDocument, cid: a.documentCID2 },
+    },
+    {
+      id: 'content-create',
+      description: 'Content chain create (signed by key 2), committing to the document CID.',
+      values: {
+        jws: a.contentCreateJws,
+        cid: a.contentCreateCID,
+        kid: `${a.did}#${a.keyId2}`,
+        typ: 'did:dfos:content-op',
+        documentCID: a.documentCID,
+      },
+    },
+    {
+      id: 'content-update',
+      description: 'Content chain update (signed by key 2), rebasing on the create.',
+      values: {
+        jws: a.contentUpdateJws,
+        cid: a.contentUpdateCID,
+        documentCID: a.documentCID2,
+        baseDocumentCID: a.documentCID,
+      },
+    },
+    {
+      id: 'content-chain',
+      description: 'The verified two-operation content chain: its id, genesis CID, and head CID.',
+      values: {
+        contentId: a.contentId,
+        genesisCID: a.contentGenesisCID,
+        headCID: a.contentHeadCID,
+      },
+    },
+    {
+      id: 'services-genesis',
+      description:
+        'An identity create whose payload carries a full-state services discovery array (relay locator + content/artifact anchors). Re-encoding the decoded payload must re-derive this CID and DID.',
+      values: {
+        jws: servicesGenesisJws,
+        payload: servicesGenesisOp,
+        cid: servicesGenesisCID,
+        did: servicesIdentity.did,
+        kid: a.keyId1,
+        typ: 'did:dfos:identity-op',
+      },
+    },
+    {
+      id: 'credential-write',
+      description: 'A DFOS credential granting broad chain write, issued by key 1 to key 3’s DID.',
+      values: {
+        jws: writeCredentialJws,
+        cid: decodeParts(writeCredentialJws).header.cid,
+        kid: `${a.did}#${a.keyId1}`,
+        typ: 'did:dfos:credential',
+        iss: a.did,
+        aud: identity3.did,
+        resource: 'chain:*',
+        action: 'write',
+      },
+    },
+    {
+      id: 'credential-read',
+      description: 'A DFOS credential granting broad chain read, issued by key 1 to key 3’s DID.',
+      values: {
+        jws: readCredentialJws,
+        cid: decodeParts(readCredentialJws).header.cid,
+        kid: `${a.did}#${a.keyId1}`,
+        typ: 'did:dfos:credential',
+        iss: a.did,
+        aud: identity3.did,
+        resource: 'chain:*',
+        action: 'read',
+      },
+    },
+    {
+      id: 'jwt',
+      description: 'An EdDSA device-auth JWT signed by key 2.',
+      values: { token: a.jwt, iss: 'dfos', sub: a.did, aud: 'dfos-api' },
+    },
+    {
+      id: 'number-integer',
+      description:
+        'dag-cbor number determinism: whole numbers MUST encode as CBOR integers. floatCborHex/floatCid are the encoding a conforming encoder must never emit.',
+      values: {
+        value: integerValue,
+        cborHex: toHex(integerBlock.bytes),
+        cid: integerBlock.cid.toString(),
+        floatCborHex: toHex(floatVersionCbor),
+        floatCid: await cidOverBytes(floatVersionCbor),
+      },
+    },
+    {
+      id: 'number-max-safe',
+      description: 'WP-0 number policy: 2^53-1 is the largest accepted integer.',
+      values: { value: maxSafeValue, cid: maxSafeBlock.cid.toString() },
+    },
+    {
+      id: 'number-null-vector',
+      description: 'WP-0 number policy: nulls and empty arrays encode without normalization.',
+      values: { value: nullValue, cid: nullBlock.cid.toString() },
+    },
+    {
+      id: 'reject-corpus',
+      description:
+        'Nine tokens every conformant verifier MUST reject, each isolating one profile or signature gate. The base vector is a valid JWS signed by key 1; publicKeyHex is the key to verify against.',
+      values: { publicKeyHex: a.publicKey1Hex, tokens: rejectVectors },
+    },
+  ];
+
+  return {
+    version: 1,
+    description:
+      'Shared deterministic reference vectors for the DFOS protocol. Generated from the fixed seeds by packages/dfos-protocol/tests/protocol-reference.spec.ts and consumed by every protocol-verify suite — do not hand-edit.',
+    generator: 'packages/dfos-protocol/tests/protocol-reference.spec.ts',
+    vectors,
+  };
+}
+
+const VECTORS_PATH = path.resolve(__dirname, '../../protocol-verify/vectors.json');
+
+const serializeVectors = (doc: VectorsDocument) => `${JSON.stringify(doc, null, 2)}\n`;
 
 // Resolve the spec + fixtures relative to this test file, not the cwd, so the
 // drift guard is robust to where vitest is invoked from.
@@ -693,5 +1115,28 @@ describe('protocol reference artifacts', () => {
     expect(contentFixture.expected.contentId).toBe(a.contentId);
     expect(contentFixture.expected.currentDocumentCID).toBe(a.documentCID2);
     expect(contentFixture.signerPublicKey).toBe(a.multikey2);
+  });
+
+  /**
+   * ARTIFACT GUARD. packages/protocol-verify/vectors.json is what all five
+   * standalone suites and the Go twin's reference tests read. It must be
+   * byte-identical to a fresh generation from the seeds, or a suite is
+   * asserting a value the reference implementation no longer produces.
+   */
+  it('matches packages/protocol-verify/vectors.json byte-for-byte', async () => {
+    const a = await generateReferenceArtifacts();
+    const generated = serializeVectors(await generateSharedVectors(a));
+
+    if (process.env.UPDATE_VECTORS === '1') {
+      fs.writeFileSync(VECTORS_PATH, generated, 'utf-8');
+      return;
+    }
+
+    const onDisk = fs.readFileSync(VECTORS_PATH, 'utf-8');
+    expect(
+      onDisk,
+      'packages/protocol-verify/vectors.json has drifted from the generator — ' +
+        'regenerate with UPDATE_VECTORS=1 and re-read the diff before accepting it',
+    ).toBe(generated);
   });
 });
