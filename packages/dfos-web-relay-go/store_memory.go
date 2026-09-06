@@ -940,20 +940,20 @@ func (s *MemoryStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 		currentCID = op.previousCID
 	}
 
-	// Historical replay is a VALIDITY decision, so authorization is enforced and
-	// revocation is evaluated AS OF each op's own createdAt: a credential revoked
-	// after an op was signed leaves that op — and therefore the fork state derived
-	// from it — valid. Without the as-of basis this replay would start failing the
-	// moment any credential in the chain's history was revoked, which would make a
-	// legitimate fork extension unverifiable. Mirrors the TS twin (store.ts
-	// getContentStateAtCID).
-	// Identity deletion, unlike revocation, IS retroactive and has no as-of basis
-	// (CREDENTIALS.md "Identity Deletion Is Absolute"), so the deleted-issuer gate
-	// is threaded unconditionally. The TS twin gets this for free — its
+	// Replay of committed history is a VALIDITY decision, so it runs at each
+	// operation's own createdAt: signers resolve in the state that held then, and
+	// a credential revoked after an op was signed leaves that op — and therefore
+	// the fork state derived from it — valid. Without the basis this replay would
+	// start failing the moment any credential in the chain's history was revoked,
+	// which would make a legitimate fork extension unverifiable. Mirrors the TS
+	// twin (store.ts getContentStateAtCID).
+	// Identity deletion, unlike revocation, IS retroactive and does not run
+	// against the basis (CREDENTIALS.md "Deleted issuers"), so the deleted-issuer
+	// gate is threaded unconditionally. The TS twin gets this for free — its
 	// verifyDFOSCredential rejects a deleted issuer via resolveIdentity — while Go
 	// takes it as an explicit option, so omitting it here would let a deleted
 	// issuer's credentials keep authorizing committed history on Go only.
-	resolveKey := CreateKeyResolver(s)
+	resolveKey := CreateAsOfKeyResolver(s)
 	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
 		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
 	})

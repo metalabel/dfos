@@ -91,11 +91,11 @@ func TestVerifyCredentialExpired(t *testing.T) {
 	}
 }
 
-// TestVerifyCredentialTemporalBoundaries pins the half-open interval [iat, exp)
-// documented in CREDENTIALS.md "Time Basis Conversion and Boundaries". The exp
-// boundary is closed-rejecting (exp == now is expired); the iat boundary is
-// open-accepting (iat == now is valid). This is the Go twin of the TS
-// boundary tests in dfos-protocol/tests/chain.spec.ts.
+// TestVerifyCredentialTemporalBoundaries pins the exp boundary documented in
+// PROTOCOL.md "Time basis": exp is closed-rejecting (exp == basis is expired),
+// and iat is informational, so a credential issued after the basis is accepted.
+// This is the Go twin of the TS boundary tests in
+// dfos-protocol/tests/chain.spec.ts.
 func TestVerifyCredentialTemporalBoundaries(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
@@ -128,16 +128,52 @@ func TestVerifyCredentialTemporalBoundaries(t *testing.T) {
 		t.Errorf("now == exp-1 MUST be accepted, got %v", err)
 	}
 
-	// iat open-accepting: currentTime == iat MUST be accepted.
+	// basis == iat MUST be accepted.
 	if _, err := VerifyCredentialAt(token, pub, aud, "read", issuedAt); err != nil {
-		t.Errorf("now == iat MUST be accepted (open boundary), got %v", err)
+		t.Errorf("basis == iat MUST be accepted, got %v", err)
 	}
 
-	// just before iat: currentTime == iat-1 MUST be not-yet-valid.
-	if _, err := VerifyCredentialAt(token, pub, aud, "read", issuedAt-1); err == nil {
-		t.Error("now == iat-1 MUST be rejected as not-yet-valid")
-	} else if err.Error() != "credential not yet valid (iat is in the future)" {
-		t.Errorf("now == iat-1: expected 'credential not yet valid (iat is in the future)', got %q", err.Error())
+	// iat gates nothing: a basis BEFORE the credential was issued is accepted,
+	// because the basis decides when authority applies, not the issuer's clock.
+	if _, err := VerifyCredentialAt(token, pub, aud, "read", issuedAt-1); err != nil {
+		t.Errorf("basis == iat-1 MUST be accepted (iat is informational), got %v", err)
+	}
+}
+
+// TestVerifyCredentialAtBasisTruncates pins the ISO-basis entrypoint: the basis
+// converts to whole seconds by truncation, so a sub-second remainder never
+// pushes exp over its boundary.
+func TestVerifyCredentialAtBasisTruncates(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	iss := "did:dfos:abc123"
+	aud := "did:dfos:reader456"
+	kid := iss + "#key_auth_0"
+
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 10*time.Second, priv)
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+	probe, err := VerifyCredentialAt(token, pub, aud, "read", time.Now().Unix())
+	if err != nil {
+		t.Fatalf("probe verify: %v", err)
+	}
+
+	// A basis whose whole-second floor is exp-1 is inside the window; the .999
+	// remainder is truncated away rather than rounded up onto exp.
+	inside := time.Unix(probe.Exp-1, 999_000_000).UTC().Format(protocolTimeFormat)
+	if _, err := VerifyCredentialAtBasis(token, pub, aud, "read", inside); err != nil {
+		t.Errorf("basis floor == exp-1 MUST be accepted, got %v", err)
+	}
+
+	// A basis whose floor is exp is expired.
+	atExp := time.Unix(probe.Exp, 0).UTC().Format(protocolTimeFormat)
+	if _, err := VerifyCredentialAtBasis(token, pub, aud, "read", atExp); err == nil {
+		t.Error("basis floor == exp MUST be rejected as expired")
+	}
+
+	// An empty basis is ephemeral: the wall clock, where the credential is live.
+	if _, err := VerifyCredentialAtBasis(token, pub, aud, "read", ""); err != nil {
+		t.Errorf("empty basis MUST fall to the wall clock, got %v", err)
 	}
 }
 

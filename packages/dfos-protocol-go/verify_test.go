@@ -565,7 +565,7 @@ func TestVerifyContentChain_GenesisOnly(t *testing.T) {
 	idResult, _ := VerifyIdentityChain([]string{genJWS})
 
 	kid := did + "#" + keyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -601,7 +601,7 @@ func TestVerifyContentChain_GenesisAndUpdate(t *testing.T) {
 	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -631,7 +631,7 @@ func TestVerifyContentChain_Delete(t *testing.T) {
 	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -664,7 +664,7 @@ func TestVerifyContentChain_DelegatedWriteRequiresCredential(t *testing.T) {
 
 	kid := did + "#" + keyID
 	kid2 := did2 + "#" + keyID2
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		switch k {
 		case kid:
 			return pub, nil
@@ -715,7 +715,7 @@ func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
 
 	kid := did + "#" + keyID
 	kid2 := did2 + "#" + keyID2
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		switch k {
 		case kid:
 			return pub, nil
@@ -770,7 +770,7 @@ func TestVerifyContentExtension_Update(t *testing.T) {
 	_, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 
 	kid := did + "#" + keyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -815,7 +815,7 @@ func TestVerifyArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -853,7 +853,7 @@ func TestVerifyArtifact_LongSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -887,7 +887,7 @@ func TestVerifyArtifact_MissingSchema(t *testing.T) {
 	header := JWSHeader{Alg: "EdDSA", Typ: "did:dfos:artifact", Kid: kid, CID: cidStr}
 	jws, _ := CreateJWS(header, payload, priv)
 
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -916,7 +916,7 @@ func TestVerifyCountersignature(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		if k == kid {
 			return pub, nil
 		}
@@ -947,7 +947,7 @@ func TestVerifyCountersignature_WrongKey(t *testing.T) {
 
 	// resolver returns a different key
 	wrongPub, _, _ := ed25519.GenerateKey(rand.Reader)
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		return wrongPub, nil
 	}
 

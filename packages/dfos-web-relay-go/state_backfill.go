@@ -14,7 +14,7 @@ package relay
   State.ProvedKeys is the member that makes that gap load-bearing. It is
   HAS-EVER-PROVED key state: the monotonic union of every effective key state
   the chain has held, and the reading two surfaces need — CreateKeyResolver, so
-  an artifact signed by a key that has since rotated away still verifies, and
+  a credit claim signed by a key that has since rotated away still verifies, and
   the `key=` reverse index, so a search by a rotated-out key still finds the
   identity. provedKeyState (ingest.go) reads it with a fallback: an absent union
   reads as "what is effective now was proved". That fallback is correct in the

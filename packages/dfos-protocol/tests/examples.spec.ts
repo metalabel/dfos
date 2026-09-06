@@ -180,7 +180,7 @@ describe('example fixtures', () => {
       const resolveIdentity = makeResolveIdentity(fixture, fixture.broadCredential);
       const result = await verifyDFOSCredential(fixture.broadCredential, {
         resolveIdentity,
-        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+        basis: '2026-06-01T00:00:00.000Z',
       });
 
       expect(result.iss).toBe(fixture.expected.iss);
@@ -193,7 +193,7 @@ describe('example fixtures', () => {
       const resolveIdentity = makeResolveIdentity(fixture, fixture.narrowCredential);
       const result = await verifyDFOSCredential(fixture.narrowCredential, {
         resolveIdentity,
-        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+        basis: '2026-06-01T00:00:00.000Z',
       });
 
       expect(result.att.some((a) => a.resource.includes(fixture.expected.narrowContentId))).toBe(
@@ -208,7 +208,7 @@ describe('example fixtures', () => {
       const resolveIdentity = makeResolveIdentity(fixture, fixture.credential);
       const result = await verifyDFOSCredential(fixture.credential, {
         resolveIdentity,
-        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+        basis: '2026-06-01T00:00:00.000Z',
       });
 
       expect(result.iss).toBe(fixture.expected.iss);

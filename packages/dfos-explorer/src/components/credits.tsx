@@ -178,8 +178,10 @@ const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[]
 
     props.entries.forEach((entry, index) => {
       if (!readDisplay(entry).claimPresent) return;
+      // A credit claim runs no temporal check, so it resolves the claimant's key
+      // against every key that chain has ever held.
       void verifyCreditEntry(entry as Record<string, unknown>, {
-        resolveIdentity: getClient().callbacks().resolveIdentity,
+        resolveIdentity: getClient().callbacks().resolveClaimantIdentity,
         contentId: props.contentId,
       })
         .then((verified) => (dead ? null : describe(verified)))

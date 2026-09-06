@@ -40,8 +40,10 @@ export { MemoryRelayStore } from './store';
 export {
   ingestOperations,
   createKeyResolver,
+  createAsOfKeyResolver,
   createCurrentKeyResolver,
-  createHistoricalIdentityResolver,
+  createIdentityResolver,
+  resolveIdentityAsOf,
   StoreFaultError,
   isStoreFault,
 } from './ingest';

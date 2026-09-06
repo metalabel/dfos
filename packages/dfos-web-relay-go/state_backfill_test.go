@@ -59,7 +59,7 @@ func staleIdentityRow(t *testing.T, store staleRowStore, did string) StoredIdent
 // resolvesHistorically reports whether the has-ever-proved resolver knows a key.
 func resolvesHistorically(t *testing.T, store RelayReadStore, did, keyID string) bool {
 	t.Helper()
-	_, err := CreateKeyResolver(store)(did + "#" + keyID)
+	_, err := CreateKeyResolver(store)(did+"#"+keyID, "")
 	return err == nil
 }
 

@@ -70,7 +70,10 @@ const genesis = async () => {
     authKeys: [key.key],
     assertKeys: [key.key],
     controllerKeys: [key.key],
-    createdAt: ts(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: ts(-60),
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation: createOp,
@@ -271,7 +274,7 @@ describe('void keys never reach a resolution surface', () => {
     expect(body.state.provedKeys?.authKeys.map((k) => k.id)).toEqual([root.key.keyId]);
   });
 
-  it('resolves a proved-then-rotated-out key historically, and a void key never', async () => {
+  it('resolves a proved key at its own basis, past the rotation and never a void key', async () => {
     const store = new MemoryRelayStore();
     const root = await genesis();
     expect((await ingestOperations([root.jwsToken], store))[0]!.status).toBe('new');
@@ -299,14 +302,23 @@ describe('void keys never reach a resolution surface', () => {
     });
     expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
 
-    // A key that was PROVED and later rotated out still resolves on the
-    // historical path — that is what verifying long-lived artifacts across a
-    // rotation means, and revocation, not rotation, is the invalidation.
+    // Historical admission resolves the signer AS OF the operation's own
+    // createdAt, so the same key that signed `early` still verifies it after the
+    // rotation: replay the committed op and it lands again, idempotently.
+    const [replayed] = await ingestOperations([early.jwsToken], store, {
+      admissionMode: 'historical',
+    });
+    expect(replayed!.status).toBe('duplicate');
+
+    // A key rotated out at the basis resolves nowhere: an op dated after the
+    // rotation and signed by the retired key is refused on the historical path
+    // too, and the refusal is a verdict rather than a missing dependency.
     const late = await contentGenesis(root.did, root.key, 'after the rotation', 3);
     const [historical] = await ingestOperations([late.jwsToken], store, {
       admissionMode: 'historical',
     });
-    expect(historical!.status).toBe('new');
+    expect(historical!.status).toBe('rejected');
+    expect(historical!.dependencyMissing).not.toBe(true);
 
     // A key nothing ever proved does not, even historically: it never spoke for
     // this identity, so there is nothing for its signature to have been.

@@ -71,10 +71,15 @@ export const signCountersignature = async (input: {
  * Checks: valid signature, CID integrity, payload schema. Does NOT check
  * whether the target exists or whether the witness differs from the target
  * author — those are relay-level semantic checks.
+ *
+ * The countersignature's own `createdAt` is the basis: a committed statement
+ * resolves its signer in the state that held when it was signed (PROTOCOL, Time
+ * basis).
  */
 export const verifyCountersignature = async (input: {
   jwsToken: string;
-  resolveKey: (kid: string) => Promise<Uint8Array>;
+  /** Resolve a kid to key bytes in the signer's state as of `basis`. */
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
 }): Promise<VerifiedCountersignature> => {
   const decoded = decodeJwsUnsafe(input.jwsToken);
   if (!decoded) throw new Error('failed to decode countersignature JWS');
@@ -102,7 +107,7 @@ export const verifyCountersignature = async (input: {
   }
 
   // verify signature
-  const publicKey = await input.resolveKey(kid);
+  const publicKey = await input.resolveKey(kid, payload.createdAt);
   try {
     verifyJws({ token: input.jwsToken, publicKey });
   } catch {

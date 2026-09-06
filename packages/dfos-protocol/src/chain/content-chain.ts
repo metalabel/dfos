@@ -112,25 +112,31 @@ export const signContentOperation = async (input: {
 /**
  * Verify that a delegated content operation has a valid DFOS credential
  * authorizing the signer to write to this content chain.
+ *
+ * THE OPERATION'S `createdAt` IS THE BASIS for everything the credential path
+ * asks (PROTOCOL, Time basis): the issuer's signing key must be effective as of
+ * it, every `exp` in the delegation chain must exceed it, and only a revocation
+ * dated at or before it counts. A credential a key signed while that key was
+ * effective therefore keeps authorizing the operations it authorized, and stops
+ * authorizing operations dated after the key is gone.
  */
 const verifyOperationAuthorization = async (input: {
   authorization: string;
   operationDID: string;
   creatorDID: string;
   contentId: string;
+  /** The operation's own `createdAt` — the basis for this verification. */
   createdAt: string;
-  resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+  resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
   /**
    * Check whether a credential has been revoked. Threaded onto the WRITE path
    * so a revoked LEAF credential no longer authorizes writes (verifyDelegationChain
    * only checks PARENTS). When omitted, revocation is not enforced (protocol-layer
    * callers without a revocation store).
    *
-   * Called with `asOfUnix = the operation's own createdAt`: verifying an
-   * operation that is already part of a chain is a VALIDITY decision, and a
-   * revocation signed after the operation does not reach back to invalidate it.
-   * A caller that instead wants a freshness gate (relay ingest) supplies a
-   * checker that ignores the as-of basis and answers from current knowledge.
+   * Called with `asOfUnix` = the basis. A caller that instead wants a freshness
+   * gate (relay ingest) supplies a checker that ignores the as-of basis and
+   * answers from current knowledge.
    */
   isRevoked?: RevocationChecker;
 }): Promise<void> => {
@@ -143,11 +149,11 @@ const verifyOperationAuthorization = async (input: {
     throw new Error(`invalid authorization typ: ${decoded.header.typ}`);
   }
 
-  // verify the credential signature + schema + expiry
+  // verify the credential signature + schema + expiry, all against the basis
   const opCreatedAtUnix = Math.floor(new Date(input.createdAt).getTime() / 1000);
   const credential = await verifyDFOSCredential(input.authorization, {
     resolveIdentity: input.resolveIdentity,
-    now: opCreatedAtUnix,
+    basis: input.createdAt,
   });
 
   // explicit LEAF-revocation check on the write path. verifyDelegationChain
@@ -155,11 +161,9 @@ const verifyOperationAuthorization = async (input: {
   // still authorize writes, so "revocation is the timely lever" would be false
   // for the leaf case. Mirrors the read-path pattern (relay auth.ts).
   //
-  // asOf = the operation's own createdAt — the SAME deterministic basis already
-  // used for expiry above. A revocation signed after this operation leaves it
-  // valid on every future verification of the chain; only a revocation that
-  // predates it invalidates it. MUST stay in sync with the Go twin (verify.go
-  // verifyContentAuthorization).
+  // asOf = the basis in unix seconds. Only a revocation dated at or before the
+  // basis invalidates the operation. MUST stay in sync with the Go twin
+  // (verify.go verifyContentAuthorization).
   if (
     input.isRevoked &&
     (await input.isRevoked(credential.iss, credential.credentialCID, opCreatedAtUnix))
@@ -167,13 +171,12 @@ const verifyOperationAuthorization = async (input: {
     throw new Error('credential is revoked');
   }
 
-  // verify the delegation chain roots at the creator DID (parents covered by
-  // the same isRevoked callback, on the same as-of basis)
+  // verify the delegation chain roots at the creator DID, at the same basis
   await verifyDelegationChain(credential, {
     resolveIdentity: input.resolveIdentity,
     rootDID: input.creatorDID,
-    now: opCreatedAtUnix,
-    ...(input.isRevoked ? { isRevoked: input.isRevoked, asOfUnix: opCreatedAtUnix } : {}),
+    basis: input.createdAt,
+    ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
   });
 
   // verify the credential's audience matches the operation signer
@@ -209,8 +212,11 @@ const verifyOperationAuthorization = async (input: {
  */
 export const verifyContentChain = async (input: {
   log: string[];
-  /** Resolve a kid (DID URL) to the raw Ed25519 public key bytes */
-  resolveKey: (kid: string) => Promise<Uint8Array>;
+  /**
+   * Resolve a kid (DID URL) to the raw Ed25519 public key bytes, in the signing
+   * identity's state as of `basis` — each operation's own `createdAt`.
+   */
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
   /**
    * Enforce creator-sovereignty authorization. When true, non-creator signers
    * must include a DFOS credential in the operation's `authorization` field
@@ -218,10 +224,11 @@ export const verifyContentChain = async (input: {
    */
   enforceAuthorization?: boolean;
   /**
-   * Resolve a DID to a VerifiedIdentity. Required when `enforceAuthorization`
-   * is true, as credential verification needs identity resolution.
+   * Resolve a DID to a VerifiedIdentity as of `basis`. Required when
+   * `enforceAuthorization` is true, as credential verification needs identity
+   * resolution.
    */
-  resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
+  resolveIdentity?: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
   /**
    * Check whether a credential (leaf or parent) has been revoked. Called with
    * `asOfUnix` = each operation's own `createdAt`, so a fold of committed
@@ -295,8 +302,9 @@ export const verifyContentChain = async (input: {
       throw new Error(`log[${idx}]: kid DID does not match operation did`);
     }
 
-    // verify JWS signature via key resolver
-    const publicKey = await input.resolveKey(kid);
+    // Verify the JWS signature against the key as of the operation's OWN
+    // createdAt: the signer must have been effective when it signed.
+    const publicKey = await input.resolveKey(kid, op.createdAt);
     try {
       verifyJws({ token: jwsToken, publicKey });
     } catch {
@@ -408,12 +416,15 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   lastCreatedAt: string;
   /** The new JWS operation to verify */
   newOp: string;
-  /** Resolve a kid (DID URL) to the raw Ed25519 public key bytes */
-  resolveKey: (kid: string) => Promise<Uint8Array>;
+  /**
+   * Resolve a kid (DID URL) to the raw Ed25519 public key bytes, in the signing
+   * identity's state as of `basis` — the new operation's own `createdAt`.
+   */
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
   /** Enforce creator-sovereignty authorization (see verifyContentChain) */
   enforceAuthorization?: boolean;
-  /** Resolve a DID to a VerifiedIdentity. Required when enforceAuthorization is true. */
-  resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /** Resolve a DID to a VerifiedIdentity as of `basis`. Required when enforceAuthorization is true. */
+  resolveIdentity?: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
   /**
    * Check whether a credential (leaf or parent) has been revoked. Called with
    * `asOfUnix` = the new operation's own `createdAt`. See `RevocationChecker`.
@@ -473,8 +484,9 @@ export const verifyContentExtensionFromTrustedState = async (input: {
     throw new Error('kid DID does not match operation did');
   }
 
-  // verify JWS signature via key resolver
-  const publicKey = await resolveKey(kid);
+  // Verify the JWS signature against the key as of the operation's OWN
+  // createdAt: the signer must have been effective when it signed.
+  const publicKey = await resolveKey(kid, op.createdAt);
   try {
     verifyJws({ token: newOp, publicKey });
   } catch {

@@ -65,10 +65,14 @@ export const signArtifact = async (input: {
 
 /**
  * Verify an artifact JWS — signature, CID, payload schema, size limit
+ *
+ * The artifact's own `createdAt` is the basis: a committed statement resolves
+ * its signer in the state that held when it was signed (PROTOCOL, Time basis).
  */
 export const verifyArtifact = async (input: {
   jwsToken: string;
-  resolveKey: (kid: string) => Promise<Uint8Array>;
+  /** Resolve a kid to key bytes in the signer's state as of `basis`. */
+  resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
 }): Promise<VerifiedArtifact> => {
   const decoded = decodeJwsUnsafe(input.jwsToken);
   if (!decoded) throw new Error('failed to decode artifact JWS');
@@ -96,7 +100,7 @@ export const verifyArtifact = async (input: {
   }
 
   // verify signature
-  const publicKey = await input.resolveKey(kid);
+  const publicKey = await input.resolveKey(kid, payload.createdAt);
   try {
     verifyJws({ token: input.jwsToken, publicKey });
   } catch {

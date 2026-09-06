@@ -67,25 +67,20 @@ func mustUnix(t *testing.T, value string) int64 {
 	return parsed.Unix()
 }
 
-// verifyChainAt is verifyChain with an explicit temporal basis: the leaf is
-// verified at asOfUnix and the same basis is threaded into the walk. asOfUnix 0
-// leaves the leaf on the wall clock too, matching the read path.
-func verifyChainAt(t *testing.T, childToken string, resolve KeyResolver, rootDID string, asOfUnix int64) error {
+// verifyChainAt is verifyChain with an explicit basis: the leaf is verified at
+// basis and the same basis is threaded into the walk. An empty basis leaves the
+// leaf on the wall clock too, matching the read path.
+func verifyChainAt(t *testing.T, childToken string, resolve KeyResolver, rootDID string, basis string) error {
 	t.Helper()
 	header, payload, err := DecodeJWSUnsafe(childToken)
 	if err != nil {
 		t.Fatalf("decode child: %v", err)
 	}
-	pubKey, err := resolve(header.Kid)
+	pubKey, err := resolve(header.Kid, basis)
 	if err != nil {
 		return err
 	}
-	var vc *VerifiedCredential
-	if asOfUnix > 0 {
-		vc, err = VerifyCredentialAt(childToken, pubKey, "", "", asOfUnix)
-	} else {
-		vc, err = VerifyCredential(childToken, pubKey, "", "")
-	}
+	vc, err := VerifyCredentialAtBasis(childToken, pubKey, "", "", basis)
 	if err != nil {
 		return err
 	}
@@ -94,7 +89,7 @@ func verifyChainAt(t *testing.T, childToken string, resolve KeyResolver, rootDID
 	if err != nil {
 		return err
 	}
-	return verifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, asOfUnix, 0)
+	return VerifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, basis)
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +115,7 @@ func TestParentExpiryUsesOperationBasis(t *testing.T) {
 	creatorKid := creatorDID + "#" + creatorKeyID
 	middleKid := middleDID + "#" + middleKeyID
 	delegateKid := delegateDID + "#" + delegateKeyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		switch k {
 		case creatorKid:
 			return creatorPub, nil
@@ -160,7 +155,7 @@ func TestParentExpiryUsesOperationBasis(t *testing.T) {
 // because the basis moved off the wall clock. The parent's temporal check runs
 // before the expiry-narrowing check, so the rejection names the parent.
 func TestParentExpiredBeforeOperationStillRejects(t *testing.T) {
-	basis := mustUnix(t, "2020-06-01T00:00:00.000Z")
+	basis := "2020-06-01T00:00:00.000Z"
 	root := newCredParty(t, "rootexp")
 	member := newCredParty(t, "memberexp")
 
@@ -218,9 +213,9 @@ func TestParentExpiryAtReadBasisUsesWallClock(t *testing.T) {
 		exp: now + 3600,
 	})
 
-	err := verifyChainAt(t, childCred, mapResolver(root, member), root.did, 0)
+	err := verifyChainAt(t, childCred, mapResolver(root, member), root.did, "")
 	if err == nil {
-		t.Fatal("expected an expired parent to be REJECTED on the read path (asOfUnix 0), got nil")
+		t.Fatal("expected an expired parent to be REJECTED on the read path (empty basis), got nil")
 	}
 	// the parent's temporal check fires before expiry narrowing, so this message
 	// (not the narrowing one) is what proves the wall clock was the basis

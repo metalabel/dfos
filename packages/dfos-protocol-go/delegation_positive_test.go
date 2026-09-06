@@ -91,7 +91,7 @@ func mapResolver(parties ...credParty) KeyResolver {
 	for _, p := range parties {
 		keys[p.kid] = p.pub
 	}
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		k, ok := keys[kid]
 		if !ok {
 			return nil, errKeyNotFound{kid}
@@ -111,7 +111,7 @@ func verifyChain(t *testing.T, childToken string, resolve KeyResolver, rootDID s
 	if err != nil {
 		t.Fatalf("decode child: %v", err)
 	}
-	pubKey, err := resolve(header.Kid)
+	pubKey, err := resolve(header.Kid, "")
 	if err != nil {
 		return err
 	}
@@ -124,9 +124,9 @@ func verifyChain(t *testing.T, childToken string, resolve KeyResolver, rootDID s
 	if err != nil {
 		return err
 	}
-	// asOfUnix 0, depth 0 — no revocation checker is wired here, so the as-of basis
-	// is immaterial to what these positive cases assert
-	return verifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, 0, 0)
+	// Empty basis, depth 0 — these positive cases assert attenuation and root
+	// linkage, which the basis does not reach.
+	return verifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, "", 0, 0)
 }
 
 func att(resource, action string) []map[string]string {

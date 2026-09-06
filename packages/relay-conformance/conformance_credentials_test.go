@@ -5,8 +5,8 @@
 //   - revocation blocking credential use
 //   - public credential ingestion
 //   - standing authorization via public credential
-//   - credential ingestion survives key rotation
-//   - per-request credential survives key rotation
+//   - rotation closes forward issuance of standalone credentials
+//   - rotation stops a per-request credential granting at read time
 //   - chain:* wildcard standing authorization
 //   - chain:* wildcard per-request credential
 //   - audience mismatch rejection
@@ -270,9 +270,12 @@ func TestPublicCredentialIngestion(t *testing.T) {
 }
 
 // ===================================================================
-// credential ingestion survives key rotation
+// rotation closes forward issuance
 // ===================================================================
 
+// A standalone public credential is an ephemeral presentation, so its basis is
+// now (PROTOCOL, Time basis): the signing key must be effective at the head. A
+// key the issuer has rotated out grants nothing new.
 func TestPublicCredentialIngestionAfterKeyRotation(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
@@ -295,8 +298,7 @@ func TestPublicCredentialIngestionAfterKeyRotation(t *testing.T) {
 		ctrlKid, id.controller.priv)
 	postOperationsAccepted(t, base, []string{rotateToken})
 
-	// submit the credential signed with the OLD (rotated-out) key
-	// it should still be accepted — revocation, not key rotation, invalidates
+	// submit the credential signed with the OLD (rotated-out) key — refused
 	res := postOperations(t, base, []string{credToken})
 	body := readBody(t, res)
 
@@ -316,16 +318,18 @@ func TestPublicCredentialIngestionAfterKeyRotation(t *testing.T) {
 	if len(batchResp.Results) == 0 {
 		t.Fatal("expected at least one result")
 	}
-	if batchResp.Results[0].Status != "new" {
-		t.Fatalf("credential signed with rotated-out key should be accepted: status=%s error=%s",
-			batchResp.Results[0].Status, batchResp.Results[0].Error)
+	if batchResp.Results[0].Status != "rejected" {
+		t.Fatalf("credential signed with a rotated-out key must be refused: status=%s",
+			batchResp.Results[0].Status)
 	}
 }
 
 // ===================================================================
-// per-request credential survives key rotation
+// per-request credential after key rotation
 // ===================================================================
 
+// A read-time credential check is an ephemeral presentation too, so a credential
+// signed by a key the issuer has since rotated out stops granting.
 func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
@@ -347,6 +351,15 @@ func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// While the issuing key is still current the credential grants the read.
+	readerSigner := signerFor(reader)
+	liveRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
+	if liveRes.StatusCode != 200 {
+		liveBody := readBody(t, liveRes)
+		t.Fatalf("credential under the current key should grant access: status %d, body: %s", liveRes.StatusCode, liveBody)
+	}
+	liveRes.Body.Close()
+
 	// Rotate after issuing the credential — a whole rotation onto a fresh key, carrying
 	// that key's possession envelope, so the genesis key is genuinely rotated out
 	// of every role rather than left current in the ones the update did not touch.
@@ -360,12 +373,11 @@ func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 		ctrlKid, id.controller.priv)
 	postOperationsAccepted(t, base, []string{rotateToken})
 
-	// reader uses credential signed with the OLD key — should still work
-	readerSigner := signerFor(reader)
+	// reader presents the credential signed with the OLD key — refused
 	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
-	if dlRes.StatusCode != 200 {
-		dlBody := readBody(t, dlRes)
-		t.Fatalf("credential signed with rotated-out key should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
+	if dlRes.StatusCode == 200 {
+		dlRes.Body.Close()
+		t.Fatal("credential signed with a rotated-out key must stop granting access")
 	}
 	dlRes.Body.Close()
 }

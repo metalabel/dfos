@@ -355,19 +355,19 @@ func TestVoidKeyResolvesOnNeitherResolver(t *testing.T) {
 	introduceKeyWithoutProof(t, r, id, added.mk)
 
 	voidKid := id.did + "#" + added.keyID
-	if _, err := CreateKeyResolver(store)(voidKid); err == nil {
+	if _, err := CreateKeyResolver(store)(voidKid, ""); err == nil {
 		t.Fatal("the historical resolver resolved a key no proof ever admitted")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(voidKid); err == nil {
+	if _, err := CreateCurrentKeyResolver(store)(voidKid, ""); err == nil {
 		t.Fatal("the current resolver resolved a key no proof ever admitted")
 	}
 	// The genesis key still resolves on both — the refusal is possession and
 	// nothing else.
 	livingKid := id.did + "#" + id.controller.keyID
-	if _, err := CreateKeyResolver(store)(livingKid); err != nil {
+	if _, err := CreateKeyResolver(store)(livingKid, ""); err != nil {
 		t.Fatalf("historical resolver on the genesis key: %v", err)
 	}
-	if _, err := CreateCurrentKeyResolver(store)(livingKid); err != nil {
+	if _, err := CreateCurrentKeyResolver(store)(livingKid, ""); err != nil {
 		t.Fatalf("current resolver on the genesis key: %v", err)
 	}
 }
@@ -388,13 +388,13 @@ func TestHistoricalResolverKeepsAProvedRotatedOutKey(t *testing.T) {
 	rotated, _ := rotateExistingTestIdentity(t, r, id)
 
 	rotatedOutKid := id.did + "#" + id.auth.keyID
-	if _, err := CreateKeyResolver(store)(rotatedOutKid); err != nil {
+	if _, err := CreateKeyResolver(store)(rotatedOutKid, ""); err != nil {
 		t.Fatalf("historical resolver dropped a proved rotated-out key: %v", err)
 	}
-	if _, err := CreateCurrentKeyResolver(store)(rotatedOutKid); err == nil {
+	if _, err := CreateCurrentKeyResolver(store)(rotatedOutKid, ""); err == nil {
 		t.Fatal("the current resolver kept a rotated-out key")
 	}
-	if _, err := CreateCurrentKeyResolver(store)(id.did + "#" + rotated.keyID); err != nil {
+	if _, err := CreateCurrentKeyResolver(store)(id.did+"#"+rotated.keyID, ""); err != nil {
 		t.Fatalf("current resolver on the rotated-in key: %v", err)
 	}
 }

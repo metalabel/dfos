@@ -57,7 +57,16 @@ func operationSizeForCap(payload map[string]any, fullEncoded []byte) (int, error
 	return len(encoded), nil
 }
 
-// KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
+// KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519
+// public key, in the signing identity's EFFECTIVE state as of basis.
+//
+// THE BASIS IS THE TIME THE VERIFICATION RUNS AT (PROTOCOL, Time basis). It is
+// a timestamp in the createdAt grammar for a committed artifact — the
+// operation's own createdAt, and the createdAt of anything carried inline in it
+// — and the empty string for an ephemeral presentation, whose basis is now and
+// whose answer is therefore head state. A resolver that ignores the basis
+// answers about head state, which is correct only where the caller asks the
+// freshness question.
 //
 // A RESOLVER ERROR IS A TYPED FACT AND MUST REACH THE CALLER INTACT. Only the
 // resolver knows WHY a key did not resolve — "the identity chain has not synced
@@ -74,7 +83,7 @@ func operationSizeForCap(payload map[string]any, fullEncoded []byte) (int, error
 // and the relay would keep and re-verify the operation forever. Preserving the
 // chain is what lets the classification be a fact rather than a spelling.
 // TestResolverErrorSurvivesEveryVerifyEntrypoint pins it.
-type KeyResolver func(kid string) (ed25519.PublicKey, error)
+type KeyResolver func(kid string, basis string) (ed25519.PublicKey, error)
 
 // RevocationChecker reports whether a credential (by issuer DID + credential
 // CID) has been revoked. Threaded onto the content WRITE path so revoked
@@ -94,10 +103,10 @@ type KeyResolver func(kid string) (ed25519.PublicKey, error)
 //     before 1970 gets the stricter answer in both).
 //   - asOfUnix > 0 (as-of) — "was this credential already revoked at asOfUnix?".
 //     The validity question. Report true only if a revocation exists AND its
-//     signed createdAt is <= asOfUnix. Used when verifying operations already
-//     committed to a chain, where asOfUnix is the operation's own createdAt. A
-//     revocation signed AFTER an operation does not invalidate it — see
-//     CREDENTIALS.md "Revocation Scope".
+//     signed createdAt is <= asOfUnix. Used when verifying an artifact against a
+//     basis, where asOfUnix is that basis in integer Unix seconds. A revocation
+//     signed AFTER the basis does not invalidate the artifact — see
+//     CREDENTIALS.md "Revocation against the basis".
 //
 // An implementation that ignores asOfUnix degrades to the timeless answer, which
 // is always the stricter (safe) direction. MUST stay in sync with the TS twin
@@ -134,9 +143,12 @@ func WithIdentityDeletedChecker(fn IdentityDeletedChecker) ContentVerifyOption {
 	return func(o *contentVerifyOpts) { o.isDeleted = fn }
 }
 
-// WithCredentialKeyResolver separates credential-history verification from
-// operation-signature admission. When omitted, credentials use the operation
-// resolver for backward compatibility.
+// WithCredentialKeyResolver separates the resolver used for an operation's
+// inline credential from the one used for its own signature. Both are handed
+// the operation's createdAt as the basis; a relay uses this where the two
+// resolvers answer different questions — freshness for a new operation's
+// signer, the basis for the credential committed with it. When omitted,
+// credentials use the operation resolver.
 func WithCredentialKeyResolver(fn KeyResolver) ContentVerifyOption {
 	return func(o *contentVerifyOpts) { o.credentialResolveKey = fn }
 }
@@ -612,9 +624,32 @@ func parseKeyProofs(payload map[string]any, opType string) ([]string, error) {
 // folds the possession proofs alongside. The returned state's key arrays are
 // EFFECTIVE state, with the declared arrays and the void memberships beside them.
 func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
+	return verifyIdentityChain(log, "")
+}
+
+// VerifyIdentityChainAsOf verifies the whole log exactly as VerifyIdentityChain
+// does and returns the identity's state AS OF basis: the state the last
+// operation dated at or before the basis folds to (PROTOCOL, Time basis).
+//
+// The basis selects which state comes back, never how much of the log is
+// verified. Comparison is byte-wise on the createdAt strings, per PROTOCOL's
+// Comparison basis. A basis earlier than genesis names no state and is an error.
+// HeadCID and LastCreatedAt describe the operation the returned state folds to.
+func VerifyIdentityChainAsOf(log []string, basis string) (*VerifiedIdentityResult, error) {
+	if basis == "" {
+		return nil, fmt.Errorf("basis must not be empty")
+	}
+	return verifyIdentityChain(log, basis)
+}
+
+func verifyIdentityChain(log []string, basis string) (*VerifiedIdentityResult, error) {
 	if len(log) == 0 {
 		return nil, fmt.Errorf("log must have at least one operation")
 	}
+
+	// The state as of the basis, captured on the way through. Operations carry
+	// strictly increasing createdAt, so the last capture is the answer.
+	var asOf *VerifiedIdentityResult
 
 	var (
 		did           string
@@ -865,10 +900,36 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		case "restore":
 			isDeleted = false
 		}
+
+		if basis != "" && createdAt <= basis {
+			asOf = &VerifiedIdentityResult{
+				State: IdentityState{
+					DID:            did,
+					IsDeleted:      isDeleted,
+					AuthKeys:       effective.AuthKeys,
+					AssertKeys:     effective.AssertKeys,
+					ControllerKeys: effective.ControllerKeys,
+					Services:       normalizeServices(services),
+					Declared:       declared,
+					VoidKeys:       voidKeys,
+					ProvedKeys:     provedKeys,
+					SeenKeys:       seenKeys.keys(),
+				},
+				HeadCID:       previousCID,
+				LastCreatedAt: lastCreatedAt,
+			}
+		}
 	}
 
 	if did == "" {
 		return nil, fmt.Errorf("did is not set")
+	}
+
+	if basis != "" {
+		if asOf == nil {
+			return nil, fmt.Errorf("identity has no state as of %s", basis)
+		}
+		return asOf, nil
 	}
 
 	return &VerifiedIdentityResult{
@@ -1134,6 +1195,11 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 // valid DFOS credential authorizing the signer to write to this content chain.
 // Walks the delegation chain to confirm it roots at the creator DID.
 //
+// THE OPERATION'S createdAt IS THE BASIS for everything the credential path asks
+// (PROTOCOL, Time basis): the issuer's signing key must be effective as of it,
+// every exp in the delegation chain must exceed it, and only a revocation dated
+// at or before it counts.
+//
 // WRITE-path hardening (mirrors the relay READ path / the TS twin):
 //   - issuer-isDeleted gate (via opts.isDeleted)
 //   - aud:"*" wildcard accepted (subject="" + explicit aud check)
@@ -1167,7 +1233,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	if credentialResolveKey == nil {
 		credentialResolveKey = resolveKey
 	}
-	creatorPubKey, err := credentialResolveKey(vcKid)
+	creatorPubKey, err := credentialResolveKey(vcKid, createdAt)
 	if err != nil {
 		// %w, never %v: the resolver's error is the ONLY carrier of "this
 		// identity is not here yet" and a caller (the relay ingest classifier)
@@ -1177,11 +1243,10 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 		return fmt.Errorf("cannot resolve creator key for authorization verification: %w", err)
 	}
 
-	opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
+	opTimeUnix, parseErr := BasisUnixSeconds(createdAt)
 	if parseErr != nil {
 		return fmt.Errorf("invalid createdAt format: %w", parseErr)
 	}
-	opTimeUnix := opTime.Unix()
 
 	// subject="" so the wildcard aud:"*" credential is accepted; the explicit
 	// aud check below replicates the TS rule (aud=="*" || aud==opDID). Do NOT
@@ -1199,10 +1264,8 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	// explicit LEAF-revocation check on the write path. verifyDelegationChain
 	// covers PARENTS only — without this a revoked leaf still authorizes writes.
 	//
-	// asOf = opTimeUnix, the operation's own createdAt and the SAME deterministic
-	// basis already used for expiry above. A revocation signed after this
-	// operation leaves it valid on every future verification of the chain; only a
-	// revocation that predates it invalidates it. MUST stay in sync with the TS
+	// asOf = opTimeUnix, the basis in unix seconds. Only a revocation dated at or
+	// before the basis invalidates the operation. MUST stay in sync with the TS
 	// twin (content-chain.ts verifyOperationAuthorization).
 	if opts.isRevoked != nil {
 		revoked, err := opts.isRevoked(vc.Iss, vc.CID, opTimeUnix)
@@ -1227,7 +1290,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, credentialResolveKey, creatorDID, opts.isRevoked, opts.isDeleted, opTimeUnix, 0); err != nil {
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, credentialResolveKey, creatorDID, opts.isRevoked, opts.isDeleted, createdAt, opTimeUnix, 0); err != nil {
 		return err
 	}
 
@@ -1370,8 +1433,9 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 			return nil, fmt.Errorf("log[%d]: kid DID does not match operation did", idx)
 		}
 
-		// verify signature via key resolver
-		publicKey, err := resolveKey(kid)
+		// Verify the signature against the key as of the operation's OWN
+		// createdAt: the signer must have been effective when it signed.
+		publicKey, err := resolveKey(kid, createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("log[%d]: failed to resolve key: %w", idx, err)
 		}
@@ -1513,8 +1577,9 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 		return nil, fmt.Errorf("kid DID does not match operation did")
 	}
 
-	// verify signature
-	publicKey, err := resolveKey(kid)
+	// Verify the signature against the key as of the operation's OWN createdAt:
+	// the signer must have been effective when it signed.
+	publicKey, err := resolveKey(kid, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve key: %w", err)
 	}
@@ -1632,8 +1697,8 @@ func VerifyArtifact(jwsToken string, resolveKey KeyResolver) (*VerifiedArtifactR
 		return nil, fmt.Errorf("artifact kid DID does not match payload did")
 	}
 
-	// verify signature
-	publicKey, err := resolveKey(kid)
+	// A committed statement resolves its signer as of its own createdAt.
+	publicKey, err := resolveKey(kid, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve artifact key: %w", err)
 	}
@@ -1700,6 +1765,10 @@ func VerifyCountersignature(jwsToken string, resolveKey KeyResolver) (*VerifiedC
 	if targetCID == "" {
 		return nil, fmt.Errorf("invalid countersignature payload: missing targetCID")
 	}
+	createdAt := payloadString(payload, "createdAt")
+	if err := validateCreatedAt(createdAt); err != nil {
+		return nil, fmt.Errorf("invalid countersignature payload: %w", err)
+	}
 	// optional open-namespace relation tag — present → must be a 1..N string
 	relation := ""
 	if rv, ok := payload["relation"]; ok {
@@ -1721,8 +1790,8 @@ func VerifyCountersignature(jwsToken string, resolveKey KeyResolver) (*VerifiedC
 		return nil, fmt.Errorf("countersignature kid DID does not match payload did")
 	}
 
-	// verify signature
-	publicKey, err := resolveKey(kid)
+	// A committed statement resolves its signer as of its own createdAt.
+	publicKey, err := resolveKey(kid, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve countersignature key: %w", err)
 	}

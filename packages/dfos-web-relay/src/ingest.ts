@@ -344,20 +344,19 @@ const classify = (jwsToken: string): ClassifiedOperation => {
 // -----------------------------------------------------------------------------
 
 /**
- * Create a key resolver that looks up Ed25519 public keys from identity chains
- * in the store. Used for chain re-verification during ingestion.
+ * Create a key resolver over every key an identity chain has EVER PROVED,
+ * rotated-out keys included.
  *
- * Searches every key the chain has EVER PROVED, not just current state. This is
- * necessary because re-verifying a full content chain log needs to resolve keys
- * from operations signed before a key rotation — and it stops at proved, because
- * a key no possession proof ever admitted never signed anything on this chain's
- * behalf and must not resolve here (see `provedKeyMultibase`).
+ * HAS-EVER-PROVED IS THE CREDIT-CLAIM CARVE-OUT, and the only place the relay
+ * asks it: a credit claim runs no temporal check at all, so it resolves the
+ * claimant's key against every key that chain has held (PROTOCOL, Time basis).
+ * Every other surface in this package has a basis and takes
+ * `createAsOfKeyResolver`. The `key=` reverse index reads `provedKeys` for the
+ * same reason and reads it directly, through `resolveSignerKeyMultibase`.
  *
- * CID fidelity invariant: countersignature ingestion derives the operation CID
- * by re-encoding the decoded payload via dagCborCanonicalEncode. This relies on
- * the JWS decode round-trip preserving payload fidelity through JSON→CBOR→JSON→CBOR.
- * The protocol library's canonical encoding (dag-cbor + sha-256) guarantees
- * deterministic CIDs for identical payloads.
+ * HAS-EVER-PROVED, NOT HAS-EVER-DECLARED. A key no possession proof ever
+ * admitted never spoke for this identity, so it never resolves here (see
+ * `provedKeyMultibase`).
  */
 export const createKeyResolver =
   (store: RelayReadStore) =>
@@ -368,11 +367,9 @@ export const createKeyResolver =
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
 
-    // The two MISS sites: this store does not hold the chain, or holds it and
-    // has never seen the key. Both may be answered differently once more of the
-    // graph arrives, so both are marked retryable. The malformed-kid failure
-    // above is NOT marked — no amount of syncing makes a kid that is not a DID
-    // URL into one, so that op is durably rejected.
+    // This store does not hold the chain: retryable, sync may deliver it. The
+    // malformed-kid failure above is NOT marked — no amount of syncing makes a
+    // kid that is not a DID URL into one, so that op is durably rejected.
     const identity = await store.getIdentityChain(did);
     if (!identity) throw markDependencyMissing(new Error(`unknown identity: ${did}`));
 
@@ -381,6 +378,70 @@ export const createKeyResolver =
       throw markDependencyMissing(new Error(`unknown key ${keyId} on identity ${did}`));
     }
     return decodeMultikey(publicKeyMultibase).keyBytes;
+  };
+
+/**
+ * The identity's verified state AS OF `basis`, from this store's copy of its
+ * chain (PROTOCOL, Time basis).
+ *
+ * TWO BRANCHES, ONE ANSWER. When the stored chain's last operation is dated at
+ * or before the basis, head state IS the state as of the basis and no walk runs.
+ * Otherwise the log is re-verified with the basis, which folds the prefix the
+ * basis names. Both branches return the same key set for the same basis.
+ *
+ * DELETION READS HEAD STATE, never the as-of state: a deleted issuer's
+ * credentials are invalid retroactively, so the deletion a later operation
+ * recorded reaches back past the basis (CREDENTIALS, Deleted issuers).
+ *
+ * An unknown chain is a retryable miss, exactly as elsewhere. A basis earlier
+ * than the chain's genesis is a verdict: the identity had no state then.
+ */
+export const resolveIdentityAsOf = async (
+  store: RelayReadStore,
+  did: string,
+  basis?: string,
+): Promise<VerifiedIdentity | undefined> => {
+  const chain = await store.getIdentityChain(did);
+  if (!chain) return undefined;
+  if (basis === undefined || chain.lastCreatedAt <= basis) return chain.state;
+  const asOf = await verifyIdentityChain({ didPrefix: 'did:dfos', log: chain.log, asOf: basis });
+  return { ...asOf, isDeleted: chain.state.isDeleted };
+};
+
+/**
+ * Create an identity resolver that answers at the basis it is given, and at head
+ * state when it is given none (an ephemeral presentation, whose basis is now).
+ */
+export const createIdentityResolver =
+  (store: RelayReadStore) =>
+  (did: string, basis?: string): Promise<VerifiedIdentity | undefined> =>
+    resolveIdentityAsOf(store, did, basis);
+
+/**
+ * Create a key resolver that resolves a kid in the identity's EFFECTIVE state as
+ * of the basis it is handed — the state that held when the artifact was signed.
+ *
+ * A key absent from that state is a VERDICT, not a retryable miss: the basis
+ * fixes which state answers, so a fuller chain does not change it. An unknown
+ * chain stays retryable, because sync may still deliver it.
+ */
+export const createAsOfKeyResolver =
+  (store: RelayReadStore) =>
+  async (kid: string, basis?: string): Promise<Uint8Array> => {
+    const hashIdx = kid.indexOf('#');
+    if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
+
+    const did = kid.substring(0, hashIdx);
+    const keyId = kid.substring(hashIdx + 1);
+
+    const identity = await resolveIdentityAsOf(store, did, basis);
+    if (!identity) throw markDependencyMissing(new Error(`unknown identity: ${did}`));
+
+    const key = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys].find(
+      (candidate) => candidate.id === keyId,
+    );
+    if (!key) throw new Error(`unknown key ${keyId} on identity ${did}`);
+    return decodeMultikey(key.publicKeyMultibase).keyBytes;
   };
 
 /**
@@ -437,47 +498,15 @@ export const resolveSignerKeyMultibase = async (
 };
 
 /**
- * Project a verified identity onto its HAS-EVER-PROVED key state, so a consumer
- * that resolves keys against the ordinary arrays resolves rotated-out keys too.
- *
- * Credentials are long-lived artifacts — their validity persists across key
- * rotations, and revocation (not key rotation) is the invalidation mechanism. So
- * a credential signed by a key that was PROVED and later rotated out MUST still
- * verify. A credential signed by a key no chain ever proved MUST NOT: nothing
- * ever demonstrated possession of it, so it never spoke for this identity.
- *
- * `provedKeys` is exactly that set and the chain walk computes it, so this no
- * longer re-walks the raw log collecting declarations — a rule that admitted
- * void memberships the walk itself excludes.
- *
- * Used for credential verification at both ingestion and access-check time.
- */
-export const mergeHistoricalIdentity = (state: VerifiedIdentity): VerifiedIdentity => {
-  const proved = provedKeyState(state);
-  return {
-    ...state,
-    authKeys: proved.authKeys,
-    assertKeys: proved.assertKeys,
-    controllerKeys: proved.controllerKeys,
-  };
-};
-
-export const createHistoricalIdentityResolver = (store: RelayReadStore) => async (did: string) => {
-  const chain = await store.getIdentityChain(did);
-  if (!chain) return undefined;
-  return mergeHistoricalIdentity(chain.state);
-};
-
-/**
  * Create a key resolver that only resolves current-state keys.
  *
- * Used for live authentication and first admission, where rotated-out keys
- * must NOT be accepted. After a key rotation, the old key can still verify
- * committed history through createKeyResolver, but cannot author a fresh op.
+ * Used for live authentication and first admission — the freshness question the
+ * relay asks of a NEW operation (RELAY, "Ingest asks freshness"). The basis is
+ * accepted and ignored: this resolver answers about head state by construction.
  */
 export const createCurrentKeyResolver =
   (store: RelayReadStore) =>
-  async (kid: string): Promise<Uint8Array> => {
+  async (kid: string, _basis?: string): Promise<Uint8Array> => {
     const hashIdx = kid.indexOf('#');
     if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
 
@@ -494,8 +523,7 @@ export const createCurrentKeyResolver =
     // CURRENT means EFFECTIVE — the arrays already exclude every membership no
     // possession proof admitted, so a key the chain merely declared cannot
     // author a fresh op. `provedKeys` is the has-ever set and deliberately NOT
-    // consulted here: that is the whole difference between this resolver and
-    // `createKeyResolver`.
+    // consulted here.
     const currentKeys = [
       ...identity.state.authKeys,
       ...identity.state.assertKeys,
@@ -507,8 +535,16 @@ export const createCurrentKeyResolver =
     throw new Error(NONCURRENT_SIGNING_KEY_ERROR);
   };
 
+/**
+ * The signer resolver for one admission mode.
+ *
+ * First admission of a NEW operation asks freshness, so the signer must be
+ * effective at the head. Replay and peer ingest of committed history ask the
+ * basis, so the signer must have been effective at the operation's own
+ * `createdAt` (RELAY, "Ingest asks freshness; re-verification asks the basis").
+ */
 const createAdmissionKeyResolver = (store: RelayReadStore, mode: AdmissionMode) =>
-  mode === 'historical' ? createKeyResolver(store) : createCurrentKeyResolver(store);
+  mode === 'historical' ? createAsOfKeyResolver(store) : createCurrentKeyResolver(store);
 
 // -----------------------------------------------------------------------------
 // individual verifiers
@@ -687,7 +723,10 @@ const ingestContentOp = async (
   }
 
   const resolveKey = createAdmissionKeyResolver(store, admissionMode);
-  const resolveIdentity = createHistoricalIdentityResolver(store);
+  // A credential carried inline in a content operation is committed with it, so
+  // its issuer resolves as of the operation's own `createdAt` in BOTH admission
+  // modes. The protocol verifier passes that basis; this resolver answers at it.
+  const resolveIdentity = createIdentityResolver(store);
   // Thread revocation onto the WRITE path so revoked credentials (leaf AND
   // parents) no longer authorize writes. The read path already does this
   // (auth.ts); this closes the write-path gap.
@@ -916,6 +955,13 @@ const ingestContentOp = async (
   return { cid, status, kind: 'content-op', chainId: chain.contentId };
 };
 
+/**
+ * CID fidelity invariant: countersignature ingestion derives the operation CID
+ * by re-encoding the decoded payload via dagCborCanonicalEncode. This relies on
+ * the JWS decode round-trip preserving payload fidelity through JSON→CBOR→JSON→CBOR.
+ * The protocol library's canonical encoding (dag-cbor + sha-256) guarantees
+ * deterministic CIDs for identical payloads.
+ */
 const ingestCountersign = async (
   jwsToken: string,
   store: RelayWriteStore,
@@ -1064,7 +1110,9 @@ const ingestRevocation = async (
   store: RelayWriteStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
-  const resolveKey = createKeyResolver(store);
+  // A revocation is a committed statement: its signer resolves as of its own
+  // `createdAt`, which the protocol verifier passes.
+  const resolveKey = createAsOfKeyResolver(store);
 
   let verified: VerifiedRevocation;
   try {
@@ -1141,7 +1189,10 @@ const ingestPublicCredential = async (
   store: RelayWriteStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
-  const resolveIdentity = createHistoricalIdentityResolver(store);
+  // A standalone public credential is an ephemeral presentation, so its basis is
+  // now: the signing key must be effective at the head, and `exp` runs against
+  // the wall clock. A key the issuer has rotated out grants nothing new.
+  const resolveIdentity = createIdentityResolver(store);
 
   let verified: VerifiedDFOSCredential;
   try {

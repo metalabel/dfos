@@ -49,8 +49,12 @@ func seedAsOfChain(t *testing.T, genesisOffset time.Duration) asOfChain {
 	t.Helper()
 	now := time.Now()
 	store := NewMemoryStore()
-	creator := createTestIdentity(t)
-	delegate := createTestIdentity(t)
+	// The identities predate every backdated op below: a verification at a basis
+	// resolves the signer in the state as of that basis, and an identity has no
+	// state before its own genesis.
+	identityBirth := now.Add(-72 * time.Hour)
+	creator := createBackdatedTestIdentity(t, identityBirth)
+	delegate := createBackdatedTestIdentity(t, identityBirth)
 	IngestOperations([]string{creator.token, delegate.token}, store)
 
 	genesisToken, contentID, genesisOpCID := signBackdatedContentCreate(t, creator, newDocCID(t, "genesis"), now.Add(genesisOffset))

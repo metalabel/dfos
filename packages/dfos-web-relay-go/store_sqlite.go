@@ -2031,10 +2031,10 @@ func (s *SQLiteStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 		currentCID = op.previousCID
 	}
 
-	// Historical replay is a VALIDITY decision — authorization enforced, revocation
-	// evaluated AS OF each op's own createdAt, identity deletion retroactive and
-	// therefore unconditional. See the MemoryStore twin.
-	resolveKey := CreateKeyResolver(s)
+	// Replay of committed history is a VALIDITY decision — authorization enforced,
+	// signers and revocation evaluated at each op's own createdAt, identity
+	// deletion retroactive and therefore unconditional. See the MemoryStore twin.
+	resolveKey := CreateAsOfKeyResolver(s)
 	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
 		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
 	})

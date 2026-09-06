@@ -233,8 +233,9 @@ func VerifySignRequest(jwsToken string, resolveKey KeyResolver,
 		return nil, fmt.Errorf("%w: sign request kid DID does not match payload did", ErrSignRequestInvalid)
 	}
 
-	// 6–7. Current-state key resolution, then signature.
-	publicKey, resolveErr := resolveKey(header.Kid)
+	// 6–7. Current-state key resolution, then signature. A sign request is an
+	// ephemeral presentation, so it passes the empty basis: head state.
+	publicKey, resolveErr := resolveKey(header.Kid, "")
 	if resolveErr != nil {
 		return nil, fmt.Errorf("%w: failed to resolve current sign request key: %s", ErrSignRequestUnverifiable, resolveErr)
 	}

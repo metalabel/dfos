@@ -57,7 +57,10 @@ const createIdentity = async () => {
     authKeys: [controller.key],
     assertKeys: [controller.key],
     controllerKeys: [controller.key],
-    createdAt: timestamp(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: timestamp(-60),
   };
   const genesis = await signIdentityOperation({
     operation,
@@ -212,11 +215,18 @@ describe('current-state first admission', () => {
     expect((await ingestOperations([currentContent.jwsToken], store))[0]!.status).toBe('new');
   });
 
-  it('resolves the fresh operation signer currently but its credential issuer historically', async () => {
+  // Forward issuance closes at the operation's basis: a credential resolves its
+  // issuer's key as of the operation's own createdAt, so a key rotated out
+  // before that instant authorizes nothing there. Committed history keeps
+  // verifying; new writes after the rotation do not. Twin of the Go
+  // TestForwardIssuanceClosesAtTheOperationBasis.
+  it('closes forward issuance at the operation basis and leaves history verifiable', async () => {
     const store = new MemoryRelayStore();
     const creator = await createIdentity();
     const delegate = await createIdentity();
-    const genesis = await signContent(creator.did, creator.oldAuth, 'genesis', 1);
+    // The chain genesis and the early write both predate the rotation, which
+    // rotateIdentity stamps at timestamp(1).
+    const genesis = await signContent(creator.did, creator.oldAuth, 'genesis', 0.2);
     const seeded = await ingestOperations(
       [creator.jwsToken, delegate.jwsToken, genesis.jwsToken],
       store,
@@ -233,16 +243,37 @@ describe('current-state first admission', () => {
       keyId: creator.oldAuth.keyId,
       iat: now,
     });
-    await rotateIdentity(creator, store);
 
-    const document = await dagCborCanonicalEncode({ type: 'post', title: 'delegated' });
-    const delegated = await signContentOperation({
+    // Dated BEFORE the rotation, so the issuer key is effective at the basis.
+    const earlyDocument = await dagCborCanonicalEncode({ type: 'post', title: 'early' });
+    const early = await signContentOperation({
       operation: {
         version: 1,
         type: 'update',
         did: delegate.did,
         previousOperationCID: genesis.operationCID,
-        documentCID: document.cid.toString(),
+        documentCID: earlyDocument.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: timestamp(0.5),
+        note: null,
+        authorization: credential,
+      },
+      signer: delegate.oldAuth.signer,
+      kid: `${delegate.did}#${delegate.oldAuth.keyId}`,
+    });
+    expect((await ingestOperations([early.jwsToken], store))[0]!.status).toBe('new');
+
+    // The rotation lands at timestamp(1); an op dated after it carrying the same
+    // credential resolves that credential's issuer key nowhere.
+    await rotateIdentity(creator, store);
+    const lateDocument = await dagCborCanonicalEncode({ type: 'post', title: 'late' });
+    const late = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did: delegate.did,
+        previousOperationCID: early.operationCID,
+        documentCID: lateDocument.cid.toString(),
         baseDocumentCID: null,
         createdAt: timestamp(3),
         note: null,
@@ -251,8 +282,16 @@ describe('current-state first admission', () => {
       signer: delegate.oldAuth.signer,
       kid: `${delegate.did}#${delegate.oldAuth.keyId}`,
     });
-    expect((await ingestOperations([delegated.jwsToken], store))[0]!.status).toBe('new');
+    const lateResult = (await ingestOperations([late.jwsToken], store))[0]!;
+    expect(lateResult.status).toBe('rejected');
+    // A verdict, not a missing dependency — the relay holds the whole chain.
+    expect(lateResult.dependencyMissing).not.toBe(true);
 
+    // The committed early write still replays, at its own basis.
+    const replayed = await store.getContentStateAtCID(contentID, early.operationCID);
+    expect(replayed?.state.headCID).toBe(early.operationCID);
+
+    // And a signer whose own key rotated out cannot author a fresh op at all.
     await rotateIdentity(delegate, store);
     const staleDocument = await dagCborCanonicalEncode({ type: 'post', title: 'stale signer' });
     const staleSigner = await signContentOperation({
@@ -260,7 +299,7 @@ describe('current-state first admission', () => {
         version: 1,
         type: 'update',
         did: delegate.did,
-        previousOperationCID: delegated.operationCID,
+        previousOperationCID: early.operationCID,
         documentCID: staleDocument.cid.toString(),
         baseDocumentCID: null,
         createdAt: timestamp(4),
@@ -301,11 +340,14 @@ describe('current-state first admission', () => {
     expect(await peer.getContentChain(contentID)).toBeDefined();
   });
 
-  it('keeps direct revocation and credential admission historical after rotation', async () => {
+  // A standalone public credential is an ephemeral presentation, so it is
+  // admitted only while the key that signed it is effective at the head. A
+  // revocation, being a committed statement, resolves at its own createdAt.
+  // Twin of the Go TestStandaloneCredentialAndRevocationAdmissionAreEphemeral.
+  it('admits a standalone credential and its revocation at the head, never on a rotated-out key', async () => {
     const store = new MemoryRelayStore();
     const identity = await createIdentity();
     await ingestOperations([identity.jwsToken], store);
-    await rotateIdentity(identity, store);
 
     const now = Math.floor(Date.now() / 1000);
     const credential = await createDFOSCredential({
@@ -327,6 +369,19 @@ describe('current-state first admission', () => {
       keyId: identity.oldAuth.keyId,
     });
     expect((await ingestOperations([revocation.jwsToken], store))[0]!.status).toBe('new');
+
+    // After the rotation the old key grants nothing new.
+    await rotateIdentity(identity, store);
+    const stale = await createDFOSCredential({
+      issuerDID: identity.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:*', action: 'read' }],
+      exp: now + 3600,
+      signer: identity.oldAuth.signer,
+      keyId: identity.oldAuth.keyId,
+      iat: now,
+    });
+    expect((await ingestOperations([stale], store))[0]!.status).toBe('rejected');
   });
 });
 

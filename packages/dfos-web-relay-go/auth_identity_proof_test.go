@@ -61,7 +61,7 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 	counting := &authCountingStore{referenceStore: base}
 	resolve := CreateCurrentStateProofResolver(counting)
 
-	if _, err := resolve(id.did + "#" + id.auth.keyID); err != nil {
+	if _, err := resolve(id.did+"#"+id.auth.keyID, ""); err != nil {
 		t.Fatalf("current key rejected: %v", err)
 	}
 	if counting.identityReads != 1 {
@@ -71,7 +71,7 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 	// A kid whose DID is not a canonical did:dfos is refused BEFORE the store
 	// read: a flood of garbage kids costs a regex, never a lookup per request.
 	counting.identityReads = 0
-	_, err := resolve("did:dfos:not-canonical#attacker-key")
+	_, err := resolve("did:dfos:not-canonical#attacker-key", "")
 	if !errors.Is(err, dfos.ErrProofPresenterInvalid) {
 		t.Fatalf("non-canonical DID: got %v, want a presenter-invalid verdict", err)
 	}
@@ -80,13 +80,13 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 	}
 
 	// A key that is not in CURRENT state is checked-and-failed, not unverifiable.
-	if _, err := resolve(id.did + "#key_never_existed"); !errors.Is(err, dfos.ErrProofPresenterInvalid) {
+	if _, err := resolve(id.did+"#key_never_existed", ""); !errors.Is(err, dfos.ErrProofPresenterInvalid) {
 		t.Fatalf("absent key: got %v, want a presenter-invalid verdict", err)
 	}
 
 	// An unknown chain is something the resolver could NOT check: unverifiable.
 	unknown := createTestIdentity(t)
-	if _, err := resolve(unknown.did + "#" + unknown.auth.keyID); errors.Is(err, dfos.ErrProofPresenterInvalid) {
+	if _, err := resolve(unknown.did+"#"+unknown.auth.keyID, ""); errors.Is(err, dfos.ErrProofPresenterInvalid) {
 		t.Fatal("an unknown identity must be UNVERIFIABLE, never a judgment about the caller")
 	}
 }
@@ -102,7 +102,7 @@ func TestIdentityProofDeletedThenRestored(t *testing.T) {
 	}
 	resolve := CreateCurrentStateProofResolver(store)
 	kid := id.did + "#" + id.auth.keyID
-	if _, err := resolve(kid); err != nil {
+	if _, err := resolve(kid, ""); err != nil {
 		t.Fatalf("genesis identity did not resolve: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestIdentityProofDeletedThenRestored(t *testing.T) {
 	if result := IngestOperations([]string{deleteToken}, store); result[0].Status != "new" {
 		t.Fatalf("delete identity: %+v", result[0])
 	}
-	if _, err := resolve(kid); !errors.Is(err, dfos.ErrProofPresenterInvalid) {
+	if _, err := resolve(kid, ""); !errors.Is(err, dfos.ErrProofPresenterInvalid) {
 		t.Fatalf("deleted identity: got %v, want a presenter-invalid verdict", err)
 	}
 
@@ -154,7 +154,7 @@ func TestIdentityProofDeletedThenRestored(t *testing.T) {
 	if result := IngestOperations([]string{restore}, store); result[0].Status != "new" {
 		t.Fatalf("restore: %+v", result[0])
 	}
-	if _, err := resolve(kid); err != nil {
+	if _, err := resolve(kid, ""); err != nil {
 		t.Fatalf("restored identity did not resolve: %v", err)
 	}
 }

@@ -27,7 +27,7 @@ import type {
   IndexOrderedCursor,
   IndexRecencyOrder,
 } from './index-routes';
-import { createKeyResolver } from './ingest';
+import { createAsOfKeyResolver, createIdentityResolver } from './ingest';
 import { decodeSigningCursor, encodeSigningCursor } from './types';
 import type {
   BlobKey,
@@ -1054,18 +1054,16 @@ export class MemoryRelayStore
       currentCID = op.previousCID;
     }
 
-    const resolveKey = createKeyResolver(this);
-    const resolveIdentity = async (did: string) => {
-      const chain2 = await this.getIdentityChain(did);
-      return chain2?.state;
-    };
-    // Historical replay is a VALIDITY decision, so authorization is enforced and
-    // revocation is evaluated AS OF each op's own createdAt: a credential revoked
-    // after an op was signed leaves that op — and therefore the fork state
-    // derived from it — valid. Without the as-of basis this replay would start
-    // failing the moment any credential in the chain's history was revoked, which
-    // would make a legitimate fork extension unverifiable. Mirrors the Go twins
-    // (store_memory.go / store_sqlite.go GetContentStateAtCID).
+    const resolveKey = createAsOfKeyResolver(this);
+    const resolveIdentity = createIdentityResolver(this);
+    // Replay of committed history is a VALIDITY decision, so it runs at each
+    // operation's own createdAt: signers resolve in the state that held then,
+    // and a credential revoked after an op was signed leaves that op — and
+    // therefore the fork state derived from it — valid. Without the basis this
+    // replay would start failing the moment any credential in the chain's
+    // history was revoked, which would make a legitimate fork extension
+    // unverifiable. Mirrors the Go twins (store_memory.go / store_sqlite.go
+    // GetContentStateAtCID).
     const content = await verifyContentChain({
       log: path,
       resolveKey,

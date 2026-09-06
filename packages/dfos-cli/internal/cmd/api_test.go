@@ -320,7 +320,7 @@ func plantCredential(t *testing.T, store *keystore.MemoryStore, subject, authori
 // local relay, plus the login client's own key.
 func resolverFor(t *testing.T, extra map[string]ed25519.PublicKey) protocol.KeyResolver {
 	t.Helper()
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		if pub, ok := extra[kid]; ok {
 			return pub, nil
 		}

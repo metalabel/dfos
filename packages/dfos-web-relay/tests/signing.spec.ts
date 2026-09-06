@@ -57,7 +57,10 @@ const identity = async () => {
     authKeys: [controller.publicKey],
     assertKeys: [controller.publicKey],
     controllerKeys: [controller.publicKey],
-    createdAt: new Date().toISOString(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: new Date(Date.now() - 3_600_000).toISOString(),
   };
   const signed = await signIdentityOperation({
     operation,

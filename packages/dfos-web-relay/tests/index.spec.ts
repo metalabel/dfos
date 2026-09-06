@@ -57,7 +57,10 @@ const createIdentityOp = async (services?: ServiceEntry[]) => {
     assertKeys: [controller.key],
     controllerKeys: [controller.key],
     ...(services ? { services } : {}),
-    createdAt: ts(),
+    // An hour back: every verification with a committed basis resolves the signer
+    // in the state as of that basis, and an identity has no state before its own
+    // genesis.
+    createdAt: ts(-60),
   };
   const { jwsToken, operationCID } = await signIdentityOperation({
     operation: createOp,
@@ -874,7 +877,7 @@ describe('index v0', () => {
         authKeys: [controller.key],
         assertKeys: [controller.key],
         controllerKeys: [controller.key],
-        createdAt: ts(),
+        createdAt: ts(-60),
       };
       const { jwsToken, operationCID } = await signIdentityOperation({
         operation: createOp,
@@ -1475,9 +1478,19 @@ describe('index v0', () => {
       orderedBySignerSchema.content.map((row: { contentId: string }) => row.contentId),
     ).toEqual([c1.contentId]);
 
+    // Scoped to the three fixtures, the way the content assertion above is: the
+    // store also holds the relay's own bootstrapped identity, which is not one
+    // of them.
+    const identityGenesisDesc = await json(
+      await req('/index/v0/identities?order=genesisAt.desc&limit=1000'),
+    );
+    expect(
+      identityGenesisDesc.identities
+        .map((row: { did: string }) => row.did)
+        .filter((did: string) => [a.did, b.did, c.did].includes(did)),
+    ).toEqual([c.did, b.did, a.did]);
     const identityPage = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=1'));
     expect(identityPage.identities).toHaveLength(1);
-    expect(identityPage.identities[0].did).toBe(c.did);
     expect(identityPage.next).toEqual(expect.any(String));
 
     const allIdentities = await json(
@@ -1835,8 +1848,11 @@ describe('index v0', () => {
    * apart.
    */
   const signerKeyCorpus = async () => {
-    const author = await addProvedAuthKey(await createIdentity(), 5);
-    const witness = await addProvedAuthKey(await createIdentity(), 6);
+    // The auth keys are introduced BEFORE the revocation this corpus signs with
+    // one of them: a committed statement resolves its signer as of its own
+    // createdAt, so a key introduced later is not effective there.
+    const author = await addProvedAuthKey(await createIdentity(), -50);
+    const witness = await addProvedAuthKey(await createIdentity(), -49);
     const content = await createContent(author, { $schema: 'example/signer-key' }, 10);
     const artifact = await createArtifact(author, { $schema: 'example/signer-key-art' }, 11);
     const credentialCID = await grantPublicRead(author, content.contentId);

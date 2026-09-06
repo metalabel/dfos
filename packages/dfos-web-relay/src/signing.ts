@@ -24,7 +24,7 @@ import {
   DEFAULT_PROOF_SKEW_SECONDS,
   DEFAULT_PROOF_WINDOW_SECONDS,
 } from './auth';
-import { createHistoricalIdentityResolver, mergeHistoricalIdentity } from './ingest';
+import { createIdentityResolver } from './ingest';
 import type { RelayReadStore, SigningStore, StoredSignRequest } from './types';
 
 const MAX_DEPOSIT_BODY_BYTES = 524_288;
@@ -145,12 +145,10 @@ const verifyResponse = async (
   if (base64urlEncode(payloadBytes) !== parts[1]) throw new Error('invalid response payload');
   if (!bytesEqual(payloadBytes, request.payloadBytes)) throw new Error('response payload mismatch');
 
-  // HAS-EVER-PROVED, via the historical resolver: the subject may have rotated
-  // between depositing the request and answering it, and the response is still
-  // the answer the request asked for. What the resolver will NOT hand back is a
-  // key the chain merely declared — no possession proof admitted it, so it never
-  // spoke for this identity and cannot complete a sign request in its name.
-  const resolveIdentity = createHistoricalIdentityResolver(store);
+  // A mailbox response is an ephemeral presentation, so the basis is now: the
+  // subject signs with a key effective at the head. A key the subject rotated
+  // out between depositing the request and answering it does not complete it.
+  const resolveIdentity = createIdentityResolver(store);
   const identity = await resolveIdentity(request.subjectDID);
   if (!identity) throw new Error('subject identity unavailable');
   const keyID = kid.substring(hash + 1);
@@ -226,15 +224,14 @@ export const registerSigningRoutes = (options: {
       return c.json({ error: 'invalid identity chain bundle' }, 400);
     }
 
+    // A mailbox deposit is an ephemeral presentation and carries no committed
+    // basis, so ONE head-state resolver answers every question on this path: the
+    // request's signer, the deposit credential's issuer, and every parent in its
+    // delegation chain. The carried bundle stands in for a chain this relay does
+    // not hold, at its own head.
     const resolveCurrent = async (did: string): Promise<VerifiedIdentity | undefined> => {
       const local = await store.getIdentityChain(did);
       return local?.state ?? bundle.get(did)?.state;
-    };
-    const localHistorical = createHistoricalIdentityResolver(store);
-    const resolveHistorical = async (did: string): Promise<VerifiedIdentity | undefined> => {
-      const local = await localHistorical(did);
-      const bundled = bundle.get(did);
-      return local ?? (bundled ? mergeHistoricalIdentity(bundled.state) : undefined);
     };
 
     let verifiedRequest: Awaited<ReturnType<typeof verifySignRequest>>;
@@ -251,13 +248,13 @@ export const registerSigningRoutes = (options: {
 
     try {
       const credential = await verifyDFOSCredential(body.credential, {
-        resolveIdentity: resolveHistorical,
+        resolveIdentity: resolveCurrent,
       });
       if (await store.isCredentialRevoked(credential.iss, credential.credentialCID)) {
         throw new Error('credential revoked');
       }
       await verifyDelegationChain(credential, {
-        resolveIdentity: resolveHistorical,
+        resolveIdentity: resolveCurrent,
         rootDID: verifiedRequest.subject,
         isRevoked: (issuer, cid) => store.isCredentialRevoked(issuer, cid),
       });

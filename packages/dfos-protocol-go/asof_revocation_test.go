@@ -90,7 +90,7 @@ func buildAsOfFixtureAt(t *testing.T, depth int, genesisOffset, opOffset time.Du
 	creatorKid := creatorDID + "#" + creatorKeyID
 	middleKid := middleDID + "#" + middleKeyID
 	delegateKid := delegateDID + "#" + delegateKeyID
-	resolver := func(k string) (ed25519.PublicKey, error) {
+	resolver := func(k string, _ string) (ed25519.PublicKey, error) {
 		switch k {
 		case creatorKid:
 			return creatorPub, nil

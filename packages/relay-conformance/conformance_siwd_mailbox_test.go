@@ -30,7 +30,7 @@ type relayIdentityState struct {
 }
 
 func relayCurrentKeyResolver(base string, authOnly bool) dfos.KeyResolver {
-	return func(kid string) (ed25519.PublicKey, error) {
+	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		hash := strings.Index(kid, "#")
 		if hash < 1 || hash == len(kid)-1 {
 			return nil, fmt.Errorf("kid must be a DID URL")
@@ -151,7 +151,7 @@ func verifySiwdMailboxArtifact(t *testing.T, base, token string, expected dfos.S
 		t.Fatalf("SIWD DID binding mismatch: kid=%s challenge=%+v", kid, challenge)
 	}
 
-	publicKey, err := relayCurrentKeyResolver(base, true)(kid)
+	publicKey, err := relayCurrentKeyResolver(base, true)(kid, "")
 	if err != nil {
 		t.Fatalf("resolve current SIWD auth key: %v", err)
 	}

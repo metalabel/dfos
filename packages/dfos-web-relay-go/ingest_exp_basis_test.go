@@ -123,8 +123,11 @@ func buildWallClockExpiredDelegatedWrite(t *testing.T) (seed []string, delegated
 	t.Helper()
 	now = time.Now()
 
-	creator := createTestIdentity(t)
-	delegate := createTestIdentity(t)
+	// The identities predate every backdated op below: a verification at a basis
+	// resolves the signer in the state as of that basis, and an identity has no
+	// state before its own genesis.
+	creator := createBackdatedTestIdentity(t, now.Add(-4*time.Hour))
+	delegate := createBackdatedTestIdentity(t, now.Add(-4*time.Hour))
 
 	// genesis at T0 = now-3h (well in the past)
 	genesisDoc := newDocCID(t, "genesis")

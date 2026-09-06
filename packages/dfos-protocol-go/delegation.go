@@ -167,14 +167,22 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 //
 // Pass nil for isRevoked or isDeleted to skip that store-backed check.
 //
-// asOfUnix is the temporal basis for the whole walk: pass the operation's own
-// createdAt when verifying committed history (a validity decision), or 0 for the
-// live read path (a freshness decision). It is handed to isRevoked at every hop
-// (see RevocationChecker) AND used as each parent's expiry basis, so the parents
-// are judged on the same clock as the leaf. asOfUnix == 0 leaves parent expiry
-// on the wall clock, which is what a read is: a local, ephemeral decision.
-func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, asOfUnix int64) error {
-	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, asOfUnix, 0)
+// ONE BASIS FOR THE WHOLE WALK (PROTOCOL, Time basis). basis is a timestamp in
+// the createdAt grammar for a committed artifact — the operation's own createdAt
+// — and the empty string for an ephemeral presentation, where exp runs against
+// the wall clock and revocation is asked timelessly. Every hop resolves its
+// parent's key, checks its exp, and asks revocation at that one basis, so a
+// chain either held at that instant or it did not.
+func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, basis string) error {
+	var asOfUnix int64
+	if basis != "" {
+		seconds, err := BasisUnixSeconds(basis)
+		if err != nil {
+			return err
+		}
+		asOfUnix = seconds
+	}
+	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, basis, asOfUnix, 0)
 }
 
 // verifyDelegationChain verifies a DFOS credential's delegation chain.
@@ -182,13 +190,13 @@ func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 // signature, audience linkage, expiry bounds, and monotonic attenuation.
 // The chain must root at rootDID.
 //
-// Each parent's expiry is checked on the asOfUnix basis (wall clock when
-// asOfUnix is 0). The optional isRevoked callback checks revocation at each
-// parent level (on the same basis, see RevocationChecker), and the isDeleted callback
-// gates each parent's issuer identity. Pass nil for either to skip that check
-// (the protocol layer is store-agnostic; the relay supplies these closures at the
-// call boundary).
-func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, asOfUnix int64, depth int) error {
+// basis is the walk's one basis time; asOfUnix is that same basis in integer
+// Unix seconds, derived once by the exported entrypoint. The optional isRevoked
+// callback checks revocation at each parent level (on that basis, see
+// RevocationChecker), and the isDeleted callback gates each parent's issuer
+// identity. Pass nil for either to skip that check (the protocol layer is
+// store-agnostic; the relay supplies these closures at the call boundary).
+func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, basis string, asOfUnix int64, depth int) error {
 	// A delegation chain MUST contain at most 16 credentials (leaf through root
 	// inclusive). The leaf is verified at depth 0 and each parent walk increments
 	// depth, so the root of an N-credential chain is reached at depth N-1; the
@@ -240,35 +248,28 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 		}
 	}
 
-	pKey, err := resolveKey(pKid)
+	// The parent's key resolves in its issuer's state AS OF the walk's basis: a
+	// key rotated out before the basis signs nothing that holds at it.
+	pKey, err := resolveKey(pKid, basis)
 	if err != nil {
 		return fmt.Errorf("failed to resolve parent credential key: %w", err)
 	}
 
-	// Verify the parent on the SAME temporal basis as the leaf. asOfUnix > 0 is
-	// the committed-history basis (the operation's own createdAt, threaded in by
-	// verifyContentAuthorization); asOfUnix == 0 is the live read path, where
-	// the wall clock IS the basis. Checking a parent's exp against the wall
-	// clock while the leaf was checked against the operation's createdAt is
-	// exactly the ingest-time wall-clock exp check CREDENTIALS.md "Expiry Basis"
-	// forbids: a delegated op signed under a short-TTL root would verify today
-	// and stop verifying once that root's TTL lapsed, diverging both from itself
-	// over time and from the TS twin (dfos-credential.ts verifyDelegationChain
-	// threads `now` to every hop).
-	var pVerified *VerifiedCredential
-	if asOfUnix > 0 {
-		pVerified, err = VerifyCredentialAt(parentJws, pKey, "", "", asOfUnix)
-	} else {
-		pVerified, err = VerifyCredential(parentJws, pKey, "", "")
-	}
+	// Verify the parent on the SAME basis as the leaf. Checking a parent's exp
+	// against the wall clock while the leaf was checked against the operation's
+	// createdAt is exactly the ingest-time wall-clock exp check PROTOCOL's Time
+	// basis forbids: a delegated op signed under a short-TTL root would verify
+	// today and stop verifying once that root's TTL lapsed, diverging both from
+	// itself over time and from the TS twin.
+	pVerified, err := VerifyCredentialAtBasis(parentJws, pKey, "", "", basis)
 	if err != nil {
 		return fmt.Errorf("parent credential verification failed: %v", err)
 	}
 
-	// check revocation at every level, on the SAME as-of basis as the leaf (a
-	// parent revoked after the operation was signed must not retroactively
-	// invalidate it either — the whole chain is evaluated at one point in time).
-	// MUST stay in sync with the TS twin (dfos-credential.ts).
+	// check revocation at every level, on the SAME basis as the leaf: a parent
+	// revoked after the basis does not reach back past it, and the whole chain is
+	// evaluated at one instant. MUST stay in sync with the TS twin
+	// (dfos-credential.ts).
 	if isRevoked != nil {
 		revoked, err := isRevoked(pVerified.Iss, pVerified.CID, asOfUnix)
 		if err != nil {
@@ -302,5 +303,5 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	}
 
 	// continue walking through the parent
-	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, isDeleted, asOfUnix, depth+1)
+	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, isDeleted, basis, asOfUnix, depth+1)
 }
