@@ -1,5 +1,6 @@
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
+import type { Hono } from 'hono';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
 import { serve } from '../src/serve';
@@ -65,10 +66,91 @@ describe('node server body cap', () => {
     expect(status).toBe(413);
   });
 
+  // ===========================================================================
+  // Client disconnect mid-body
+  //
+  // The handler reads the request stream with `for await`. A client that
+  // declares a Content-Length and then vanishes makes that loop throw
+  // (ECONNRESET / "aborted"). In an async handler passed straight to
+  // createServer, that throw is an UNHANDLED PROMISE REJECTION, which under
+  // Node's default kills the process — one rude client takes the relay down.
+  // The next request succeeding is the assertion: the server is still alive.
+  // ===========================================================================
+  it('survives a client that disconnects mid-body', async () => {
+    await new Promise<void>((resolve, reject) => {
+      const sock = connect(port, '127.0.0.1', () => {
+        sock.write(
+          'POST /operations HTTP/1.1\r\n' +
+            'Host: 127.0.0.1\r\n' +
+            'Content-Type: application/json\r\n' +
+            'Content-Length: 1000000\r\n' +
+            '\r\n' +
+            'x'.repeat(500),
+        );
+        // let the server enter the read loop, then vanish mid-body
+        setTimeout(() => {
+          sock.destroy();
+          resolve();
+        }, 50);
+      });
+      // our own end of the reset is expected and uninteresting
+      sock.on('error', () => {});
+      sock.setTimeout(5000, () => {
+        sock.destroy();
+        reject(new Error('timeout aborting mid-body request'));
+      });
+    });
+
+    // give the server a moment to observe the abort (and, unfixed, to die)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const res = await fetch(`http://127.0.0.1:${port}/.well-known/dfos-relay`);
+    expect(res.status).toBe(200);
+  });
+
   it('still serves a small request normally', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/.well-known/dfos-relay`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { protocol: string };
     expect(body.protocol).toBe('dfos-web-relay');
+  });
+});
+
+// =============================================================================
+// The handler's own failures are answered, not escaped
+//
+// The same rule as the aborted read, from the other side: a throw out of
+// app.fetch must become a 500 on that one request, never a process-level
+// unhandled rejection. Driven with a deliberately broken app.
+// =============================================================================
+
+describe('node server handler failure', () => {
+  const brokenApp = {
+    fetch: () => {
+      throw new Error('boom');
+    },
+  } as unknown as Hono;
+
+  let server: ReturnType<typeof serve>;
+  let port: number;
+
+  beforeAll(async () => {
+    server = serve(brokenApp, { port: 0 });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('answers 500 and keeps serving', async () => {
+    const first = await fetch(`http://127.0.0.1:${port}/anything`);
+    expect(first.status).toBe(500);
+    expect(await first.json()).toEqual({ error: 'internal error' });
+
+    // the process is still here and the server still accepts connections
+    const second = await fetch(`http://127.0.0.1:${port}/anything-else`);
+    expect(second.status).toBe(500);
   });
 });

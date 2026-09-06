@@ -1252,6 +1252,49 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
 };
 
 // -----------------------------------------------------------------------------
+// chain-state serialization
+// -----------------------------------------------------------------------------
+
+/**
+ * The per-store chain-state lock — the TypeScript twin of the Go relay's
+ * `ingestMu` (relay.go), and the mechanism behind WEB-RELAY.md's requirement
+ * that all chain-state mutations are serialized.
+ *
+ * SINGLE-THREADED JS IS NOT SERIALIZATION. Applying one operation is a
+ * read-verify-write span — read the chain, compare `previousOperationCID` to
+ * its head, verify the signature, write the whole chain back — and the verify
+ * is a real yield point (WebCrypto). Two overlapping ingests of competing
+ * children of the same parent therefore both read the same head, both verify
+ * against it, and both write from their own now-stale snapshot: the second
+ * commit erases the first's log entry, and a relay that answered "accepted"
+ * holds no record of it.
+ *
+ * Keyed by STORE, not by relay: the store is the shared state, so two relay
+ * instances over one store — and the exported `ingestOperations` / `sequenceOps`
+ * called directly — all queue on the same lock. A `WeakMap` so a discarded
+ * store's lock is collected with it.
+ *
+ * NOT REENTRANT, exactly like the Go mutex: anything already holding the lock
+ * calls the `*Locked` variant (`ingestOperationsLocked`, `sequenceOpsLocked`)
+ * rather than the public entry point, or it deadlocks. The tail promise is
+ * rejection-swallowed so one failed span cannot poison the queue behind it.
+ */
+const chainStateLocks = new WeakMap<RelayStore, Promise<unknown>>();
+
+export const withChainStateLock = <T>(store: RelayStore, fn: () => Promise<T>): Promise<T> => {
+  const tail = chainStateLocks.get(store) ?? Promise.resolve();
+  const run = tail.then(fn);
+  chainStateLocks.set(
+    store,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+};
+
+// -----------------------------------------------------------------------------
 // main pipeline
 // -----------------------------------------------------------------------------
 
@@ -1301,7 +1344,23 @@ const captureIndexSignerKey = async (
   }
 };
 
-export const ingestOperations = async (
+/**
+ * Ingest a batch under the store's chain-state lock. The entry point for every
+ * caller that does not already hold it.
+ */
+export const ingestOperations = (
+  tokens: string[],
+  store: RelayStore,
+  options?: { logEnabled?: boolean; admissionMode?: AdmissionMode },
+): Promise<IngestionResult[]> =>
+  withChainStateLock(store, () => ingestOperationsLocked(tokens, store, options));
+
+/**
+ * The ingestion batch itself. CALLER MUST HOLD the store's chain-state lock —
+ * the twin of Go's `IngestOperations`, which is likewise called only from
+ * inside `ingestMu`.
+ */
+export const ingestOperationsLocked = async (
   tokens: string[],
   store: RelayStore,
   options?: { logEnabled?: boolean; admissionMode?: AdmissionMode },

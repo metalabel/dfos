@@ -576,10 +576,15 @@ export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
  * Implementations handle persistence (memory, SQLite, Postgres, S3, etc.).
  * The relay core handles verification — the store just reads and writes.
  *
- * Concurrency contract: the in-memory store is safe under single-threaded JS.
- * Durable implementations must enforce optimistic concurrency (compare-and-swap
- * on chain head CID) or pessimistic locking to prevent concurrent extensions
- * from silently overwriting each other.
+ * Concurrency contract: single-threaded JS does NOT make a store safe. Applying
+ * an operation is a read-verify-write span with real yield points inside it (the
+ * WebCrypto verify is one), so two overlapping ingests read the same chain head
+ * and the second write erases the first. Serializing that span is the RELAY's
+ * job, not the store's: every ingestion entry point, the sequencer, and the blob
+ * write hold the per-store chain-state lock (`withChainStateLock` in ingest.ts),
+ * the twin of the Go relay's `ingestMu`. That lock spans one process. A store
+ * shared across processes is outside its reach and must add its own optimistic
+ * concurrency (compare-and-swap on the chain head CID) or pessimistic locking.
  */
 export interface RelayStore {
   // --- signing mailbox (ephemeral courier state) ---
