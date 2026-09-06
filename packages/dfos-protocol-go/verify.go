@@ -1235,12 +1235,12 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 	creatorPubKey, err := credentialResolveKey(vcKid, createdAt)
 	if err != nil {
-		// %w, never %v: the resolver's error is the ONLY carrier of "this
-		// identity is not here yet" and a caller (the relay ingest classifier)
-		// branches on it with errors.Is. Flattening it to text would force that
-		// caller back onto substring matching of a message an attacker can
-		// influence.
-		return fmt.Errorf("cannot resolve creator key for authorization verification: %w", err)
+		// Returned bare: a key miss here is the ordinary outcome of a rotation,
+		// and the twins MUST answer one condition with one text (TS
+		// dfos-credential.ts wraps nothing either). Bare also keeps the
+		// resolver's error itself, which is the ONLY carrier of "this identity is
+		// not here yet" that the relay ingest classifier reads with errors.Is.
+		return err
 	}
 
 	opTimeUnix, parseErr := BasisUnixSeconds(createdAt)

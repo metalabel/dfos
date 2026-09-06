@@ -2,6 +2,8 @@ package dfos
 
 import (
 	"crypto/ed25519"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +189,17 @@ func TestIdentityChainAsOfVerifiesTheWholeLog(t *testing.T) {
 	}
 }
 
+// TestVerifyIdentityChainAsOfRejectsAnEmptyBasis pins the twin answer to an
+// empty basis: it names no instant, so it is an error rather than a walk that
+// reports "no state as of" about every chain.
+func TestVerifyIdentityChainAsOfRejectsAnEmptyBasis(t *testing.T) {
+	id := newRotatingIdentity(t)
+	_, err := VerifyIdentityChainAsOf(id.log, "")
+	if err == nil || err.Error() != "basis must not be empty" {
+		t.Fatalf("empty basis: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // forward issuance
 // ---------------------------------------------------------------------------
@@ -293,6 +306,47 @@ func TestInlineCredentialIsRefusedAfterTheIssuingKeyRotatesOut(t *testing.T) {
 	}
 	if _, err := VerifyContentExtension(throughEarly.State, basisT1, late, f.resolveKey, true); err == nil {
 		t.Fatal("the extension path must refuse it too")
+	}
+}
+
+// relayWordedResolver words a key miss the way both relays' resolvers do, so the
+// message this test pins is the one a relay puts on the wire.
+func relayWordedResolver(t *testing.T, chains ...rotatingIdentity) KeyResolver {
+	t.Helper()
+	inner := asOfKeyResolver(t, chains...)
+	return func(kid string, basis string) (ed25519.PublicKey, error) {
+		key, err := inner(kid, basis)
+		if !errors.Is(err, errUnknownTestKid) {
+			return key, err
+		}
+		hash := strings.Index(kid, "#")
+		return nil, fmt.Errorf("unknown key %s on identity %s", kid[hash+1:], kid[:hash])
+	}
+}
+
+// TestRotatedOutIssuerReadsAsTheTwinDoes pins the wire text one condition gets.
+// A rotation is the ordinary way an inline credential's issuer key stops
+// resolving, and the two relays MUST answer it with the same bytes, so the
+// library adds no wrap of its own around the resolver's message
+// (dfos-protocol/tests/time-basis.spec.ts).
+func TestRotatedOutIssuerReadsAsTheTwinDoes(t *testing.T) {
+	f := newDelegatedBasisFixture(t)
+	f.resolveKey = relayWordedResolver(t, f.creator, f.delegate)
+	early, earlyCID := f.delegatedWrite(t, f.genesisCID, "early", basisT1)
+	late, _ := f.delegatedWrite(t, earlyCID, "late", basisT3)
+
+	throughEarly, err := VerifyContentChain([]string{f.genesisJWS, early}, f.resolveKey, true)
+	if err != nil {
+		t.Fatalf("through early: %v", err)
+	}
+	_, err = VerifyContentExtension(throughEarly.State, basisT1, late, f.resolveKey, true)
+	want := fmt.Sprintf("authorization verification failed: unknown key %s on identity %s",
+		f.creator.k1KeyID, f.creator.did)
+	if err == nil {
+		t.Fatal("a write dated after the issuing key rotated out must be refused")
+	}
+	if err.Error() != want {
+		t.Fatalf("twin text\n got: %s\nwant: %s", err.Error(), want)
 	}
 }
 

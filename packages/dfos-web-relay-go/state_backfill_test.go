@@ -56,11 +56,16 @@ func staleIdentityRow(t *testing.T, store staleRowStore, did string) StoredIdent
 	return *chain
 }
 
-// resolvesHistorically reports whether the has-ever-proved resolver knows a key.
-func resolvesHistorically(t *testing.T, store RelayReadStore, did, keyID string) bool {
+// provedKeyIndexed reports whether the identity's HAS-EVER-PROVED key state
+// carries keyID, which is the reading the `key=` reverse index takes.
+func provedKeyIndexed(t *testing.T, store RelayReadStore, did, keyID string) bool {
 	t.Helper()
-	_, err := CreateKeyResolver(store)(did+"#"+keyID, "")
-	return err == nil
+	chain, err := store.GetIdentityChain(did)
+	if err != nil || chain == nil {
+		t.Fatalf("read identity chain %s: %v", did, err)
+	}
+	_, ok := findKeyInKeyState(provedKeyState(chain.State), keyID)
+	return ok
 }
 
 // TestBackfillProvedKeyStateRestoresRotatedOutKeys is the core claim, run
@@ -93,7 +98,7 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 
 			// Sanity: the rotation really did leave the genesis key behind, and the
 			// current code really did keep it in the union.
-			if !resolvesHistorically(t, store, id.did, id.auth.keyID) {
+			if !provedKeyIndexed(t, store, id.did, id.auth.keyID) {
 				t.Fatal("fixture: the rotated-out key should resolve before it is staled")
 			}
 
@@ -101,10 +106,10 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 
 			// BEFORE: the fallback answers from the effective arrays, so the key the
 			// rotation retired is simply unknown — silently, with a plain error.
-			if resolvesHistorically(t, store, id.did, id.auth.keyID) {
+			if provedKeyIndexed(t, store, id.did, id.auth.keyID) {
 				t.Fatal("the stale row still resolved the rotated-out key — fixture is not stale")
 			}
-			if !resolvesHistorically(t, store, id.did, rotated.keyID) {
+			if !provedKeyIndexed(t, store, id.did, rotated.keyID) {
 				t.Fatal("the stale row lost the CURRENT key too — the fallback is broken, not narrow")
 			}
 
@@ -114,10 +119,10 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 			}
 
 			// AFTER: both keys, and the union is on the row rather than recomputed.
-			if !resolvesHistorically(t, store, id.did, id.auth.keyID) {
+			if !provedKeyIndexed(t, store, id.did, id.auth.keyID) {
 				t.Fatal("the backfill did not restore the rotated-out key")
 			}
-			if !resolvesHistorically(t, store, id.did, rotated.keyID) {
+			if !provedKeyIndexed(t, store, id.did, rotated.keyID) {
 				t.Fatal("the backfill lost the current key")
 			}
 			repaired, err := store.GetIdentityChain(id.did)
@@ -292,7 +297,7 @@ func TestBackfillLeavesAnUnverifiableChainAlone(t *testing.T) {
 	}
 
 	// The healthy row got its history back.
-	if !resolvesHistorically(t, store, healthy.did, healthy.auth.keyID) {
+	if !provedKeyIndexed(t, store, healthy.did, healthy.auth.keyID) {
 		t.Fatal("a healthy stale row was not repaired alongside a broken one")
 	}
 

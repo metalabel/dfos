@@ -184,6 +184,13 @@ describe('identity state as of a basis', () => {
     ).rejects.toThrow(/identity has no state as of/);
   });
 
+  it('rejects an empty basis, which names no instant', async () => {
+    const { log } = await rotatingIdentity();
+    await expect(verifyIdentityChain({ didPrefix: 'did:dfos', log, asOf: '' })).rejects.toThrow(
+      'basis must not be empty',
+    );
+  });
+
   it('verifies the whole log whatever the basis, so a broken tail still throws', async () => {
     const { did, log } = await rotatingIdentity();
     const tampered = [log[0]!, `${log[1]!.slice(0, -4)}AAAA`];
@@ -368,7 +375,12 @@ describe('a credential carried inline resolves at the operation basis', () => {
         enforceAuthorization: true,
         resolveIdentity: f.resolveIdentity,
       }),
-    ).rejects.toThrow(/authorization verification failed/i);
+      // BYTE-IDENTICAL WITH THE GO TWIN (time_basis_test.go
+      // TestRotatedOutIssuerReadsAsTheTwinDoes). One condition gets one text:
+      // the library adds no wrap of its own around the key miss.
+    ).rejects.toThrow(
+      `authorization verification failed: unknown key ${f.creator.k1.keyId} on identity ${f.creator.did}`,
+    );
   });
 });
 

@@ -135,8 +135,10 @@ const resolveKeyFromIdentity = (
   const allKeys = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
   const key = allKeys.find((k) => k.id === keyId);
   if (!key) {
+    // ONE TEXT ACROSS THE TWINS for one condition: the Go library returns its
+    // resolver's miss bare, and both relays' resolvers word it this way.
     const miss = new CredentialVerificationError(
-      `key ${keyId} not found on identity ${identity.did}`,
+      `unknown key ${keyId} on identity ${identity.did}`,
     );
     // A determinate answer makes the miss a verdict. An indeterminate one is a
     // retryable dependency miss: a fuller chain can still change it, and a

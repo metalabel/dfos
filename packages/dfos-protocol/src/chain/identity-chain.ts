@@ -360,7 +360,7 @@ export const signIdentityOperation = async (input: {
  * before the basis folds to — the identity's state as of that instant
  * (PROTOCOL, Time basis). The comparison is byte-wise on the `createdAt`
  * strings, per PROTOCOL's Comparison basis. A basis earlier than genesis has no
- * state to name and throws.
+ * state to name and throws, and so does an empty basis.
  */
 export const verifyIdentityChain = async (input: {
   didPrefix: string;
@@ -372,6 +372,9 @@ export const verifyIdentityChain = async (input: {
   asOf?: string;
 }): Promise<VerifiedIdentity> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
+  // An empty basis names no instant. Walking it would report "no state as of"
+  // for every chain, which reads as a verdict about the identity.
+  if (input.asOf === '') throw new Error('basis must not be empty');
 
   const state = {
     did: undefined as string | undefined,

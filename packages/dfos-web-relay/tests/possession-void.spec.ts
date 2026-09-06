@@ -37,7 +37,7 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { identityToDidDocument } from '../src/did-document';
-import { createAsOfKeyResolver, ingestOperations } from '../src/ingest';
+import { ingestOperations } from '../src/ingest';
 import { createRelay } from '../src/relay';
 import { MemoryRelayStore } from '../src/store';
 import { chainKeyProof } from './key-proofs';
@@ -303,11 +303,24 @@ describe('void keys never reach a resolution surface', () => {
     expect((await ingestOperations([rotation.jwsToken], store))[0]!.status).toBe('new');
 
     // Historical admission resolves the signer AS OF the operation's own
-    // createdAt, so the key that signed `early` still resolves at `early`'s
-    // basis after the rotation. Asked at the resolver rather than through a
-    // replay, which short-circuits as a duplicate before any resolver runs.
-    const asOf = createAsOfKeyResolver(store);
-    await expect(asOf(`${root.did}#${root.key.keyId}`, ts(1))).resolves.toBeInstanceOf(Uint8Array);
+    // createdAt, so the key that signed `early` still verifies after the
+    // rotation. Replayed onto a FRESH store, which holds no copy of the
+    // operation and therefore re-verifies it instead of short-circuiting as a
+    // duplicate.
+    const replay = new MemoryRelayStore();
+    expect((await ingestOperations([root.jwsToken], replay))[0]!.status).toBe('new');
+    expect((await ingestOperations([rotation.jwsToken], replay))[0]!.status).toBe('new');
+    const [replayed] = await ingestOperations([early.jwsToken], replay, {
+      admissionMode: 'historical',
+    });
+    expect(replayed!.status).toBe('new');
+
+    // The same op refused on first admission: freshness asks the head, where the
+    // signing key is retired.
+    const fresh = new MemoryRelayStore();
+    expect((await ingestOperations([root.jwsToken], fresh))[0]!.status).toBe('new');
+    expect((await ingestOperations([rotation.jwsToken], fresh))[0]!.status).toBe('new');
+    expect((await ingestOperations([early.jwsToken], fresh))[0]!.status).toBe('rejected');
 
     // A key rotated out at the basis resolves nowhere: an op dated after the
     // rotation and signed by the retired key is refused on the historical path

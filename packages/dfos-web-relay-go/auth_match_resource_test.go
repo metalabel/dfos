@@ -82,7 +82,7 @@ func TestCredentialAccessRejectsScopedAudienceWithoutRequester(t *testing.T) {
 	}
 	err = verifyCredentialForAccess(
 		credential,
-		CreateKeyResolver(store),
+		CreateAsOfKeyResolver(store),
 		"chain:content",
 		"read",
 		issuer.did,

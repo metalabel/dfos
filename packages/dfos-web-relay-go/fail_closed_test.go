@@ -337,7 +337,7 @@ func newReadPathFixture(t *testing.T, relay *Relay) readPathFixture {
 
 func (f readPathFixture) verify(store RelayReadStore) error {
 	return verifyCredentialForAccess(
-		f.leafJWS, CreateKeyResolver(store), f.resource, "read",
+		f.leafJWS, CreateAsOfKeyResolver(store), f.resource, "read",
 		f.creator.did, f.requester.did, store, false,
 	)
 }

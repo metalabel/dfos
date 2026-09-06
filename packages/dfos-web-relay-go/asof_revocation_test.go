@@ -381,6 +381,67 @@ func TestIngestRejectsBackdatedWriteUnderRevokedCredential(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ingest: historical admission asks the basis
+// ---------------------------------------------------------------------------
+
+// chainRevokedAt seeds a chain, mints a delegated write dated 25 minutes ago,
+// and ingests a revocation of that write's credential stamped revokedAt. The
+// write itself is NOT ingested, so each admission mode gets a store that has
+// never seen it and therefore verifies rather than short-circuiting.
+func chainRevokedAt(t *testing.T, now, revokedAt time.Time) (asOfChain, string) {
+	t.Helper()
+	c := seedAsOfChain(t, -30*time.Minute)
+	write, _ := signBackdatedDelegatedUpdate(t, c.delegate, c.genesisOpCID,
+		newDocCID(t, "committed"), c.credential, now.Add(-25*time.Minute))
+	revocation, _ := c.signRevocationAt(t, revokedAt)
+	if res := IngestOperations([]string{revocation}, c.store); res[0].Status != "new" {
+		t.Fatalf("ingest revocation: %s (%s)", res[0].Status, res[0].Error)
+	}
+	return c, write
+}
+
+// TestHistoricalAdmissionLandsAnOpRevokedAfterIt pins the split RELAY draws at
+// the admission boundary: a relay MUST NOT reject a committed operation because
+// a credential in its history was revoked later, while first admission of the
+// same operation answers from current knowledge.
+func TestHistoricalAdmissionLandsAnOpRevokedAfterIt(t *testing.T) {
+	now := time.Now()
+
+	fresh, write := chainRevokedAt(t, now, now.Add(-20*time.Minute))
+	res := IngestOperations([]string{write}, fresh.store)
+	if res[0].Status != "rejected" || !strings.Contains(res[0].Error, "revoked") {
+		t.Fatalf("first admission asks freshness: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// A relay that refused here would hold a different history from every relay
+	// that ingested the operation before the revocation arrived.
+	replay, replayWrite := chainRevokedAt(t, now, now.Add(-20*time.Minute))
+	res = IngestOperations([]string{replayWrite}, replay.store, WithHistoricalAdmission())
+	if res[0].Status != "new" {
+		t.Fatalf("historical admission asks the basis: %s (%s)", res[0].Status, res[0].Error)
+	}
+}
+
+// TestHistoricalAdmissionRefusesAnOpRevokedBeforeIt is the other side: the
+// boundary is inclusive and forward-looking, so a revocation dated before the
+// operation covers it in either admission mode.
+func TestHistoricalAdmissionRefusesAnOpRevokedBeforeIt(t *testing.T) {
+	now := time.Now()
+
+	fresh, write := chainRevokedAt(t, now, now.Add(-28*time.Minute))
+	res := IngestOperations([]string{write}, fresh.store)
+	if res[0].Status != "rejected" || !strings.Contains(res[0].Error, "revoked") {
+		t.Fatalf("current admission: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	replay, replayWrite := chainRevokedAt(t, now, now.Add(-28*time.Minute))
+	res = IngestOperations([]string{replayWrite}, replay.store, WithHistoricalAdmission())
+	if res[0].Status != "rejected" || !strings.Contains(res[0].Error, "revoked") {
+		t.Fatalf("historical admission: %s (%s)", res[0].Status, res[0].Error)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GetContentStateAtCID: historical replay is a validity decision
 // ---------------------------------------------------------------------------
 

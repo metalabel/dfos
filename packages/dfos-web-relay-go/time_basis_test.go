@@ -218,6 +218,36 @@ func TestResolveIdentityAsOfReportsDeletionFromHeadState(t *testing.T) {
 	}
 }
 
+// TestAsOfKeyResolverRejectsAMalformedDIDBeforeTheStoreRead pins the twin gate:
+// a malformed identifier is a verdict reached without asking the store, because
+// no amount of syncing turns it into a DID.
+func TestAsOfKeyResolverRejectsAMalformedDIDBeforeTheStoreRead(t *testing.T) {
+	store := &countingReadStore{RelayReadStore: NewMemoryStore()}
+
+	_, err := CreateAsOfKeyResolver(store)("did:dfos:not-a-did#key_0", "2026-03-07T00:05:00.000Z")
+	if err == nil || !strings.Contains(err.Error(), "malformed did:dfos identifier") {
+		t.Fatalf("malformed DID: %v", err)
+	}
+	if errors.Is(err, ErrDependencyMissing) {
+		t.Fatal("a malformed DID is a verdict, not a dependency miss")
+	}
+	if store.reads != 0 {
+		t.Fatalf("the store was read %d times before the DID was validated", store.reads)
+	}
+}
+
+// countingReadStore counts identity-chain reads, so a test can assert a gate ran
+// ahead of the store.
+type countingReadStore struct {
+	RelayReadStore
+	reads int
+}
+
+func (s *countingReadStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
+	s.reads++
+	return s.RelayReadStore.GetIdentityChain(did)
+}
+
 func TestResolveIdentityAsOfBeforeGenesisIsAVerdict(t *testing.T) {
 	now := time.Now()
 	store := NewMemoryStore()

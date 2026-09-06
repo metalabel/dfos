@@ -318,6 +318,64 @@ describe('relay ingest — acceptance stays a freshness decision', () => {
 });
 
 // -----------------------------------------------------------------------------
+// ingest: historical admission asks the basis
+// -----------------------------------------------------------------------------
+
+describe('relay ingest — historical admission asks revocation at the basis', () => {
+  /** A seeded chain, a delegated write dated 25 minutes ago, and a revocation. */
+  const chainRevokedAt = async (revokedAt: string) => {
+    const c = await seedChain(-30);
+    const write = await updateOp(
+      c.delegate,
+      c.genesis.operationCID,
+      'committed',
+      -25,
+      c.credential,
+    );
+    const revocation = await c.signRevocationAt(revokedAt);
+    expect((await ingestOperations([revocation.jws], c.store))[0]!.status).toBe('new');
+    return { ...c, write };
+  };
+
+  it('lands a committed op whose credential was revoked AFTER it', async () => {
+    // First admission refuses it: freshness answers from what this relay knows
+    // now, and it holds the revocation.
+    const fresh = await chainRevokedAt(iso(-20));
+    const refused = (await ingestOperations([fresh.write.jwsToken], fresh.store))[0]!;
+    expect(refused.status).toBe('rejected');
+    expect(refused.error).toMatch(/revoked/);
+
+    // Replay and peer ingest of the same committed op ask the basis, where the
+    // revocation had not happened yet. A relay that refused here would hold a
+    // different history from every relay that ingested the op before the
+    // revocation arrived.
+    const replay = await chainRevokedAt(iso(-20));
+    const landed = (
+      await ingestOperations([replay.write.jwsToken], replay.store, {
+        admissionMode: 'historical',
+      })
+    )[0]!;
+    expect(landed.status).toBe('new');
+  });
+
+  it('refuses a committed op whose credential was revoked BEFORE it, in both modes', async () => {
+    const current = await chainRevokedAt(iso(-28));
+    const refusedNow = (await ingestOperations([current.write.jwsToken], current.store))[0]!;
+    expect(refusedNow.status).toBe('rejected');
+    expect(refusedNow.error).toMatch(/revoked/);
+
+    const historical = await chainRevokedAt(iso(-28));
+    const refusedAtBasis = (
+      await ingestOperations([historical.write.jwsToken], historical.store, {
+        admissionMode: 'historical',
+      })
+    )[0]!;
+    expect(refusedAtBasis.status).toBe('rejected');
+    expect(refusedAtBasis.error).toMatch(/revoked/);
+  });
+});
+
+// -----------------------------------------------------------------------------
 // getContentStateAtCID: historical replay is a validity decision
 // -----------------------------------------------------------------------------
 

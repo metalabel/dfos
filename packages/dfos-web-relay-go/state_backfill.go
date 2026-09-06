@@ -13,17 +13,16 @@ package relay
 
   State.ProvedKeys is the member that makes that gap load-bearing. It is
   HAS-EVER-PROVED key state: the monotonic union of every effective key state
-  the chain has held, and the reading two surfaces need — CreateKeyResolver, so
-  a credit claim signed by a key that has since rotated away still verifies, and
-  the `key=` reverse index, so a search by a rotated-out key still finds the
-  identity. provedKeyState (ingest.go) reads it with a fallback: an absent union
+  the chain has held, and the reading the `key=` reverse index needs, so a search
+  by a rotated-out key still finds the identity. Verification never reads it:
+  every verifying surface has a basis and resolves keys in the effective state as
+  of it. provedKeyState (ingest.go) reads it with a fallback: an absent union
   reads as "what is effective now was proved". That fallback is correct in the
   only direction it can be — it under-claims rather than admitting a key nothing
   proved — but on a row written before the member existed it is SILENTLY NARROW.
-  A key proved into the chain and later rotated out simply stops resolving, and
-  a projection rebuild triggered by the same upgrade materializes a `key=` index
-  missing exactly those keys. Neither surface reports anything: the fallback
-  returns a valid, smaller answer.
+  A projection rebuild triggered by the same upgrade materializes a `key=` index
+  missing exactly the keys the chain has rotated out. The index reports nothing:
+  the fallback returns a valid, smaller answer.
 
   The row heals on its own the moment that chain accepts another operation —
   ingest re-folds and rewrites the whole state. That is no consolation for a
@@ -60,7 +59,7 @@ import (
 )
 
 // backfillProvedKeyState repairs identity state rows persisted before
-// dfos.IdentityState carried ProvedKeys, so has-ever-proved readers stop
+// dfos.IdentityState carried ProvedKeys, so the `key=` reverse index stops
 // falling back to the narrower effective arrays.
 //
 // Ordered BEFORE rebuildIndexProjection at startup (see NewRelay). The rebuild

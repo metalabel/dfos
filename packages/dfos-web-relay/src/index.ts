@@ -39,7 +39,6 @@ export {
 export { MemoryRelayStore } from './store';
 export {
   ingestOperations,
-  createKeyResolver,
   createAsOfKeyResolver,
   createCurrentKeyResolver,
   createIdentityResolver,

@@ -13,6 +13,7 @@
 
 */
 
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   encodeEd25519Multikey,
   signContentOperation,
@@ -30,7 +31,7 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { hasPublicStandingAuth } from '../src/auth';
-import { ingestOperations, resolveIdentityAsOf } from '../src/ingest';
+import { createAsOfKeyResolver, ingestOperations, resolveIdentityAsOf } from '../src/ingest';
 import { MemoryRelayStore } from '../src/store';
 import { chainKeyProof } from './key-proofs';
 
@@ -179,6 +180,28 @@ describe('resolveIdentityAsOf', () => {
     // deleted issuer authorizes nothing at any point in history.
     const asOf = await resolveIdentityAsOf(store, did, ts(T1));
     expect(asOf?.isDeleted).toBe(true);
+  });
+
+  it('rejects a malformed DID before the store read', async () => {
+    const store = new MemoryRelayStore();
+    let reads = 0;
+    const read = store.getIdentityChain.bind(store);
+    store.getIdentityChain = async (did: string) => {
+      reads += 1;
+      return read(did);
+    };
+
+    const resolve = createAsOfKeyResolver(store);
+    // A verdict, and reached without asking the store: no amount of syncing
+    // turns a malformed identifier into a DID. Twin of the Go resolver's
+    // dfos.ValidateDID gate.
+    const err = await resolve('did:dfos:not-a-did#key_0', ts(T1)).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect((err as Error).message).toMatch(/malformed did:dfos identifier/);
+    expect(isDependencyMissing(err)).toBe(false);
+    expect(reads).toBe(0);
   });
 
   it('is a verdict, not a dependency miss, when the basis predates the genesis', async () => {
