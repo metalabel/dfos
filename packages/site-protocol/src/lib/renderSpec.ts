@@ -106,8 +106,7 @@ const LINK_REWRITES: Array<[RegExp, string]> = [
   [/href="(?:\.\/|\.\.\/dfos-web-relay\/)RELAY\.md"/g, 'href="/relay"'],
   [/href="\.\/INTEGRATIONS\.md"/g, 'href="/integrations"'],
   [/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"'],
-  [/href="\.\/THREAT-MODEL\.md"/g, 'href="/threat-model"'],
-  [/href="\.\/CONFORMANCE\.md"/g, 'href="/conformance"'],
+  [/href="\.\/GUARANTEES\.md"/g, 'href="/guarantees"'],
   // SECURITY.md lives at the repo root (not a site route); point the rendered
   // link at GitHub so it resolves on the published site instead of 404ing.
   [/href="\.\.\/SECURITY\.md"/g, 'href="https://github.com/metalabel/dfos/blob/main/SECURITY.md"'],

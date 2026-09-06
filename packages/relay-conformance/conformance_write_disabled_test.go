@@ -12,8 +12,8 @@ import (
 // Write-disabled (lite / pull-only) relay conformance.
 //
 // A relay MAY advertise capabilities.write == false — a "lite" pull-only node
-// that serves the proof plane read-only and rejects ingestion. WEB-RELAY.md and
-// CONFORMANCE.md make writes OPTIONAL: POST /proof/v1/operations returns 501
+// that serves the proof plane read-only and rejects ingestion. RELAY.md makes
+// writes OPTIONAL: POST /proof/v1/operations returns 501
 // Not Implemented while every proof-plane READ route stays fully conformant.
 //
 // This poses a bootstrapping problem for a conformance suite that normally

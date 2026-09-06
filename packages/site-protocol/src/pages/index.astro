@@ -8,13 +8,13 @@ import { navLinks, primaryNav, headerLabel } from '../data/nav';
 const specTiers = [
   { grid: 'core', label: 'Core' },
   { grid: 'reference', label: 'Relay and integrations' },
-  { grid: 'companions', label: 'Companions' },
+  { grid: 'guarantees', label: 'Guarantees' },
 ] as const;
 ---
 
 <Base
   title="DFOS Protocol"
-  description="Cryptographic identity and verifiable authorship for private spaces. Ed25519 signed chains, content-addressed proofs, W3C DIDs. MIT License."
+  description="DFOS is an identity you hold and content whose authorship anyone can check, from any copy."
   landing={true}
 >
   <!-- ═══ Hero ═══ -->
@@ -30,16 +30,16 @@ const specTiers = [
 
     <div class="hero-overlay">
       <p class="hero-declaration" id="hero-typed">
-        YOUR IDENTITY AND CONTENT ARE RENTED BACK TO YOU BY THE PLATFORMS THAT OWN THEM. <span class="green">DFOS PROTOCOL GIVES YOU BACK THE KEYS.</span>
+        DFOS is an identity you hold and content whose authorship anyone can check, from any copy. <span class="green">A platform can host your identity. It cannot own it.</span>
       </p>
       <p class="hero-pitch">
-        An open standard for cryptographic identity and verifiable content. Runs anywhere, portable across everything, no permission required &mdash; a rotation-capable signing identity for AI agents and devices that needs no central directory to resolve.
+        A signed record verifies from any copy of it, without fetching the document it names. The document stays where it is served.
       </p>
     </div>
 
     <div class="hero-below">
       <h1 class="hero-headline">
-        The proof is public. The content stays in the dark forest
+        Authorship is verifiable without trusting any server
       </h1>
       <div class="hero-cta">
         <a href="#get-started" class="hero-cta-link">Install the CLI</a>
@@ -49,31 +49,28 @@ const specTiers = [
     </div>
   </section>
 
-  <!-- ═══ Dark Forest ═══ -->
+  <!-- ═══ Two planes ═══ -->
   <section class="two-worlds-section">
     <div class="two-worlds-inner">
       <div class="two-worlds-card" id="tilt-card">
         <img src="/card-hands.png" alt="" class="two-worlds-card-img" />
       </div>
       <div class="two-worlds-text">
-        <span class="section-label">The Dark Forest</span>
-        <h2>Two worlds</h2>
+        <span class="section-label">Proof and content</span>
+        <h2>Two planes</h2>
         <p>
-          The most meaningful creative and social coordination on the internet
-          happens in private groups, closed communities, invite-only spaces.
-          The topology is private-first.
+          The proof plane is public. Signed chains carry identity, authorship,
+          and the hash of every document committed, and anyone can verify them.
         </p>
         <p>
-          The major social protocols &mdash; AT Protocol, nostr, Farcaster &mdash;
-          are public-by-default: to verify a piece of content you generally have to
-          be able to read it. DFOS separates proof from content.
+          The content plane is the documents. They are served by whoever holds
+          the bytes, under that host's own access control, and they do not
+          travel with the proofs.
         </p>
         <p>
-          The world of proofs is public &mdash; signed chains that anyone can verify.
-          The world of content lives in dark forests &mdash; member-governed spaces,
-          undisclosed by default and served only to participants.
-          The protocol defines the proof world. It commits to content hashes, never the
-          documents themselves &mdash; it does not encrypt them.
+          The protocol commits to a document by hash. It does not encrypt, and
+          whoever serves a document can read it. <a href="/overview">Why this
+          exists</a> covers the topology this separation answers to.
         </p>
       </div>
     </div>
@@ -86,31 +83,30 @@ const specTiers = [
 
       <div class="concepts-three">
         <div class="concept-card">
-          <h2>Self-certifying identity</h2>
+          <h2>An identity you hold</h2>
           <p>
-            Identity is a chain of cryptographic operations you control.
-            Your <a href="/did-method"><code>did:dfos</code></a> identifier derives from
-            your genesis &mdash; self-certifying, linear, verifiable offline.
-            No consensus needed.
+            A <a href="/did-method"><code>did:dfos</code></a> is derived from its first
+            signed operation and resolves from the chain itself: no directory, no
+            registry, no consensus. On the DFOS platform, the platform holds a key for
+            you by default; you can add keys it never holds.
           </p>
         </div>
 
         <div class="concept-card">
-          <h2>Offline verification</h2>
+          <h2>Verification is a pure function of the chains</h2>
           <p>
-            Verification is a pure function. Public key + signed chain = valid or invalid.
-            Any Ed25519 library, any language. The chain carries everything needed.
-            A proof exported today is verifiable by code that doesn't exist yet.
+            A signed chain and the identity chains it names give valid or invalid,
+            offline, in any language. No server is consulted. Any Ed25519
+            implementation can verify it.
           </p>
         </div>
 
         <div class="concept-card">
-          <h2>Verifiable distribution</h2>
+          <h2>Relays are carriers, not authorities</h2>
           <p>
-            <a href="/relay">Relays</a> independently verify every operation on ingestion.
-            Authorship is verifiable without trusting any server. Which view of an identity
-            you follow is a choice of relay. No hierarchy, topology is emergent, and three
-            peering behaviors compose the network: gossip, read-through, and sync.
+            A <a href="/relay">relay</a> verifies what it admits and serves one view of
+            each identity. It cannot make a forged record verify or a valid one fail.
+            Which view you follow is a choice of relay, and anyone can run one.
           </p>
         </div>
       </div>
@@ -185,12 +181,9 @@ dfos serve`} /></pre>
         <Fragment>
           <span class="spec-tier-label">{tier.label}</span>
           <div class="spec-links spec-links--quad spec-links--tier">
-            {specs.filter((spec) => spec.grid === tier.grid).map(({ slug, title, listTitle, tile, chip }) => (
+            {specs.filter((spec) => spec.grid === tier.grid).map(({ slug, title, listTitle, tile }) => (
               <a href={slug} class="spec-link">
-                <span class="spec-link-title">
-                  {listTitle ?? title}
-                  {chip && <span class="spec-chip">{chip}</span>}
-                </span>
+                <span class="spec-link-title">{listTitle ?? title}</span>
                 <span class="spec-link-desc" set:html={tile} />
               </a>
             ))}

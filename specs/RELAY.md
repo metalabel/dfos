@@ -2238,3 +2238,4 @@ Construction, storage, and peer-client interfaces are package documentation.
 - [Content Model](https://protocol.dfos.com/content-model): document schemas and the credit vocabulary
 - [Integrations](https://protocol.dfos.com/integrations): sign-in, API authentication, and origin binding
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method): the W3C DID method registration
+- [Guarantees](https://protocol.dfos.com/guarantees): what holds without trusting a server, what is a chosen view, and what the operator can read

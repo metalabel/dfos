@@ -1830,3 +1830,4 @@ relying party is the worked consumer.
 - [Relay](https://protocol.dfos.com/relay): the HTTP relay, including the signing mailbox this document's profile B deposits into
 - [Content Model](https://protocol.dfos.com/content-model): document schemas and the credit vocabulary
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method): the W3C DID method registration
+- [Guarantees](https://protocol.dfos.com/guarantees): what holds without trusting a server, what is a chosen view, and what the operator can read

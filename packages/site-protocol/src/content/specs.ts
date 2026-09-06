@@ -24,10 +24,8 @@ export interface SpecEntry {
    * package root. Absent for pages whose content is site-local.
    */
   source?: string;
-  /** Landing-grid tier; null = not on the grid. */
-  grid: 'core' | 'reference' | 'companions' | 'use' | null;
-  /** Per-tile status chip on the landing grid; absent = no chip. */
-  chip?: string;
+  /** Landing-grid grouping; null = not on the grid. */
+  grid: 'core' | 'reference' | 'guarantees' | 'use' | null;
   /** llms.txt grouping. */
   llmsSection: 'specifications' | 'implementation';
   /** Nav presence/labels (every registry entry appears in the nav). */
@@ -110,28 +108,14 @@ export const specs: SpecEntry[] = [
     nav: { tier: 'secondary' },
   },
   {
-    slug: '/conformance',
-    title: 'Conformance',
-    tile: 'Signer, verifier, and relay tiers with the test vectors that prove them',
-    llms: 'Conformance tiers (signer, verifier, relay), the normative MUST sets per tier, and the deterministic test vectors that prove them',
+    slug: '/guarantees',
+    title: 'Guarantees',
+    tile: 'What holds without trusting a server, what is a chosen view, and what the operator can read',
+    llms: 'What holds without trusting a server, what is a chosen view of an identity, what a relay operator can do and see, the adversaries this design does not cover, and the executable conformance definition',
     metaDescription:
-      'DFOS Protocol conformance — what it means to be a conformant signer, verifier, or relay, the normative MUST sets per tier, and the deterministic test vectors that prove it.',
-    source: '../../specs/CONFORMANCE.md',
-    grid: 'companions',
-    chip: 'companion',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/threat-model',
-    title: 'Threat Model',
-    tile: 'Adversaries, trust boundaries, and what the proof/content separation defends',
-    llms: 'Adversary model, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol defends against',
-    metaDescription:
-      'DFOS Protocol threat model — adversaries, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol does and does not defend against.',
-    source: '../../specs/THREAT-MODEL.md',
-    grid: 'companions',
-    chip: 'companion',
+      'DFOS guarantees: what verifies without trusting a server, what is a chosen view of an identity, what a relay operator can read, the adversaries the protocol does not defend against, and the executable conformance suites.',
+    source: '../../specs/GUARANTEES.md',
+    grid: 'guarantees',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
   },

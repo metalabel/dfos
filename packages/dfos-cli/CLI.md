@@ -73,7 +73,7 @@ The DFOS protocol defines signed chain primitives — identity and content chain
 
 Relays verify and store; authorship is verifiable without trusting any server, and which view of an identity you follow is a choice of relay. The CLI is the sovereign actor: it generates keys, signs operations, decides what to publish and when, and independently verifies what relays serve back. Private key material never leaves the local machine.
 
-The CLI is designed for both human operators and AI agents. Every command that produces output supports `--json` for structured machine-readable responses. Every interactive prompt has a flag equivalent. Stdin is accepted wherever a file is expected.
+The CLI is designed for both human operators and coding agents driving it programmatically. Every command that produces output supports `--json` for structured machine-readable responses. Every interactive prompt has a flag equivalent. Stdin is accepted wherever a file is expected.
 
 ---
 
@@ -1126,7 +1126,7 @@ Two types are structurally recognized:
 - **`DfosRelay`** — `{id, type, endpoint}`, a transport endpoint where this identity's chains can be fetched.
 - **`ContentAnchor`** — `{id, type, label, anchor}`, a stable pointer to a content chain (31-char content id) or an artifact (CIDv1 `baf…`), addressable by `label` (e.g. `profile`, `avatar`).
 
-Extensions ride the same open namespace — `DfosOrigin` (see **Origin Binding** below) is one, written by `identity bind-domain` and given meaning by a spec outside the frozen core rather than by a core verifier. `DfosAuthorizationServer` is a second: `{id, type, endpoint}`, the authorize origin that speaks for this DID — where a client holding only the DID finds the sign-in server its person authenticates to. It is registered by [INTEGRATIONS.md](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint), not by the core.
+Extensions ride the same open namespace — `DfosOrigin` (see **Origin Binding** below) is one, written by `identity bind-domain` and given meaning by a spec outside the core rather than by a core verifier. `DfosAuthorizationServer` is a second: `{id, type, endpoint}`, the authorize origin that speaks for this DID — where a client holding only the DID finds the sign-in server its person authenticates to. It is registered by [INTEGRATIONS.md](https://protocol.dfos.com/integrations#finding-the-authorize-endpoint), not by the core.
 
 Bounds (enforced at sign time by the protocol layer): at most 256 entries, unique ids, non-empty `id`/`type`, and a 32768-byte cap on the encoded services array. Individual field lengths are not separately capped — the aggregate byte cap is the single bound.
 

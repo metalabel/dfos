@@ -529,3 +529,4 @@ The reference TypeScript implementation is [`packages/dfos-protocol/src/credenti
 - [Protocol](https://protocol.dfos.com/spec): encoding, chains, the time basis, and the signature verification profile
 - [Relay](https://protocol.dfos.com/relay): the HTTP surface that ingests credentials and revocations and enforces them
 - [Integrations](https://protocol.dfos.com/integrations): sign-in, API request authentication, and the `api:<host>` action registry
+- [Guarantees](https://protocol.dfos.com/guarantees): what holds without trusting a server, what is a chosen view, and what the operator can read

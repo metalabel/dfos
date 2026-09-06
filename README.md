@@ -1,10 +1,8 @@
 # DFOS
 
-Your identity and content are rented back to you by the platforms that own it. The DFOS Protocol gives you back the keys.
+DFOS is an identity you hold and content whose authorship anyone can check, from any copy. A platform can host your identity. It cannot own it.
 
-An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations, not platform accounts. Proofs verify offline, in any language, from any source. The proof is public; the content is access-controlled. The protocol commits to content hashes, never plaintext — it does not encrypt, and document confidentiality is enforced at the application layer (the relay operator that serves a space can read it; there is no end-to-end encryption).
-
-The first thing it cleanly solves: a portable, rotation-capable signing identity for AI agents and devices — a `did:dfos` derives from a genesis operation and needs no external directory to resolve.
+An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations. Proofs verify offline, in any language, from any copy. Content chains reference documents by hash. The protocol does not encrypt, and whoever serves a document can read it.
 
 This repository contains the protocol specification, reference implementations in TypeScript and Go, cross-language verification suites, and the CLI.
 
@@ -34,8 +32,7 @@ This repository contains the protocol specification, reference implementations i
 - [Credentials](https://protocol.dfos.com/credentials) — UCAN-style authorization, linear delegation, revocation
 - [Integrations](https://protocol.dfos.com/integrations) — sign in, API authentication, origin binding, and key ceremonies
 - [Relay](https://protocol.dfos.com/relay) — the relay HTTP surface: read and write contracts, ingestion, profiles, the content plane
-- [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the verifiable-proof / honest-host split
-- [Conformance](https://protocol.dfos.com/conformance) — tiered conformance definition and self-certification
+- [Guarantees](https://protocol.dfos.com/guarantees) — what holds without trusting a server, what is a chosen view, what the operator can read, and the executable conformance definition
 - [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
 
 ## Specifications
@@ -48,8 +45,7 @@ This repository contains the protocol specification, reference implementations i
 | [CREDENTIALS](./specs/CREDENTIALS.md)     | Delegated authorization, attenuation, and revocation                                                                                        |
 | [RELAY](./specs/RELAY.md)                 | The relay HTTP surface: read and write contracts, ingestion, index, signing mailbox, peering, content plane                                 |
 | [INTEGRATIONS](./specs/INTEGRATIONS.md)   | Sign in, API authentication, origin binding, and key ceremonies                                                                             |
-| [THREAT-MODEL](./specs/THREAT-MODEL.md)   | The adversary model and trust boundaries assembled from the specs above                                                                     |
-| [CONFORMANCE](./specs/CONFORMANCE.md)     | Conformance tiers and the executable suites that prove them                                                                                 |
+| [GUARANTEES](./specs/GUARANTEES.md)       | What holds without trusting a server, what is a chosen view, what the operator can read, and what the executable suites prove               |
 
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [Chain explorer](https://explore.dfos.com) — client-side, verify-in-tab

@@ -59,10 +59,10 @@ Out of scope: vulnerabilities in third-party dependencies (report those
 upstream, though we welcome a heads-up), and issues that require a compromised
 host or a user's own private keys.
 
-For the consolidated adversary model and trust-boundary reference — adversary
-classes, the self-authenticating proof plane vs. honest-host content plane
-split, and the explicitly-accepted residual risks — see
-[specs/THREAT-MODEL.md](specs/THREAT-MODEL.md).
+For what the protocol guarantees and what it does not — the adversaries it holds
+against, what a relay operator can do and see, the accepted bounds, and the
+executable conformance definition — see
+[specs/GUARANTEES.md](specs/GUARANTEES.md).
 
 ## Safe harbor
 

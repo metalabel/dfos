@@ -318,3 +318,4 @@ A resolver reading a local chain reveals nothing. A resolver reading a relay rev
 | dag-cbor Codec              | https://ipld.io/specs/codecs/dag-cbor/spec/                          |
 | Reference implementation    | https://www.npmjs.com/package/@metalabel/dfos-protocol               |
 | Cross-language verification | https://github.com/metalabel/dfos/tree/main/packages/protocol-verify |
+| DFOS Guarantees             | https://protocol.dfos.com/guarantees                                 |
