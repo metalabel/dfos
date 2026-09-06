@@ -1,7 +1,7 @@
 # DFOS Protocol
 
-DFOS is an identity you hold and content whose authorship anyone can check
-without asking the host. A platform can host your identity. It cannot own it.
+DFOS is an identity you hold and content that proves who wrote it. A platform
+can host your identity. It cannot own it.
 
 This document specifies the wire: the byte encodings, the identifier
 derivations, the chain rules, the possession rules, and the verification

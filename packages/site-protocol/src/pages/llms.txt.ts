@@ -8,8 +8,8 @@ export const GET: APIRoute = () => {
   const content = [
     '# DFOS Protocol',
     '',
-    '> DFOS is an identity you hold and content whose authorship anyone can check, from any copy. A platform can host your identity. It cannot own it.',
-    '> An open protocol for cryptographic identity and verifiable content. The proof plane is public; the content plane is served under the access control of whoever holds the bytes. The protocol commits to content hashes, never plaintext: it does not encrypt, and whoever serves a document can read it.',
+    '> DFOS is an identity you hold and content that proves who wrote it. A platform can host your identity. It cannot own it.',
+    '> An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations. Proofs verify offline, in any language, from any copy. Content chains reference documents by hash. The protocol does not encrypt, and whoever serves a document can read it.',
     '',
     '## About',
     '',

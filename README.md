@@ -1,6 +1,6 @@
 # DFOS
 
-DFOS is an identity you hold and content whose authorship anyone can check, from any copy. A platform can host your identity. It cannot own it.
+DFOS is an identity you hold and content that proves who wrote it. A platform can host your identity. It cannot own it.
 
 An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations. Proofs verify offline, in any language, from any copy. Content chains reference documents by hash. The protocol does not encrypt, and whoever serves a document can read it.
 
