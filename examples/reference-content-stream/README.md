@@ -1,57 +1,78 @@
-# Reference Content Stream — Worked Example
+# Reference content stream
 
-This directory contains a worked example of the `reference-content-stream/v1` schema — a toy content model for developing and testing content stream patterns against DFOS content chains.
+The canonical example of the
+[stream](https://protocol.dfos.com/content-model#stream) interpretation. Each
+operation appends a new entry to the sequence rather than replacing the previous
+one. This is a reference schema, not one of the hosted standard schemas, and its
+`$id` carries the `reference-content-stream/v1` URI to mark it as such.
 
-## Schema
+The JSON Schema is
+[`schemas/reference-content-stream.v1.json`](../../schemas/reference-content-stream.v1.json).
 
-`reference-content-stream/v1` is a discriminated union of five actions:
+## Document fields
 
-| Action        | Required fields                  | Description                            |
-| ------------- | -------------------------------- | -------------------------------------- |
-| `create-item` | `title`                          | Create a new item with optional `body` |
-| `update-item` | `targetOperationCID`, `title`    | Update an existing item                |
-| `delete-item` | `targetOperationCID`             | Delete an existing item                |
-| `react`       | `targetOperationCID`, `reaction` | Add a reaction to an operation         |
-| `unreact`     | `targetOperationCID`, `reaction` | Remove a reaction from an operation    |
+| Field                | Type   | Required    | Description                                                                    |
+| -------------------- | ------ | ----------- | ------------------------------------------------------------------------------ |
+| `$schema`            | string | yes         | `"https://schemas.dfos.com/reference-content-stream/v1"`                       |
+| `action`             | enum   | yes         | `"create-item"`, `"update-item"`, `"delete-item"`, `"react"`, `"unreact"`      |
+| `createdByDID`       | string | yes         | DID of the content author, distinct from the operation signer                  |
+| `title`              | string | conditional | REQUIRED for `create-item`. Optional on `update-item` and `delete-item`        |
+| `body`               | string | no          | Entry body content, carried on `create-item`, `update-item`, and `delete-item` |
+| `targetOperationCID` | string | conditional | REQUIRED for `update-item`, `delete-item`, `react`, and `unreact`              |
+| `reaction`           | string | conditional | REQUIRED for `react` and `unreact`                                             |
 
-Every document also carries `createdByDID` — the DID of the content author. This is a content-layer convention, distinct from the operation signer (who may be a delegate or device key).
+`createdByDID` is a content-layer convention. It names the author, who is not
+necessarily the identity that signed the operation: a delegate or a device key
+often signs on the author's behalf.
 
-## Projection Rules
+## Projection rules
 
-State = fold over operations in chain sequence:
+State is the fold over the operations in chain sequence:
 
-1. **create-item** — add to item set, keyed by operation CID
-2. **update-item** — replace item at `targetOperationCID` with new fields
-3. **delete-item** — remove item at `targetOperationCID` + remove associated reactions
-4. **react** — add `{ reaction, createdByDID }` to target's reaction set
-5. **unreact** — remove matching reaction from target's reaction set
+1. `create-item` adds an item to the set, keyed by the operation CID
+2. `update-item` replaces the fields of the item at `targetOperationCID`
+3. `delete-item` removes the item at `targetOperationCID` and its reactions
+4. `react` adds `{ reaction, createdByDID }` to the target's reaction set
+5. `unreact` removes the matching reaction from the target's reaction set
 
-## Example Chain
+## The example chain
 
-`chain.json` contains 6 operations demonstrating the full lifecycle:
+`chain.json` is one content chain of six operations. Alice, bob, and carol are
+real `did:dfos` identities minted from fixed seeds. Alice created the chain, so
+she writes to it directly; bob and carol each hold a `chain:*` write credential
+alice issued, carried in the `authorization` field of the operations they sign.
+Every `operationCID`, `documentCID`, credential, and `jws` in the file is real
+and verifies.
 
-1. `create-item` — alice creates "Hello world"
-2. `create-item` — bob creates "Second item"
-3. `react` — carol reacts with a thumbs-up to op 1
-4. `update-item` — alice edits op 1 to "Hello world (edited)"
-5. `react` — alice reacts with fire to op 2
-6. `delete-item` — bob deletes op 2
+1. `create-item`, alice creates "Hello world"
+2. `create-item`, bob creates "Second item"
+3. `react`, carol reacts with a thumbs-up to operation 1
+4. `update-item`, alice edits operation 1 to "Hello world (edited)"
+5. `react`, alice reacts with fire to operation 2
+6. `delete-item`, bob deletes operation 2
 
-## Projected State
+The chain operation type is `create` for the genesis and `update` for the other
+five. `delete-item` is a document action, not a chain `delete`: the chain stays
+live and the item leaves the projection.
 
-After folding all 6 operations:
+`projected-state.json` is the state after folding all six. One item survives,
+carrying carol's thumbs-up. Item 2 is deleted, and alice's fire reaction on it
+is dropped with it.
 
-- **Items**: `[{ title: "Hello world (edited)", op: 4 }]` — item 2 was deleted
-- **Reactions**: `[{ target: op1, reaction: "thumbsup", by: carol }]` — alice's reaction on the deleted item was dropped
+## What it is for
 
-See `projected-state.json` for the expected state.
+- testing content chain write-through
+- developing relay document endpoints
+- validating credential-based access control
+- building projection and materialization logic
+- cross-language implementation testing
 
-## Purpose
+## Regenerate
 
-This schema is intentionally simple — it's a development tool, not a production content model. Use it for:
+`mint.ts` mints both files from the fixed seeds it names and verifies the chain
+with `verifyContentChain` before writing. It is deterministic: two runs produce
+byte-identical files.
 
-- Testing content chain write-through
-- Developing relay document endpoints
-- Validating credential-based access control
-- Building projection/materialization logic
-- Cross-language implementation testing
+```
+pnpm --filter @metalabel/dfos-protocol exec tsx ../../examples/reference-content-stream/mint.ts
+```

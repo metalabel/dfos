@@ -102,8 +102,7 @@ const didUrl = (did: string, fragment: string): string => `${did}#${fragment}`;
  * Project a single service entry into its DID Document form (DID-METHOD.md §4.5).
  * Recognized types get an explicit `serviceEndpoint` mapping; unrecognized types
  * are preserved verbatim (envelope + all extra fields) so downstream consumers
- * (e.g. the document gateway's DfosDocumentGateway / DfosProfile) survive a relay
- * that does not recognize them.
+ * of a consumer-defined type survive a relay that does not recognize them.
  */
 const projectService = (
   did: string,
