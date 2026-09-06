@@ -47,7 +47,7 @@ import {
   redactNonPublicContentRow,
   redactNonPublicIdentityRow,
 } from './index-routes';
-import { ingestOperations, type AdmissionMode } from './ingest';
+import { ingestOperationsLocked, withChainStateLock, type AdmissionMode } from './ingest';
 import { DEFAULT_OPENAPI_ROUTE, selfDescribingDocument } from './openapi';
 import {
   credentialRevocationStatus,
@@ -55,7 +55,7 @@ import {
   isValidCredentialCid,
   REVOCATIONS_BASE_PATH,
 } from './revocations';
-import { computeOpCID, sequenceOps } from './sequencer';
+import { computeOpCID, sequenceOpsLocked } from './sequencer';
 import { registerSigningRoutes } from './signing';
 import { INGESTION_MODES, PROOF_BASE_PATH } from './types';
 import type {
@@ -430,32 +430,45 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   };
 
   // ingest wrapper: store raw → process → mark results → sequence pending → gossip
+  //
+  // Everything up to and including the sequencer run happens inside ONE hold of
+  // the store's chain-state lock, so a concurrent request cannot land a
+  // competing extension between this batch's read of a chain head and its
+  // write. The held span mirrors the Go twin's `Relay.Ingest` byte for byte:
+  // raw-op writes, the batch apply, the sequenced/rejected marking, and the
+  // trailing sequencer pass are all under it; gossip happens after the release,
+  // because a network push must never hold the lock.
   const ingestWithGossip = async (tokens: string[], admissionMode: AdmissionMode = 'current') => {
     const origin = admissionMode === 'historical' ? 'peer' : 'direct';
-    // store raw ops first — they can never be lost
-    for (const token of tokens) {
-      const cid = await computeOpCID(token);
-      if (cid) await store.putRawOp(cid, token, origin);
-    }
 
-    // process batch
-    const results = await ingestOperations(tokens, store, { logEnabled, admissionMode });
-
-    // mark results in raw store
-    const newOps: string[] = [];
-    for (let i = 0; i < results.length; i++) {
-      const res = results[i]!;
-      if (!res.cid) continue;
-      if (res.status === 'new') {
-        await store.markOpsSequenced([res.cid]);
-        newOps.push(tokens[i]!);
-      } else if (res.status === 'duplicate') {
-        await store.markOpsSequenced([res.cid]);
+    const { results, newOps, seqNewOps } = await withChainStateLock(store, async () => {
+      // store raw ops first — they can never be lost
+      for (const token of tokens) {
+        const cid = await computeOpCID(token);
+        if (cid) await store.putRawOp(cid, token, origin);
       }
-    }
 
-    // run sequencer — resolves pending ops whose deps just arrived
-    const { newOps: seqNewOps } = await sequenceOps(store);
+      // process batch
+      const results = await ingestOperationsLocked(tokens, store, { logEnabled, admissionMode });
+
+      // mark results in raw store
+      const newOps: string[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const res = results[i]!;
+        if (!res.cid) continue;
+        if (res.status === 'new') {
+          await store.markOpsSequenced([res.cid]);
+          newOps.push(tokens[i]!);
+        } else if (res.status === 'duplicate') {
+          await store.markOpsSequenced([res.cid]);
+        }
+      }
+
+      // run sequencer — resolves pending ops whose deps just arrived
+      const { newOps: seqNewOps } = await sequenceOpsLocked(store);
+
+      return { results, newOps, seqNewOps };
+    });
 
     // gossip outside the critical path
     gossip(newOps);
@@ -1399,11 +1412,22 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'blob bytes do not match documentCID' }, 400);
     }
 
-    await store.putBlob({ creatorDID: chain.state.creatorDID, documentCID }, bytes);
-    // A document blob just landed — often out of band, after the content op that
-    // referenced it. Recompute the content rows that project this documentCID
-    // (docSchema/name/profile), cascading to their anchored identities.
-    await maintainIndexAfterBlob(documentCID, store);
+    // Under the chain-state lock, like the Go twin's blob route: the projection
+    // rewrite below reads chain state and writes index rows, so running it
+    // alongside an ingest batch would project a half-applied chain. (`committed`
+    // re-states the already-narrowed `documentCID` as a const, since narrowing a
+    // `let` does not survive into a closure.)
+    const committedDocumentCID = documentCID;
+    await withChainStateLock(store, async () => {
+      await store.putBlob(
+        { creatorDID: chain.state.creatorDID, documentCID: committedDocumentCID },
+        bytes,
+      );
+      // A document blob just landed — often out of band, after the content op that
+      // referenced it. Recompute the content rows that project this documentCID
+      // (docSchema/name/profile), cascading to their anchored identities.
+      await maintainIndexAfterBlob(committedDocumentCID, store);
+    });
 
     return c.json({ status: 'stored', contentId, documentCID, operationCID });
   });

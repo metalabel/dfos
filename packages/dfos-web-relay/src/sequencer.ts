@@ -8,7 +8,7 @@
 
 */
 
-import { computeOpCID, ingestOperations } from './ingest';
+import { computeOpCID, ingestOperationsLocked, withChainStateLock } from './ingest';
 import type { IngestionResult, RelayStore, SequenceResult } from './types';
 
 export { computeOpCID };
@@ -46,9 +46,23 @@ export const logOpRejected = (cid: string, reason: string): void => {
 
 /**
  * Process unsequenced raw ops in a fixed-point loop until no more progress
- * is made. Returns the JWS tokens of newly sequenced ops and aggregate stats.
+ * is made, under the store's chain-state lock. Returns the JWS tokens of newly
+ * sequenced ops and aggregate stats.
+ *
+ * Twin of Go's `RunSequencer`, which takes `ingestMu` and delegates to
+ * `runSequencerLocked`. A caller already holding the lock calls
+ * `sequenceOpsLocked` instead — the lock is not reentrant.
  */
-export const sequenceOps = async (
+export const sequenceOps = (
+  store: RelayStore,
+): Promise<{ newOps: string[]; result: SequenceResult }> =>
+  withChainStateLock(store, () => sequenceOpsLocked(store));
+
+/**
+ * The sequencer inner loop. CALLER MUST HOLD the store's chain-state lock.
+ * Twin of Go's `runSequencerLocked`.
+ */
+export const sequenceOpsLocked = async (
   store: RelayStore,
 ): Promise<{ newOps: string[]; result: SequenceResult }> => {
   const newOps: string[] = [];
@@ -64,7 +78,7 @@ export const sequenceOps = async (
         .map((op, index) => ({ op, index }))
         .filter(({ op }) => op.origin === origin);
       if (partition.length === 0) continue;
-      const partitionResults = await ingestOperations(
+      const partitionResults = await ingestOperationsLocked(
         partition.map(({ op }) => op.jwsToken),
         store,
         { admissionMode: origin === 'peer' ? 'historical' : 'current' },
