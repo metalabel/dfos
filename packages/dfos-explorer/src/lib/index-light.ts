@@ -257,9 +257,10 @@ export const useIndexTitleSearch = (): boolean | null =>
 // that claim matters most.
 //
 // The 400-based separator the other two probes use is UNAVAILABLE here, and
-// deliberately so: WEB-RELAY.md specifies both as OPAQUE matches — a string no
-// operation ever declared simply matches nothing, "no format validation and no
-// 400". There is no invalid value to provoke a rejection with. So these probes
+// deliberately so: RELAY.md, Identities and RELAY.md, Operations specify both as
+// OPAQUE matches — a string no operation ever proved simply matches nothing, "no
+// format validation and no 400". There is no invalid value to provoke a
+// rejection with. So these probes
 // read the BODY instead of the status: query a sentinel nothing can match, and
 //
 //   rows came back  → the relay ignored the param        → UNSUPPORTED

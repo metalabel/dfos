@@ -225,7 +225,8 @@ export const buildSignRequest = async (input: {
 // -----------------------------------------------------------------------------
 
 /**
- * Verify a sign-request envelope in SIGNING.md's exact 1–9 order.
+ * Verify a sign-request envelope in RELAY.md, Envelope verification's exact 1–9
+ * order.
  *
  * `resolveIdentity` supplies CURRENT identity state. A missing identity or
  * resolver failure is `unverifiable`; a deleted identity, missing current key,

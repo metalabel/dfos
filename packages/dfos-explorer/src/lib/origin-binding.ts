@@ -2,7 +2,8 @@
 
   ORIGIN BINDING — the chain's domain claim, checked against the domain's answer
 
-  ORIGIN-BINDING.md defines a BIDIRECTIONAL binding: the identity chain names a
+  INTEGRATIONS.md, Origin binding defines a BIDIRECTIONAL binding: the identity
+  chain names a
   domain in a signed `DfosOrigin` services entry, and the domain attests the DID
   back over HTTPS (`/.well-known/dfos-did`) or DNS (a `_dfos` TXT record). Each
   half alone is a claim anyone could publish; only the PAIR proves one party
@@ -37,8 +38,9 @@
     broken  — a method answers a DIFFERENT DID, the methods disagree, or the DNS
               name carries multiple did= records
 
-  Silence is never contradiction (ORIGIN-BINDING.md, "Verdicts must stay
-  machine-distinguishable"): reporting `stale` as `broken` turns a hosting blip
+  Silence is never contradiction (INTEGRATIONS.md, Origin-binding security
+  notes: "Verdicts must stay machine-distinguishable"): reporting `stale` as
+  `broken` turns a hosting blip
   into a public accusation, and reporting `broken` as `stale` hides a hijack. Our
   OWN route failing is a fourth state — `proxy-unavailable` — for the same reason
   the domain view keeps it separate: we cannot attribute to a third-party domain a
@@ -54,8 +56,9 @@ export const ORIGIN_SERVICE_TYPE = 'DfosOrigin';
 
 /**
  * A bare lowercase hostname: no scheme, no port, no path, no trailing dot, and
- * an internationalized name in its A-label form. ORIGIN-BINDING.md makes every
- * comparison an exact byte comparison of this string, so — unlike the proxy's
+ * an internationalized name in its A-label form. INTEGRATIONS.md, The
+ * `DfosOrigin` service entry makes every comparison an exact byte comparison of
+ * this string, so — unlike the proxy's
  * `validateHostname`, which NORMALIZES a caller's input — nothing is trimmed,
  * lowercased, or dot-stripped here. A domain that needs normalizing to pass is a
  * domain the chain wrote wrong, and it claims nothing.
@@ -316,7 +319,8 @@ export const runAppFallback = async (host: string, candidate: string): Promise<F
 /**
  * True when the app-description fallback is eligible: the HTTPS well-known
  * yielded a NON-ANSWER. The spec's trigger is the class, and it names all three
- * members — ORIGIN-BINDING.md, "App-description fallback": "If
+ * members — INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did`, under
+ * "App-description fallback": "If
  * /.well-known/dfos-did yields a **non-answer** — a `404`; a redirect, which is
  * absence in everything but status code; or a `200` whose trimmed body is not
  * exactly one DFOS DID, the shape a host serving its application shell for every

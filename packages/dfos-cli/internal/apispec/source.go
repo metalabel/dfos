@@ -10,9 +10,9 @@ package apispec
 //	<host> or <scheme://host> DISCOVERY: ask the host, then assume the convention
 //
 // Discovery asks the host's `/.well-known/dfos-relay` for its `openapi` member
-// (WEB-RELAY.md: a relay that serves a document advertises it there, absolute or
-// root-relative) and falls back to `/openapi.json`, which is where the canonical
-// deployment serves its own.
+// (RELAY.md, The well-known document: a relay that serves a document advertises
+// it there, absolute or root-relative) and falls back to `/openapi.json`, which
+// is where the canonical deployment serves its own.
 
 import (
 	"encoding/json"

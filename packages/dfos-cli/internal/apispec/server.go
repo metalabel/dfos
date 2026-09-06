@@ -2,12 +2,13 @@ package apispec
 
 // WHERE A REQUEST ACTUALLY GOES.
 //
-// The document is discovery, never authority (API-AUTH.md) — and the authority a
-// document NAMES is exactly the thing it must not be trusted to name. A document
-// fetched from host A whose `servers` entry says host B, sent to host B, is a
-// document redirecting the wire: whoever can serve A a document can aim this
-// client anywhere, and the request that leaves carries whatever artifact the
-// profile for B says to attach.
+// The document is discovery, never authority (INTEGRATIONS.md, The document is
+// discovery, never authority) — and the authority a document NAMES is exactly
+// the thing it must not be trusted to name. A document fetched from host A
+// whose `servers` entry says host B, sent to host B, is a document redirecting
+// the wire: whoever can serve A a document can aim this client anywhere, and
+// the request that leaves carries whatever artifact the profile for B says to
+// attach.
 //
 // So the FETCH ORIGIN decides the authority, and `servers` contributes a PATH
 // PREFIX ONLY: a `servers` url of https://api.example.com/v1 fetched from

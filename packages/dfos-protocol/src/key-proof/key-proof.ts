@@ -47,21 +47,21 @@
   3. NO RESOLVER SEAM. The signature verifies against the payload's own
      `publicKeyMultibase`. That circularity IS the proof.
 
-  STEP 6 IS NOT HERE. KEY-PROOF.md's verification algorithm has seven steps;
-  `verifyKeyProof` performs 1–5 and 7. Step 6 — the nonce MUST be one this
-  verifier minted, for this ceremony, not yet consumed, checked and consumed
-  ATOMICALLY — is the CALLER'S, because only the caller holds the store the
-  check-and-delete runs against. A verified proof hands back its payload so the
-  caller can do exactly that. A deployment that skips step 6 has a replayable
-  proof for the length of its freshness window; nothing in this file can
-  substitute for it.
+  THE NONCE CHECK IS NOT HERE. INTEGRATIONS.md, Presentation verification
+  requires the nonce to be one this verifier minted, for this ceremony, not yet
+  consumed, checked and consumed ATOMICALLY. That check is the CALLER'S, because
+  only the caller holds the store the check-and-delete runs against.
+  `verifyKeyProof` performs the remaining presentation checks and hands back its
+  payload so the caller can do exactly that. A deployment that skips the nonce
+  check has a replayable proof for the length of its freshness window; nothing in
+  this file can substitute for it.
 
   TWO VERIFICATION MODES OVER ONE ENVELOPE. The same bytes are read twice in a
   key's life, by parties in different positions:
 
     - PRESENTATION-TIME (`verifyKeyProof`) — a ceremony operator completing a
       live ceremony. It holds a clock, a configured audience, and a nonce store,
-      so it checks freshness and audience, and its caller runs step 6.
+      so it checks freshness and audience, and its caller runs the nonce check.
     - CHAIN-WALK (`verifyChainKeyProof`) — anyone replaying the chain later. The
       ceremony is long over; the operator's authority, clock and nonce store are
       not the walker's, and a proof embedded in a signed operation is FIXED
@@ -90,7 +90,7 @@ import { isCanonicalRoleSet, roleSetCovers, type KeyRole } from './role-set';
 // -----------------------------------------------------------------------------
 
 /**
- * The first registered purpose in KEY-PROOF.md's purpose registry: the candidate
+ * The registered key-proof purpose in PROTOCOL.md, The envelope: the candidate
  * key presents for addition to a ceremony-named identity's `authKeys`/
  * `assertKeys` sets.
  *
@@ -106,7 +106,7 @@ export const MAX_KEY_PROOF_SIZE = 4096;
 
 /**
  * RECOMMENDED acceptance window, in seconds, EITHER SIDE of the verifier's clock
- * — matching a ceremony's own lifetime (KEY-PROOF.md, Verification step 5).
+ * — matching a ceremony's own lifetime (INTEGRATIONS.md, Presentation verification).
  */
 export const DEFAULT_KEY_PROOF_SKEW_SECONDS = 300;
 
@@ -197,11 +197,12 @@ const WHOLE_SECOND_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/;
 const PROTOCOL_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /**
- * KEY-PROOF.md step 3, and the producer-side member rules, in ONE place: exactly
- * the seven members, each a non-empty string. Any absent, any EXTRA, or any
- * non-string member rejects — this envelope is CLOSED, so unlike API-AUTH's
- * MUST-ignore-unknown payload there is no forward-compatible slack here by
- * design. Anything that wants to say more is a different artifact.
+ * PROTOCOL.md, The envelope's payload rules, and the producer-side member
+ * rules, in ONE place: exactly the seven members, each a non-empty string. Any
+ * absent, any EXTRA, or any non-string member rejects — this envelope is
+ * CLOSED, so unlike API-AUTH's MUST-ignore-unknown payload there is no
+ * forward-compatible slack here by design. Anything that wants to say more is a
+ * different artifact.
  *
  * The grammar checks past "is a string" are the ones a mismatch would otherwise
  * surface later and less usefully: an `audience` that is not an authority could
@@ -363,8 +364,8 @@ export interface SignKeyProofInput {
  * through `createJws`, whose `JwsHeader` requires a `kid` this envelope must not
  * carry.
  *
- * HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (KEY-PROOF.md, Holder
- * Obligations). A holder MUST show its human — before calling this — the
+ * HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (INTEGRATIONS.md, Holder
+ * obligations). A holder MUST show its human — before calling this — the
  * audience, the purpose, the adopting identity, and the roles. A proof is
  * consent, and consent that was never displayed was never given.
  *
@@ -440,10 +441,10 @@ interface DecodedKeyProof {
 }
 
 /**
- * KEY-PROOF.md verification steps 1–3: size cap, header gates, and the closed
- * payload schema over CANONICAL bytes. Everything both modes do identically,
- * because these three steps are about the ARTIFACT and not about the position
- * the reader occupies.
+ * INTEGRATIONS.md, Presentation verification steps 1–3: size cap, header gates,
+ * and the closed payload schema over CANONICAL bytes. Everything both modes do
+ * identically, because these three steps are about the ARTIFACT and not about
+ * the position the reader occupies.
  */
 const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
   // 1. Size cap — before any decode. A DoS guard at the header layer.
@@ -475,10 +476,11 @@ const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
     throw invalid('header', `unsupported algorithm: ${String(header['alg'])}`);
   }
   if ('crit' in header) throw invalid('header', 'crit header is not supported');
-  // Embedded key material, and the references that fetch it. `jwk`/`x5c` are the
-  // profile's; `jku`/`x5u` are named by KEY-PROOF.md's "an embedded key member
-  // (`jwk`, `jku`, `x5c`, …) rejects" — a URL that FETCHES a key is header key
-  // trust with an extra hop, which is the thing being refused.
+  // Embedded key material, and the references that fetch it. `jwk`/`x5c` are
+  // the profile's; `jku`/`x5u` are named by INTEGRATIONS.md, Presentation
+  // verification's "an embedded key member (`jwk`, `jku`, `x5c`, …) rejects" —
+  // a URL that FETCHES a key is header key trust with an extra hop, which is
+  // the thing being refused.
   for (const member of ['jwk', 'jku', 'x5c', 'x5u']) {
     if (member in header) {
       throw invalid('header', `${member} header is not allowed (the key rides in the payload)`);
@@ -521,7 +523,7 @@ const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
   // header's serialization — so one proof still has more than one envelope
   // spelling, and a caller must not treat the envelope string as an identity.
   // Nothing here needs it to be: what a completion spends is the NONCE, consumed
-  // atomically and once by the caller's step 6. Conformant producers already emit
+  // atomically and once by the caller's nonce check. Conformant producers already emit
   // these bytes, so nothing that could be signed correctly is refused here.
   let payload: KeyProofPayload;
   try {
@@ -540,7 +542,7 @@ const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
 };
 
 /**
- * KEY-PROOF.md verification step 7: the signature, against the payload's OWN
+ * PROTOCOL.md, Chain-walk verification step 7: the signature, against the payload's OWN
  * `publicKeyMultibase`. The circularity is the point — a valid envelope is
  * possession demonstrated over bytes the signer did not choose alone.
  */
@@ -623,10 +625,10 @@ export interface VerifyKeyProofOptions {
 /** What a verified key proof hands back. */
 export interface VerifiedKeyProof {
   /**
-   * The validated payload. THE CALLER MUST NOW RUN STEP 6 against `payload.nonce`:
-   * check that it is a nonce this verifier minted, for this ceremony, not yet
-   * consumed, and consume it ATOMICALLY (check-and-delete) so two racing
-   * completions cannot both pass.
+   * The validated payload. THE CALLER MUST NOW RUN THE NONCE CHECK against
+   * `payload.nonce`: check that it is a nonce this verifier minted, for this
+   * ceremony, not yet consumed, and consume it ATOMICALLY (check-and-delete) so
+   * two racing completions cannot both pass.
    */
   payload: KeyProofPayload;
   /** The header `typ` — equal to `expectedTyp`, since anything else rejected. */
@@ -636,17 +638,18 @@ export interface VerifiedKeyProof {
 }
 
 /**
- * Verify a key proof AT PRESENTATION TIME — KEY-PROOF.md's verification algorithm
- * steps 1–5 and 7: size cap, header gates, the closed payload schema over
- * CANONICAL bytes, the four expectation arms (audience, did, roleSet, prevCID),
- * freshness, and the signature against the payload's OWN `publicKeyMultibase`.
+ * Verify a key proof AT PRESENTATION TIME — INTEGRATIONS.md, Presentation
+ * verification except its nonce check: size cap, header gates, the closed
+ * payload schema over CANONICAL bytes, the four expectation arms (audience,
+ * did, roleSet, prevCID), freshness, and the signature against the payload's
+ * OWN `publicKeyMultibase`.
  *
  * EVERY EXPECTATION IS THE DEPLOYMENT'S OWN VALUE. There is no arm here that
  * compares the envelope to itself. `expectedDid`, `expectedRoleSet` and
  * `expectedPrevCID` are the position the completing authority is about to WRITE;
  * if the envelope names a different one, the holder consented to something else.
  *
- * STEP 6 (NONCE) IS THE CALLER'S, and this function cannot stand in for it. The
+ * THE NONCE CHECK IS THE CALLER'S, and this function cannot stand in for it. The
  * nonce MUST be one this verifier minted, for this ceremony, not yet consumed,
  * checked and consumed ATOMICALLY — a check-and-delete against the verifier's
  * own store, which is state this pure function does not hold. It is returned on
@@ -662,13 +665,14 @@ export const verifyKeyProof = (jws: string, options: VerifyKeyProofOptions): Ver
   // THE TYP GATE IS ONLY A GATE WHEN THE EXPECTATION NAMES A PURPOSE. An empty
   // `expectedTyp` byte-equals an artifact carrying `"typ":""`, so a verifier
   // configured with one admits an envelope scoped to no ceremony at all — the
-  // gate reads as satisfied while gating nothing. That is a MISCONFIGURATION, not
-  // a verdict about a proof: it throws a plain Error like the guards below and
-  // never a `KeyProofVerifyError`, so a caller branching on `reason` cannot
-  // mistake a broken deployment for a bad envelope. Non-empty is the whole rule —
-  // the purpose registry is KEY-PROOF.md's, and hardcoding its rows here would
-  // make registering a new purpose a library release. `signKeyProof` refuses an
-  // empty `typ` on the producer side for the same reason.
+  // gate reads as satisfied while gating nothing. That is a MISCONFIGURATION,
+  // not a verdict about a proof: it throws a plain Error like the guards below
+  // and never a `KeyProofVerifyError`, so a caller branching on `reason` cannot
+  // mistake a broken deployment for a bad envelope. Non-empty is the whole rule
+  // — the purpose registry is PROTOCOL.md, The envelope's, and hardcoding its
+  // rows here would make registering a new purpose a library release.
+  // `signKeyProof` refuses an empty `typ` on the producer side for the same
+  // reason.
   //
   // The same argument covers the other four expectations, and it is why none of
   // them is optional: an omitted or empty positional expectation is an arm that

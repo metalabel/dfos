@@ -87,8 +87,9 @@ const indexKeyProbeSeed = "dfos-cli:index-key-filter-probe:v1"
 // It exists for one query, made once per run before the scan: ask for a key no
 // chain has ever proved and see whether rows come back. Rows mean the relay
 // ignored `key=` entirely, which is the failure mode with no status code to
-// catch (WEB-RELAY.md specifies `key=` as an opaque match with no format
-// validation, so there is no invalid value to provoke a 400 with).
+// catch (RELAY.md, Index (capability `index`) specifies `key=` as an opaque
+// match with no format validation, so there is no invalid value to provoke a
+// 400 with).
 func indexKeyProbeMultibase() string {
 	sum := sha256.Sum256([]byte(indexKeyProbeSeed))
 	return protocol.EncodeMultikey(ed25519.PublicKey(sum[:]))

@@ -218,8 +218,8 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 
 // handlePostOperations submits operations for ingestion.
 //
-// THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (WEB-RELAY.md, Ingestion
-// Admission): structural caps (400/413) -> proof verification when one is
+// THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (RELAY.md, Admission):
+// structural caps (400/413) -> proof verification when one is
 // presented (401 invalid / 503 unverifiable) -> admission policy over
 // (principal | anonymous), a request-level 403 -> full per-item verification.
 // The expensive step is never spent on a submission policy refuses, and a
@@ -986,7 +986,7 @@ func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentI
 	//
 	// An accompanying X-Credential is NOT malformed here, unlike on an api:<host>
 	// surface: the identity proof is the AuthN half and the DFOS credential is a
-	// separate authorization artifact (WEB-RELAY.md, Authentication) — two halves
+	// separate authorization artifact (INTEGRATIONS.md, The identity proof) — two halves
 	// of one answer, not two competing claims.
 	auth := r.authenticateIdentityProof(req, nil, false)
 	if auth.Status != 0 {

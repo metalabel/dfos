@@ -2,11 +2,12 @@
 
   ORIGIN-BINDING ATTEST-BACK PROBE — the explorer's second serverless route
 
-  GET /api/binding?host=<hostname> runs BOTH attest-back methods ORIGIN-BINDING.md
-  defines — the HTTPS document at /.well-known/dfos-did and the DNS TXT record at
-  _dfos.<host> — and answers 200 with a BindingEnvelope carrying one result per
-  method. It exists because a browser tab can do neither honestly: origins do not
-  reliably send CORS headers on well-knowns, and a page cannot query DNS at all.
+  GET /api/binding?host=<hostname> runs BOTH attest-back methods INTEGRATIONS.md,
+  Attest-back: the domain's half defines — the HTTPS document at
+  /.well-known/dfos-did and the DNS TXT record at _dfos.<host> — and answers 200
+  with a BindingEnvelope carrying one result per method. It exists because a
+  browser tab can do neither honestly: origins do not reliably send CORS headers
+  on well-knowns, and a page cannot query DNS at all.
   It stores nothing, decides nothing, and calls no platform API — the VERDICT is
   computed in the tab (src/lib/origin-binding.ts).
 
@@ -17,11 +18,11 @@
    - resolve-then-check: every resolved address must be globally routable, and
      only globally routable addresses are fetched — an allowlist of public
      unicast, so a range nobody named is refused rather than reached
-   - redirects are not followed: a redirect attests nothing (ORIGIN-BINDING.md),
-     so it is reported as its own status — never as a contradiction, and never
-     as an answer. The spec puts it in the NON-ANSWER class, where a verifier
-     "treats the path exactly as it treats absence": it licenses the
-     app-description fallback exactly as a 404 does
+   - redirects are not followed: a redirect attests nothing (INTEGRATIONS.md,
+     HTTPS: `/.well-known/dfos-did`), so it is reported as its own status —
+     never as a contradiction, and never as an answer. The spec puts it in the
+     NON-ANSWER class, where a verifier "treats the path exactly as it treats
+     absence": it licenses the app-description fallback exactly as a 404 does
    - 1024-byte response cap (a conforming body is under a hundred bytes), 5s timeout
    - the TXT lookup makes no connection, so it needs no address policy of its own
 
@@ -45,15 +46,17 @@ const TXT_NAME_PREFIX = '_dfos.';
 
 /** A DFOS DID: the 31-char id alphabet the protocol mints. */
 const DID_RE = /^did:dfos:[2346789acdefhknrtvz]{31}$/;
-/** The DNS attestation's exact value form (ORIGIN-BINDING.md, "DNS"). */
+/** The DNS attestation's exact value form
+ *  (INTEGRATIONS.md, DNS: TXT at `_dfos.<domain>`). */
 const TXT_CLAIM_RE = /^did=(did:dfos:[2346789acdefhknrtvz]{31})$/;
 /** ASCII whitespace only — the spec trims ASCII, not Unicode. */
 const ASCII_WS_RE = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
 
 /**
  * What ONE method established. Seven outcomes, and the split between them is the
- * whole point. ORIGIN-BINDING.md sorts them into three classes, and the class a
- * result lands in is what decides whether the app-description fallback fires:
+ * whole point. INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did` sorts them into
+ * three classes, and the class a result lands in is what decides whether the
+ * app-description fallback fires:
  *
  * NON-ANSWERS — "the file attests nothing"; each licenses the fallback on HTTPS,
  * because the spec's trigger is the class, not the status code:

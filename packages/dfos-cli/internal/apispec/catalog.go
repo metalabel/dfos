@@ -5,9 +5,10 @@ package apispec
 //
 // Two places in a document name action tokens, and the catalog is their union:
 //
-//   - `x-dfos-actions` on the request-proof security scheme, which API-AUTH.md
-//     calls "the host's action catalog": a map of action token → human-readable
-//     description, restating the registry the host serves.
+//   - `x-dfos-actions` on the request-proof security scheme, which
+//     INTEGRATIONS.md, Scheme vocabulary calls "the host's action catalog": a
+//     map of action token → human-readable description, restating the registry
+//     the host serves.
 //   - `x-dfos-actions` on an Operation Object, which is the OR-of-alternatives a
 //     route requires. A token can be required by a route the catalog forgot to
 //     list, and a client asking for a grant it will actually spend needs it.
@@ -87,12 +88,12 @@ func (d *Doc) ActionCatalog() ([]CatalogEntry, error) {
 // schemeCatalog reads the `x-dfos-actions` catalogs declared on the document's
 // proof schemes.
 //
-// Scoped to the schemes API-AUTH.md puts a catalog on — the request-proof
-// scheme, plus the unmarked `scheme: dfos` case the same section says a consumer
-// MAY read under the combination rules. Every other scheme is left alone: an
-// unrelated scheme carrying an `x-dfos-actions` member is not this convention's
-// catalog, and reading it would put a stranger's vocabulary in front of a person
-// choosing what to grant.
+// Scoped to the schemes INTEGRATIONS.md, Scheme vocabulary puts a catalog on —
+// the request-proof scheme, plus the unmarked `scheme: dfos` case the same
+// section says a consumer MAY read under the combination rules. Every other
+// scheme is left alone: an unrelated scheme carrying an `x-dfos-actions` member
+// is not this convention's catalog, and reading it would put a stranger's
+// vocabulary in front of a person choosing what to grant.
 func (d *Doc) schemeCatalog() ([]CatalogEntry, error) {
 	components := d.model.Model.Components
 	if components == nil || components.SecuritySchemes == nil {

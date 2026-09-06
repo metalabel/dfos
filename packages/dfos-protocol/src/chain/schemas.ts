@@ -551,7 +551,8 @@ export const MAX_SIGN_REQUEST_PAYLOAD_SIZE = 4096;
  *
  * Unknown envelope fields are preserved-and-ignored, matching every other wire
  * payload in this file. The signer-side target-payload check is deliberately
- * strict instead: a signer refuses fields it cannot render (see SIGNING.md).
+ * strict instead: a signer refuses fields it cannot render (see RELAY.md,
+ * Signer obligations).
  */
 export const SignRequestPayload = z.looseObject({
   version: z.literal(1),

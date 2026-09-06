@@ -133,8 +133,8 @@ const (
 	refusalInvalidName         = "app description at %s has an invalid name: present-but-empty is malformed — give it a value or omit it"
 )
 
-// name is optional (SIWD.md: the domain leads) — a nameless document patches
-// exactly as a named one does.
+// name is optional (INTEGRATIONS.md, The app description document: the domain
+// leads) — a nameless document patches exactly as a named one does.
 func TestIdentityWellKnownPatchAcceptsNamelessDocument(t *testing.T) {
 	store, _, _ := setupDevices(t)
 	did := createIdentity(t, "alice", store)

@@ -102,7 +102,8 @@ const deviceCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 // deviceCodeLength is how many of those characters a code is.
 const deviceCodeLength = 8
 
-// keyProofWellKnownPath is the code-resolution route KEY-PROOF.md names.
+// keyProofWellKnownPath is the code-resolution route INTEGRATIONS.md, Carriage
+// and resolution names.
 const keyProofWellKnownPath = "/.well-known/dfos-key-proof"
 
 // ceremonyHTTPTimeout bounds both ceremony requests. A ceremony lives ten
@@ -819,7 +820,7 @@ const (
 // client below is built here, used once, and dropped. Nothing is registered,
 // nothing is pinned, and no config is written — a holder that adopted an
 // operator's relay as a standing peer would be extending trust the ceremony
-// never asked for (KEY-PROOF.md "Security Considerations"). The fallback's
+// never asked for (INTEGRATIONS.md, Carriage and resolution). The fallback's
 // discipline is identical, so an operator-named relay that cannot answer the
 // question is as loud a failure as a configured one.
 //
@@ -1337,7 +1338,7 @@ func roleDisclosure(role protocol.KeyRole) string {
 	return string(role)
 }
 
-// printCeremonyDisclosure is KEY-PROOF.md's Holder Obligation made visible: the
+// printCeremonyDisclosure is INTEGRATIONS.md, Holder obligations made visible: the
 // audience, the purpose, the identity being joined, and the roles being consented
 // to, before anything is signed. It goes to stderr, so --json emits one document
 // on stdout and the human still sees what they are consenting to.

@@ -4,7 +4,7 @@
 
   Byte-twin: dfos-protocol-go/word_fingerprint.go.
 
-  KEY-PROOF.md's holder obligations put a human in the loop at exactly one point:
+  INTEGRATIONS.md, Holder obligations puts a human in the loop at exactly one point:
   a key travels between two surfaces — the holder's tool printing the key it
   presented, and the ceremony surface displaying the key that arrived — and the
   human is asked whether they match. This renders the thing that human compares.

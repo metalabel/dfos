@@ -338,7 +338,7 @@ func TestIndexOperationsSignerKeyIsOpaque(t *testing.T) {
 		}
 	}
 
-	// THE ROW SHAPE, AS THE SPEC FIXES IT AND NO TIGHTER. WEB-RELAY.md prohibits
+	// THE ROW SHAPE, AS THE SPEC FIXES IT AND NO TIGHTER. RELAY.md, Operations prohibits
 	// exactly four row contents — "they contain no JWS, payload, title, or name" —
 	// and that is what a third-party relay is gated on here. This suite tests
 	// MUSTs, not the reference twins' habits: the same section describes the

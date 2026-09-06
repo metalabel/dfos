@@ -2,7 +2,8 @@
 
   BROWSER VANTAGE — checking both attest-back channels from the tab itself
 
-  ORIGIN-BINDING.md defines two attest-back channels, and until now the explorer
+  INTEGRATIONS.md, Attest-back: the domain's half defines two attest-back
+  channels, and until now the explorer
   read both through its own serverless route (`/api/binding`), because the tab
   was assumed to be able to do neither: a page cannot open a DNS socket, and
   origins do not reliably send CORS headers on well-knowns. The first half of
@@ -74,7 +75,8 @@ import {
  *  — the two parsers must read the same bytes the same way, and the route cannot
  *  be imported here (it is Node-only). */
 const DID_RE = /^did:dfos:[2346789acdefhknrtvz]{31}$/;
-/** The DNS attestation's exact value form (ORIGIN-BINDING.md, "DNS"). */
+/** The DNS attestation's exact value form
+ *  (INTEGRATIONS.md, DNS: TXT at `_dfos.<domain>`). */
 const TXT_CLAIM_RE = /^did=(did:dfos:[2346789acdefhknrtvz]{31})$/;
 /** ASCII whitespace only — the spec trims ASCII, not Unicode. */
 const ASCII_WS_RE = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
@@ -266,7 +268,8 @@ export const probeDnsFromBrowser = async (host: string): Promise<ChannelAttempt>
  * Read a 200 body from `/.well-known/dfos-did`. Mirrors `parseDidBody` in
  * api/binding.ts: exactly one DFOS DID after ASCII trimming attests it, and
  * ANYTHING else is `malformed` — a document that is present and answers nothing,
- * which is the third member of ORIGIN-BINDING.md's non-answer class and licenses
+ * which is the third member of the non-answer class of INTEGRATIONS.md, HTTPS:
+ * `/.well-known/dfos-did`, and licenses
  * the app-description fallback exactly as a 404 does.
  */
 export const parseDidBody = (body: string): BindingMethodResult => {

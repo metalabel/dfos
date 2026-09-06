@@ -35,8 +35,9 @@ import (
 )
 
 const (
-	// originServiceType is the service type registered by ORIGIN-BINDING.md.
-	// Deliberately NOT in protocol.RecognizedServiceTypes — see the file header.
+	// originServiceType is the service type registered by INTEGRATIONS.md, The
+	// `DfosOrigin` service entry. Deliberately NOT in
+	// protocol.RecognizedServiceTypes — see the file header.
 	originServiceType = "DfosOrigin"
 	// defaultOriginServiceID is the entry id `bind-domain` uses when the
 	// identity has no DfosOrigin entry yet and --id was not supplied.
@@ -58,9 +59,10 @@ const (
 	appDescriptionCap = 512 * 1024
 )
 
-// asciiWhitespace is the trim set for attestation values. ORIGIN-BINDING.md says
-// "after trimming ASCII whitespace" — not Unicode space, so this is spelled out
-// rather than deferring to strings.TrimSpace.
+// asciiWhitespace is the trim set for attestation values. INTEGRATIONS.md,
+// Attest-back: the domain's half says "after trimming ASCII whitespace" — not
+// Unicode space, so this is spelled out rather than deferring to
+// strings.TrimSpace.
 const asciiWhitespace = " \t\r\n\v\f"
 
 // ---------------------------------------------------------------------------
@@ -157,10 +159,11 @@ func originEntryIndexes(services []protocol.ServiceEntry) []int {
 	return idx
 }
 
-// originClaim is what a services set claims, per ORIGIN-BINDING.md "One entry,
-// or none": exactly one structurally valid DfosOrigin entry claims its domain;
-// zero, several, or one malformed entry claim NOTHING. Domain is "" when
-// nothing is claimed, and Reason says which case it was.
+// originClaim is what a services set claims, per INTEGRATIONS.md, The
+// `DfosOrigin` service entry: "One entry, or none": exactly one structurally
+// valid DfosOrigin entry claims its domain; zero, several, or one malformed
+// entry claim NOTHING. Domain is "" when nothing is claimed, and Reason says
+// which case it was.
 type originClaim struct {
 	Domain string
 	Reason string
@@ -434,11 +437,12 @@ func planOriginBinding(services []protocol.ServiceEntry, domain, idOverride stri
 // ---------------------------------------------------------------------------
 
 // attestationClient is the client both attestation fetches use. It follows NO
-// redirects: ORIGIN-BINDING.md requires verifiers to "fetch over HTTPS with
-// ordinary TLS validation, MUST NOT follow redirects", and rules that "a
-// redirect is a non-answer, never a contradiction" — whatever the redirect
-// points at, another origin or another path on the same one, the bytes would
-// arrive from somewhere the binding did not send the verifier.
+// redirects: INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did` requires verifiers
+// to "fetch over HTTPS with ordinary TLS validation, MUST NOT follow
+// redirects", and rules that "a redirect is a non-answer, never a
+// contradiction" — whatever the redirect points at, another origin or another
+// path on the same one, the bytes would arrive from somewhere the binding did
+// not send the verifier.
 //
 // http.ErrUseLastResponse hands the 3xx back AS THE RESPONSE instead of as a
 // transport error, which is what lets the probe report a redirect for what it
@@ -495,8 +499,8 @@ type wellKnownOutcome struct {
 	Note     string
 }
 
-// classifyWellKnown applies ORIGIN-BINDING.md's non-answer rule to a reply from
-// the well-known path, as a pure function.
+// classifyWellKnown applies INTEGRATIONS.md, HTTPS: `/.well-known/dfos-did`'s
+// non-answer rule to a reply from the well-known path, as a pure function.
 //
 // The non-answer class is uniform and the fallback trigger is the WHOLE class:
 // "If /.well-known/dfos-did yields a non-answer — a 404; a redirect, which is

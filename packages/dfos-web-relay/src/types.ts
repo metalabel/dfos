@@ -85,7 +85,7 @@ export interface RelayIdentity {
    *
    * OPTIONAL, and the only thing they enable is the relay signing an IDENTITY
    * PROOF of its own — gossip-out announces itself as a named peer rather than
-   * anonymously (WEB-RELAY.md, Relay Identity: "a gossiping peer authenticates
+   * anonymously (RELAY.md, Relay identity and profile: "a gossiping peer authenticates
    * like any client: anonymously, or with an identity proof signed by its own
    * DID"). A relay constructed from a DID and a profile alone still runs; it
    * simply gossips anonymously.
@@ -95,7 +95,7 @@ export interface RelayIdentity {
 }
 
 /**
- * The advertised ingestion admission mode (WEB-RELAY.md, Ingestion Admission).
+ * The advertised ingestion admission mode (RELAY.md, Admission).
  *
  * - `open` — anonymous submissions admitted, subject to policy.
  * - `proof-required` — anonymous refused at the policy step (403).
@@ -135,7 +135,7 @@ export type AdmissionPolicy = (principal: string | null) => boolean | Promise<bo
 
 /**
  * How this deployment answers the well-known's optional `openapi` field
- * (WEB-RELAY.md, Well-Known Endpoint). Serving a document is SHOULD, never MUST;
+ * (RELAY.md, The well-known document). Serving a document is SHOULD, never MUST;
  * an unset option means the relay serves none and omits the field.
  *
  * - `{ url }` — ADVERTISE ONLY. The document lives somewhere else (a docs site,
@@ -249,7 +249,7 @@ export interface RelayOptions {
    * `host` against a request header would have no host binding at all.
    *
    * MULTI-AUTHORITY DEPLOYMENTS. A relay serving several hostnames "selects the
-   * expected one from its own configuration" (WEB-RELAY.md, Authentication).
+   * expected one from its own configuration" (RELAY.md, Authentication).
    * This option is that selection, made at construction: front the origins with
    * one relay instance per authority, or have the front door route each
    * authority to the instance configured for it. There is deliberately no
@@ -294,7 +294,7 @@ export interface RelayOptions {
   replayCache?: JtiReplayCache;
   /**
    * Whether gossip-out attaches an identity proof signed by the relay's OWN DID
-   * (WEB-RELAY.md, Relay Identity: "a gossiping peer authenticates like any
+   * (RELAY.md, Relay identity and profile: "a gossiping peer authenticates like any
    * client: anonymously, or with an identity proof signed by its own DID").
    *
    * DEFAULT OFF, deliberately — and this is the one place the obvious default is

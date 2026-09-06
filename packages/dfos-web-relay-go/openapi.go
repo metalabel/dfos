@@ -4,8 +4,9 @@ package relay
 
   OPENAPI DOCUMENT — the relay's advertised HTTP surface
 
-  WEB-RELAY.md makes serving an OpenAPI document a SHOULD and the well-known's
-  `openapi` field the advertisement: a relay that serves one names its URL, and
+  RELAY.md, The well-known document makes serving an OpenAPI document a SHOULD
+  and the well-known's `openapi` field the advertisement: a relay that serves one
+  names its URL, and
   absence of the field means none is served. This relay serves one at
   /openapi.json and advertises "/openapi.json" (root-relative, resolved against
   the relay's base URL).
@@ -45,8 +46,9 @@ package relay
   and the route can then be a plain application/json GET with no content
   negotiation. The conversion runs once, lazily, and is cached.
 
-  The document is DISCOVERY, NEVER AUTHORITY (WEB-RELAY.md): the routes,
-  capability gates, and auth rules in the spec govern regardless of what this
+  The document is DISCOVERY, NEVER AUTHORITY (RELAY.md, The well-known
+  document): the routes, capability gates, and auth rules in the spec govern
+  regardless of what this
   document says. Which is also why the route itself is ungated — a meta surface
   like the well-known, readable before a client knows anything about this relay.
 

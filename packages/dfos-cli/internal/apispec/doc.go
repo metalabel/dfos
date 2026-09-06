@@ -2,7 +2,7 @@
 // generic DFOS client has about it: WHICH request does this operation name, and
 // WHICH authentication artifact does it need.
 //
-// The document is discovery, never authority (API-AUTH.md, "The document is
+// The document is discovery, never authority (INTEGRATIONS.md, "The document is
 // discovery, never authority"). Everything here decides what to ATTEMPT; the
 // serving host's own verdict — 401, 403, 503 — is the machine signal, and
 // nothing in this package retries around one.

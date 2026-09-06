@@ -35,10 +35,11 @@ import (
 const indexBasePath = "/index/v0"
 
 // ErrIndexUnavailable is the relay's "I do not serve this" — a 501 from an
-// index route, which WEB-RELAY.md specifies as the answer when
-// `capabilities.index` is false or absent. It is a distinct error rather than an
-// empty page because the two mean opposite things, and a recovery scan that
-// confused them would report an operator's identities as gone.
+// index route, which RELAY.md, Capabilities are how a relay honestly declines a
+// family specifies as the answer when `capabilities.index` is false or absent.
+// It is a distinct error rather than an empty page because the two mean
+// opposite things, and a recovery scan that confused them would report an
+// operator's identities as gone.
 var ErrIndexUnavailable = errors.New("this relay does not serve the index family (/index/v0) — capabilities.index is off or the relay predates it")
 
 // IndexIdentityRow is one row of GET /index/v0/identities. Rows are browsing

@@ -585,7 +585,8 @@ describe('verifyApiRequest', () => {
   it('accepts a signature from any current key role, not just authKeys', async () => {
     // The identity fixture registers one key in all three roles; the assertion
     // that matters is that the lookup spans auth + assert + controller per
-    // API-AUTH.md ("Any current key role may sign"), unlike SIWD's authKeys-only rule.
+    // INTEGRATIONS.md, JWS header ("Any effective key role (auth, assert,
+    // controller) may sign"), unlike SIWD's authKeys-only rule.
     const grant = await buildGrant();
     const client = clientFor([grant.user, grant.rp]);
     const state = (await client.identity(grant.rp.did)).value;

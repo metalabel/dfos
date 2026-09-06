@@ -143,7 +143,8 @@ export interface CreateApiAuthFetchOptions {
  * sees, never whether the request succeeds, and it would drag dag-cbor and the
  * credential schema into a producer path that today needs neither.
  *
- * A request proof deliberately carries no `cid` header (API-AUTH.md), so
+ * A request proof deliberately carries no `cid` header (INTEGRATIONS.md, JWS
+ * header), so
  * requiring one here also catches a proof handed over in a credential's place.
  */
 const credentialCIDFromHeader = (credential: string): string => {
@@ -178,7 +179,7 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
  *
  * `signApiRequest` stays exported for the backends that must NOT proxy. A
  * signing backend fronting a browser MUST authorize the coordinates it is about
- * to sign against its own session (API-AUTH.md, Security Considerations) — it
+ * to sign against its own session (INTEGRATIONS.md, API security notes) — it
  * describes the one request it is willing to make rather than receiving one, so
  * there is no `Request` for this adapter to cover.
  *
@@ -293,9 +294,9 @@ const clientPresenterResolver =
       );
     }
     const state = resolved.value;
-    // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-    // current-state") — auth, assert, or controller. This is wider than SIWD,
-    // which is authKeys-only by its own spec.
+    // Any CURRENT key role may sign a proof (INTEGRATIONS.md, JWS header: "Key
+    // resolution is at the basis, which is now") — auth, assert, or controller.
+    // This is wider than SIWD, which is authKeys-only by its own spec.
     return {
       isDeleted: state.isDeleted,
       keys: [...state.authKeys, ...state.assertKeys, ...state.controllerKeys],
@@ -370,7 +371,8 @@ export interface VerifiedRequestProof {
 /**
  * Walk the presented `prf` chain UNVERIFIED to learn where it roots.
  *
- * API-AUTH.md step 10: the root `iss` is the DID whose data the request serves,
+ * INTEGRATIONS.md, Verification algorithm step 10 (subject selection): the root
+ * `iss` is the DID whose data the request serves,
  * and it is deliberately NOT checked against an externally-known resource owner —
  * for the v0 action registry there is none, and the credential is what selects
  * the subject. The protocol's chain verifier takes an EXPECTED root, so the
@@ -397,7 +399,8 @@ const discoverChainRoot = (leafToken: string): string => {
 };
 
 /**
- * Verify a credential-gated request — API-AUTH.md's eleven steps, in an order
+ * Verify a credential-gated request — INTEGRATIONS.md, Verification algorithm's
+ * eleven steps, in an order
  * that honors both load-bearing ordering rules: the proof signature gates every
  * credential-chain step, and body hashing runs after the cheaper binding checks.
  *
@@ -618,7 +621,8 @@ export interface VerifiedIdentityProof {
 }
 
 /**
- * Verify an identity-proven request — API-AUTH.md's PROOF PHASE (steps 1–7) with
+ * Verify an identity-proven request — INTEGRATIONS.md, Verification algorithm's
+ * PROOF PHASE (steps 1–7) with
  * the identity `typ`, and nothing more. Steps 8–11 do not exist for this
  * artifact: there is no credential to walk, so there is no chain, no revocation
  * lookup, and no attenuation coverage.

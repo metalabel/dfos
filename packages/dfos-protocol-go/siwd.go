@@ -13,7 +13,7 @@ import (
 const SiwdJWSTyp = "did:dfos:siwd"
 
 // SiwdAskJWSTyp is the registered JWS typ of a loopback client's ask proof
-// (SIWD.md §The ask proof) — distinct from SiwdJWSTyp because both artifacts
+// (INTEGRATIONS.md, The ask proof) — distinct from SiwdJWSTyp because both artifacts
 // sign the SAME canonical challenge bytes, so the typ gate is the only thing
 // keeping a client's ask from presenting as a subject's sign-in, or a subject's
 // sign-in from presenting as a client's ask.
@@ -165,7 +165,7 @@ func ParseSiwdChallenge(octets []byte) (SiwdChallenge, error) {
 // SignSiwdAskProof signs the ask proof a loopback client carries on its
 // authorize request: a JWS over the exact canonical bytes of that request's own
 // challenge, under SiwdAskJWSTyp, signed by a CURRENT auth key of the client
-// identity's chain (SIWD.md §The ask proof). It is what makes a client_did on a
+// identity's chain (INTEGRATIONS.md, The ask proof). It is what makes a client_did on a
 // loopback request mean anything — the host verifies it against the chain's
 // current state before rendering any consent.
 //

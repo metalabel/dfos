@@ -285,11 +285,11 @@ func errNoIdentity() error {
 // and one caller is entitled to act on the difference.
 //
 // `keys prove` may fall back to the oracle a ceremony's own resolution named,
-// but only for a holder that brought none of its own (KEY-PROOF.md). An operator
-// who typed --relay named a relay; a pin mismatch is a compromise signal about
-// the relay they named. Reaching past either for someone else's relay would
-// answer a question that was asked of a specific one, so the fallback tests for
-// this sentinel and nothing else.
+// but only for a holder that brought none of its own (INTEGRATIONS.md, Carriage
+// and resolution). An operator who typed --relay named a relay; a pin mismatch
+// is a compromise signal about the relay they named. Reaching past either for
+// someone else's relay would answer a question that was asked of a specific
+// one, so the fallback tests for this sentinel and nothing else.
 var errNoPeerConfigured = errors.New("no peer to talk to")
 
 // errNoPeer is the peer-side twin of errNoIdentity. localPeerFlag adds the

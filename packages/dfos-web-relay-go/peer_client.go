@@ -205,7 +205,7 @@ func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) e
 // signed by the pushing relay's own DID.
 //
 // Gossip-out authenticates like any client: anonymously, or with an identity
-// proof (WEB-RELAY.md, Relay Identity). The signer is a callback because the
+// proof (RELAY.md, Relay identity and profile). The signer is a callback because the
 // proof binds bodyHash — the body is serialized ONCE here and both hashed and
 // sent, since re-serializing for the wire would sign one string and send another.
 // A signer that fails leaves the push anonymous rather than dropping it: gossip

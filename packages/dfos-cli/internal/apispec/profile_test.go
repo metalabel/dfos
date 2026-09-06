@@ -335,10 +335,10 @@ func TestRequiredActionsOrAndAnd(t *testing.T) {
 // THE SHAPE MATRIX. Every spelling of `x-dfos-actions` an operation can carry,
 // conforming and not, with the exact reading or the exact refusal.
 //
-// The canonical AND-array — one OR-alternative that is an AND-pair, the
-// `[[a, b]]` spelling API-AUTH.md's convention writes verbatim — is the row that
-// matters most: it is legal, it is what a real host publishes, and a client that
-// mis-walks it refuses a route it can call.
+// The canonical AND-array — one OR-alternative that is an AND-pair, the `[[a,
+// b]]` spelling INTEGRATIONS.md, Required actions' convention writes verbatim —
+// is the row that matters most: it is legal, it is what a real host publishes,
+// and a client that mis-walks it refuses a route it can call.
 func TestRequiredActionsShapeMatrix(t *testing.T) {
 	cases := []struct {
 		name string

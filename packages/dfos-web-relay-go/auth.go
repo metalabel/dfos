@@ -48,7 +48,7 @@ const (
 // CreateCurrentStateProofResolver resolves an identity proof's kid to a CURRENT
 // key of the presenter, from THIS relay's local store.
 //
-// CURRENT-STATE ONLY, deliberately (WEB-RELAY.md, Key Resolution): after a key
+// CURRENT-STATE ONLY, deliberately (INTEGRATIONS.md, The request proof): after a key
 // rotation the old key immediately stops authenticating, which is how a
 // presenter whose key is compromised revokes that key's ability to speak in its
 // name. A deleted identity has no live-authentication standing at all.
@@ -83,8 +83,8 @@ func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 		if identity.State.IsDeleted {
 			return nil, fmt.Errorf("%w: presenter identity is deleted", dfos.ErrProofPresenterInvalid)
 		}
-		// Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-		// current-state") — auth, assert, or controller. keyFromState searches
+		// Any CURRENT key role may sign a proof (INTEGRATIONS.md, The request
+		// proof) — auth, assert, or controller. keyFromState searches
 		// exactly those three sets of the CURRENT state.
 		publicKey, err := keyFromState(identity.State, kid[hash+1:])
 		if err != nil {
@@ -100,7 +100,7 @@ func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 // ---------------------------------------------------------------------------
 
 // JtiCache is the replay cache a relay consumes — REQUIRED on every
-// write-shaped proof (WEB-RELAY.md, Authentication).
+// write-shaped proof (RELAY.md, Admission).
 //
 // WHY A WRITE-SHAPED SURFACE CANNOT BORROW ITS REPLAY POSTURE FROM DOWNSTREAM
 // IDEMPOTENCY: the admission ladder runs POLICY before full verification, so the

@@ -14,7 +14,7 @@
 // This index is the ONE-KEY-ONE-DID ORACLE: a holder asks it before signing a key
 // proof and REFUSES when some chain already holds the key, because proving one
 // key into two chains publishes an irreversible public link between those two
-// identities (KEY-PROOF.md, Holder Obligations). An index of DECLARATIONS would
+// identities (INTEGRATIONS.md, Holder obligations). An index of DECLARATIONS would
 // therefore be a burn weapon. Nothing structural stops anyone from writing anyone
 // else's public key into their own chain — and if that listing indexed, every
 // future ceremony for the key's true holder would refuse, forever, on evidence
@@ -249,14 +249,15 @@ func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
 // implementation gets wrong, and both are exactly the cases key-loss recovery
 // depends on — possession, once demonstrated, does not become untrue.
 //
-// The deletion half pins BOTH resolution shapes unconditionally. WEB-RELAY.md's
-// discovery-vs-resolution rule lets a relay omit deleted identities from the
-// DISCOVERY shapes of this route (the bare listing, the walks, nameContains,
-// hasPublicProfile) — and requires `did=` AND `key=` to return them carrying
-// isDeleted. `key=` is not a convenience here: key-loss recovery starts from a
-// restored seed holding no DID, and mint-time burn checking refuses a key that
-// already proves somewhere. A hidden sealed row tells a returning holder their
-// identity never existed, and tells a minter that a spent key is free.
+// The deletion half pins BOTH resolution shapes unconditionally. The
+// discovery-vs-resolution rule (RELAY.md, Identities) lets a relay omit deleted
+// identities from the DISCOVERY shapes of this route (the bare listing, the
+// walks, nameContains, hasPublicProfile) — and requires `did=` AND `key=` to
+// return them carrying isDeleted. `key=` is not a convenience here: key-loss
+// recovery starts from a restored seed holding no DID, and mint-time burn
+// checking refuses a key that already proves somewhere. A hidden sealed row
+// tells a returning holder their identity never existed, and tells a minter
+// that a spent key is free.
 func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)

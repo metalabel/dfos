@@ -33,16 +33,17 @@ package cmd
 // that, because the one wrong thing to believe at that moment is that stopping
 // the command took the key back.
 //
-// THE STALE HEAD IS THE ONE PLACE AN ENVELOPE IS SIGNED TWICE. `prevCID` binds a
-// proof to one chain position; when the chain moves under a ceremony — the
+// THE STALE HEAD IS THE ONE PLACE AN ENVELOPE IS SIGNED TWICE. `prevCID` binds
+// a proof to one chain position; when the chain moves under a ceremony — the
 // custodian published something between the presentation and the decision — the
-// envelope names a head that is no longer the head, and the operator says so with
-// `stale`. The recovery is the one KEY-PROOF.md names: re-resolve the SAME code
-// (a live ceremony re-resolves, answering the same nonce against the current
-// head), re-sign with the SAME key, re-present. It is not a retry of a refused
-// presentation — nothing was refused — and it is bounded: three re-signs, then a
-// loud stop, because a head moving that often is a ceremony that is never going
-// to settle and a signature is not something to spend in a loop.
+// envelope names a head that is no longer the head, and the operator says so
+// with `stale`. The recovery is the one INTEGRATIONS.md, Carriage and
+// resolution names: re-resolve the SAME code (a live ceremony re-resolves,
+// answering the same nonce against the current head), re-sign with the SAME
+// key, re-present. It is not a retry of a refused presentation — nothing was
+// refused — and it is bounded: three re-signs, then a loud stop, because a head
+// moving that often is a ceremony that is never going to settle and a signature
+// is not something to spend in a loop.
 //
 // THE POSITION CANNOT MOVE ACROSS A RE-SIGN. What the human consented to is an
 // identity, a role set, and an audience; only the head is allowed to be different
@@ -316,8 +317,8 @@ func waitForCeremonyDecision(cer *ceremony, cand *candidateKey, description stri
 	}
 }
 
-// resignForMovedHead runs KEY-PROOF.md's stale recovery: re-resolve, re-sign,
-// re-present.
+// resignForMovedHead runs INTEGRATIONS.md, Carriage and resolution's stale
+// recovery: re-resolve, re-sign, re-present.
 //
 // THE RE-RESOLUTION IS OF THE SAME CODE, at the same authority, through the same
 // resolveCode — so every rule that made the first resolution safe applies to this
