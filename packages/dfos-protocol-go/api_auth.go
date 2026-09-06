@@ -25,7 +25,7 @@ import (
 // canonical-bytes machinery, same freshness bounds, same host binding, same
 // current-state key resolution — that one member and the credential walk are the
 // whole delta, and the typ gate keeps the two claims distinct on the wire. See
-// specs/API-AUTH.md.
+// specs/INTEGRATIONS.md.
 //
 // This file MUST stay in sync with the TS twin. The canonical signing input is
 // hand-rolled with jsonStringifyString rather than encoding/json for one

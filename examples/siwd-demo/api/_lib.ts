@@ -2,7 +2,7 @@
 
   The backend's shared parts: the seal, the cookies, and this request's origin.
 
-  The seal is the replay defense. specs/SIWD.md §Replay prevention admits two
+  The seal is the replay defense. specs/INTEGRATIONS.md §Replay prevention admits two
   disciplines, and which one you owe is decided by WHAT SUCCESS GRANTS. This
   demo grants one thing — a session with the browser standing here — so it runs
   the flow-bound discipline: at mint time the server seals the nonce under a key
@@ -49,7 +49,7 @@ export const RELAY_URL = 'https://relay.dfos.com';
 /**
  * The API host this demo spends its credential against. It is the `<host>` half
  * of the `api:<host>` resource string AND the `host` member of every request
- * proof, and specs/API-AUTH.md requires those to name the same origin — so it
+ * proof, and specs/INTEGRATIONS.md requires those to name the same origin — so it
  * is one constant here rather than two strings that could drift.
  */
 export const API_HOST = 'api.dfos.com';
@@ -257,7 +257,7 @@ export const unseal = (purpose: string, sealed: string | undefined): string | nu
   The second key, and the one that makes a credential spendable.
 
   A DFOS credential is issued TO a named DID — `aud` is the app's `client_did`,
-  the one served in `/.well-known/dfos-app.json`. specs/API-AUTH.md is built so
+  the one served in `/.well-known/dfos-app.json`. specs/INTEGRATIONS.md is built so
   that holding the credential bytes is not enough: every request additionally
   carries a fresh JWS signed by that DID's key, binding the credential's CID to
   this exact method, host, path, and body. So a captured credential authorizes

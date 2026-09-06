@@ -38,7 +38,7 @@ package relay
   can outlive the grant that made it public until the next op happens to dirty
   that content (or a full rebuild reruns the builder). Acceptable for a
   non-authoritative hint plane: authoritative reads always re-verify at request
-  time; the index only advertises a browse hint. See specs/WEB-RELAY.md §Index.
+  time; the index only advertises a browse hint. See specs/RELAY.md §Index.
 
   Byte-identical to the TS twin index-maintenance.ts (enforced by the parity
   harness).

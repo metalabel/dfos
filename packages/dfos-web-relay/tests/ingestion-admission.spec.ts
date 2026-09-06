@@ -2,7 +2,7 @@
 
   INGESTION ADMISSION
 
-  The admission ladder of specs/WEB-RELAY.md "Ingestion Admission", asserted in
+  The admission ladder of specs/RELAY.md "Admission", asserted in
   its normative order: structural caps -> proof verification when one is
   presented -> the relay-local admission policy -> full per-item verification.
 

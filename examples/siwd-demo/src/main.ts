@@ -4,7 +4,7 @@
 
   This page never decides whether to believe a signed challenge. It hands the
   JWS to `/api/verify`, where the session is granted, and renders the answer.
-  specs/SIWD.md requires that: a bare DID is an address, not a proof, so the
+  specs/INTEGRATIONS.md requires that: a bare DID is an address, not a proof, so the
   JWS MUST be verified wherever a session is granted.
 
   The browser's half is three moves:
@@ -46,7 +46,7 @@
   credential arrives in the callback's URL fragment, is handed straight to the
   backend, and is never stored here. A browser cannot hold a signing key safely,
   so the backend holds it and signs — the backend-for-frontend shape
-  specs/API-AUTH.md describes.
+  specs/INTEGRATIONS.md describes.
 
   The JWS is decoded here for display only. `decodeJwsUnsafe` does no
   verification — the panel says so, and so does the name.

@@ -129,7 +129,7 @@ func TestIdentityWellKnownPatchRefusesDIDMismatch(t *testing.T) {
 // The two refusal messages buildWellKnownPatch can produce, as format strings
 // over the document path.
 const (
-	refusalMissingRedirectURIs = "app description at %s is missing its required member (redirect_uris); author that first — see specs/SIWD.md \"The App Description Document\""
+	refusalMissingRedirectURIs = "app description at %s is missing its required member (redirect_uris); author that first — see specs/INTEGRATIONS.md \"The app description document\""
 	refusalInvalidName         = "app description at %s has an invalid name: present-but-empty is malformed — give it a value or omit it"
 )
 

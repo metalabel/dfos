@@ -48,7 +48,7 @@ func newIdentityCmd() *cobra.Command {
 	return cmd
 }
 
-// siwdCarriageCap is the identity_chain operation limit specified by specs/SIWD.md.
+// siwdCarriageCap is the identity_chain operation limit specified by specs/INTEGRATIONS.md.
 const siwdCarriageCap = 100
 
 func newIdentityCreateCmd() *cobra.Command {
@@ -381,9 +381,9 @@ func ordinalSuffix(n int) string {
 // --- possession proofs for the keys an update introduces ---
 //
 // A key's appearance in an identity chain is accompanied by that key's own
-// signature over the appearance (specs/KEY-PROOF.md, PROTOCOL.md → Key
-// Possession). Genesis is the one exception, and it proves itself: one key in all
-// three roles, signing the operation that declares it. Every other introduction
+// signature over the appearance (specs/PROTOCOL.md → Key possession).
+// Genesis is the one exception, and it proves itself: one key in all three
+// roles, signing the operation that declares it. Every other introduction
 // carries an embedded envelope, and a membership no envelope covers is VOID —
 // excluded from effective state, never indexed, never resolving.
 //
@@ -1110,7 +1110,7 @@ func newIdentityDevicePubkeyCmd() *cobra.Command {
 // DfosOrigin services entry naming the domain, signed by a controller key. The
 // domain's half is served by the operator, so the command's real output is the
 // instruction block telling them exactly what to publish. See
-// specs/ORIGIN-BINDING.md (https://protocol.dfos.com/origin-binding).
+// specs/INTEGRATIONS.md (https://protocol.dfos.com/integrations#origin-binding).
 func newIdentityBindDomainCmd() *cobra.Command {
 	var peerName string
 	var serviceID string
@@ -2790,7 +2790,7 @@ func buildWellKnownPatch(chain *relay.StoredIdentityChain, doc map[string]any, p
 	redirectURIs, hasRedirectURIs := doc["redirect_uris"].([]any)
 	if !hasRedirectURIs || len(redirectURIs) == 0 {
 		return nil, fmt.Errorf(
-			"app description at %s is missing its required member (redirect_uris); author that first — see specs/SIWD.md \"The App Description Document\"",
+			"app description at %s is missing its required member (redirect_uris); author that first — see specs/INTEGRATIONS.md \"The app description document\"",
 			path,
 		)
 	}

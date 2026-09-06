@@ -179,6 +179,6 @@ drift.
 
 - [Setup guide](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup) — integrate sign-in into your own app
 - [Why signed requests](https://docs.dfos.com/docs/developers/sign-in-with-dfos/why-signed-requests) — the security model this demo exercises
-- [SIWD specification](https://protocol.dfos.com/siwd) · [API-AUTH specification](https://protocol.dfos.com/api-auth)
+- [Sign-in specification](https://protocol.dfos.com/integrations#sign-in) · [API authentication specification](https://protocol.dfos.com/integrations#api-authentication)
 - [`@metalabel/dfos-client`](../../packages/dfos-client) — the relying-party kit this demo consumes
 - [Chain explorer](https://explore.dfos.com) — inspect any identity chain, this app's included

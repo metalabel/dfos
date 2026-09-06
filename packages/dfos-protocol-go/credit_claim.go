@@ -14,7 +14,7 @@ import (
 // content chain. Attribution, not authorization: a credit claim grants nothing.
 // It is a DOCUMENT-PLANE artifact — not gossiped, and relays are not
 // credit-claim aware; a claim travels inside the document bytes that embed it.
-// See specs/CREDITS.md for the two-way bind and the four verification states.
+// See specs/CONTENT-MODEL.md for the two-way bind and the four verification states.
 //
 // This file MUST stay in sync with the TS twin. The payload fields, the
 // validation ORDER, and the error strings are aligned deliberately: a claim that
@@ -65,7 +65,7 @@ const maxCreditClaimSize = 4096
 //     not resolve). The claim may be perfectly valid.
 //
 // Collapsing these two, or rendering either as "unclaimed", is the one thing
-// specs/CREDITS.md says a consumer MUST NOT do.
+// specs/CONTENT-MODEL.md says a consumer MUST NOT do.
 var (
 	ErrCreditClaimInvalid      = errors.New("credit claim invalid")
 	ErrCreditClaimUnverifiable = errors.New("credit claim unverifiable")

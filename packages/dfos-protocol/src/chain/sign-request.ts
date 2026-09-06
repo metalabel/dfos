@@ -11,7 +11,7 @@
   remains opaque bytes during envelope build and verification; only the explicit
   signer-side canonical-payload check parses them.
 
-  See `specs/SIGNING.md` for the verification algorithm and the WYSIWYS signer
+  See `specs/RELAY.md` § Signing mailbox for the verification algorithm and the WYSIWYS signer
   obligations. This file MUST stay in sync with the Go twin
   (`dfos-protocol-go/sign_request.go`).
 

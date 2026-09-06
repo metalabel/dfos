@@ -23,8 +23,8 @@ import (
 // where an identity proof binds ONE method, host, path, and body inside a window
 // the RELAY owns.
 //
-// Byte twin of packages/dfos-web-relay/src/auth.ts. See specs/WEB-RELAY.md
-// "Authentication" and specs/API-AUTH.md "The Identity Proof".
+// Byte twin of packages/dfos-web-relay/src/auth.ts. See specs/RELAY.md
+// "Authentication" and specs/INTEGRATIONS.md "The identity proof".
 
 const (
 	// DefaultProofWindowSeconds is the acceptance window W — how old an identity

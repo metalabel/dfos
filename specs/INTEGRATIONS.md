@@ -673,8 +673,8 @@ consent is rendered.
 The request MUST carry a **client proof**, as the **`client_proof`** authorize
 parameter: a JWS over the exact
 [canonical challenge bytes](#challenge-canonical-signing-input) of the request's
-own challenge, signed by a key effective in the client identity's state at the
-chain head, with `alg: "EdDSA"`, `kid` the DID URL of the signing key, and
+own challenge, signed by a key effective in the client identity's **`authKeys`**
+at the chain head, with `alg: "EdDSA"`, `kid` the DID URL of the signing key, and
 protected header `typ: "did:dfos:siwd-ask"`. The host MUST verify it under the
 [Signature verification profile](https://protocol.dfos.com/spec#signature-verification-profile)
 against the client chain, carried or resident, **before any consent is

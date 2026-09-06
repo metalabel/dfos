@@ -256,7 +256,7 @@ describe('siwd login kit', () => {
   });
 
   /*
-    The loopback credential tier (specs/SIWD.md §Loopback Clients) is what a
+    The loopback credential tier (specs/INTEGRATIONS.md §Loopback clients) is what a
     bare `client_did` on a local port used to lack: the request itself proves
     key control. So the param rides through now instead of being dropped — the
     proof that backs it is `createSiwdLoopbackLoginRequest`'s job, not this
@@ -303,7 +303,7 @@ describe('siwd login kit', () => {
 
   /*
     A loopback target with NO client identity is admitted for `scope=identity`
-    only (specs/SIWD.md): every richer scope returns a credential issued to a
+    only (specs/INTEGRATIONS.md): every richer scope returns a credential issued to a
     `client_did`, and there is none to issue to. Naming a client identity opens
     the tier, and with it every scope.
   */

@@ -1166,7 +1166,7 @@ dfos identity well-known alice
 dfos identity well-known alice --patch public/.well-known/dfos-app.json
 ```
 
-Carriage is limited to 100 operations; longer chains must be published to a relay. The member set and exact carriage semantics are specified by `specs/SIWD.md` under “The App Description Document.”
+Carriage is limited to 100 operations; longer chains must be published to a relay. The member set and exact carriage semantics are specified by [Integrations](https://protocol.dfos.com/integrations#the-app-description-document) under “The app description document.”
 
 ---
 

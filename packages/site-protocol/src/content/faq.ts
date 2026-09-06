@@ -12,9 +12,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What is the DFOS Protocol?',
     answer:
-      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
     answerHtml:
-      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay. Identity chains are linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
   },
   {
     question: 'How do chains handle forks and conflicts?',

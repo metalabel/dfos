@@ -189,7 +189,7 @@ The canonical example of the [stream](#stream) interpretation. Each operation ap
 {
   "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
   "action": "create-item",
-  "createdByDID": "did:dfos:alice",
+  "createdByDID": "did:dfos:alice...",
   "title": "Hello world",
   "body": "My first post."
 }

@@ -6,7 +6,7 @@
   and nothing more. The unlock is NOT a fat verifier; it is `siwdSigningInput`,
   the PURE byte contract both halves share. A browser wallet signs those exact
   bytes; a verifier re-derives them. Without it the challenge→JWS encoding lives
-  nowhere and the two sides drift silently. See specs/SIWD.md.
+  nowhere and the two sides drift silently. See specs/INTEGRATIONS.md.
 
   Verification follows SIWD.md §Third-Party Verification: the signing key MUST be
   a CURRENT `authKeys` entry of a non-deleted identity — rotated-out keys and
@@ -281,13 +281,13 @@ export interface SiwdLoginRequestInput {
   redirectUri: string;
   /**
    * Requested scope: a space-separated SET of scope tokens (the OAuth `scope`
-   * convention), each of which must be one specs/SIWD.md §Scopes and Credentials
+   * convention), each of which must be one specs/INTEGRATIONS.md §Scopes and credentials
    * registers. A request naming an unregistered token is refused WHOLE rather
    * than partially honored — a consent screen that silently dropped a token
    * would describe something other than what was asked for.
    */
   scope: string;
-  /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
+  /** Consent-screen prose. A host MAY decline to render it; see specs/INTEGRATIONS.md. */
   statement?: string;
   /**
    * Bind the challenge to ONE identity — "sign in as this DID, or not at all".
@@ -352,7 +352,7 @@ export interface SiwdLoginRequest {
  * on a local port used to be refused outright — there is no domain serving a
  * well-known and no registration to check, so nothing backed the DID and a host
  * would not display an identity it could not stand behind. The LOOPBACK
- * CREDENTIAL TIER (specs/SIWD.md §Loopback Clients) replaces "nothing backs it"
+ * CREDENTIAL TIER (specs/INTEGRATIONS.md §Loopback clients) replaces "nothing backs it"
  * with the one thing local software can prove: control of that identity's
  * current keys. So the param now rides through on a loopback redirect instead
  * of being dropped — but it is honored only when the request ALSO carries an
@@ -363,7 +363,7 @@ export interface SiwdLoginRequest {
  *
  * The same judgment BOUNDS THE SCOPE. Every scope past `identity` returns a
  * credential issued to a `client_did`, so a loopback request with no client
- * identity at all still has nothing to issue to and specs/SIWD.md admits it for
+ * identity at all still has nothing to issue to and specs/INTEGRATIONS.md admits it for
  * `scope=identity` only — there is nothing to downgrade, so it throws. With a
  * client identity the tier is open and every scope is available.
  *
@@ -387,7 +387,7 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
     throw new Error(
       'invalid SIWD login request: loopback redirects support scope=identity only without a ' +
         'client identity — a credential scope needs a client_did proven under the loopback ' +
-        'credential tier (specs/SIWD.md §Loopback Clients)',
+        'credential tier (specs/INTEGRATIONS.md §Loopback clients)',
     );
   }
 
@@ -662,7 +662,7 @@ export interface SiwdLoopbackLoginRequestInput {
    * a credential to.
    */
   scope: string;
-  /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
+  /** Consent-screen prose. A host MAY decline to render it; see specs/INTEGRATIONS.md. */
   statement?: string;
   /** Bind the challenge to ONE subject DID (sign in as this DID or not at all). */
   did?: string;

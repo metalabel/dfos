@@ -7,7 +7,7 @@
     @metalabel/dfos-api      knows the API's shape — paths, params, response
                              types, generated from the live OpenAPI spec.
     @metalabel/dfos-client   knows the byte contract — `signApiRequest` builds
-                             the request proof specs/API-AUTH.md defines.
+                             the request proof specs/INTEGRATIONS.md defines.
     this file                holds the key and decides WHAT may be signed.
     the fetch seam           is where the two meet: `createDfosApi({ fetch })`
                              hands the wrapper one fully-composed `Request`, and

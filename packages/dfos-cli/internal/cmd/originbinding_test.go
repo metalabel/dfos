@@ -1,6 +1,6 @@
 package cmd
 
-// Origin-binding tests. Every rule in specs/ORIGIN-BINDING.md that the CLI
+// Origin-binding tests. Every rule in specs/INTEGRATIONS.md that the CLI
 // enforces is exercised here as a PURE fold — domain validation, claim reading,
 // record/body parsing, the bind plan, the verdict matrix — plus the two
 // command-level paths that touch nothing but the local relay. No test resolves
