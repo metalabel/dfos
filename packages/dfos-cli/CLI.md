@@ -104,12 +104,14 @@ The CLI embeds a full relay locally — the same SQLite-backed relay that runs a
 
 The CLI has four layers of state:
 
-- **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `key:<publicKeyMultibase>` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<name>`, holding its mnemonic. Never written to disk.
+- **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `key:<publicKeyMultibase>` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<custody id>:<name>`, holding its mnemonic. Never written to disk.
 - **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
-- **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain.
+- **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain. The directory also holds one `custody-id` file, the 16 hex characters that name this directory's keychain namespace.
 - **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
 
 `DFOS_CONFIG` names the config **file**, not the directory — `DFOS_CONFIG=/tmp/scratch/config.toml`, not `DFOS_CONFIG=/tmp/scratch`. A path naming a directory is refused with the contract rather than a bare "is a directory". Everything on disk sits beside that file: point it at another directory and the relay database, the credentials, the vaults, and the file-backed keys all move with it.
+
+A vault's mnemonic moves with it on either backend. The keychain is machine-wide and has no notion of a config directory, so a vault's keychain account carries the custody id of the directory its metadata lives in — `vault:<custody id>:<name>` — and two config directories holding a vault of the same name hold two entries. Key seeds in the keychain are not namespaced this way: they are addressed by public key, which is the same key wherever it is read from. Vault entries written by earlier versions sit at the flat account `vault:<name>`; that account is still read, and a vault whose metadata fingerprints as the phrase it holds moves it under its own custody id the first time it opens it.
 
 ---
 
@@ -275,13 +277,18 @@ This path is fixed. A vault's mnemonic and this path are together the full descr
 
 ### Storage
 
-| Piece                                        | Location                                  | Protection                          |
-| -------------------------------------------- | ----------------------------------------- | ----------------------------------- |
-| Mnemonic                                     | OS keychain, account `vault:<name>`       | whatever the host keychain provides |
-| Mnemonic (keychain unavailable)              | `~/.dfos/vaults/<name>.seed`, mode `0600` | filesystem permissions              |
-| Metadata (fingerprint, counter, minted keys) | `~/.dfos/vaults/<name>.toml`, mode `0600` | filesystem permissions              |
+| Piece                                        | Location                                         | Protection                          |
+| -------------------------------------------- | ------------------------------------------------ | ----------------------------------- |
+| Mnemonic                                     | OS keychain, account `vault:<custody id>:<name>` | whatever the host keychain provides |
+| Mnemonic (keychain unavailable)              | `~/.dfos/vaults/<name>.seed`, mode `0600`        | filesystem permissions              |
+| Metadata (fingerprint, counter, minted keys) | `~/.dfos/vaults/<name>.toml`, mode `0600`        | filesystem permissions              |
+| Custody id (names the keychain namespace)    | `~/.dfos/vaults/custody-id`, mode `0600`         | filesystem permissions              |
 
 The mnemonic follows the same probe-and-fall-back rule as the keystore: the OS keychain when one is reachable, a `0600` file when it is not, and the file store directly under `DFOS_NO_KEYCHAIN`. The metadata file holds no secret — a fingerprint and a list of public key ids — and is readable by hand.
+
+A mnemonic belongs to the vault directory its metadata lives in, on both backends. The file backend writes into that directory; the keychain account carries the directory's **custody id**, 16 random hex characters minted the first time a vault in that directory reaches the keychain and kept at `custody-id` beside the metadata. The id is not a secret and guards nothing on its own — it names a namespace, so that `DFOS_CONFIG=/tmp/scratch/config.toml dfos vault create personal` writes a keychain entry of its own instead of over the phrase behind `~/.dfos/vaults/personal.toml`. It belongs in the same backup as the metadata: without it, the entries it points at cannot be found. A vault created by an earlier version has its phrase at the flat account `vault:<name>`, which is read when the namespaced account holds nothing. A phrase found there is taken only if it fingerprints as that vault's own — the check is what stops a second directory adopting a phrase by name — and is then filed under the directory's custody id, with the flat entry removed.
+
+Two more rules hold the halves together. Storing a mnemonic never overwrites one: `vault create` and `vault import` are the only writers, both already refuse a name this directory has metadata for, and a name whose secret slot is occupied anyway stops the command rather than replacing what is there. And a phrase is checked before it is used — every reveal and every mint re-derives the fingerprint and refuses a phrase that is not the one the metadata was written from, because a mismatched seed derives perfectly good keys that no chain has ever heard of.
 
 The fingerprint is the first four bytes of SHA-256 over the seed's SLIP-0010 master key, hex-encoded. It identifies the **seed**, not the name it is filed under: the same phrase reaches the same fingerprint on every machine that holds it.
 
@@ -650,7 +657,7 @@ There are two storage backends:
 | OS keychain | system keychain/keyring | default, when an OS keychain is reachable          |
 | File store  | `~/.dfos/keys/`         | keychain probe fails, or `DFOS_NO_KEYCHAIN` is set |
 
-The file store lives inside the config directory, so `DFOS_CONFIG` relocates the keys along with `config.toml`, `relay.db`, and the vaults — pointing it at a scratch directory isolates all of this machine's dfos state, not part of it.
+The file store lives inside the config directory, so `DFOS_CONFIG` relocates the file-backed keys along with `config.toml`, `relay.db`, and the vaults. Keychain-held key seeds are addressed by public key in one machine-wide namespace, so they are the state `DFOS_CONFIG` does not move: a run that must hold its keys inside its config directory as well sets `DFOS_NO_KEYCHAIN`. Vault mnemonics are scoped on both backends — a keychain entry for a vault carries the custody id of the directory its metadata lives in.
 
 On startup the CLI probes the OS keychain with a test write/read/delete cycle (the gh CLI pattern). If the probe succeeds, keys go in the keychain. If it fails — which is the common case on headless Linux, containers, and CI where no keychain daemon is running — the CLI prints a warning to stderr and **falls back to the file store**. Setting `DFOS_NO_KEYCHAIN` to any non-empty value skips the probe and uses the file store directly.
 

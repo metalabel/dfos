@@ -17,6 +17,7 @@ package vault
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,7 +119,11 @@ func Open(dir string, secrets SecretStore) *Store {
 //
 // It resolves through config.ConfigDir(), which honors DFOS_CONFIG, rather than
 // os.UserHomeDir() — so pointing DFOS_CONFIG at a scratch directory takes the
-// vaults with it instead of reaching into the operator's real ones.
+// vaults with it instead of reaching into the operator's real ones. The
+// mnemonics move with the metadata on both backends: the file backend writes
+// into this directory, and the keychain accounts carry this directory's custody
+// id (see custody.go), which is what keeps one directory's vault out of
+// another's keychain entry.
 // The secret backend is chosen lazily, so a metadata-only command — `vault
 // list`, `vault show`, whoami's provenance line — never probes the keychain.
 func Default() *Store {
@@ -197,7 +202,15 @@ func (s *Store) adopt(name, mnemonic string, imported bool) (*Metadata, error) {
 	if err := s.refuseDuplicateSeed(fingerprint); err != nil {
 		return nil, err
 	}
+	// Put refuses an occupied slot rather than replacing it, and this is the one
+	// caller that can meet one: the metadata half of the vault is absent (Has()
+	// said so) while the secret half is not. That is a leftover — a rolled-back
+	// adopt whose delete did not land, or a metadata file removed by hand — and
+	// the operator has to say which phrase survives, because this code cannot.
 	if err := s.secrets.Put(name, mnemonic); err != nil {
+		if errors.Is(err, ErrSecretExists) {
+			return nil, fmt.Errorf("no vault '%s' in %s, but a mnemonic is already stored under that name — nothing was written, because storing this one would destroy it: %w", name, s.dir, err)
+		}
 		return nil, err
 	}
 	meta := &Metadata{
@@ -306,10 +319,74 @@ func (s *Store) List() ([]*Metadata, error) {
 // Mnemonic returns a vault's mnemonic. Every caller of this is a deliberate
 // reveal or a derivation; nothing prints its result by default.
 func (s *Store) Mnemonic(name string) (string, error) {
-	if _, err := s.Load(name); err != nil {
+	meta, err := s.Load(name)
+	if err != nil {
 		return "", err
 	}
-	return s.secrets.Get(name)
+	return s.mnemonicFor(meta)
+}
+
+// mnemonicFor opens the secret half of a vault and checks it is the phrase the
+// metadata describes before handing it back.
+//
+// The check is the point. Metadata is a file in one directory; the mnemonic may
+// be in a machine-wide keychain, and the two can be made to disagree — by an
+// entry edited by hand, by a backend that answered for a different profile, by a
+// restore that put back one half. A phrase that fingerprints differently from
+// the metadata is not this vault's phrase, and every caller here either reveals
+// it to an operator as that vault's backup or derives keys from it under that
+// vault's counter. Both are wrong with the wrong phrase, and both are silent
+// about it: a mismatched seed derives perfectly good keys that no chain knows.
+func (s *Store) mnemonicFor(meta *Metadata) (string, error) {
+	mnemonic, err := s.secrets.Get(meta.Name)
+	if err != nil {
+		if legacy, ok := s.legacyMnemonic(meta); ok {
+			return legacy, nil
+		}
+		return "", err
+	}
+	if err := checkFingerprint(meta, mnemonic); err != nil {
+		return "", err
+	}
+	return mnemonic, nil
+}
+
+// legacyMnemonic is the read path for a vault whose phrase is still under the
+// account an earlier version wrote — a flat, machine-wide name with no custody
+// id in it. It is taken only when the phrase fingerprints as this vault's, so a
+// second config directory holding a vault of the same name cannot pick it up.
+//
+// A phrase that IS this vault's is then moved forward, once, into this
+// directory's namespace. The migration is best-effort: the read has already
+// succeeded, and a keychain that refuses the rewrite is not a reason to fail the
+// command that asked for the phrase.
+func (s *Store) legacyMnemonic(meta *Metadata) (string, bool) {
+	backend, ok := s.secrets.(legacySecrets)
+	if !ok {
+		return "", false
+	}
+	mnemonic, found := backend.getLegacy(meta.Name)
+	if !found {
+		return "", false
+	}
+	if checkFingerprint(meta, mnemonic) != nil {
+		return "", false
+	}
+	_ = backend.migrateLegacy(meta.Name, mnemonic)
+	return mnemonic, true
+}
+
+// checkFingerprint reports whether a stored phrase is the seed this vault's
+// metadata was written from.
+func checkFingerprint(meta *Metadata, mnemonic string) error {
+	seed, err := MnemonicSeed(mnemonic)
+	if err != nil {
+		return fmt.Errorf("the mnemonic stored for vault '%s' is not a valid BIP-39 phrase: %w", meta.Name, err)
+	}
+	if got := Fingerprint(seed); got != meta.Fingerprint {
+		return fmt.Errorf("vault '%s' records fingerprint %s, but the stored mnemonic is seed %s — the phrase behind this vault is not the one it was created from, and nothing was derived from it", meta.Name, meta.Fingerprint, got)
+	}
+	return nil
 }
 
 // Mint reserves the next count indices and derives their keypairs.
@@ -328,7 +405,7 @@ func (s *Store) Mint(name string, count int) ([]Derived, error) {
 	if err != nil {
 		return nil, err
 	}
-	mnemonic, err := s.secrets.Get(name)
+	mnemonic, err := s.mnemonicFor(meta)
 	if err != nil {
 		return nil, err
 	}

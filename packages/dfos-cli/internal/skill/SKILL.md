@@ -197,10 +197,14 @@ own.
 | `DFOS_NO_UPDATE_CHECK` | Disable the background version check             |
 
 In headless/CI environments set `DFOS_NO_KEYCHAIN=1` to avoid interactive
-keychain prompts. `DFOS_CONFIG` moves the whole of a machine's dfos state
-together — config, `relay.db`, credentials, vaults, and file-backed keys all sit
-beside the config file — so pointing it at a scratch directory isolates a run
-completely.
+keychain prompts. `DFOS_CONFIG` moves a machine's dfos files together — config,
+`relay.db`, credentials, vaults, and file-backed keys all sit beside the config
+file — and a vault's mnemonic goes with them on either backend: a vault's
+keychain entry is namespaced by the config directory its metadata lives in, so a
+scratch profile's `personal` and a real profile's `personal` are two phrases.
+Key seeds in the OS keychain are the state that does not move — they are
+addressed by public key in one machine-wide namespace — so a run that must be
+isolated down to its keys sets `DFOS_NO_KEYCHAIN=1` as well.
 
 ## Command map
 
