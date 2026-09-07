@@ -326,22 +326,32 @@ func originFormTarget(req *http.Request) string {
 // A read-time credential check is an ephemeral presentation, so the basis is now
 // (PROTOCOL, Time basis): keys come from head effective state, exp runs against
 // the wall clock, and revocation is asked timelessly.
-func hasPublicStandingAuth(contentID string, action string, store RelayReadStore) bool {
+// A STORE FAULT IS NOT "NOT PUBLIC". The projection persists this answer, so a
+// lookup that failed and a chain that is genuinely private must not read the
+// same: the caller aborts its run on the error and retries, rather than writing
+// publicRead: false and advancing the cursor past it.
+func hasPublicStandingAuth(contentID string, action string, store RelayReadStore) (bool, error) {
 	resource := "chain:" + contentID
-	publicCreds, _ := store.GetPublicCredentials(resource)
+	publicCreds, err := store.GetPublicCredentials(resource)
+	if err != nil {
+		return false, err
+	}
 	resolveKey := CreateAsOfKeyResolver(store)
 
-	chain, _ := store.GetContentChain(contentID)
+	chain, err := store.GetContentChain(contentID)
+	if err != nil {
+		return false, err
+	}
 	if chain == nil {
-		return false
+		return false, nil
 	}
 
 	for _, credJws := range publicCreds {
 		if err := verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, "", store, true); err == nil {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // ---------------------------------------------------------------------------

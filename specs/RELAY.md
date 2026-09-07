@@ -2105,6 +2105,15 @@ The optional `:ref` parameter selects which operation's document to return: `hea
 (default) is the current document at chain head, and an operation CID is the
 document that operation committed.
 
+A public (`aud: "*"`) grant covers only the document at the chain's CURRENT head.
+The operative test is document-CID equality: the selected `:ref` resolves to a
+`documentCID`, and the grant applies only when that CID equals the chain state's
+current document CID. This holds however the grant arrives — a standing
+credential the relay holds and a public credential presented in `X-Credential`
+are both refused for a superseded document — so reading a superseded revision
+requires a credential whose audience names the requester, with a delegation chain
+rooting at the creator, or an identity proof as the creator.
+
 There is deliberately no relay-side document list route. Fetch
 `GET /content/:contentId/blob` for the document at head,
 `GET /content/:contentId/blob/:ref` for the document any specific operation

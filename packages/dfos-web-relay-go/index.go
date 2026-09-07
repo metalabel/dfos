@@ -640,7 +640,11 @@ func nextIndexCursor(rowCount, limit int, order string, last func() (string, str
 // the HTTP read store. Byte-identical to the TS twins in index-routes.ts.
 // ---------------------------------------------------------------------------
 
-func identityIndexRow(chain StoredIdentityChain, store RelayReadStore) IndexIdentityRow {
+func identityIndexRow(chain StoredIdentityChain, store RelayReadStore) (IndexIdentityRow, error) {
+	profile, err := profileProjection(chain, store)
+	if err != nil {
+		return IndexIdentityRow{}, err
+	}
 	return IndexIdentityRow{
 		DID:       chain.DID,
 		HeadCID:   chain.HeadCID,
@@ -648,8 +652,8 @@ func identityIndexRow(chain StoredIdentityChain, store RelayReadStore) IndexIden
 		GenesisAt: createdAtOf(chain.Log),
 		HeadAt:    chain.LastCreatedAt,
 		IsDeleted: chain.State.IsDeleted,
-		Profile:   profileProjection(chain, store),
-	}
+		Profile:   profile,
+	}, nil
 }
 
 func contentIndexRow(chain StoredContentChain, src contentProjection) IndexContentRow {
@@ -765,7 +769,9 @@ func artifactIndexRow(cid, jwsToken, ingestedAt string) *IndexArtifactRow {
 	return &IndexArtifactRow{CID: cid, SignerDID: signerDID, CreatedAt: createdAt, IngestedAt: ingestedAt, DocSchema: docSchema}
 }
 
-func profileProjection(chain StoredIdentityChain, store RelayReadStore) *IndexProfile {
+// A store fault propagates rather than projecting an absent profile: see
+// hasPublicStandingAuth and headDocumentProjection.
+func profileProjection(chain StoredIdentityChain, store RelayReadStore) (*IndexProfile, error) {
 	candidates := make([]dfos.ServiceEntry, 0)
 	for _, service := range chain.State.Services {
 		if service["type"] != "ContentAnchor" {
@@ -787,23 +793,33 @@ func profileProjection(chain StoredIdentityChain, store RelayReadStore) *IndexPr
 		return a < b
 	})
 	if len(candidates) == 0 {
-		return nil
+		return nil, nil
 	}
 	anchor, _ := candidates[0]["anchor"].(string)
 	if anchor == "" {
-		return nil
+		return nil, nil
 	}
 
 	var doc map[string]any
 	var docSchema *string
-	if content, _ := store.GetContentChain(anchor); content != nil {
-		doc, docSchema = headDocumentProjection(*content, store)
+	content, err := store.GetContentChain(anchor)
+	if err != nil {
+		return nil, err
+	}
+	if content != nil {
+		doc, docSchema, err = headDocumentProjection(*content, store)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Confidentiality is enforced at the application layer by whoever serves: a
 	// non-public profile document MUST NOT project its extracted name onto the
 	// anonymous index surface. Compute publicRead first and gate name on it.
-	publicRead := hasPublicStandingAuth(anchor, "read", store)
+	publicRead, err := hasPublicStandingAuth(anchor, "read", store)
+	if err != nil {
+		return nil, err
+	}
 	var name *string
 	if publicRead && docSchema != nil && *docSchema == profileSchema && doc != nil {
 		if value, ok := doc["name"].(string); ok && value != "" {
@@ -815,31 +831,38 @@ func profileProjection(chain StoredIdentityChain, store RelayReadStore) *IndexPr
 		PublicRead: publicRead,
 		DocSchema:  docSchema,
 		Name:       name,
-	}
+	}, nil
 }
 
-func headDocumentProjection(chain StoredContentChain, store RelayReadStore) (map[string]any, *string) {
+// A BLOB STORE THAT IS DOWN HAS NOT SAID THE DOCUMENT IS ABSENT. Undecodable
+// bytes are still null metadata — that answer is stable — but a read fault
+// propagates, so the projection run aborts instead of persisting a null
+// docSchema and advancing past the row.
+func headDocumentProjection(chain StoredContentChain, store RelayReadStore) (map[string]any, *string, error) {
 	documentCID := chain.State.CurrentDocumentCID
 	if documentCID == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	blob, err := store.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *documentCID})
-	if err != nil || blob == nil {
-		return nil, nil
+	if err != nil {
+		return nil, nil, err
+	}
+	if blob == nil {
+		return nil, nil, nil
 	}
 	var decoded any
 	if err := json.Unmarshal(blob, &decoded); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	doc, ok := decoded.(map[string]any)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	schemaValue, ok := doc["$schema"].(string)
 	if !ok {
-		return doc, nil
+		return doc, nil, nil
 	}
-	return doc, &schemaValue
+	return doc, &schemaValue, nil
 }
 
 // contentProjection is what both of a content chain's projection rows read: the
@@ -858,13 +881,16 @@ type contentProjection struct {
 	publicRead bool
 }
 
-func contentProjectionSources(chain StoredContentChain, store RelayReadStore) contentProjection {
-	doc, docSchema := headDocumentProjection(chain, store)
-	return contentProjection{
-		doc:        doc,
-		docSchema:  docSchema,
-		publicRead: hasPublicStandingAuth(chain.ContentID, "read", store),
+func contentProjectionSources(chain StoredContentChain, store RelayReadStore) (contentProjection, error) {
+	doc, docSchema, err := headDocumentProjection(chain, store)
+	if err != nil {
+		return contentProjection{}, err
 	}
+	publicRead, err := hasPublicStandingAuth(chain.ContentID, "read", store)
+	if err != nil {
+		return contentProjection{}, err
+	}
+	return contentProjection{doc: doc, docSchema: docSchema, publicRead: publicRead}, nil
 }
 
 func parseBooleanQuery(query map[string][]string, key string) (*bool, bool) {

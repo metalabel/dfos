@@ -399,7 +399,7 @@ func (r *Relay) readThroughIdentity(peerURL, did string) bool {
 		for i, entry := range page.Entries {
 			tokens[i] = entry.JWSToken
 		}
-		r.Ingest(tokens)
+		r.ingestPeer(tokens)
 		if page.Resume() == nil {
 			return true
 		}
@@ -436,7 +436,7 @@ func (r *Relay) readThroughContent(peerURL, contentID string) bool {
 		for i, entry := range page.Entries {
 			tokens[i] = entry.JWSToken
 		}
-		r.Ingest(tokens)
+		r.ingestPeer(tokens)
 		if page.Resume() == nil {
 			return true
 		}
@@ -470,7 +470,11 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughIdentity(peer.URL, did)
-			chain, _ = r.readStore.GetIdentityChain(did)
+			// A failed reread is a store fault, not "not found" — see storeErr.
+			chain, err = r.readStore.GetIdentityChain(did)
+			if storeErr(w, err) {
+				return
+			}
 			if chain != nil && complete {
 				break
 			}
@@ -533,7 +537,11 @@ func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughIdentity(peer.URL, did)
-			chain, _ = r.readStore.GetIdentityChain(did)
+			// A failed reread is a store fault, not "not found" — see storeErr.
+			chain, err = r.readStore.GetIdentityChain(did)
+			if storeErr(w, err) {
+				return
+			}
 			if chain != nil && complete {
 				break
 			}
@@ -640,7 +648,11 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughContent(peer.URL, contentID)
-			chain, _ = r.readStore.GetContentChain(contentID)
+			// A failed reread is a store fault, not "not found" — see storeErr.
+			chain, err = r.readStore.GetContentChain(contentID)
+			if storeErr(w, err) {
+				return
+			}
 			if chain != nil && complete {
 				break
 			}
@@ -1057,12 +1069,23 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	// only; a request for any other revision requires authenticated or credentialed
 	// access, and even then a public grant does not count (see authorizeRead).
 	isHeadRef := chain.State.CurrentDocumentCID != nil && documentCID == *chain.State.CurrentDocumentCID
-	publicAccess := isHeadRef && hasPublicStandingAuth(contentID, "read", r.readStore)
+	publicAccess := false
+	if isHeadRef {
+		public, err := hasPublicStandingAuth(contentID, "read", r.readStore)
+		if storeErr(w, err) {
+			return
+		}
+		publicAccess = public
+	}
 	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID, publicAccess, isHeadRef) {
 		return
 	}
 
-	blob, _ := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID})
+	blob, err := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID})
+	// A blob store that is down has not told us the blob is absent — see storeErr.
+	if storeErr(w, err) {
+		return
+	}
 	if blob == nil {
 		writeError(w, 404, "blob not found")
 		return

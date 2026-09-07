@@ -303,7 +303,11 @@ func recomputeIdentityRow(did string, store RelayReadStore, rows *IndexRowBatch)
 	if err != nil || chain == nil {
 		return err
 	}
-	rows.Identities = append(rows.Identities, identityIndexRow(*chain, store))
+	row, err := identityIndexRow(*chain, store)
+	if err != nil {
+		return err
+	}
+	rows.Identities = append(rows.Identities, row)
 	return nil
 }
 
@@ -316,7 +320,10 @@ func recomputeContentRow(contentID string, store IndexProjectionStore, rows *Ind
 	if err != nil || chain == nil {
 		return err
 	}
-	src := contentProjectionSources(*chain, store)
+	src, err := contentProjectionSources(*chain, store)
+	if err != nil {
+		return err
+	}
 	rows.Content = append(rows.Content, contentIndexRow(*chain, src))
 	rows.Credits = append(rows.Credits, IndexCreditRowSet{ContentID: contentID, Rows: creditIndexRows(*chain, src)})
 	anchored, err := store.GetIndexIdentityDIDsByProfileAnchor(contentID)
@@ -656,6 +663,14 @@ func projectIndex(store IndexProjectionStore, budget int, logger *slog.Logger) I
 		}
 	}
 
+	caughtUp := cursor.Sweep == nil && reachedTip
+	// The rebuild marker is cleared by the run that finishes the rebuild, and
+	// only by it: until the walk reaches the tip with no sweep outstanding, a
+	// restart must resume the rebuild rather than adopt its partial rows.
+	if caughtUp {
+		cursor.Rebuilding = false
+	}
+
 	if err := store.ApplyIndexRows(rows); err != nil {
 		logIndexProjectionError(logger, "applyIndexRows", err)
 		return IndexProjectionRun{}
@@ -665,7 +680,7 @@ func projectIndex(store IndexProjectionStore, budget int, logger *slog.Logger) I
 		return IndexProjectionRun{}
 	}
 
-	return IndexProjectionRun{Projected: projected, Swept: swept, CaughtUp: cursor.Sweep == nil && reachedTip}
+	return IndexProjectionRun{Projected: projected, Swept: swept, CaughtUp: caughtUp}
 }
 
 // indexProjectionMaxRuns bounds how many budgets one drain spends before
@@ -766,7 +781,10 @@ func rebuildIndexProjection(store IndexProjectionStore, logger *slog.Logger) err
 	if err := rebuildable.ClearIndexProjection(); err != nil {
 		return err
 	}
-	if err := store.SetIndexCursor(IndexCursor{}); err != nil {
+	// The marker goes down BEFORE any draining, so a crash at any point during
+	// the drain leaves a state that says "rebuild in progress" rather than one
+	// that reads as a completed pre-cursor projection.
+	if err := store.SetIndexCursor(IndexCursor{Rebuilding: true}); err != nil {
 		return err
 	}
 	if err := rebuildable.SetIndexProjectionVersion(IndexProjectionVersion); err != nil {
@@ -790,18 +808,22 @@ func rebuildIndexProjection(store IndexProjectionStore, logger *slog.Logger) err
 // fresh corpus-wide sweep, which on a large public-read corpus is the #266 stall
 // again, on startup instead of on ingest.
 //
-// THE POPULATED CHECK IS THE WHOLE SAFETY ARGUMENT, and it is not decoration. A
-// zero cursor at the current version has exactly two causes: the pre-cursor
-// corpus above, or a rebuild that cleared the rows, stamped the version, and has
-// not drained yet (reachable under IndexProjection "external", where nothing
-// drains at boot). Skipping to the tip in the second case would discard the
-// rebuild permanently. A rebuild always leaves the projection EMPTY, so a
-// populated projection distinguishes them — and an empty one replays from the
-// start, where there are no rows to sweep and the replay is cheap anyway.
+// THE REBUILD MARKER IS THE WHOLE SAFETY ARGUMENT, and it is not decoration. A
+// zero cursor at the current version has two causes: the pre-cursor corpus
+// above, or a rebuild that cleared the rows, stamped the version, and has not
+// finished draining. Skipping to the tip in the second case discards the rebuild
+// permanently. "Populated" alone does NOT tell them apart: rows and the cursor
+// are two separate writes, so a rebuild that committed one batch of rows and
+// stopped before SetIndexCursor leaves populated rows beside a zero cursor,
+// exactly like a pre-cursor corpus. The marker is written before any draining
+// and cleared only by the run that reaches the tip, so it answers precisely.
 func adoptBuiltProjectionCursor(store IndexProjectionStore, logger *slog.Logger) error {
 	cursor, err := store.GetIndexCursor()
 	if err != nil {
 		return err
+	}
+	if cursor.Rebuilding {
+		return nil // a rebuild owns this projection — resume it, do not adopt it
 	}
 	if cursor.LogCursor != "" || cursor.Sweep != nil {
 		return nil // a cursor is already being kept — this relay owns the projection

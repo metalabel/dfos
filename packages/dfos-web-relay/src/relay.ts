@@ -547,9 +547,6 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     and never nests inside it: the projection reads the committed log, so it runs
     after the accepting span has released.
   */
-  const runProjection = async (): Promise<IndexProjectionRun> =>
-    projectionStore ? projectIndex(projectionStore) : { projected: 0, swept: 0, caughtUp: true };
-
   // EVERY projection pass this relay runs goes through here, so no two of them
   // overlap — a blob recompute that read an old content head, yielded, and then
   // applied its rows over a newer row would undo a concurrent ingest's drain.
@@ -565,6 +562,22 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       () => {},
     );
     return next;
+  };
+
+  // The PUBLIC entry point (CreatedRelay.projectIndex), and the only projection
+  // an `indexProjection: 'external'` deployment ever runs — so it goes through
+  // the same chain the inline path does. Bypassing it let two timer calls read
+  // the same cursor and apply their rows in either order: the slower pass's
+  // stale row lands last, both leave the same cursor, and no later run revisits
+  // it. Go's ProjectIndex guards the same overlap with projectionMu.TryLock.
+  const runProjection = async (): Promise<IndexProjectionRun> => {
+    if (!projectionStore) return { projected: 0, swept: 0, caughtUp: true };
+    const store = projectionStore;
+    let run: IndexProjectionRun = { projected: 0, swept: 0, caughtUp: true };
+    await chainProjection(async () => {
+      run = await projectIndex(store);
+    });
+    return run;
   };
 
   const scheduleIndexProjection = (): Promise<void> => {

@@ -1592,9 +1592,12 @@ paths:
       description: |
         Download the raw bytes of the document committed by a specific operation.
         The ref parameter is an operation CID within the chain. Anonymous access
-        is legal when a standing public-read grant authorizes it; otherwise the
-        creator presents an identity proof alone and a non-creator presents an
-        identity proof plus a DFOS read credential in `X-Credential`.
+        is legal when a standing public-read grant authorizes it AND the ref
+        resolves to the chain's current head document; a public (`aud: "*"`)
+        grant never covers a superseded document, stored or presented in
+        `X-Credential`. Otherwise the creator presents an identity proof alone
+        and a non-creator presents an identity proof plus a DFOS read credential
+        in `X-Credential` whose audience names the requester.
       tags: [Content Plane]
       # Three alternatives, cheapest first: anonymous under a standing
       # public-read grant; the creator's bare identity proof (AuthN, local policy
