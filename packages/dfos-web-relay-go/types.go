@@ -917,6 +917,12 @@ type IndexSweepState struct {
 type IndexCursor struct {
 	LogCursor string           `json:"logCursor"`
 	Sweep     *IndexSweepState `json:"sweep"`
+	// Rebuilding marks a rebuild that has started and not yet reached the tip.
+	// It is the only thing that distinguishes a partially drained rebuild from a
+	// projection built without a cursor — both can show rows beside a zero log
+	// cursor. See adoptBuiltProjectionCursor. Absent in older persisted cursors,
+	// which decode to false, the value they have always meant.
+	Rebuilding bool `json:"rebuilding,omitempty"`
 }
 
 // IndexWriteStore is THE PROJECTION SIDE of the index profile. A store

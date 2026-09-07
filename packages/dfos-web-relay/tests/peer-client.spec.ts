@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHttpPeerClient } from '../src/peer-client';
+import { createHttpPeerClient, MAX_PEER_LOG_PAGE_BYTES } from '../src/peer-client';
 
 describe('HTTP peer client cursor errors', () => {
   it.each(['identity', 'content'] as const)(
@@ -58,5 +58,62 @@ describe('HTTP peer client request timeout', () => {
     });
     await client.getOperationLog('http://peer.example', {});
     expect(seen).toBeUndefined();
+  });
+});
+
+describe('HTTP peer client page bounds', () => {
+  // The timeout bounds wall time, not memory, and read-through's op budget is
+  // only consulted AFTER a page has been decoded and ingested. A page that is
+  // not bounded here is unbounded work no later check can undo.
+  const pageOf = (count: number) =>
+    JSON.stringify({
+      entries: Array.from({ length: count }, (_, i) => ({ cid: `cid-${i}`, jwsToken: 'x' })),
+      next: null,
+    });
+
+  const clientReturning = (body: string, init?: ResponseInit) =>
+    createHttpPeerClient({ fetch: async () => new Response(body, { status: 200, ...init }) });
+
+  it.each(['identity', 'content', 'operation'] as const)(
+    'refuses a %s page with more entries than were requested',
+    async (kind) => {
+      const client = clientReturning(pageOf(50));
+      const result =
+        kind === 'identity'
+          ? await client.getIdentityLog('http://peer.example', 'did:dfos:test', { limit: 10 })
+          : kind === 'content'
+            ? await client.getContentLog('http://peer.example', 'content-id', { limit: 10 })
+            : await client.getOperationLog('http://peer.example', { limit: 10 });
+      expect(result).toBeNull();
+    },
+  );
+
+  it('accepts a page at exactly the requested limit', async () => {
+    const client = clientReturning(pageOf(10));
+    const result = await client.getOperationLog('http://peer.example', { limit: 10 });
+    expect(result).not.toBeNull();
+    expect(result).not.toBe('invalid-cursor');
+    expect((result as { entries: unknown[] }).entries).toHaveLength(10);
+  });
+
+  it('refuses a body past the byte cap', async () => {
+    const oversized = JSON.stringify({
+      entries: [{ cid: 'cid-0', jwsToken: 'x'.repeat(MAX_PEER_LOG_PAGE_BYTES) }],
+      next: null,
+    });
+    const client = clientReturning(oversized);
+    expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
+  });
+
+  it('refuses a declared content-length past the byte cap', async () => {
+    const client = clientReturning(pageOf(1), {
+      headers: { 'content-length': String(MAX_PEER_LOG_PAGE_BYTES + 1) },
+    });
+    expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
+  });
+
+  it('refuses a page whose entries are not an array', async () => {
+    const client = clientReturning(JSON.stringify({ entries: 'nope', next: null }));
+    expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
   });
 });

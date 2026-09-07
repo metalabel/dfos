@@ -527,7 +527,11 @@ func TestStandingPublicCredentialIsCheckedAtTheHead(t *testing.T) {
 	if res := IngestOperations([]string{credential}, store); res[0].Status != "new" {
 		t.Fatalf("public credential: %s (%s)", res[0].Status, res[0].Error)
 	}
-	if !hasPublicStandingAuth(contentID, "read", store) {
+	public, err := hasPublicStandingAuth(contentID, "read", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !public {
 		t.Fatal("the standing grant must hold while the issuing key is effective")
 	}
 
@@ -536,7 +540,11 @@ func TestStandingPublicCredentialIsCheckedAtTheHead(t *testing.T) {
 	if res := IngestOperations([]string{f.rotation}, store); res[0].Status != "new" {
 		t.Fatalf("rotation: %s (%s)", res[0].Status, res[0].Error)
 	}
-	if hasPublicStandingAuth(contentID, "read", store) {
+	public, err = hasPublicStandingAuth(contentID, "read", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public {
 		t.Fatal("a standing grant signed by a rotated-out key must stop granting")
 	}
 }

@@ -355,6 +355,18 @@ const projectLogEntry = async (
         'type'
       ];
       if (opType === 'delete') return { scope: 'public', after: null };
+      // A genesis is not always the FIRST thing this relay learns about an
+      // identity. A delegated public credential is admitted on its leaf
+      // signature alone, so a grant whose parent issuer is still unsynced is
+      // stored while the chain that authorizes it does not yet exist here — and
+      // the content it names projects as private. The parent's arrival is a
+      // `create`, and without this case it dirties nothing, so the content stays
+      // private until some unrelated touch happens to re-fold it. A newly-synced
+      // identity can only ADD standing authority, never remove it, so the same
+      // all-scope sweep restore and update already take is the right shape.
+      // Coarse on purpose: the sweep is budgeted, resumable, and COALESCED, so a
+      // burst of genesis operations costs one sweep, not one per identity.
+      if (opType === 'create') return { scope: 'all', after: null };
       if (opType === 'restore') return { scope: 'all', after: null };
       // An `update` can change the effective key set, and a standing credential
       // whose issuer key rotated out stops granting at read time (auth.ts), so

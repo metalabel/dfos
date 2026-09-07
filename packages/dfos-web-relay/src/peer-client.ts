@@ -43,6 +43,92 @@ export { REVOCATIONS_BASE_PATH } from './revocations';
  */
 export const PEER_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Byte cap on ONE peer log page. Matches the Go twin's `maxPeerLogPageBytes`.
+ *
+ * Read-through decodes a page inside an unauthenticated GET, and the op and
+ * deadline budgets that bound read-through are only consulted AFTER the decode
+ * has already returned — so the page itself has to be bounded here, or one
+ * hostile response is unbounded work no later check can undo. The request
+ * timeout bounds wall time, not memory.
+ */
+export const MAX_PEER_LOG_PAGE_BYTES = 16 << 20; // 16 MB
+
+type PeerLogPage = { entries: PeerLogEntry[]; next: string | null };
+
+/** Read a response body up to the cap; null past it, or on a read failure. */
+const readBoundedBody = async (res: Response): Promise<string | null> => {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_PEER_LOG_PAGE_BYTES) return null;
+  try {
+    if (!res.body) {
+      const text = await res.text();
+      return new TextEncoder().encode(text).length > MAX_PEER_LOG_PAGE_BYTES ? null : text;
+    }
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_PEER_LOG_PAGE_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return new TextDecoder().decode(body);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * One bounded page read, shared by all three log methods — an unbounded peer
+ * read is exactly the kind of thing the next method someone writes adds back.
+ *
+ * `limit` is the page size this relay asked for: a peer that returns more
+ * entries than were requested is answering a question nobody posed, so the page
+ * is refused rather than drained (same rule as Go's `fetchLog`).
+ */
+const fetchLogPage = async (
+  fetchImpl: typeof fetch,
+  url: URL,
+  params: { after?: string; limit?: number } | undefined,
+): Promise<PeerLogPage | 'invalid-cursor' | null> => {
+  if (params?.after) url.searchParams.set('after', params.after);
+  if (params?.limit) url.searchParams.set('limit', String(params.limit));
+  let res: Response;
+  try {
+    res = await fetchImpl(url.toString());
+  } catch {
+    return null;
+  }
+  // A 400 with an `after` param is the peer rejecting our relay-local cursor —
+  // distinguishable so the sync loop can reset instead of stall.
+  if (res.status === 400 && params?.after) return 'invalid-cursor';
+  if (!res.ok) return null;
+  const body = await readBoundedBody(res);
+  if (body === null) return null;
+  let data: { entries?: unknown; next?: string | null; cursor?: string | null };
+  try {
+    data = JSON.parse(body) as typeof data;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(data?.entries)) return null;
+  if (params?.limit && params.limit > 0 && data.entries.length > params.limit) return null;
+  // `cursor` fallback: pre-rename relays emit only the deprecated alias.
+  return { entries: data.entries as PeerLogEntry[], next: data.next ?? data.cursor ?? null };
+};
+
 export const createHttpPeerClient = (options?: {
   fetch?: typeof fetch;
   /** Per-request timeout in milliseconds; 0 disables it. */
@@ -61,29 +147,7 @@ export const createHttpPeerClient = (options?: {
   return {
     async getIdentityLog(peerUrl, did, params) {
       const url = new URL(`${PROOF_BASE_PATH}/identities/${encodeURIComponent(did)}/log`, peerUrl);
-      if (params?.after) url.searchParams.set('after', params.after);
-      if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      let res: Response;
-      try {
-        res = await fetchImpl(url.toString());
-      } catch {
-        return null;
-      }
-      if (res.status === 400 && params?.after) return 'invalid-cursor';
-      if (!res.ok) return null;
-      let data: {
-        entries?: PeerLogEntry[];
-        next?: string | null;
-        cursor?: string | null;
-      };
-      try {
-        data = (await res.json()) as typeof data;
-      } catch {
-        return null;
-      }
-      if (!data?.entries) return null;
-      // `cursor` fallback: pre-rename relays emit only the deprecated alias.
-      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
+      return fetchLogPage(fetchImpl, url, params);
     },
 
     async getContentLog(peerUrl, contentId, params) {
@@ -91,52 +155,12 @@ export const createHttpPeerClient = (options?: {
         `${PROOF_BASE_PATH}/content/${encodeURIComponent(contentId)}/log`,
         peerUrl,
       );
-      if (params?.after) url.searchParams.set('after', params.after);
-      if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      let res: Response;
-      try {
-        res = await fetchImpl(url.toString());
-      } catch {
-        return null;
-      }
-      if (res.status === 400 && params?.after) return 'invalid-cursor';
-      if (!res.ok) return null;
-      let data: {
-        entries?: PeerLogEntry[];
-        next?: string | null;
-        cursor?: string | null;
-      };
-      try {
-        data = (await res.json()) as typeof data;
-      } catch {
-        return null;
-      }
-      if (!data?.entries) return null;
-      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
+      return fetchLogPage(fetchImpl, url, params);
     },
 
     async getOperationLog(peerUrl, params) {
       const url = new URL(`${PROOF_BASE_PATH}/log`, peerUrl);
-      if (params?.after) url.searchParams.set('after', params.after);
-      if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      let res: Response;
-      try {
-        res = await fetchImpl(url.toString());
-      } catch {
-        return null;
-      }
-      // A 400 with an `after` param is the peer rejecting our relay-local
-      // cursor — distinguishable so the sync loop can reset instead of stall.
-      if (res.status === 400 && params?.after) return 'invalid-cursor';
-      if (!res.ok) return null;
-      let data: { entries?: PeerLogEntry[]; next?: string | null; cursor?: string | null };
-      try {
-        data = (await res.json()) as typeof data;
-      } catch {
-        return null;
-      }
-      if (!data?.entries) return null;
-      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
+      return fetchLogPage(fetchImpl, url, params);
     },
 
     async submitOperations(peerUrl, operations, options) {

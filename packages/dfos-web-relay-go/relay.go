@@ -450,6 +450,22 @@ func (r *Relay) projectIndexForBlob(documentCID string) {
 
 // Ingest stores raw ops, processes a batch for immediate results, and gossips.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
+	return r.ingestTokens(tokens, OpOriginDirect, currentAdmission)
+}
+
+// ingestPeer is Ingest for a batch pulled off a peer's log — read-through and
+// nothing else. A peer's log is COMMITTED HISTORY, so it is admitted the way the
+// sequencer admits its peer partition and the TS twin admits read-through
+// (`ingestWithGossip(tokens, 'historical')`): each operation against the
+// revocation state at its own basis, not this relay's live knowledge. Under
+// current admission a delegated update older than a later revocation is a
+// permanent rejection, which DELETES the raw op — the page can never be
+// reconsidered, and the GET serves a truncated chain from then on.
+func (r *Relay) ingestPeer(tokens []string) []IngestionResult {
+	return r.ingestTokens(tokens, OpOriginPeer, historicalAdmission)
+}
+
+func (r *Relay) ingestTokens(tokens []string, origin OpOrigin, mode admissionMode) []IngestionResult {
 	start := time.Now()
 
 	if r.writeStore == nil || r.writerState == nil {
@@ -471,13 +487,16 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	for i, token := range tokens {
 		rawCIDs[i] = computeOpCID(token)
 		if rawCIDs[i] != "" {
-			r.writerState.PutRawOp(rawCIDs[i], token, OpOriginDirect)
+			r.writerState.PutRawOp(rawCIDs[i], token, origin)
 		}
 	}
 
 	var opts []IngestOption
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
+	}
+	if mode == historicalAdmission {
+		opts = append(opts, WithHistoricalAdmission())
 	}
 	results := IngestOperations(tokens, r.writeStore, opts...)
 

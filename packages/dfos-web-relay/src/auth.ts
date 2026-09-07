@@ -364,7 +364,20 @@ export interface AccessVerification {
  * A read-time credential check is an ephemeral presentation, so the basis is now
  * (PROTOCOL, Time basis): no basis is passed, keys come from head effective
  * state, `exp` runs against the wall clock, and revocation is asked timelessly.
+ *
+ * A STORE FAULT IS NOT "NOT PUBLIC", AND IT THROWS. The per-credential `catch`
+ * below means "this credential does not work" — a revocation lookup that FAILED
+ * is a different claim, and swallowing it here is durable: the projection writes
+ * `publicRead: false`, advances its cursor, and considers itself caught up, so
+ * nothing ever retries. StoreFault is what the loop lets through.
  */
+class StoreFault extends Error {
+  constructor(cause: unknown) {
+    super(`store fault during standing-auth check: ${String(cause)}`);
+    this.cause = cause;
+  }
+}
+
 export const hasPublicStandingAuth = async (
   contentId: string,
   action: 'read' | 'write',
@@ -378,8 +391,16 @@ export const hasPublicStandingAuth = async (
   if (!chain) return false;
 
   const resolveIdentity = createIdentityResolver(store);
-  const isRevoked = async (issuerDID: string, credentialCID: string) =>
-    store.isCredentialRevoked(issuerDID, credentialCID);
+  // Marked at the seam, because a revocation lookup returns a BOOLEAN: anything
+  // it throws is the store failing, never a verdict. The delegation walk gets
+  // the same wrapped call, so a fault at any level propagates.
+  const isRevoked = async (issuerDID: string, credentialCID: string) => {
+    try {
+      return await store.isCredentialRevoked(issuerDID, credentialCID);
+    } catch (error) {
+      throw new StoreFault(error);
+    }
+  };
 
   for (const credJws of publicCreds) {
     try {
@@ -401,7 +422,8 @@ export const hasPublicStandingAuth = async (
       });
 
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof StoreFault) throw error;
       continue;
     }
   }
