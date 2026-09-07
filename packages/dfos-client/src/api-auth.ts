@@ -28,6 +28,7 @@
 
 */
 
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   apiIdentitySigningInput,
   apiRequestSigningInput,
@@ -414,24 +415,10 @@ const discoverChainRoot = (leafToken: string): string => {
  * message text. `status` is the recommended HTTP code (401 proof-invalid, 403
  * credential-invalid, 503 unverifiable, 500 config).
  *
- * REVOCATION AND RESOLUTION AVAILABILITY — read before deploying. This helper
- * rejects a credential it KNOWS is revoked (`isRevoked` true at any chain level).
- * It does NOT, with the default client, fail closed when the revocation source is
- * unreachable: the stock `createRevocationChecker` is fail-open by design
- * ("no revocation found" and "could not reach any relay" both return false), the
- * system-wide v1 stance that "non-revocation is never provable." Likewise a
- * credential-issuer that is unresolvable because relays are down surfaces from the
- * protocol verifier as a `CredentialVerificationError` and is reported here as
- * `invalid` (403), not `unverifiable` (503) — the underlying callback cannot
- * distinguish "genuinely absent" from "transiently unreachable." The PRESENTER
- * side is availability-aware (a resolution failure or unverified/stale tip is
- * `unverifiable`, failing closed unless `allowStale`); the CREDENTIAL side inherits
- * the v1 primitives' limitation. A deployment that needs fail-closed-on-outage for
- * the credential/revocation phase MUST inject an availability-aware `isRevoked`
- * (one that THROWS when it reaches zero sources — the throw is surfaced here as
- * `unverifiable`) via the client config. Tightening the default is a client-level
- * change to the shared revocation/resolution contract (it governs SIWD and relay
- * verification too), tracked outside this kit.
+ * Missing issuer dependencies and an unavailable revocation source are
+ * unverifiable (503). The default checker throws when no relay answers; an
+ * answered negative still cannot prove non-revocation. Custom checkers must
+ * likewise throw when status cannot be obtained.
  */
 export const verifyApiRequest = async (
   client: Client,
@@ -504,6 +491,9 @@ export const verifyApiRequest = async (
     chain = verifiedChain.chain;
   } catch (err) {
     if (err instanceof ApiRequestVerifyError) throw err;
+    if (isDependencyMissing(err)) {
+      throw unverifiableCredential(err instanceof Error ? err.message : String(err));
+    }
     if (err instanceof CredentialVerificationError) throw invalidCredential(err.message);
     // Anything else is a resolution or transport failure — the server's
     // condition, not a judgment about the credential.

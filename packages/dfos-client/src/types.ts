@@ -13,6 +13,12 @@ import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-pro
 import type { Attenuation, VerifiedDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 
+/** Head/as-of state; excludes the credit-claim projection. */
+export type EffectiveIdentity = VerifiedIdentity & { readonly resolution?: 'effective' };
+
+/** Every key ever proved, including memberships absent from effective state. */
+export type EverProvedIdentity = VerifiedIdentity & { readonly resolution: 'ever-proved' };
+
 // -----------------------------------------------------------------------------
 // trust + provenance (data, never exceptions)
 // -----------------------------------------------------------------------------
@@ -77,7 +83,7 @@ export interface VerifyResult<T> {
 export interface ResolvedContent {
   chain: VerifiedContentChain;
   /** The creator identity — resolved as a side effect of key resolution. */
-  creator: VerifiedIdentity;
+  creator: EffectiveIdentity;
   /** The current document blob, when fetched. */
   document?: DocumentBlob;
 }
@@ -85,7 +91,7 @@ export interface ResolvedContent {
 export interface ResolvedCredential {
   credential: VerifiedDFOSCredential;
   /** The issuer identity, verified. */
-  issuer: VerifiedIdentity;
+  issuer: EffectiveIdentity;
   /** Revocation status per the effective revocation checker (see Trust.unverifiable). */
   revoked: boolean;
 }
@@ -102,7 +108,7 @@ export interface DocumentBlob {
 
 /** Discriminated result of the paste-a-string dispatcher. */
 export type Resolution =
-  | ({ kind: 'identity' } & Resolved<VerifiedIdentity>)
+  | ({ kind: 'identity' } & Resolved<EffectiveIdentity>)
   | ({ kind: 'content' } & Resolved<ResolvedContent>)
   | ({ kind: 'credential' } & Resolved<ResolvedCredential>);
 
@@ -111,7 +117,7 @@ export type Resolution =
 // -----------------------------------------------------------------------------
 
 /**
- * Check whether a credential has been revoked. Default: `() => false` (honest).
+ * Check whether a credential has been revoked. The default queries relays and throws when none answers.
  *
  * `asOfUnix` is the protocol's revocation as-of basis (see the protocol's
  * `RevocationChecker`): supplied when folding committed history, so a credential
@@ -138,12 +144,12 @@ export interface Callbacks {
    */
   resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>;
   /** Resolve a DID to its verified identity state as of `basis`. */
-  resolveIdentity: (did: string, basis?: string) => Promise<VerifiedIdentity | undefined>;
+  resolveIdentity: (did: string, basis?: string) => Promise<EffectiveIdentity | undefined>;
   /**
    * Resolve a DID to its identity with every key it has ever proved — the
    * credit-claim carve-out, which runs no temporal check and so has no basis.
    */
-  resolveClaimantIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+  resolveClaimantIdentity: (did: string) => Promise<EverProvedIdentity | undefined>;
   isRevoked: RevChecker;
 }
 
@@ -342,7 +348,7 @@ export interface ClientConfig {
   store?: Store;
   /** Distinct-digest agreement threshold. Default 1 (first-wins). */
   quorum?: number;
-  /** Revocation checker. Default `() => false` (honest — status is unverifiable). */
+  /** Revocation checker. Default queries relays; throws when none answers. */
   isRevoked?: RevChecker;
   /** Injected fetch for blob/health/revocation calls. Default `globalThis.fetch`. */
   fetch?: typeof fetch;
@@ -365,7 +371,7 @@ export interface Client {
   /** Paste-a-string dispatcher → a typed, trust-wrapped resolution. */
   resolve(ref: string, options?: CallOptions): Promise<Resolution>;
 
-  identity(did: string, options?: CallOptions): Promise<Resolved<VerifiedIdentity>>;
+  identity(did: string, options?: CallOptions): Promise<Resolved<EffectiveIdentity>>;
   content(contentId: string, options?: CallOptions): Promise<Resolved<ResolvedContent>>;
   credential(jws: string, options?: CallOptions): Promise<Resolved<ResolvedCredential>>;
   document(contentId: string, options?: CallOptions): Promise<Resolved<DocumentBlob>>;

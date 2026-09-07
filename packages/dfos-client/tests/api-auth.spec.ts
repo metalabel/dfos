@@ -390,6 +390,7 @@ const clientFor = (identities: Identity[], isRevoked?: RevChecker) =>
         identities: Object.fromEntries(identities.map((id) => [id.did, id.log])),
       },
     }),
+    fetch: async () => Response.json({ revoked: false }),
     ...(isRevoked ? { isRevoked } : {}),
   });
 
@@ -1131,6 +1132,56 @@ describe('verifyApiRequest', () => {
     });
     expect(result.subjectDID).toBe(user.did);
   });
+
+  it.each(['missing', 'throws'] as const)('reports an %s issuer as unverifiable', async (mode) => {
+    const grant = await buildGrant();
+    const client = clientFor([grant.rp]);
+    if (mode === 'throws') {
+      const callbacks = client.callbacks();
+      client.callbacks = () => ({
+        ...callbacks,
+        resolveIdentity: async () => {
+          throw new Error('issuer offline');
+        },
+      });
+    }
+    await expect(
+      verifyApiRequest(client, {
+        ...baseInput(),
+        proof: grant.proof,
+        credential: grant.credential,
+      }),
+    ).rejects.toMatchObject({ reason: 'unverifiable', phase: 'credential', status: 503 });
+  });
+
+  it.each([501, 404, 500, 'throws'] as const)(
+    'reports unavailable revocation (%s) as 503',
+    async (status) => {
+      const grant = await buildGrant();
+      const client = createClient({
+        relays: [RELAY],
+        peerClient: fakePeerClient({
+          [RELAY]: {
+            identities: {
+              [grant.user.did]: grant.user.log,
+              [grant.rp.did]: grant.rp.log,
+            },
+          },
+        }),
+        fetch: async () => {
+          if (status === 'throws') throw new Error('offline');
+          return new Response('{}', { status });
+        },
+      });
+      await expect(
+        verifyApiRequest(client, {
+          ...baseInput(),
+          proof: grant.proof,
+          credential: grant.credential,
+        }),
+      ).rejects.toMatchObject({ reason: 'unverifiable', phase: 'credential', status: 503 });
+    },
+  );
 
   it('rejects a revoked leaf credential — revocation is checked in the verify path', async () => {
     const grant = await buildGrant();

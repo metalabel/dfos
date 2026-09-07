@@ -21,6 +21,8 @@ export type {
   Client,
   ClientConfig,
   DocumentBlob,
+  EffectiveIdentity,
+  EverProvedIdentity,
   GlobalLogOptions,
   GlobalLogPage,
   GlobalLogResult,
