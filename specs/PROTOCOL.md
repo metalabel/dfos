@@ -467,7 +467,8 @@ inside the 64 KiB measurement. Each envelope is separately bounded by the 4096-b
 Artifacts keep their own 16384-byte cap; the `services` array keeps its
 32768-byte cap.
 
-**Cardinality caps (structure, not byte length):**
+**Cardinality and field caps.** Each row states its own unit: item counts bound
+structure, and the one field cap is measured in UTF-8 bytes.
 
 | Field                                        | Max       | Note                                            |
 | -------------------------------------------- | --------- | ----------------------------------------------- |
@@ -476,10 +477,10 @@ Artifacts keep their own 16384-byte cap; the `services` array keeps its
 | `services` entries                           | 256 items | (see Services)                                  |
 | countersignature `relation`                  | 64 bytes  | Open-namespace tag (min 1 when present)         |
 
-The protocol does not limit individual field string lengths, document content
-size (the protocol commits to a CID, not the document, so large binary media is
-referenced rather than inlined), chain length, or number of chains per identity.
-These are application and transport concerns.
+Beyond the caps above, the protocol does not limit field string lengths, document
+content size (the protocol commits to a CID, not the document, so large binary
+media is referenced rather than inlined), chain length, or number of chains per
+identity. These are application and transport concerns.
 
 ---
 
@@ -499,10 +500,24 @@ At the basis:
 - an `exp` MUST be strictly greater than the basis;
 - no revocation effective as of the basis may cover the artifact.
 
+Two rules stand outside the basis, and both are stated where they live. Issuer
+identity deletion is retroactive: while an identity is deleted the credentials it
+issued authorize nothing at any point in history, and verification of committed
+operations that relied on one rejects
+([CREDENTIALS, Deleted issuers](https://protocol.dfos.com/credentials#deleted-issuers)).
+Admitting a new operation is answered from what a relay currently knows: a relay
+refuses an operation authorized by a credential it already holds a revocation
+for, whatever that operation's `createdAt` claims
+([RELAY, Revocations and standing credentials](https://protocol.dfos.com/relay#revocations-and-standing-credentials)).
+
 An identity's **state as of a basis time** is the state produced by the last
 operation in the chain whose `createdAt` is less than or equal to the basis, with
 key memberships read from the effective (proved) state. For an ephemeral
-presentation the basis is now, so this is the chain head. A basis earlier than
+presentation the state is the head of the identity's chain as the relay answering
+the request serves it. Admission, not the clock, is what makes an operation
+current: an operation admitted with a `createdAt` in the future, within the
+[future timestamp bound](#future-timestamp-bound), is effective from the moment
+it is admitted, not from the instant its timestamp names. A basis earlier than
 the chain's genesis names no state: the identity did not exist, no key of it was
 effective, and an artifact with that basis does not verify.
 
@@ -687,8 +702,10 @@ A verifier walking an identity chain checks, for each embedded envelope:
 4. **Chain.** `did` MUST equal the chain's own DID.
 5. **Position.** `prevCID` MUST equal the carrying operation's
    `previousOperationCID`.
-6. **Coverage.** `roleSet` MUST include every role the operation introduces the
-   key to.
+6. **Coverage.** `roleSet` MUST include the role this walk is checking. The walk
+   runs once per introduced key-role membership, so coverage is per role: an
+   envelope covering some of the roles an operation introduces the key to proves
+   those and leaves the rest void.
 7. **Signature.** The JWS MUST verify against the payload's `publicKeyMultibase`.
 
 `nonce`, `audience`, and `timestamp` are presentation-time transport, byte-fixed
@@ -1112,7 +1129,7 @@ is addressed by its CID.
 
 **Countersignature.** `targetCID` names any CID-addressed statement: a content
 or identity operation, an artifact, or another countersignature. `relation` is
-an optional open-namespace tag of 1 to 64 characters. Recognized values
+an optional open-namespace tag of 1 to 64 UTF-8 bytes. Recognized values
 (`endorses`, `coauthors`, `witnessed`, `holds`, `received`) inform clients;
 unrecognized values MUST be preserved and ignored. When present, `relation` is
 part of the canonical payload and so of the CID; absent, the payload encodes

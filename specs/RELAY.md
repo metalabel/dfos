@@ -50,14 +50,6 @@ their source. Access is host-cooperative: the operator reads what it stores, and
 anything that must stay confidential against the operator is withheld or
 encrypted above the protocol.
 
-### A relay is a library
-
-`createRelay()` returns a portable Hono application: Node.js, Cloudflare Workers,
-Deno, Bun, Docker, a Raspberry Pi. You supply storage and peer configuration. The
-relay supplies verification, ingestion, and HTTP semantics. The Go relay in
-[`packages/dfos-web-relay-go`](https://github.com/metalabel/dfos/tree/main/packages/dfos-web-relay-go)
-is the full reference implementation and a byte twin of the TypeScript routes.
-
 ---
 
 ## The well-known document
@@ -1651,8 +1643,15 @@ A stale request is refused and re-composed, never patched. Stateless envelopes (
 credit claim, a countersign payload, a sign-in challenge) carry no reference to a
 chain head and cannot go stale. Chain operations embed a `previousOperationCID`,
 so if the chain advances while the request sits in a mailbox the produced
-operation is invalid at ingest and harmless everywhere; the remedy is composer-side
-re-composition. Nothing in the courier retries, rebases, or mutates bytes.
+operation names a position that is no longer the head, and what that costs
+depends on the chain. On an **identity** chain the sequence is linear and
+first-seen wins, so the produced operation is invalid at ingest and harmless
+everywhere. On a **content** chain it is a valid fork: the relay verifies it
+against the chain state at that fork point, accepts it, and it can win head
+selection ([Content-chain forks and head selection](#content-chain-forks-and-head-selection),
+[PROTOCOL, Chain validity](https://protocol.dfos.com/spec#chain-validity)). Either
+way the remedy is composer-side re-composition; nothing in the courier retries,
+rebases, or mutates bytes.
 
 ### The response
 
