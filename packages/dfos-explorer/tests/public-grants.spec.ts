@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { ExplorerOp } from '../src/lib/db';
 import { isFetchEligible, publicGrantSet } from '../src/lib/public-grants';
-
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
-const mkJws = (header: Record<string, unknown>, payload: Record<string, unknown>): string =>
-  `${b64url(header)}.${b64url(payload)}.sig`;
+import { mockJws } from './fixtures/mock-jws';
 
 let seq = 0;
 const credOp = (payload: Record<string, unknown>): ExplorerOp => {
   seq += 1;
   return {
     cid: `cred-${seq}`,
-    jwsToken: mkJws({ typ: 'did:dfos:credential', kid: 'did:dfos:i#k' }, payload),
+    jwsToken: mockJws({ typ: 'did:dfos:credential', kid: 'did:dfos:i#k' }, payload),
     kind: 'credential',
     chainId: 'did:dfos:i',
     type: 'grant',
@@ -23,7 +20,7 @@ const credOp = (payload: Record<string, unknown>): ExplorerOp => {
 
 const revOp = (credentialCID: string): ExplorerOp => ({
   cid: `rev-${credentialCID}`,
-  jwsToken: mkJws({ typ: 'did:dfos:revocation', kid: 'did:dfos:i#k' }, { credentialCID }),
+  jwsToken: mockJws({ typ: 'did:dfos:revocation', kid: 'did:dfos:i#k' }, { credentialCID }),
   kind: 'revocation',
   chainId: 'did:dfos:i',
   type: 'revocation',

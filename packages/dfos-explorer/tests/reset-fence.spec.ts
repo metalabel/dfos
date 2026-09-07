@@ -19,6 +19,7 @@
 
 import { IDBFactory } from 'fake-indexeddb';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { mockJws } from './fixtures/mock-jws';
 
 // the shared db handle opens against the global factory — install one before
 // anything in the store is touched
@@ -26,13 +27,15 @@ beforeAll(() => {
   (globalThis as { indexedDB?: IDBFactory }).indexedDB = new IDBFactory();
 });
 
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 const op = (cid: string, createdAt: string) => ({
   cid,
-  jwsToken: `${b64url({ typ: 'did:dfos:identity', kid: 'did:dfos:aaa#key1' })}.${b64url({
-    type: 'create',
-    createdAt,
-  })}.sig`,
+  jwsToken: mockJws(
+    { typ: 'did:dfos:identity', kid: 'did:dfos:aaa#key1' },
+    {
+      type: 'create',
+      createdAt,
+    },
+  ),
 });
 
 const OPS = [op('bafy-a1', '2026-01-01T00:00:00.000Z'), op('bafy-a2', '2026-01-02T00:00:00.000Z')];

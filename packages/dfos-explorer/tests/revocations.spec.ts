@@ -10,11 +10,11 @@ import {
   revokedByCredential,
   type RevocationView,
 } from '../src/lib/revocations';
+import { mockJws } from './fixtures/mock-jws';
 
-const b64url = (v: unknown): string => Buffer.from(JSON.stringify(v)).toString('base64url');
 const revocationOp = (cid: string, payload: Record<string, unknown>): ExplorerOp => ({
   cid,
-  jwsToken: `${b64url({ typ: 'did:dfos:revocation' })}.${b64url(payload)}.sig`,
+  jwsToken: mockJws({ typ: 'did:dfos:revocation' }, payload),
   kind: 'revocation',
   chainId: cid,
   type: 'revocation',

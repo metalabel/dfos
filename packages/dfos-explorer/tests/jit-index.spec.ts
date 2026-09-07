@@ -2,10 +2,10 @@ import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openExplorerDb } from '../src/lib/db';
 import { indexChainOps } from '../src/lib/sync';
+import { mockJws } from './fixtures/mock-jws';
 
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 const mkJws = (createdAt: string, type = 'create'): string =>
-  `${b64url({ typ: 'did:dfos:identity', kid: 'did:dfos:aaa#key1' })}.${b64url({ type, createdAt })}.sig`;
+  mockJws({ typ: 'did:dfos:identity', kid: 'did:dfos:aaa#key1' }, { type, createdAt });
 
 const op = (cid: string, createdAt: string, type = 'create') => ({
   cid,

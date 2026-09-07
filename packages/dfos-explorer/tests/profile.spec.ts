@@ -5,10 +5,13 @@ import {
   PROFILE_SCHEMA,
   profileAnchorOf,
 } from '../src/lib/profile';
+import { mockJws } from './fixtures/mock-jws';
 
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 const mkArtifact = (did: string, kidDid: string, content: unknown): string =>
-  `${b64url({ typ: 'did:dfos:artifact', kid: `${kidDid}#key_1`, cid: 'bafyreiexample' })}.${b64url({ version: 1, type: 'artifact', did, content })}.sig`;
+  mockJws(
+    { typ: 'did:dfos:artifact', kid: `${kidDid}#key_1`, cid: 'bafyreiexample' },
+    { version: 1, type: 'artifact', did, content },
+  );
 
 describe('isProfileContent', () => {
   it('accepts profile/v1 docs and rejects others', () => {

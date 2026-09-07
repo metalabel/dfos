@@ -4,13 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { openExplorerDb, type ChainRollup, type ExplorerOp } from '../src/lib/db';
 import type { BlobResult } from '../src/lib/relay-raw';
 import { resolvePublicProjections } from '../src/lib/sync-projections';
+import { mockJws } from './fixtures/mock-jws';
 
 const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
 const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
-
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
-const mkJws = (header: Record<string, unknown>, payload: Record<string, unknown>): string =>
-  `${b64url(header)}.${b64url(payload)}.sig`;
 
 const cidOf = async (obj: Record<string, unknown>): Promise<string> =>
   (await dagCborCanonicalEncode(obj)).cid.toString();
@@ -26,7 +23,7 @@ const contentOp = async (opts: {
   const cid = await cidOf(opts.payload);
   return {
     cid,
-    jwsToken: mkJws({ typ: 'did:dfos:content-op', kid: opts.kid }, opts.payload),
+    jwsToken: mockJws({ typ: 'did:dfos:content-op', kid: opts.kid }, opts.payload),
     kind: 'content-op',
     chainId: opts.chainId,
     type: String(opts.payload['type'] ?? ''),
@@ -75,7 +72,7 @@ const grantOp = (contentId: string, opts: { exp?: number } = {}): ExplorerOp => 
   };
   return {
     cid: `cred-${grantSeq}`,
-    jwsToken: mkJws({ typ: 'did:dfos:credential', kid: 'did:dfos:issuer#k' }, payload),
+    jwsToken: mockJws({ typ: 'did:dfos:credential', kid: 'did:dfos:issuer#k' }, payload),
     kind: 'credential',
     chainId: 'did:dfos:issuer',
     type: 'grant',
@@ -88,7 +85,7 @@ const grantOp = (contentId: string, opts: { exp?: number } = {}): ExplorerOp => 
 /** A revocation op invalidating a credential by its op CID. */
 const revokeOp = (credentialCid: string): ExplorerOp => ({
   cid: `rev-of-${credentialCid}`,
-  jwsToken: mkJws(
+  jwsToken: mockJws(
     { typ: 'did:dfos:revocation', kid: 'did:dfos:issuer#k' },
     { credentialCID: credentialCid },
   ),

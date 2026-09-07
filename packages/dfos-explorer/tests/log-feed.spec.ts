@@ -2,16 +2,15 @@ import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openExplorerDb, type ExplorerOp } from '../src/lib/db';
 import { indexOpRows, localOpRows, logSource, toLogRows } from '../src/lib/log-feed';
+import { mockJws } from './fixtures/mock-jws';
 
 // the keyset queries use the global IDBKeyRange a browser provides; the node
 // test environment has only the injected factory, so supply the matching one.
 globalThis.IDBKeyRange = IDBKeyRange as unknown as typeof globalThis.IDBKeyRange;
 
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
-
 /** A decodable JWS with the header/payload fields the log rows read. */
 const jws = (payload: Record<string, unknown>): string =>
-  `${b64url({ alg: 'EdDSA', typ: 'did:dfos:identity-op', cid: 'bafy1' })}.${b64url(payload)}.sig`;
+  mockJws({ typ: 'did:dfos:identity-op', cid: 'bafy1' }, payload);
 
 describe('toLogRows — global-log entries → display rows', () => {
   it('decodes type and createdAt out of the JWS payload', () => {
