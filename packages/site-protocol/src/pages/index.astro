@@ -10,11 +10,17 @@ const specTiers = [
   { grid: 'reference', label: 'Relay and integrations' },
   { grid: 'guarantees', label: 'Guarantees' },
 ] as const;
+
+// A public content chain served by relay.dfos.com. The explorer re-runs the
+// signature, chain, and document-hash checks in the browser, so the first
+// action the homepage offers is watching those checks run against real bytes.
+const signedRecordUrl =
+  'https://explore.dfos.com/#/content/222978eakt29ner7zv8zhz763drzf34';
 ---
 
 <Base
   title="DFOS Protocol"
-  description="DFOS is an identity you hold and content that proves who wrote it."
+  description="DFOS is an open protocol for identities, signed records, and delegated permissions that any compatible application can verify for itself."
   landing={true}
 >
   <!-- ═══ Hero ═══ -->
@@ -29,119 +35,130 @@ const specTiers = [
     </header>
 
     <div class="hero-overlay">
-      <p class="hero-declaration" id="hero-typed">
-        DFOS is an identity you hold<br />and content that certifies itself
-        <span class="green">Platforms host your identity<br />You own it</span>
-      </p>
+      <h1 class="hero-declaration">Identity and authorship, beyond the platform.</h1>
       <p class="hero-pitch">
-        A signed record verifies from any copy of it, without fetching the document it names. The document stays where it is served.
+        DFOS is an open protocol for identities, signed records, and delegated
+        permissions that any compatible application can verify for itself.
       </p>
+      <ul class="action-list action-list--hero">
+        <li>Use the same identity across applications.</li>
+        <li>Give your work a verifiable history.</li>
+        <li>Let collaborators or software act within permissions you grant, without your keys.</li>
+      </ul>
     </div>
 
     <div class="hero-below">
-      <h1 class="hero-headline">
-        Authorship is verifiable without trusting any server
-      </h1>
       <div class="hero-cta">
-        <a href="#get-started" class="hero-cta-link">Install the CLI</a>
-        <a href="/overview" class="hero-cta-link">Why this exists</a>
-        <a href="/spec" class="hero-cta-link">Read the spec</a>
+        <a href={signedRecordUrl} class="hero-cta-link">Explore a signed record &rarr;</a>
+        <a href="/integrations" class="hero-cta-link">Start building &rarr;</a>
       </div>
     </div>
   </section>
 
-  <!-- ═══ Two planes ═══ -->
+  <!-- ═══ Identity ═══ -->
+  <section class="dark-section">
+    <div class="dark-section-inner">
+      <span class="section-label">I D E N T I T Y</span>
+      <h2>One identity. More than one application.</h2>
+      <div class="section-body">
+        <p>
+          A DFOS identity begins with a signed record, not a registration in a
+          central directory. Its <a href="/did-method"><code>did:dfos</code></a>
+          identifier is derived from that first operation, and it stays the same
+          as the identity's keys and services change. Every later key proves
+          possession of itself, bound to its role and its position in the chain.
+        </p>
+        <p>
+          An application verifies a sign-in against that signed history rather
+          than against an account at one host. A domain you control can point to
+          the identity, with a matching claim recorded on the identity itself.
+        </p>
+      </div>
+      <p class="section-cta-row">
+        <a href="/did-method" class="section-cta">The did:dfos method &rarr;</a>
+        <a href="/integrations" class="section-cta">Sign in and API auth &rarr;</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ Signed records ═══ -->
   <section class="two-worlds-section">
     <div class="two-worlds-inner">
       <div class="two-worlds-card" id="tilt-card">
         <img src="/card-hands.png" alt="" class="two-worlds-card-img" />
       </div>
       <div class="two-worlds-text">
-        <span class="section-label">Proof and content</span>
-        <h2>Two planes</h2>
+        <span class="section-label">S I G N E D &nbsp; R E C O R D S</span>
+        <h2>The proof can travel without the document.</h2>
         <p>
-          The proof plane is public. Signed chains carry identity, authorship,
-          and the hash of every document committed, and anyone can verify them.
+          A signed content record names its document by cryptographic hash.
+          Anyone holding the record and the identity history it references can
+          check who signed it without opening the document.
         </p>
         <p>
-          The content plane is the documents. They are served by whoever holds
-          the bytes, under that host's own access control, and they do not
-          travel with the proofs.
+          A reader who does receive the document can check that the bytes match
+          the commitment. Those are two separate results: signed attribution is
+          one check, document integrity is another.
         </p>
         <p>
-          The protocol commits to a document by hash. It does not encrypt, and
-          whoever serves a document can read it. <a href="/overview">Why this
-          exists</a> covers the topology this separation answers to.
+          A document can be public or served only to selected readers, and
+          distributing its signed record does not require distributing its
+          contents. The protocol commits to a document by hash. It does not
+          encrypt, and whoever serves a document can read it.
+        </p>
+        <p class="section-cta-row">
+          <a href="/content-model" class="section-cta">The content model &rarr;</a>
+          <a href="/relay" class="section-cta">Relays and the content plane &rarr;</a>
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ═══ How It Works ═══ -->
+  <!-- ═══ Permissions ═══ -->
   <section class="dark-section">
     <div class="dark-section-inner">
-      <span class="section-label">T H E &nbsp; P R O T O C O L</span>
-
-      <div class="concepts-three">
-        <div class="concept-card">
-          <h2>An identity you hold</h2>
-          <p>
-            A <a href="/did-method"><code>did:dfos</code></a> is derived from its first
-            signed operation and resolves from the chain itself: no directory, no
-            registry, no consensus. On the DFOS platform, the platform holds a key for
-            you by default; you can add keys it never holds.
-          </p>
-        </div>
-
-        <div class="concept-card">
-          <h2>Verification is a pure function of the chains</h2>
-          <p>
-            A signed chain and the identity chains it names give valid or invalid,
-            offline, in any language. No server is consulted. Any Ed25519
-            implementation can verify it.
-          </p>
-        </div>
-
-        <div class="concept-card">
-          <h2>Relays are carriers, not authorities</h2>
-          <p>
-            A <a href="/relay">relay</a> verifies what it admits and serves one view of
-            each identity. It cannot make a forged record verify or a valid one fail.
-            Which view you follow is a choice of relay, and anyone can run one.
-          </p>
-        </div>
+      <span class="section-label">P E R M I S S I O N S</span>
+      <h2>Delegate a task. Keep your keys.</h2>
+      <div class="section-body">
+        <p>
+          Give a collaborator permission to update one content chain. Give an
+          application access to one resource. A permission is a signed
+          credential naming the identity it authorizes, and for credential-gated
+          API calls that party proves possession of its own key and binds the
+          proof to the particular request.
+        </p>
+        <p>
+          Delegation is linear and narrowing: each hop can drop resources, drop
+          actions, and shorten expiry, and it can never widen what it was given.
+          A credential expires at the time it names and can be revoked before
+          then, and a verifier enforces a revocation once it holds it.
+        </p>
       </div>
+      <p class="section-cta-row">
+        <a href="/credentials" class="section-cta">Credentials &rarr;</a>
+        <a href="/guarantees" class="section-cta">What revocation reaches &rarr;</a>
+      </p>
     </div>
-  </section>
-
-  <!-- ═══ Credibility + Routing ═══ -->
-  <section class="landing-section">
-    <div class="credibility-strip">
-      <span>MIT License</span>
-      <span class="credibility-dot">&middot;</span>
-      <span>Powers the <a href="https://dfos.com">DFOS platform</a></span>
-      <span class="credibility-dot">&middot;</span>
-      <span>TypeScript &middot; Go &middot; Python &middot; Rust &middot; Swift</span>
-    </div>
-    <p class="credibility-sub">
-      Same deterministic test vectors across all five implementations.
-      <a href="/spec">The protocol specification</a> is the single source of truth.
-    </p>
-  </section>
-
-  <!-- ═══ Key Separator ═══ -->
-  <section class="key-separator">
-    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
   </section>
 
   <!-- ═══ Get Started ═══ -->
   <section class="landing-section get-started" id="get-started">
     <span class="section-label">G E T &nbsp; S T A R T E D</span>
-    <h2>Install the CLI</h2>
+    <h2>Start locally. Connect when you need to.</h2>
     <p class="get-started-intro">
-      One binary. Keys in your OS keychain. Local-first by default.
+      Create identities, sign records, and verify them on your own machine. The
+      CLI signs and stores operations locally, and publishing to a relay is a
+      separate, explicit step. A relay is HTTP storage and exchange for signed
+      records, with optional document hosting, and anyone can run one. You do
+      not need an account on the DFOS platform to begin.
       <a href="/cli">Full documentation</a>.
     </p>
+
+    <ul class="action-list">
+      <li>Create an identity on your own machine.</li>
+      <li>Add a key your host never receives.</li>
+      <li>Continue a signed history on another relay, from the last operation your controller key controlled.</li>
+    </ul>
 
     <div class="install-primary">
       <div class="install-code">
@@ -158,24 +175,80 @@ const specTiers = [
 
     <div class="quickstart-block">
       <div class="install-label">Quickstart</div>
-      <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
+      <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create the seed your keys derive from, and write the phrase down</span>
+dfos vault create personal
+
+<span class="qs-comment"># create your identity — one key, minted from that vault</span>
 dfos identity create --name myname
 
-<span class="qs-comment"># publish your first post</span>
-echo '{"body":"gm"}' | dfos content create -
+<span class="qs-comment"># sign your first record — every signing command names the identity it acts as</span>
+echo '{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"gm"}' | dfos --as myname content create -
+
+<span class="qs-comment"># tired of typing it: set the standing default</span>
+dfos config set default-identity myname
 
 <span class="qs-comment"># see it</span>
 dfos content list
 
-<span class="qs-comment"># run a relay</span>
-dfos serve`} /></pre>
+<span class="qs-comment"># re-verify the chain, locally</span>
+dfos content verify &lt;contentId&gt;`} /></pre>
+    </div>
+  </section>
+
+  <!-- ═══ Key Separator ═══ -->
+  <section class="key-separator">
+    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
+  </section>
+
+  <!-- ═══ Trust model ═══ -->
+  <section class="dark-section">
+    <div class="dark-section-inner">
+      <span class="section-label">T R U S T &nbsp; M O D E L</span>
+      <h2>Know what you are verifying.</h2>
+      <div class="section-body">
+        <p>
+          Verification answers who signed a record and whether a document
+          matches its commitment. It does not establish that a signed claim is
+          true: the chain shows what was signed, never who was at the keyboard.
+        </p>
+        <p>
+          The protocol does not encrypt documents, and a relay operator reads
+          every blob it stores. Nothing obliges a relay to keep your chain. An
+          identity chain is linear per view, nothing arbitrates between relays
+          that admitted different successors, and which relay you read is which
+          view you get.
+        </p>
+        <p>
+          The DFOS platform holds a signing key for your account by default, so
+          ordinary use needs no key management, and you can add keys it never
+          holds. Keep your own copies of your chain and your documents.
+        </p>
+      </div>
+      <p class="section-cta-row">
+        <a href="/guarantees" class="section-cta">The guarantees and trust model &rarr;</a>
+      </p>
     </div>
   </section>
 
   <!-- ═══ Specifications ═══ -->
   <section class="landing-section">
     <span class="section-label">S P E C I F I C A T I O N S</span>
-    <h2>Read the protocol</h2>
+    <h2>Open specifications. Working implementations.</h2>
+
+    <div class="credibility-strip">
+      <span>MIT License</span>
+      <span class="credibility-dot">&middot;</span>
+      <span>Powers the <a href="https://dfos.com">DFOS platform</a></span>
+      <span class="credibility-dot">&middot;</span>
+      <span>TypeScript &middot; Go &middot; Python &middot; Rust &middot; Swift</span>
+    </div>
+    <p class="credibility-sub">
+      Verification implementations in five languages, checked against the same
+      deterministic test vectors. <a href="/spec">The protocol specification</a>
+      is the single source of truth.
+    </p>
+
+    <span class="section-label section-label--spaced">R E A D &nbsp; T H E &nbsp; P R O T O C O L</span>
 
     {
       specTiers.map((tier) => (
@@ -206,7 +279,7 @@ dfos serve`} /></pre>
       }
       <a href="/overview" class="spec-link">
         <span class="spec-link-title">Why</span>
-        <span class="spec-link-desc">The structural condition, design principles, what the protocol is and isn't</span>
+        <span class="spec-link-desc">The requirement the protocol answers to, the design principles, what it is and isn't</span>
       </a>
     </div>
 
@@ -328,35 +401,6 @@ dfos serve`} /></pre>
         requestAnimationFrame(update);
       }
       update();
-    })();
-
-    // Hero typewriter effect
-    (function () {
-      var el = document.getElementById('hero-typed');
-      if (!el) return;
-      var html = el.innerHTML;
-      // Wrap each character in a span, preserving HTML tags
-      var wrapped = '';
-      var inTag = false;
-      for (var i = 0; i < html.length; i++) {
-        var ch = html[i];
-        if (ch === '<') { inTag = true; wrapped += ch; continue; }
-        if (ch === '>') { inTag = false; wrapped += ch; continue; }
-        if (inTag) { wrapped += ch; continue; }
-        if (ch === ' ') { wrapped += ' '; continue; }
-        wrapped += '<span class="char">' + ch + '</span>';
-      }
-      el.innerHTML = wrapped;
-      el.classList.add('typing');
-
-      var chars = el.querySelectorAll('.char');
-      var delay = 800; // wait for painting fade-in
-      var speed = 25;  // ms per character
-      for (var j = 0; j < chars.length; j++) {
-        (function (c, t) {
-          setTimeout(function () { c.classList.add('visible'); }, t);
-        })(chars[j], delay + j * speed);
-      }
     })();
   </script>
 
