@@ -28,6 +28,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/atomicfile"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 )
 
@@ -39,7 +40,7 @@ var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 // ValidateName rejects names that cannot be a file or would read as a path.
 func ValidateName(name string) error {
 	if !nameRE.MatchString(name) {
-		return fmt.Errorf("invalid vault name %q: 1–64 characters of letters, digits, '.', '_', or '-', starting with a letter or digit", name)
+		return fmt.Errorf("invalid vault name: 1–64 characters of letters, digits, '.', '_', or '-', starting with a letter or digit")
 	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("invalid vault name %q", name)
@@ -260,7 +261,7 @@ func (s *Store) save(meta *Metadata) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(meta.Name), data, 0o600)
+	return atomicfile.Write(s.metaPath(meta.Name), data)
 }
 
 // Load reads one vault's metadata.
@@ -284,6 +285,9 @@ func (s *Store) Load(name string) (*Metadata, error) {
 	}
 	// The file name is the authority on the name, so a hand-edited or copied
 	// metadata file cannot make a vault answer to something it is not filed under.
+	if strings.TrimSpace(meta.Fingerprint) == "" {
+		return nil, fmt.Errorf("corrupt vault metadata %s: empty fingerprint", s.metaPath(name))
+	}
 	meta.Name = name
 	return meta, nil
 }

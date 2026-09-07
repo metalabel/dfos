@@ -73,7 +73,7 @@ type heldKey struct {
 
 // heldKeyAccount answers where a declared key's seed actually is on this
 // machine: the content address if it is there, otherwise the legacy DID-scoped
-// account, otherwise nowhere.
+// account, then a ceremony candidate, otherwise nowhere.
 //
 // The order is not arbitrary. A key written by this version is at the content
 // address; a key written by an earlier one is at the legacy account; a key
@@ -90,11 +90,16 @@ func heldKeyAccount(did, keyID, publicKeyMultibase string) (account string, held
 			return a, true
 		}
 	}
+	if publicKeyMultibase != "" {
+		if a := candidateAccountPrefix + publicKeyMultibase; keys.HasKey(a) {
+			return a, true
+		}
+	}
 	return "", false
 }
 
 // holdsDeclaredKey reports whether this device holds the private half of a key
-// an identity declares, under either addressing.
+// an identity declares, under any supported addressing.
 func holdsDeclaredKey(did string, k protocol.MultikeyPublicKey) bool {
 	_, held := heldKeyAccount(did, k.ID, k.PublicKeyMultibase)
 	return held
@@ -174,6 +179,9 @@ func keyAccountsFor(did, keyID, publicKeyMultibase string) []string {
 	}
 	if did != "" && keyID != "" {
 		out = append(out, legacyKeyAccount(did, keyID))
+	}
+	if publicKeyMultibase != "" {
+		out = append(out, candidateAccountPrefix+publicKeyMultibase)
 	}
 	return out
 }

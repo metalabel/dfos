@@ -110,7 +110,21 @@ func validateDomain(raw string) (string, error) {
 			return "", domainError(raw, "it is not ASCII — supply an internationalized name in its A-label (Punycode, xn--…) form; the CLI does not convert")
 		}
 	}
+	if d == "home.arpa" || strings.HasSuffix(d, ".home.arpa") {
+		return "", domainError(raw, "it is not a public domain")
+	}
+	if net.ParseIP(d) != nil {
+		return "", domainError(raw, "IP literals are not public domains")
+	}
 	labels := strings.Split(d, ".")
+	tld := labels[len(labels)-1]
+	if strings.Trim(tld, "0123456789") == "" {
+		return "", domainError(raw, "the final label is numeric")
+	}
+	switch tld {
+	case "localhost", "local", "internal", "lan", "home", "test", "invalid":
+		return "", domainError(raw, "it is not a public domain")
+	}
 	if len(labels) < 2 {
 		return "", domainError(raw, "a bare hostname needs at least one dot")
 	}

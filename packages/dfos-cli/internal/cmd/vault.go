@@ -170,6 +170,9 @@ func newVaultImportCmd() *cobra.Command {
 		Args: func(cmd *cobra.Command, args []string) error {
 			switch len(args) {
 			case 1:
+				if len(strings.Fields(args[0])) > 1 {
+					return fmt.Errorf("the recovery phrase must never be an argument; treat the phrase as exposed and import it through stdin")
+				}
 				return nil
 			case 0:
 				return fmt.Errorf("vault import needs a NAME — a local label for the vault, not the phrase:\n" +
@@ -445,10 +448,15 @@ func readMnemonic(in io.Reader) (string, error) {
 	return mnemonic, nil
 }
 
+var revealStdinIsInteractive = stdinIsInteractive
+
 // confirmReveal is the barrier in front of printing a seed. Typing the vault's
 // name is deliberately more work than typing "y": the point is that the operator
 // looks at what is about to appear on their screen and in their scrollback.
 func confirmReveal(in io.Reader, name string) error {
+	if !revealStdinIsInteractive() {
+		return fmt.Errorf("refuses to reveal a mnemonic non-interactively — run this from a terminal")
+	}
 	fmt.Fprintf(os.Stderr, "About to print the recovery phrase for vault '%s' in clear text.\n", name)
 	fmt.Fprintf(os.Stderr, "It will remain in this terminal's scrollback and in anything recording this session.\n")
 	fmt.Fprintf(os.Stderr, "Type the vault name to continue: ")

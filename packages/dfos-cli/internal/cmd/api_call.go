@@ -34,7 +34,7 @@ import (
 // loopbackHosts are the only authorities a proof may be signed for over plain
 // http. `api:` surfaces are HTTPS surfaces, and a proof sent in the clear
 // replays for its whole freshness window. An EXACT set, never a suffix test.
-var loopbackHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "[::1]": true}
+var loopbackHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
 
 type apiCallFlags struct {
 	params         []string

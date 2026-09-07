@@ -266,7 +266,8 @@ func listStoredCredentials(now time.Time) ([]storedCredentialListItem, error) {
 		}
 		record, err := readStoredCredential(filepath.Join(credentialStoreDir(), entry.Name()))
 		if err != nil {
-			return nil, err
+			fmt.Fprintf(os.Stderr, "Warning: skipping unreadable credential file %s\n", entry.Name())
+			continue
 		}
 		expiry := decodeCredentialExpiry(record.Credential)
 		items = append(items, storedCredentialListItem{

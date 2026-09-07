@@ -1092,6 +1092,9 @@ func loadChainFacts(lr *localrelay.LocalRelay, oracle *client.Client, did string
 		if err != nil {
 			return nil, 0, fmt.Errorf("the chain the oracle serves does not verify: %v", err)
 		}
+		if verified.State.DID != did {
+			return nil, 0, fmt.Errorf("oracle chain does not match requested DID")
+		}
 		return foldChainFacts(verified.State, log), len(log), nil
 	}
 

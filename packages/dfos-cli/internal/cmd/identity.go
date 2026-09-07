@@ -803,6 +803,13 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
+			// Record local custody before a peer failure can interrupt the command.
+			if rotationVault != "" && len(mintedRecords) > 0 {
+				if err := getVaults().Record(rotationVault, mintedRecords...); err != nil {
+					return fmt.Errorf("record vault provenance: %w", err)
+				}
+			}
+
 			// push to peer if specified
 			rn := peerName
 			if rn != "" {
@@ -816,12 +823,6 @@ func newIdentityUpdateCmd() *cobra.Command {
 				}
 				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
-				}
-			}
-
-			if rotationVault != "" && len(mintedRecords) > 0 {
-				if err := getVaults().Record(rotationVault, mintedRecords...); err != nil {
-					return fmt.Errorf("record vault provenance: %w", err)
 				}
 			}
 
@@ -1534,7 +1535,7 @@ func newIdentityAddKeyCmd() *cobra.Command {
 			update := authoredUpdate{
 				Prior: chain.State, PreviousCID: previousCID,
 				ControllerKeys: newControllerKeys, AuthKeys: newAuthKeys, AssertKeys: newAssertKeys,
-				Kid: signer.KID, PrivateKey: controllerPriv,
+				Services: chain.State.Services, Kid: signer.KID, PrivateKey: controllerPriv,
 			}
 			if err := proveAuthoredUpdate(chain.DID, &update); err != nil {
 				return err
@@ -2434,6 +2435,9 @@ func runIdentityStatus(target, peerOverride string) error {
 	if err != nil {
 		return result.unknown(fmt.Sprintf("the chain %s serves for %s does not verify: %v", peer.label(), did, err))
 	}
+	if verified.State.DID != did {
+		return result.unknown("the remote chain does not match the requested DID")
+	}
 	result.Remote = &identityStatusSide{
 		HeadCID:       verified.HeadCID,
 		Operations:    len(remoteLog),
@@ -3053,6 +3057,14 @@ func newIdentityFetchCmd() *cobra.Command {
 				return fmt.Errorf("fetch identity: %w", err)
 			}
 
+			verified, err := protocol.VerifyIdentityChain(log)
+			if err != nil {
+				return fmt.Errorf("verify identity: %w", err)
+			}
+			if verified.State.DID != did {
+				return fmt.Errorf("remote chain does not match requested DID")
+			}
+
 			// ingest into local relay
 			lr, err := getRelay()
 			if err != nil {
@@ -3061,8 +3073,12 @@ func newIdentityFetchCmd() *cobra.Command {
 			results := lr.Relay.Ingest(log)
 			for _, r := range results {
 				if r.Status == "rejected" {
-					fmt.Fprintf(os.Stderr, "  Warning: operation %s rejected: %s\n", r.CID, r.Error)
+					return fmt.Errorf("operation %s rejected: %s", r.CID, r.Error)
 				}
+			}
+
+			if err := promoteCandidateKeys(did, verified.State); err != nil {
+				return err
 			}
 
 			// register in config if named

@@ -123,7 +123,7 @@ func decodeMnemonic(mnemonic string) ([]string, []byte, error) {
 	for _, w := range parts {
 		idx, ok := wordIndex[w]
 		if !ok {
-			return nil, nil, fmt.Errorf("not a word in the BIP-39 English list: %q", w)
+			return nil, nil, fmt.Errorf("mnemonic contains a word outside the BIP-39 English list")
 		}
 		for j := 10; j >= 0; j-- {
 			if (idx>>uint(j))&1 == 1 {
