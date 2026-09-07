@@ -116,7 +116,10 @@ run_variant() {
   local label="$1" port="$2"
   echo ""
   echo "=== $label index-disabled relay on :$port ==="
+  curl -fsS "http://localhost:$port/.well-known/dfos-relay" |
+    python3 -c 'import json, sys; assert json.load(sys.stdin)["capabilities"]["index"] is False, "expected disabled capability"'
   cd "$CONFORMANCE_DIR"
+  go vet ./...
   RELAY_URL="http://localhost:$port" \
     go test -v -count=1 -timeout 90s -run 'TestIndexDisabled' ./...
 }

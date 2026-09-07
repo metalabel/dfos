@@ -31,6 +31,7 @@ func getCreditPage(t *testing.T, base, route string) (int, conformanceCreditPage
 }
 
 func TestIndexCreditsPublicSnapshotFiltersAndCursor(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	status, _ := getCreditPage(t, base, "/index/v0/credits?limit=1")

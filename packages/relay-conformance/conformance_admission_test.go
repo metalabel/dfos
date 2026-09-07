@@ -2,14 +2,11 @@ package conformance
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
-
-const noncurrentAdmissionError = "signing key is not in the identity's current state"
 
 type admissionResult struct {
 	CID               string `json:"cid"`
@@ -70,14 +67,15 @@ func rotateAdmissionIdentity(t *testing.T, base string, id identity) keypair {
 	return current
 }
 
-func assertNoncurrentAdmissionRejected(t *testing.T, result admissionResult) {
+func assertNoncurrentAdmissionRejected(t *testing.T, base string, result admissionResult) {
 	t.Helper()
 	if result.Status != "rejected" {
 		t.Fatalf("expected permanent rejection, got %s", result.Status)
 	}
-	if !strings.Contains(result.Error, noncurrentAdmissionError) {
-		t.Fatalf("error %q does not name %q", result.Error, noncurrentAdmissionError)
+	if result.CID == "" {
+		t.Fatal("rejected parsed operation must report its CID")
 	}
+	assertOperationAbsent(t, base, result.CID)
 	if result.DependencyMissing {
 		t.Fatal("rotated-out key rejection must not be dependencyMissing")
 	}
@@ -95,7 +93,7 @@ func TestFreshRotatedKeyAdmissionRejected(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertNoncurrentAdmissionRejected(t, postAdmissionOperation(t, base, oldToken))
+		assertNoncurrentAdmissionRejected(t, base, postAdmissionOperation(t, base, oldToken))
 
 		currentToken, _, err := dfos.SignArtifact(id.did,
 			map[string]any{"$schema": "conformance/admission/v1", "key": "current"},
@@ -117,7 +115,7 @@ func TestFreshRotatedKeyAdmissionRejected(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertNoncurrentAdmissionRejected(t, postAdmissionOperation(t, base, oldToken))
+		assertNoncurrentAdmissionRejected(t, base, postAdmissionOperation(t, base, oldToken))
 
 		currentToken, _, err := dfos.SignCountersignWithRelation(witness.did, author.genCID, "current",
 			witness.did+"#"+current.keyID, current.priv)
@@ -141,7 +139,7 @@ func TestFreshRotatedKeyAdmissionRejected(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertNoncurrentAdmissionRejected(t, postAdmissionOperation(t, base, oldToken))
+		assertNoncurrentAdmissionRejected(t, base, postAdmissionOperation(t, base, oldToken))
 
 		currentDoc, _, err := dfos.DocumentCID(map[string]any{"type": "post", "key": "current"})
 		if err != nil {

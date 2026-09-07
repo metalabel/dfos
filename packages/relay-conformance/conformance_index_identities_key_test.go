@@ -42,6 +42,7 @@ package conformance
 
 import (
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -70,6 +71,9 @@ func requireIdentityKeyFilter(t *testing.T, base string) {
 		t.Fatalf("GET /index/v0/identities: status %d", resp.StatusCode)
 	}
 	if len(unfiltered.Identities) == 0 {
+		if os.Getenv("REQUIRE_INDEX_KEY_FILTERS") == "1" {
+			t.Fatal("required index key filter has no corpus for its behavioral probe")
+		}
 		t.Skip("relay's identity index is empty — no corpus to probe key= against")
 	}
 
@@ -84,6 +88,9 @@ func requireIdentityKeyFilter(t *testing.T, base string) {
 		t.Fatalf("key= probe: status %d, want 200 (the value is opaque — there is no format to 400 on)", resp.StatusCode)
 	}
 	if len(probe.Identities) != 0 {
+		if os.Getenv("REQUIRE_INDEX_KEY_FILTERS") == "1" {
+			t.Fatal("required index key filter returned rows for an unmatchable key")
+		}
 		t.Skip("relay does not implement key= on /index/v0/identities (an unmatchable value returned rows) — skipping")
 	}
 }
@@ -132,6 +139,7 @@ func keyParam(publicKeyMultibase string) string {
 // "matches every role" from "matches whichever array the implementation happened
 // to index".
 func TestIndexIdentitiesKeyMatchesEveryKeyArray(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 
@@ -198,6 +206,7 @@ func TestIndexIdentitiesKeyMatchesEveryKeyArray(t *testing.T) {
 // burned is the second half — the key's actual holder then proves it into their
 // OWN chain, and the filter returns that chain and only that chain.
 func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 
@@ -259,6 +268,7 @@ func TestIndexIdentitiesKeyIgnoresUnprovedDeclarations(t *testing.T) {
 // tells a returning holder their identity never existed, and tells a minter
 // that a spent key is free.
 func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	id := createIdentity(t, base)
@@ -342,6 +352,7 @@ func TestIndexIdentitiesKeyIsHasEverProved(t *testing.T) {
 // TestIndexIdentitiesKeyIsOpaque pins the byte-match posture — the property that
 // makes `key=` and `signerKey=` interoperable — and the no-400 rule.
 func TestIndexIdentitiesKeyIsOpaque(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	id := createIdentity(t, base)

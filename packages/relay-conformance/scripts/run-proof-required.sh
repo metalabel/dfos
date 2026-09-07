@@ -129,6 +129,7 @@ fi
 echo ""
 echo "=== proof-required ingestion conformance ==="
 cd "$CONFORMANCE_DIR"
+go vet ./...
 PROOF_REQUIRED_RELAY_URL="http://localhost:$PORT" \
   PROOF_REQUIRED_SEED_URL="http://localhost:$SEED_PORT" \
   go test -v -count=1 -timeout 90s -run 'TestIngestionProofRequired' ./...

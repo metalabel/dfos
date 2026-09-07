@@ -467,11 +467,12 @@ func TestIdentityRejectPostDelete(t *testing.T) {
 	// relay should reject or return error in results
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for post-delete operation")
 	}
 }
@@ -524,11 +525,12 @@ func TestContentRejectUnknownIdentity(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for content op with unknown identity")
 	}
 }
@@ -1171,11 +1173,12 @@ func TestDelegatedUpdateWithoutCredential(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for delegated update without credential")
 	}
 }
@@ -1426,11 +1429,12 @@ func TestRejectMalformedJWS(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for malformed JWS")
 	}
 }
@@ -1484,15 +1488,13 @@ func TestRejectIdentityFutureTimestamp(t *testing.T) {
 	}
 	json.Unmarshal(body, &result)
 
-	if len(result.Results) == 0 {
-		t.Fatal("expected at least 1 result")
+	if res.StatusCode != 200 || len(result.Results) != 1 {
+		t.Fatalf("expected HTTP 200 and one result, got status %d body %s", res.StatusCode, body)
 	}
 	if result.Results[0].Status != "rejected" {
 		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
 	}
-	if !strings.Contains(result.Results[0].Error, "future") {
-		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
-	}
+	assertOperationAbsent(t, base, cidStr)
 }
 
 func TestAcceptIdentityNearFutureTimestamp(t *testing.T) {
@@ -1594,15 +1596,13 @@ func TestRejectContentFutureTimestamp(t *testing.T) {
 	}
 	json.Unmarshal(body, &result)
 
-	if len(result.Results) == 0 {
-		t.Fatal("expected at least 1 result")
+	if res.StatusCode != 200 || len(result.Results) != 1 {
+		t.Fatalf("expected HTTP 200 and one result, got status %d body %s", res.StatusCode, body)
 	}
 	if result.Results[0].Status != "rejected" {
 		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
 	}
-	if !strings.Contains(result.Results[0].Error, "future") {
-		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
-	}
+	assertOperationAbsent(t, base, cidStr)
 }
 
 // ===================================================================

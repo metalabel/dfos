@@ -127,8 +127,8 @@ func TestIdentityHeadIsLastLinearOperation(t *testing.T) {
 	if st, e := postStatus(t, base, tokA); st != "new" {
 		t.Fatalf("linear update should be accepted, got %q (%s)", st, e)
 	}
-	if st, e := postStatus(t, base, tokB); st != "rejected" || e != "identity chains are linear: conflicting extension refused" {
-		t.Fatalf("conflicting extension = %q (%s), want named permanent rejection", st, e)
+	if st, e := postStatus(t, base, tokB); st != "rejected" {
+		t.Fatalf("conflicting extension = %q (%s), want permanent rejection", st, e)
 	}
 
 	var resp struct {

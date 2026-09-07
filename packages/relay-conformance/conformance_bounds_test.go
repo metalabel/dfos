@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -139,5 +140,100 @@ func TestUnknownEnvelopeKeyTolerated(t *testing.T) {
 
 	if st, msg := postStatus(t, base, signer); st != "new" {
 		t.Fatalf("operation with an unknown top-level field should be accepted, got status %q (%s)", st, msg)
+	}
+}
+
+func assertOperationAbsent(t *testing.T, base, cid string) {
+	t.Helper()
+	resp := getJSON(t, base+"/proof/v1/operations/"+cid, nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("rejected operation %s is served: status %d, want 404", cid, resp.StatusCode)
+	}
+}
+
+func TestBatchCapEnforced(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	token, cid, err := dfos.SignArtifact(id.did, map[string]any{"$schema": "conformance/batch-cap", "value": 1}, id.did+"#"+id.auth.keyID, id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := make([]string, 101)
+	for i := range tokens {
+		tokens[i] = token
+	}
+	res := postOperations(t, base, tokens)
+	body := readBody(t, res)
+	var failure struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &failure); err != nil || res.StatusCode != 400 || failure.Error == "" {
+		t.Fatalf("101 operations: status %d body %s", res.StatusCode, body)
+	}
+	assertOperationAbsent(t, base, cid)
+	res = postOperations(t, base, tokens[:100])
+	body = readBody(t, res)
+	var accepted struct {
+		Results []admissionResult `json:"results"`
+	}
+	if err := json.Unmarshal(body, &accepted); err != nil || res.StatusCode != 200 || len(accepted.Results) != 100 {
+		t.Fatalf("100 operations: status %d body %s", res.StatusCode, body)
+	}
+	for i, result := range accepted.Results {
+		want := "duplicate"
+		if i == 0 {
+			want = "new"
+		}
+		if result.Status != want || result.CID != cid {
+			t.Fatalf("position %d: %+v, want %s for %s", i, result, want, cid)
+		}
+	}
+}
+
+func TestSameCIDDifferentTokenRejected(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	second := newKeypair()
+	introduceKey(t, base, &id, second, "auth", "assert")
+	for _, kind := range []string{"content", "artifact", "countersign"} {
+		t.Run(kind, func(t *testing.T) {
+			var token string
+			var err error
+			kid := id.did + "#" + id.auth.keyID
+			switch kind {
+			case "content":
+				docCID, _, e := dfos.DocumentCID(map[string]any{"sameCID": id.did})
+				if e != nil {
+					t.Fatal(e)
+				}
+				token, _, _, err = dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
+			case "artifact":
+				token, _, err = dfos.SignArtifact(id.did, map[string]any{"$schema": "conformance/same-cid", "value": 1}, kid, id.auth.priv)
+			case "countersign":
+				author := createIdentity(t, base)
+				target := createContent(t, base, author)
+				token, _, err = dfos.SignCountersign(id.did, target.genCID, kid, id.auth.priv)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, payload, err := dfos.DecodeJWSUnsafe(token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			header.Kid = id.did + "#" + second.keyID
+			alternative, err := dfos.CreateJWS(*header, payload, second.priv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, submission := range []string{token, alternative, token} {
+				result := postAdmissionOperation(t, base, submission)
+				want := []string{"new", "rejected", "duplicate"}[i]
+				if result.Status != want || result.CID != header.CID {
+					t.Fatalf("submission %d: %+v, want %s CID %s", i, result, want, header.CID)
+				}
+			}
+		})
 	}
 }

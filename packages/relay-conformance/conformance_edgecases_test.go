@@ -33,7 +33,7 @@ func TestRejectTamperedSignature(t *testing.T) {
 	doc := map[string]any{"type": "post", "title": "tampered"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid := id.did + "#" + id.auth.keyID
-	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
+	token, _, opCID, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,13 +50,15 @@ func TestRejectTamperedSignature(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) == 0 || results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected rejection for tampered signature")
 	}
+	assertOperationAbsent(t, base, opCID)
 }
 
 // TestRejectWrongSigningKey verifies the relay rejects operations where the
@@ -72,7 +74,7 @@ func TestRejectWrongSigningKey(t *testing.T) {
 
 	// Sign with a random key, not the identity's auth key
 	wrongKey := newKeypair()
-	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, wrongKey.priv)
+	token, _, opCID, err := dfos.SignContentCreate(id.did, docCID, kid, wrongKey.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,13 +83,15 @@ func TestRejectWrongSigningKey(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) == 0 || results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected rejection for wrong signing key")
 	}
+	assertOperationAbsent(t, base, opCID)
 }
 
 // ===================================================================
@@ -249,11 +253,12 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("read credential should not grant write access")
 	}
 }
@@ -347,7 +352,8 @@ func TestCountersignNonExistentOperation(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
@@ -560,7 +566,8 @@ func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
@@ -599,7 +606,7 @@ func TestIdentityConflictingExtensionAndRestore(t *testing.T) {
 	// operation is otherwise flawless — envelope included — so linearity is the
 	// only thing left to refuse it for.
 	rotated := newKeypair()
-	conflictToken, _ := signIdentityUpdateWithProofs(t, id.genCID,
+	conflictToken, conflictCID := signIdentityUpdateWithProofs(t, id.genCID,
 		[]dfos.MultikeyPublicKey{rotated.mk},
 		[]dfos.MultikeyPublicKey{rotated.mk},
 		[]dfos.MultikeyPublicKey{rotated.mk},
@@ -616,9 +623,10 @@ func TestIdentityConflictingExtensionAndRestore(t *testing.T) {
 			} `json:"results"`
 		}
 		json.Unmarshal(body, &result)
-		if len(result.Results) != 1 || result.Results[0].Status != "rejected" || result.Results[0].Error != "identity chains are linear: conflicting extension refused" {
+		if len(result.Results) != 1 || result.Results[0].Status != "rejected" {
 			t.Fatalf("conflicting extension: %+v", result.Results)
 		}
+		assertOperationAbsent(t, base, conflictCID)
 	}
 	assertConflict()
 	assertConflict()
