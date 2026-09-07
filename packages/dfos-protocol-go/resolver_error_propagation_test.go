@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,11 @@ func missingKeyResolver() KeyResolver {
 	return func(kid string, _ string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("%w: %s", errTestDependencyMiss, kid)
 	}
+}
+
+// didOfKid is the DID half of a `did#keyid` DID URL.
+func didOfKid(kid string) string {
+	return kid[:strings.Index(kid, "#")]
 }
 
 // missingForKid resolves everything the delegate fixture knows EXCEPT one kid,
@@ -238,6 +244,43 @@ func TestResolverErrorSurvivesEveryVerifyEntrypoint(t *testing.T) {
 				_, err := VerifyContentExtension(f.genesisState, f.genesisLastAt, f.updateJWS,
 					f.resolveKey, true,
 					WithCredentialKeyResolver(missingForKid(f.resolveKey, f.creatorKid)))
+				return err
+			},
+		},
+		{
+			// The PARENT hop's deletion gate. Its leaf-level twin already
+			// wrapped with %w; this branch did not, so a caller classifying a
+			// retryable miss got unmarked text from one hop and a sentinel from
+			// the other.
+			name: "delegation chain parent issuer delete-check",
+			verify: func() error {
+				f := delegationParentFixture
+				parentIssuer := didOfKid(f.creatorKid)
+				_, err := VerifyContentExtension(f.genesisState, f.genesisLastAt, f.updateJWS,
+					f.resolveKey, true,
+					WithIdentityDeletedChecker(func(did string) (bool, error) {
+						if did == parentIssuer {
+							return false, fmt.Errorf("%w: %s", errTestDependencyMiss, did)
+						}
+						return false, nil
+					}))
+				return err
+			},
+		},
+		{
+			// The PARENT hop's revocation check, same story.
+			name: "delegation chain parent revocation check",
+			verify: func() error {
+				f := delegationParentFixture
+				parentIssuer := didOfKid(f.creatorKid)
+				_, err := VerifyContentExtension(f.genesisState, f.genesisLastAt, f.updateJWS,
+					f.resolveKey, true,
+					WithRevocationChecker(func(issuerDID, _ string, _ int64) (bool, error) {
+						if issuerDID == parentIssuer {
+							return false, fmt.Errorf("%w: %s", errTestDependencyMiss, issuerDID)
+						}
+						return false, nil
+					}))
 				return err
 			},
 		},

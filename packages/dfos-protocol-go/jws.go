@@ -3,6 +3,7 @@ package dfos
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -42,6 +43,12 @@ func CreateJWS(header JWSHeader, payload any, privateKey ed25519.PrivateKey) (st
 	return signingInput + "." + sigB64, nil
 }
 
+// errNullJWSPayload is the literal `null` payload. json.Unmarshal accepts it
+// into a map[string]any without error and leaves a NIL map behind, which reads
+// downstream as an empty object; the TS reference's decodeJwsSegment rejects the
+// same bytes outright. A JWS payload is an object or it is nothing.
+var errNullJWSPayload = errors.New("payload must be a JSON object")
+
 // decodeJWSHeader decodes a protected header BY EXACT KEY.
 //
 // encoding/json matches an unmatched struct field case-insensitively, so a
@@ -55,6 +62,11 @@ func CreateJWS(header JWSHeader, payload any, privateKey ed25519.PrivateKey) (st
 //
 // A member present with a non-string value is an error rather than a silent
 // zero: absent, null, and wrong-type are three different facts.
+//
+// `typ` is REQUIRED, matching the TS reference's asJwsHeader — an absent one
+// left Typ as "" and let a `{"alg":"EdDSA"}` header decode here while TS failed
+// the same bytes outright. `kid` and `cid` stay optional (a countersignature
+// header carries no cid).
 func decodeJWSHeader(headerBytes []byte) (*JWSHeader, error) {
 	if err := AssertCanonicalJSONText(headerBytes); err != nil {
 		return nil, err
@@ -66,16 +78,20 @@ func decodeJWSHeader(headerBytes []byte) (*JWSHeader, error) {
 
 	header := &JWSHeader{}
 	for _, field := range []struct {
-		name string
-		dst  *string
+		name     string
+		dst      *string
+		required bool
 	}{
-		{"alg", &header.Alg},
-		{"typ", &header.Typ},
-		{"kid", &header.Kid},
-		{"cid", &header.CID},
+		{"alg", &header.Alg, false},
+		{"typ", &header.Typ, true},
+		{"kid", &header.Kid, false},
+		{"cid", &header.CID, false},
 	} {
 		rawValue, present := raw[field.name]
 		if !present {
+			if field.required {
+				return nil, fmt.Errorf("header %s must be a string", field.name)
+			}
 			continue
 		}
 		// json.Unmarshal accepts a JSON null into any type as a no-op, which
@@ -121,6 +137,9 @@ func DecodeJWSUnsafe(token string) (*JWSHeader, map[string]any, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return nil, nil, fmt.Errorf("unmarshal payload: %w", err)
+	}
+	if payload == nil {
+		return nil, nil, errNullJWSPayload
 	}
 
 	// normalize JSON numbers (float64 → int64 for whole numbers)
@@ -181,6 +200,9 @@ func VerifyJWS(token string, publicKey ed25519.PublicKey) (*JWSHeader, map[strin
 	var payload map[string]any
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return nil, nil, fmt.Errorf("unmarshal payload: %w", err)
+	}
+	if payload == nil {
+		return nil, nil, errNullJWSPayload
 	}
 
 	return header, payload, nil

@@ -2,6 +2,7 @@ package dfos
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -886,10 +887,11 @@ func TestKeyMaterialSwapRejectedEvenWithAValidEnvelope(t *testing.T) {
 	}
 }
 
-// TestKeyMaterialSwapRejectedFromAStatePredatingTheBinding: a trusted state
-// persisted before SeenKeys existed, or hand-built by a caller. The binding is
-// read off declared plus has-ever-proved, and the verdict holds.
-func TestKeyMaterialSwapRejectedFromAStatePredatingTheBinding(t *testing.T) {
+// TestStatePredatingTheBindingIsNotExtensible: a trusted state persisted before
+// SeenKeys existed, or hand-built by a caller, carries no id-to-material binding
+// and no other member can reconstruct one. The extension refuses with a typed
+// error and the caller replays, rather than answering from a narrower reading.
+func TestStatePredatingTheBindingIsNotExtensible(t *testing.T) {
 	g := newPossessionGenesis(t)
 	legacy := g.state
 	legacy.SeenKeys = nil
@@ -899,9 +901,42 @@ func TestKeyMaterialSwapRejectedFromAStatePredatingTheBinding(t *testing.T) {
 	op, _ := testSignIdentityUpdate(t, g.did, one, one, one,
 		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
 
-	if _, err := VerifyIdentityExtension(legacy, g.cid, g.createdAt, op); err == nil ||
+	_, err := VerifyIdentityExtension(legacy, g.cid, g.createdAt, op)
+	if !errors.Is(err, ErrIdentityStateNoSeenKeys) {
+		t.Fatalf("extension from a seenKeys-less state: %v", err)
+	}
+	// the message is the TS twin's, byte for byte
+	if err.Error() != "identity state has no seenKeys; replay the chain" {
+		t.Fatalf("message must match the TS twin: %q", err.Error())
+	}
+	// and a full replay still reaches the real verdict
+	if _, err := VerifyIdentityChain([]string{g.jws, op}); err == nil ||
 		!strings.Contains(err.Error(), "type or public key inconsistency") {
-		t.Fatalf("extension from legacy state: %v", err)
+		t.Fatalf("full replay: %v", err)
+	}
+}
+
+// TestStatePredatingTheBindingIsNotExtensibleEvenForAValidOp: the refusal is a
+// property of the STATE, not of the operation — an ordinary, entirely valid
+// extension is refused too, because nothing about it can be judged against a
+// binding that is not there.
+func TestStatePredatingTheBindingIsNotExtensibleEvenForAValidOp(t *testing.T) {
+	g := newPossessionGenesis(t)
+	legacy := g.state
+	legacy.SeenKeys = nil
+
+	added := newPossessionKey(t)
+	op, _ := testSignIdentityUpdateWithProofs(t, g.did,
+		keysOf(g.key), keysOf(g.key, added), keysOf(g.key),
+		[]string{testKeyProof(t, added.priv, g.did, g.cid, "auth")},
+		g.key.keyID, g.key.priv, g.cid, possessionTS(1))
+
+	if _, err := VerifyIdentityExtension(legacy, g.cid, g.createdAt, op); !errors.Is(err, ErrIdentityStateNoSeenKeys) {
+		t.Fatalf("extension from a seenKeys-less state: %v", err)
+	}
+	// the same op extends the complete state
+	if _, err := VerifyIdentityExtension(g.state, g.cid, g.createdAt, op); err != nil {
+		t.Fatalf("VerifyIdentityExtension on a complete state: %v", err)
 	}
 }
 

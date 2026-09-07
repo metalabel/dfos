@@ -259,7 +259,7 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	if isDeleted != nil {
 		deleted, err := isDeleted(parentIssuerDID)
 		if err != nil {
-			return fmt.Errorf("parent issuer delete-check failed: %v", err)
+			return fmt.Errorf("parent issuer delete-check failed: %w", err)
 		}
 		if deleted {
 			return fmt.Errorf("parent credential issuer identity is deleted")
@@ -291,7 +291,7 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	if isRevoked != nil {
 		revoked, err := isRevoked(pVerified.Iss, pVerified.CID, asOfUnix)
 		if err != nil {
-			return fmt.Errorf("revocation check failed: %v", err)
+			return fmt.Errorf("revocation check failed: %w", err)
 		}
 		if revoked {
 			return fmt.Errorf("parent credential in delegation chain is revoked")

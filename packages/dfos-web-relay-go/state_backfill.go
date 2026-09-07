@@ -2,7 +2,8 @@ package relay
 
 /*
 
-  IDENTITY STATE BACKFILL — RE-WALKING ROWS PERSISTED BEFORE ProvedKeys EXISTED
+  IDENTITY STATE BACKFILL — RE-WALKING ROWS PERSISTED BEFORE ProvedKeys AND
+  SeenKeys EXISTED
 
   A durable store persists identity state as one JSON blob (store_sqlite.go's
   identity_chains.state). That blob is written by whichever binary ingested the
@@ -29,18 +30,27 @@ package relay
   chain whose controller has finished rotating and has nothing left to publish,
   which is precisely the chain whose history the resolver is being asked about.
 
+  State.SeenKeys is the second such member, and it is load-bearing in a harder
+  way. It is the chain-wide id-to-material binding, and dfos.VerifyIdentityExtension
+  now REFUSES a state that lacks it (dfos.ErrIdentityStateNoSeenKeys): no other
+  member can reconstruct the binding, because an id introduced without a proof
+  and later dropped survives in none of them. So a row written before SeenKeys
+  existed does not merely answer narrowly — the linear ingest path cannot extend
+  that chain at all until the row is re-walked.
+
   So: re-walk them at boot. backfillProvedKeyState lists the identity chains,
-  re-verifies the log of each row whose union is absent, and rewrites the row
+  re-verifies the log of each row missing either member, and rewrites the row
   with the freshly folded state.
 
-  WHY IsZero IS A SOUND MARKER FOR "WRITTEN BY AN OLDER BINARY". Genesis
+  WHY EMPTINESS IS A SOUND MARKER FOR "WRITTEN BY AN OLDER BINARY". Genesis
   declares exactly one key (assertSingleKeyGenesis) and proves it by signing
   itself with it, so the chain walk seeds provedKeys with that key
-  (fullyProvedKeyState) before any update is folded, and every later fold is a
-  union that can only grow. A state produced by the current walk therefore has a
-  NON-EMPTY ProvedKeys for every chain shape, single-op chains included —
-  DeclaredKeyState.IsZero() is true only for a state that never carried the
-  member at all. There is no marker table to consult and none is needed.
+  (fullyProvedKeyState) — and admits that key into seenKeys — before any update
+  is folded, and every later fold is a union that can only grow. A state produced
+  by the current walk therefore has a NON-EMPTY ProvedKeys and a NON-EMPTY
+  SeenKeys for every chain shape, single-op chains included; either being empty
+  is true only for a state that never carried the member at all. There is no
+  marker table to consult and none is needed.
 
   NEVER DESTROY WHAT YOU CANNOT IMPROVE. A log that fails re-verification leaves
   its row exactly as it stands — logged by DID, loudly, and skipped. The stale
@@ -59,8 +69,9 @@ import (
 )
 
 // backfillProvedKeyState repairs identity state rows persisted before
-// dfos.IdentityState carried ProvedKeys, so the `key=` reverse index stops
-// falling back to the narrower effective arrays.
+// dfos.IdentityState carried ProvedKeys and SeenKeys, so the `key=` reverse
+// index stops falling back to the narrower effective arrays and the linear
+// ingest path can extend the chain again.
 //
 // Ordered BEFORE rebuildIndexProjection at startup (see NewRelay). The rebuild
 // reads provedKeyState(chain.State) to materialize the `key=` reverse index, so
@@ -70,7 +81,7 @@ import (
 // migrations belong to the same upgrade and have an order.
 //
 // CHEAP WHEN THERE IS NOTHING TO DO, and idempotent. The only unconditional
-// work is one ListIdentityChains plus an IsZero test per row; a chain the
+// work is one ListIdentityChains plus an emptiness test per row; a chain the
 // current walk produced fails that test, so a second run — or a boot on a
 // corpus that never saw an older binary — re-verifies nothing, writes nothing,
 // and logs nothing. Signature verification is paid only for rows that are
@@ -107,7 +118,10 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger, beforeRe
 	for _, chain := range chains {
 		// An empty log is nothing to re-walk — there is no authoritative record
 		// to fold — so such a row is left alone rather than counted as repairable.
-		if !chain.State.ProvedKeys.IsZero() || len(chain.Log) == 0 {
+		if len(chain.Log) == 0 {
+			continue
+		}
+		if !chain.State.ProvedKeys.IsZero() && len(chain.State.SeenKeys) > 0 {
 			continue
 		}
 		stale = append(stale, chain)

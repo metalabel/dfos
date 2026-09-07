@@ -491,10 +491,11 @@ export const verifyIdentityChain = async (input: {
         }
       });
 
-      // enforce services byte cap (full-state services travel on create/update)
+      // enforce services byte cap (full-state services travel on create/update),
+      // measured on the RAW decoded array — see assertServicesWithinCap
       if (op.services) {
         try {
-          await assertServicesWithinCap(op.services);
+          await assertServicesWithinCap(decoded.payload['services']);
         } catch (e) {
           throw new Error(`log[${idx}]: ${(e as Error).message}`);
         }
@@ -655,6 +656,29 @@ export const verifyIdentityChain = async (input: {
 // -----------------------------------------------------------------------------
 
 /**
+ * The trusted state cannot be extended incrementally: it does not carry the
+ * chain-wide id-to-material binding. The caller replays the log.
+ *
+ * THERE IS NO RECONSTRUCTION, and that is the whole point. `seenKeys` is a
+ * monotonic index that never forgets a key id once the chain declared it — even
+ * after the id is dropped from the declared arrays — and nothing else in the
+ * state remembers it: an id introduced without a proof and then removed is in
+ * neither `declared` (removed) nor `provedKeys` (never proved). Reading the
+ * binding off those two arrays therefore treats a re-declaration of that id,
+ * bound to DIFFERENT material, as a fresh introduction and accepts it — while a
+ * full replay of the same operations rejects it. A fast path that accepts what
+ * its own re-verification refuses is worse than one that says it cannot answer.
+ *
+ * The Go twin is `ErrIdentityStateNoSeenKeys`, with this exact message.
+ */
+export class IdentityStateNoSeenKeysError extends Error {
+  constructor() {
+    super('identity state has no seenKeys; replay the chain');
+    this.name = 'IdentityStateNoSeenKeysError';
+  }
+}
+
+/**
  * Verify a single new operation against already-verified identity state
  *
  * The caller guarantees that `currentState` was produced by a correct prior
@@ -668,7 +692,8 @@ export const verifyIdentityChain = async (input: {
  * is REJECTED on this path exactly as a replay of the same two operations would
  * reject it. Without that the fast path would accept a chain its own
  * re-verification refuses, and a relay's linear path is the path almost every
- * operation takes.
+ * operation takes. A state that does not carry `seenKeys` is therefore not
+ * extensible at all — see `IdentityStateNoSeenKeysError`.
  *
  * THE POSSESSION FOLD RUNS HERE TOO, and it needs both halves of the trusted
  * state: the EFFECTIVE arrays (to know what an introduction is a transition out
@@ -699,13 +724,10 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
   // true for any chain that never voided a membership, and the only reading
   // available for a state that did not record the difference.
   const priorProved = currentState.provedKeys ?? priorEffective;
-  // The id-to-material binding this chain has already committed to. Absent, it
-  // is read off declared plus has-ever-proved — complete for any chain that
-  // never dropped an unproved key id, and the only reading available for a state
-  // that did not record the binding.
-  const seenKeys = keyMaterialIndex(
-    currentState.seenKeys ?? [...flatKeys(priorDeclared), ...flatKeys(priorProved)],
-  );
+  // The id-to-material binding this chain has already committed to. There is no
+  // fallback: see IdentityStateNoSeenKeysError.
+  if (!currentState.seenKeys?.length) throw new IdentityStateNoSeenKeysError();
+  const seenKeys = keyMaterialIndex(currentState.seenKeys);
   const priorSeenKeys = [...seenKeys.values()];
 
   // decode JWS
@@ -800,7 +822,8 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
         throw new Error('cannot repeat key ids in same usage');
       }
     });
-    if (op.services) await assertServicesWithinCap(op.services);
+    // the RAW decoded array, never zod's output — see assertServicesWithinCap
+    if (op.services) await assertServicesWithinCap(decoded.payload['services']);
   }
 
   // compute new state

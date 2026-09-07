@@ -129,6 +129,91 @@ func BasisUnixSeconds(basis string) (int64, error) {
 	return parsed.Unix(), nil
 }
 
+// credentialClaims is the decoded DFOS credential payload. It carries no struct
+// tags on purpose: nothing unmarshals INTO it, decodeCredentialClaims fills it
+// member by member.
+type credentialClaims struct {
+	Version int64
+	Type    string
+	Iss     string
+	Aud     string
+	Exp     int64
+	Iat     int64
+	Att     []AttEntry
+}
+
+// decodeCredentialClaims decodes the credential payload BY EXACT KEY, for the
+// same reason decodeJWSHeader decodes the protected header that way.
+//
+// encoding/json resolves a JSON key to a struct field by exact tag match first
+// and then by case-insensitive fold, per key, in document order — so a payload
+// spelling `"exp":1,"EXP":2000000000` overwrites Exp with the second value. The
+// TS reference reads `payload.exp` off a plain object by exact key and sees an
+// unrecognized extension member it preserves and ignores, so the two verifiers
+// disagree about when the credential expires on identical signed bytes. The
+// raw-payload CID check cannot catch it (both members are committed) and the
+// duplicate-key scan cannot either ("exp" and "EXP" are different strings).
+//
+// A member present with a wrong-typed value is an error rather than a silent
+// zero: absent and wrong-type are two different facts.
+func decodeCredentialClaims(payloadBytes []byte) (*credentialClaims, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &raw); err != nil {
+		return nil, fmt.Errorf("invalid credential claims: %s", err)
+	}
+
+	claims := &credentialClaims{}
+	for _, member := range []struct {
+		name string
+		dst  any
+	}{
+		{"version", &claims.Version},
+		{"type", &claims.Type},
+		{"iss", &claims.Iss},
+		{"aud", &claims.Aud},
+		{"exp", &claims.Exp},
+		{"iat", &claims.Iat},
+	} {
+		if err := decodeClaimMember(raw, member.name, member.dst); err != nil {
+			return nil, err
+		}
+	}
+
+	// att entries carry the same hazard one level down: an entry spelling
+	// "RESOURCE" would fold onto Resource in a struct decode.
+	if rawAtt, present := raw["att"]; present && string(rawAtt) != "null" {
+		var entries []map[string]json.RawMessage
+		if err := json.Unmarshal(rawAtt, &entries); err != nil {
+			return nil, fmt.Errorf("invalid credential claims: att must be an array of objects")
+		}
+		claims.Att = make([]AttEntry, len(entries))
+		for i, entry := range entries {
+			if err := decodeClaimMember(entry, "resource", &claims.Att[i].Resource); err != nil {
+				return nil, err
+			}
+			if err := decodeClaimMember(entry, "action", &claims.Att[i].Action); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return claims, nil
+}
+
+// decodeClaimMember reads one member by its exact name. Absent (or JSON null,
+// which unmarshals into any destination as a no-op) leaves the zero value for
+// the required-field checks to catch; present-but-wrong-type is an error.
+func decodeClaimMember(raw map[string]json.RawMessage, name string, dst any) error {
+	rawValue, present := raw[name]
+	if !present {
+		return nil
+	}
+	if err := json.Unmarshal(rawValue, dst); err != nil {
+		return fmt.Errorf("invalid credential claims: %s has the wrong type", name)
+	}
+	return nil
+}
+
 // verifyCredentialCore is the shared implementation for DFOS credential
 // verification.
 func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
@@ -183,25 +268,20 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode signature")
 	}
+	// ed25519.Verify panics on a wrong-size key, and a resolver can hand one here
+	// without erroring. Same guard, same text as VerifyJWS: a bad key is an
+	// invalid input, never a crash.
+	if len(publicKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("expected a %d-byte ed25519 key, got %d bytes", ed25519.PublicKeySize, len(publicKey))
+	}
 	if !ed25519.Verify(publicKey, []byte(signingInput), sigBytes) {
 		return nil, fmt.Errorf("invalid signature")
 	}
 
-	// parse payload — DFOS credential format
-	var claims struct {
-		Version int64  `json:"version"`
-		Type    string `json:"type"`
-		Iss     string `json:"iss"`
-		Aud     string `json:"aud"`
-		Exp     int64  `json:"exp"`
-		Iat     int64  `json:"iat"`
-		Att     []struct {
-			Resource string `json:"resource"`
-			Action   string `json:"action"`
-		} `json:"att"`
-	}
-	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return nil, fmt.Errorf("invalid credential claims: %s", err)
+	// parse payload — DFOS credential format, BY EXACT KEY
+	claims, err := decodeCredentialClaims(payloadBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	// validate required fields
@@ -262,11 +342,8 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Aud)
 	}
 
-	// build full att array
-	att := make([]AttEntry, 0, len(claims.Att))
-	for _, a := range claims.Att {
-		att = append(att, AttEntry{Resource: a.Resource, Action: a.Action})
-	}
+	// the full att array, as decoded
+	att := claims.Att
 
 	// Derive convenience fields from the first att entry that grants a recognized
 	// action. Actions are comma-separated strings ("read", "write", "read,write")
