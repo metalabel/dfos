@@ -93,8 +93,18 @@ const HINT_KEY: Partial<Record<OpKind, string>> = {
 
 interface Observatory {
   /** ops in the local index — INCLUDING ops landed by JIT folds while browsing,
-   *  so this counts what the tab holds, not what it has synced. */
+   *  so this counts what the tab holds, not what it has synced. STORED ROWS: a
+   *  row lands here the moment it is seen, verified or not (lib/sync.ts decodes
+   *  with `decodeJwsUnsafe` and says so). Never a verified figure. */
   ops: number;
+  /**
+   * Ops covered by a durable FOLD VERDICT — every signature and CID re-checked
+   * in this tab (lib/verify-queue.ts, summed by `db.verifiedOpsTotal`). This is
+   * the ONLY op figure the green tier may be computed from; `ops` above is a row
+   * count and greening on it would put "verified locally" over two numbers
+   * nobody verified.
+   */
+  verifiedOps: number;
   chains: number;
   oldestOpAt: string;
   storageBytes: number | null;
@@ -129,6 +139,27 @@ interface Observatory {
 // describes the network, so the band carries one line when it doesn't — see
 // DivergenceNotice.
 // -----------------------------------------------------------------------------
+
+/**
+ * THE GREEN TIER'S ONE LICENCE: ops this tab actually folded and re-checked, at
+ * least as many as the relay says exist. Both inputs are ops, and the left one
+ * comes from the verify store — never from `counts().ops`, which is a stored-row
+ * count of relay-asserted browsing metadata. `styles.css` states the palette as a
+ * rule ("amber = relay-asserted, green = verified locally") and the glossary
+ * defines verified locally as "your browser recomputed the signatures and CIDs
+ * itself"; this is that sentence as a function. Pure, unit-tested.
+ */
+export const fullyVerifiedLocally = (verifiedOps: number, assertedOps: number): boolean =>
+  assertedOps > 0 && verifiedOps >= assertedOps;
+
+/**
+ * A weaker, AMBER statement about the same two numbers: the local index holds at
+ * least as many rows as the relay claims operations. That is completeness of the
+ * log, not verification of it — the words say so, and it never colours anything
+ * green. Pure, unit-tested.
+ */
+export const logComplete = (localOps: number, assertedOps: number): boolean =>
+  assertedOps > 0 && localOps >= assertedOps;
 
 const StatCell = (props: { label: string; value: string; green: boolean }) => (
   <span class="ss">
@@ -190,8 +221,10 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const num = (n: number | null): string => (n != null ? fmtCount(n) : '—');
 
   const localOps = obs?.ops ?? 0;
+  const verifiedOps = obs?.verifiedOps ?? 0;
   const assertedOps = hint.opCount ?? 0;
-  const fullyVerified = assertedOps > 0 && localOps >= assertedOps;
+  const fullyVerified = fullyVerifiedLocally(verifiedOps, assertedOps);
+  const complete = logComplete(localOps, assertedOps);
   const oldest = fullyVerified && obs?.oldestOpAt ? obs.oldestOpAt : hint.oldestOpAt;
 
   // by-kind: relay-asserted OPERATION proportions — the shape of the log, always
@@ -205,11 +238,17 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
       accent={fullyVerified ? 'ok' : 'warn'}
       right={
         <span class="lbl">
+          {/* three statements, and each says exactly which number licensed it:
+              folded ops meeting the relay's count is the only green one; a full
+              row count is COMPLETENESS of the log, said in amber and in those
+              words; anything else is the bare relay claim. */}
           {fullyVerified
             ? 'fully verified locally'
-            : localOps > 0
-              ? `relay-asserted · ${fmtCount(localOps)} ops verified locally`
-              : 'relay-asserted'}
+            : verifiedOps > 0
+              ? `relay-asserted · ${fmtCount(verifiedOps)} ops verified locally`
+              : complete
+                ? "relay-asserted · log complete against the relay's count"
+                : 'relay-asserted'}
         </span>
       }
     >
@@ -752,8 +791,10 @@ export const Home = () => {
       // honestly instead of an unhandled rejection.
       const db = await getDb().catch(() => null);
       if (dead || !db) return;
-      const [counts, oldestOpAt, storageBytes, cursors] = await Promise.all([
+      const [counts, verifiedOps, oldestOpAt, storageBytes, cursors] = await Promise.all([
         db.counts(),
+        // the fold verdicts, read beside the row count and never merged with it
+        db.verifiedOpsTotal(),
         db.oldestOpAt(),
         estimateStorageBytes(),
         Promise.all(getRelays().map((relay) => db.getCursor(relay))),
@@ -761,6 +802,7 @@ export const Home = () => {
       if (dead) return;
       setObs({
         ops: counts.ops,
+        verifiedOps,
         chains: counts.chains,
         oldestOpAt,
         storageBytes,

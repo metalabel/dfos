@@ -15,6 +15,37 @@ describe('splitHash — path vs query', () => {
   });
 });
 
+// M41: the chain's `domain` service field is a bare lowercase hostname and the
+// binding check compares against it byte for byte, so a shared link carrying a
+// display-cased or fully-qualified host must not reach the view raw — it would
+// render a correct binding as `broken`.
+describe('parseRoute — the domain segment is normalized, never raw', () => {
+  it('lowercases, strips a trailing dot, a scheme, a port and a path', () => {
+    expect(parseRoute('#/domain/Example.COM.')).toEqual({ view: 'domain', host: 'example.com' });
+    expect(parseRoute('#/domain/EXAMPLE.com')).toEqual({ view: 'domain', host: 'example.com' });
+    expect(parseRoute('#/domain/https://example.com/x')).toEqual({
+      view: 'domain',
+      host: 'example.com',
+    });
+    expect(parseRoute('#/domain/example.com:8443')).toEqual({
+      view: 'domain',
+      host: 'example.com',
+    });
+  });
+
+  it('an already-canonical host is unchanged, query and all', () => {
+    expect(parseRoute('#/domain/example.com?x=1')).toEqual({
+      view: 'domain',
+      host: 'example.com',
+    });
+  });
+
+  it('a segment that is not a hostname is not a domain route', () => {
+    expect(parseRoute('#/domain/not-a-host')).toEqual({ view: 'home' });
+    expect(parseRoute('#/domain/did:dfos:abc')).toEqual({ view: 'home' });
+  });
+});
+
 describe('parseRoute — query is not part of the path', () => {
   it('routes a hash carrying query state to the same view', () => {
     expect(parseRoute('#/documents?after=abc')).toEqual({ view: 'documents' });

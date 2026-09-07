@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cacheIsFresh, PROFILE_TTL_MS, publicProfileOf, trimCache } from '../src/lib/did-profiles';
+import {
+  cacheIsFresh,
+  PROFILE_TTL_MS,
+  publicProfileOf,
+  resolveProfileVerdict,
+  trimCache,
+} from '../src/lib/did-profiles';
 
 const DID = 'did:dfos:tn7kkfz7ehzvv6fzvate9rz2874nc3e';
 const profileDoc = {
@@ -81,5 +87,59 @@ describe('trimCache — the persisted cache is bounded', () => {
       2,
     );
     expect(Object.keys(trimmed).sort()).toEqual(['mid', 'new']);
+  });
+});
+
+// M42: every failure used to collapse to `null`, which a row prints as the flat
+// factual assertion "no public profile". An unreachable relay is not that claim.
+describe('resolveProfileVerdict — absence and unavailability are different answers', () => {
+  const anchored = {
+    value: {
+      services: [
+        { type: 'ContentAnchor', id: 'profile', anchor: 'ct7kkfz7ehzvv6fzvate9rz2874nc3e' },
+      ],
+    },
+  };
+  const rejects = () => Promise.reject(new Error('relay unreachable'));
+
+  it('is unavailable when the identity chain itself did not resolve', async () => {
+    expect(await resolveProfileVerdict(DID, { identity: rejects, document: rejects })).toBe(
+      'unavailable',
+    );
+  });
+
+  it('is none when the identity resolved and anchors no profile', async () => {
+    expect(
+      await resolveProfileVerdict(DID, {
+        identity: async () => ({ value: { services: [] } }),
+        document: rejects,
+      }),
+    ).toBeNull();
+  });
+
+  // the privacy invariant, unchanged: bytes no relay serves to an anonymous read
+  // ARE "no public profile" — that is what public-read means empirically
+  it('is none when the anchored document is not served publicly', async () => {
+    expect(
+      await resolveProfileVerdict(DID, { identity: async () => anchored, document: rejects }),
+    ).toBeNull();
+  });
+
+  it('is none when the served bytes fail the integrity re-hash', async () => {
+    expect(
+      await resolveProfileVerdict(DID, {
+        identity: async () => anchored,
+        document: async () => ({ value: { decoded: profileDoc, integrity: false } }),
+      }),
+    ).toBeNull();
+  });
+
+  it('resolves the public profile when every beat lands', async () => {
+    expect(
+      await resolveProfileVerdict(DID, {
+        identity: async () => anchored,
+        document: async () => ({ value: { decoded: profileDoc, integrity: true } }),
+      }),
+    ).toMatchObject({ did: DID, name: 'Ada' });
   });
 });

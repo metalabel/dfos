@@ -102,6 +102,13 @@ const fallbackRow = (
         : { state: 'bad', note: `client_did is ${fallback.did} — a DIFFERENT identity` };
     case 'silent':
       return { state: settled ? 'pend' : 'warn', note: fallback.reason };
+    case 'proxy-unavailable':
+      // neutral, and never a reading about the domain: the explorer's own lookup
+      // route failed, so this channel was not read at all
+      return {
+        state: 'pend',
+        note: `the explorer's app-description lookup route failed — ${fallback.reason}`,
+      };
   }
 };
 

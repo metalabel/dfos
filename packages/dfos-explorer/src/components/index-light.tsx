@@ -4,8 +4,9 @@
 
   Shared by the browse and home surfaces that render relay-index rows. The badge
   reads a row's live verify-queue status; the ref hook enqueues a row's chain for
-  a proof-plane fold the first time it scrolls into view (viewport-priority), so
-  only the rows the eye reaches are ever folded.
+  a proof-plane fold each time it scrolls into view (viewport-priority), so only
+  the rows the eye reaches are ever folded — and a fold that failed for want of
+  an answer gets another go when the row comes back.
 
 */
 
@@ -23,10 +24,40 @@ import { DidChip } from './did-chip';
 import { Badge, OpLink, Term } from './ui';
 
 /**
- * A ref to attach to a row element. The first time the element intersects the
- * viewport, its chain is enqueued for verification (then the observer detaches).
- * Where IntersectionObserver is unavailable, the row enqueues eagerly on mount —
- * correctness over laziness.
+ * Call `onVisible` EVERY time the element enters the viewport, not just the
+ * first time, and stop when the returned teardown runs.
+ *
+ * The observer used to disconnect itself on the first intersection, which was
+ * fine while a fold could only ever happen once — but the verify queue now has a
+ * RETRYABLE failure (`error`: nobody answered, which says nothing about the
+ * chain), and a row whose recovery path is "scroll it back into view" needs the
+ * observer still watching. Staying observed is also why the re-arm is not a
+ * retry LOOP: IntersectionObserver reports transitions, so a row that fails and
+ * stays on screen fires once and waits for the eye to leave and come back.
+ * Enqueueing is idempotent for every other status, so the extra calls are no-ops.
+ */
+export const observeOnVisible = (el: Element, onVisible: () => void): (() => void) => {
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          onVisible();
+          return;
+        }
+      }
+    },
+    { rootMargin: '100px' },
+  );
+  io.observe(el);
+  return () => io.disconnect();
+};
+
+/**
+ * A ref to attach to a row element. Each time the element intersects the
+ * viewport, its chain is enqueued for verification — the first time to fold it,
+ * and thereafter to re-attempt a fold that failed for want of an answer (see
+ * {@link observeOnVisible}). Where IntersectionObserver is unavailable, the row
+ * enqueues eagerly on mount — correctness over laziness.
  */
 export const useVerifyOnVisible = <T extends HTMLElement>(
   kind: VerifyKind,
@@ -41,20 +72,7 @@ export const useVerifyOnVisible = <T extends HTMLElement>(
       enqueueVerify(kind, chainId, hintOpCount);
       return;
     }
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) {
-            enqueueVerify(kind, chainId, hintOpCount);
-            io.disconnect();
-            return;
-          }
-        }
-      },
-      { rootMargin: '100px' },
-    );
-    io.observe(el);
-    return () => io.disconnect();
+    return observeOnVisible(el, () => enqueueVerify(kind, chainId, hintOpCount));
   }, [kind, chainId, hintOpCount]);
   return ref;
 };
@@ -123,8 +141,21 @@ export const DocName = (props: { label: DocLabel; tier?: ContentLabelTier }) => 
  * falling back to its DID — the DID has its own column here.
  */
 export const IdentityName = (props: { row: IndexIdentityRow; seen: boolean }) => {
-  const { profile, tier } = useDidProfile(props.row.did, props.seen, projectedName(props.row));
-  if (!profile) return <span class="muted">— no public profile</span>;
+  const { profile, state, tier } = useDidProfile(
+    props.row.did,
+    props.seen,
+    projectedName(props.row),
+  );
+  // "no public profile" is a FINDING about the identity, so it is printed only
+  // where the resolve actually made it — an unreachable relay says nothing about
+  // this identity and gets its own, weaker line (lib/did-profiles.ts).
+  if (!profile) {
+    return (
+      <span class="muted">
+        {state === 'unavailable' ? '— profile unavailable' : '— no public profile'}
+      </span>
+    );
+  }
   return (
     <span
       class={tier === 'verified' ? 'did-name' : 'attr'}
@@ -166,7 +197,12 @@ export const ChainCell = (props: { chainId: string }) => {
 export const VerifyBadge = (props: { kind: VerifyKind; chainId: string }) => {
   const rec = useVerifyStatus(props.kind, props.chainId);
   if (rec.status === 'verified') return <Badge state="ok">verified</Badge>;
-  if (rec.status === 'error') return <Badge state="bad">unverifiable</Badge>;
+  // red is for what a relay DID: a rewritten history, or a log that answered and
+  // failed its checks here. A fold that never happened is amber — nothing was
+  // established about the chain, and the row re-tries when it is seen again.
+  if (rec.status === 'diverged') return <Badge state="bad">diverged</Badge>;
+  if (rec.status === 'unverified') return <Badge state="bad">unverifiable</Badge>;
+  if (rec.status === 'error') return <Badge state="warn">could not verify</Badge>;
   if (rec.status === 'verifying') {
     return (
       <span class="badge warn">

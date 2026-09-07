@@ -27,6 +27,7 @@
 */
 
 import { useEffect, useState } from 'preact/hooks';
+import { normalizeHost } from './lib/resolve-input';
 
 export type Route =
   | { view: 'home' }
@@ -64,7 +65,16 @@ export const parseRoute = (hash: string): Route => {
   if (head === 'artifacts') return { view: 'artifacts' };
   if (head === 'did' && id) return { view: 'did', id };
   if (head === 'key' && id) return { view: 'key', key: id };
-  if (head === 'domain' && id) return { view: 'domain', host: id };
+  // the domain segment is NORMALIZED, never taken raw: the chain's `domain` field
+  // is a bare lowercase hostname and the binding check is a byte comparison
+  // against it, so a shared link carrying `Example.COM.` would render a correct
+  // binding as broken. A segment that is not a hostname at all is not a domain
+  // route (the same test dispatchInput applies to pasted input).
+  if (head === 'domain' && id) {
+    const host = normalizeHost(id);
+    if (host) return { view: 'domain', host };
+    return { view: 'home' };
+  }
   if (head === 'content' && id) return { view: 'content', id };
   if (head === 'op' && id) return { view: 'op', id };
   if (head === 'cred' && id) return { view: 'cred', id };

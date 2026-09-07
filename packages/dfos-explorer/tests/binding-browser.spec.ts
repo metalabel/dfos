@@ -265,6 +265,69 @@ describe('probeWellKnownFromBrowser', () => {
     expect(out.kind).toBe('observed');
     if (out.kind === 'observed') expect(out.result.status).toBe('malformed');
   });
+
+  // M44: the cap has to bound the MEMORY, not just the verdict. `res.text()`
+  // buffered the whole body and measured afterwards, so a fast origin could push
+  // an unbounded body into the tab; the timeout bounds duration, not bytes.
+  it('cancels the stream at the cap instead of buffering the whole body', async () => {
+    let cancelled = false;
+    let served = 0;
+    const oversized = {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          // an endless body: only the cancel below ever ends this read
+          read: async () => {
+            served += 1;
+            return { done: false, value: new Uint8Array(256) };
+          },
+          cancel: async () => {
+            cancelled = true;
+          },
+        }),
+      },
+      text: async () => {
+        throw new Error('the bounded read must never call text()');
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => oversized),
+    );
+    const out = await probeWellKnownFromBrowser('example.com');
+    expect(cancelled).toBe(true);
+    // 1024 / 256 chunks, plus the one that crosses the cap
+    expect(served).toBe(5);
+    expect(out.kind).toBe('observed');
+    if (out.kind === 'observed') expect(out.result.status).toBe('malformed');
+  });
+
+  it('refuses a declared content-length over the cap before reading a byte', async () => {
+    let read = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: (k: string) => (k === 'content-length' ? '999999' : null) },
+        body: {
+          getReader: () => ({
+            read: async () => {
+              read = true;
+              return { done: true, value: undefined };
+            },
+            cancel: async () => undefined,
+          }),
+        },
+      })),
+    );
+    const out = await probeWellKnownFromBrowser('example.com');
+    expect(read).toBe(false);
+    expect(out.kind).toBe('observed');
+    if (out.kind === 'observed') expect(out.result.status).toBe('malformed');
+  });
 });
 
 describe('parseDidBody', () => {

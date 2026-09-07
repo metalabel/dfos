@@ -55,7 +55,7 @@ import {
   mergeWitnessRelations,
   witnessedFromPage,
 } from '../lib/actor-ledger';
-import { getClient } from '../lib/client';
+import { getClient, isVerificationFailure } from '../lib/client';
 import { useIndexRowLabel } from '../lib/content-labels';
 import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
@@ -1472,6 +1472,8 @@ type ProfileState =
   | { kind: 'chain-gated' }
   /** chain lookup: nothing answered — timeout, 5xx, no reachable relay */
   | { kind: 'chain-unreachable' }
+  /** RED: a relay ANSWERED for the chain and the log it served failed verification here */
+  | { kind: 'chain-unverified' }
   /** bytes: 401/403 — held, and not served to an anonymous read */
   | { kind: 'bytes-gated' }
   /** bytes: 404 or an empty body — the chain is here, its document is not */
@@ -1487,7 +1489,7 @@ type ProfileState =
 
 /** The copy for each non-resolved state. Two-tone as everywhere else: amber for
  *  "this relay set cannot show you the thing", red for "a relay answered with
- *  something it should not have". Exactly one state is red. */
+ *  something it should not have". */
 const PROFILE_NOTE: Record<
   Exclude<ProfileState, { kind: 'resolved' } | { kind: 'diverged' }>['kind'],
   { state: 'warn' | 'bad'; text: string; detail: string }
@@ -1509,6 +1511,12 @@ const PROFILE_NOTE: Record<
     text: 'could not resolve',
     detail:
       'No configured relay answered for the anchored profile chain — a timeout, a network failure, or a relay error. This says nothing about whether the profile exists: the question was never answered. Retry, or add a relay.',
+  },
+  'chain-unverified': {
+    state: 'bad',
+    text: 'chain does not verify',
+    detail:
+      'A relay answered for the anchored profile chain, and the log it served failed verification in this tab — a signature, a CID, or an authorization did not check out. The question WAS answered; the answer is one this browser refuses. That is a statement about what was served, not about whether the profile exists.',
   },
   'bytes-gated': {
     state: 'warn',
@@ -1708,6 +1716,11 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
         // way out and its own panel
         const divergence = divergenceErrorFrom(e);
         if (divergence) return setState({ kind: 'diverged', err: divergence });
+        // a relay that ANSWERED with a log that failed its checks here is the
+        // opposite of a relay that never answered, and the proof-plane probe
+        // below cannot tell them apart — it would see the same 200 and report
+        // "no relay answered". Ask the throw itself first (lib/client.ts).
+        if (isVerificationFailure(e)) return setState({ kind: 'chain-unverified' });
         // otherwise ask the proof plane directly for a STATUS, so "nobody
         // answered" never renders as "this chain is not held here"
         const claim = await fetchClaim('content', anchor, relays);

@@ -458,6 +458,35 @@ describe('openExplorerDb open-path guards', () => {
   });
 });
 
+// H31: the landing panel's green tier needs a number a VERIFICATION licensed.
+// `counts().ops` is not one — a row lands there the moment it is seen — so the
+// fold verdicts are summed separately, and the two must never be conflated.
+describe('verifiedOpsTotal — the only op figure a fold licenses', () => {
+  it('is zero while the index holds rows nobody folded', async () => {
+    const db = await freshDb();
+    await db.putBatch([op({ cid: 'bafy1' }), op({ cid: 'bafy2' })], []);
+    expect((await db.counts()).ops).toBe(2);
+    expect(await db.verifiedOpsTotal()).toBe(0);
+  });
+
+  it('sums the opCount of every durable verdict', async () => {
+    const db = await freshDb();
+    await db.putVerify({ key: 'identity:a', opCount: 3, isDeleted: false, verifiedAt: 1 });
+    await db.putVerify({ key: 'content:b', opCount: 4, isDeleted: false, verifiedAt: 2 });
+    expect(await db.verifiedOpsTotal()).toBe(7);
+    // a re-fold replaces its chain's verdict rather than adding to the total
+    await db.putVerify({ key: 'identity:a', opCount: 5, isDeleted: false, verifiedAt: 3 });
+    expect(await db.verifiedOpsTotal()).toBe(9);
+  });
+
+  it('a wipe clears it with the rest of the index', async () => {
+    const db = await freshDb();
+    await db.putVerify({ key: 'identity:a', opCount: 3, isDeleted: false, verifiedAt: 1 });
+    await db.wipe();
+    expect(await db.verifiedOpsTotal()).toBe(0);
+  });
+});
+
 describe('getDb rejection is not cached', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

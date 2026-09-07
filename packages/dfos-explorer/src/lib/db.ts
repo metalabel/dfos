@@ -227,6 +227,14 @@ export interface ExplorerDb {
   setCursor(cursor: SyncCursor): Promise<void>;
   /** A durable JIT-fold verdict for `${kind}:${chainId}`, or undefined. */
   getVerify(key: string): Promise<VerifyVerdict | undefined>;
+  /**
+   * Operations covered by a durable FOLD VERDICT — the sum of `opCount` over the
+   * `verify` store. This is the only op figure in the tab that a verification
+   * licenses: `counts().ops` is a stored-row count, and a row is stored the
+   * moment it is seen, verified or not. The two are never interchangeable, and
+   * only this one may wear green (views/home.tsx).
+   */
+  verifiedOpsTotal(): Promise<number>;
   /** Persist a JIT-fold verdict so a reload can trust it without re-folding. */
   putVerify(verdict: VerifyVerdict): Promise<void>;
   wipe(): Promise<void>;
@@ -634,6 +642,13 @@ export const openExplorerDb = async (
   const getVerify = async (k: string): Promise<VerifyVerdict | undefined> =>
     (await req(db.transaction('verify').objectStore('verify').get(k))) as VerifyVerdict | undefined;
 
+  const verifiedOpsTotal = async (): Promise<number> => {
+    const verdicts = (await req(
+      db.transaction('verify').objectStore('verify').getAll(),
+    )) as VerifyVerdict[];
+    return verdicts.reduce((n, v) => n + (typeof v.opCount === 'number' ? v.opCount : 0), 0);
+  };
+
   const putVerify = async (verdict: VerifyVerdict): Promise<void> => {
     const t = db.transaction('verify', 'readwrite');
     t.objectStore('verify').put(verdict);
@@ -666,6 +681,7 @@ export const openExplorerDb = async (
     getCursor,
     setCursor,
     getVerify,
+    verifiedOpsTotal,
     putVerify,
     wipe,
     close: () => db.close(),

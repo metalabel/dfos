@@ -49,6 +49,7 @@ import { getClient } from './client';
 import { projectedName, useIndexIdentityRow } from './index-point';
 import { parseMediaObject, type MediaObject } from './media';
 import { isProfileContent, profileAnchorOf } from './profile';
+import { subscribeRelays } from './relays';
 
 export interface DidProfile {
   did: string;
@@ -59,9 +60,24 @@ export interface DidProfile {
   avatar: MediaObject | null;
 }
 
-/** pending = not resolved yet · resolved = a public profile · none = no public
- *  profile (or unreachable) — the DID renders bare. */
-export type DidProfileState = 'pending' | 'resolved' | 'none';
+/**
+ * pending = not resolved yet · resolved = a public profile · none = the identity
+ * resolved and there is no public profile to show · unavailable = the question
+ * could not be asked at all.
+ *
+ * THE LAST TWO ARE NOT THE SAME SENTENCE. "No public profile" is a finding about
+ * an identity; an unreachable relay is a finding about the network, and printing
+ * the first over the second is the explorer asserting something it never
+ * observed. A row renders them differently (components/index-light.tsx).
+ */
+export type DidProfileState = 'pending' | 'resolved' | 'none' | 'unavailable';
+
+/**
+ * A settled resolve: the public profile, `null` for "there is none", or
+ * `'unavailable'` for "we could not look". The third value is the whole point —
+ * see {@link DidProfileState}.
+ */
+export type ProfileVerdict = DidProfile | null | 'unavailable';
 
 /** How long a resolved profile is trusted from cache before re-resolving. */
 export const PROFILE_TTL_MS = 60 * 60 * 1000;
@@ -154,8 +170,9 @@ const writeStore = (entries: Record<string, CachedProfile>): void => {
 // resolver — module cache + waiter/pump, the content-labels.ts idiom
 // -----------------------------------------------------------------------------
 
-/** did → resolved public profile, or null once it resolved to "none". */
-const cache = new Map<string, DidProfile | null>();
+/** did → resolved public profile, `null` for "none", `'unavailable'` for "could
+ *  not look". */
+const cache = new Map<string, ProfileVerdict>();
 const waiters = new Map<string, Set<() => void>>();
 const queue: string[] = [];
 let active = 0;
@@ -164,10 +181,10 @@ const notify = (did: string): void => {
   for (const fn of waiters.get(did) ?? []) fn();
 };
 
-const remember = (did: string, profile: DidProfile | null): void => {
+const remember = (did: string, profile: ProfileVerdict): void => {
   cache.set(did, profile);
   // only POSITIVES persist — see the header note on negative caching
-  if (profile) {
+  if (profile && profile !== 'unavailable') {
     const entries = readStore();
     entries[did] = { n: profile.name, d: profile.description, at: Date.now() };
     writeStore(entries);
@@ -175,27 +192,56 @@ const remember = (did: string, profile: DidProfile | null): void => {
   notify(did);
 };
 
-const resolveOne = async (did: string): Promise<void> => {
+/** The two round trips the resolve needs, structurally — so the verdict split
+ *  below is unit-testable without a browser or a relay. `getClient()` satisfies
+ *  it as it stands. */
+export interface ProfileSource {
+  identity(did: string): Promise<{ value: { services: { type: string; [k: string]: unknown }[] } }>;
+  document(anchor: string): Promise<{ value: { decoded?: unknown; integrity: boolean } }>;
+}
+
+/**
+ * Resolve one DID to a verdict, with the two beats caught SEPARATELY because
+ * they answer different questions.
+ *
+ * Beat 1 throwing means the identity chain itself did not resolve — an
+ * unreachable relay, a divergence, a chain nobody serves. Nothing was learned
+ * about whether a public profile exists, so the verdict is `'unavailable'`.
+ *
+ * Beat 2 throwing means the chain resolved, named an anchor, and no relay served
+ * those bytes to an unauthenticated read. That is what "not a PUBLIC profile"
+ * means empirically (see the header's privacy invariant), so it stays `null` —
+ * the same verdict as an anchor that resolved to something that is not a profile.
+ *
+ * Pure of module state, unit-tested.
+ */
+export const resolveProfileVerdict = async (
+  did: string,
+  client: ProfileSource,
+): Promise<ProfileVerdict> => {
+  let identity: Awaited<ReturnType<ProfileSource['identity']>>;
   try {
-    const client = getClient();
     // beat 1 — the identity chain, folded and verified in the tab, for its
     // controller-signed profile anchor
-    const identity = await client.identity(did);
-    const anchor = profileAnchorOf(identity.value.services);
-    if (!anchor) {
-      remember(did, null);
-      return;
-    }
+    identity = await client.identity(did);
+  } catch {
+    return 'unavailable';
+  }
+  const anchor = profileAnchorOf(identity.value.services);
+  if (!anchor) return null;
+  try {
     // beat 2 — an ANONYMOUS document fetch; `integrity` is the re-hash to the
     // committed documentCID. Gated bytes throw (no relay serves them) → none.
     const doc = await client.document(anchor);
-    remember(did, publicProfileOf(did, doc.value.decoded, doc.value.integrity));
+    return publicProfileOf(did, doc.value.decoded, doc.value.integrity);
   } catch {
-    // no public profile, unresolvable identity, or an unreachable relay — the
-    // DID renders bare either way. In-memory only, so a reload retries.
-    cache.set(did, null);
-    notify(did);
+    return null;
   }
+};
+
+const resolveOne = async (did: string): Promise<void> => {
+  // in-memory only either way, so a reload retries
+  remember(did, await resolveProfileVerdict(did, getClient()));
 };
 
 const pump = (): void => {
@@ -224,11 +270,38 @@ const enqueue = (did: string): void => {
   pump();
 };
 
+// A negative verdict is relay-circumstantial — "these relays yielded no profile"
+// — so a relay-set change drops it and asks again, the content-labels.ts idiom.
+// Positives are bound to the chain by math and survive the switch. Registered
+// once, for the module's life: this resolver is a session singleton.
+subscribeRelays(() => {
+  for (const [did, profile] of cache) {
+    if (profile !== null && profile !== 'unavailable') continue;
+    cache.delete(did);
+    // a row still on screen re-asks the NEW relay set rather than keeping a
+    // verdict the old one produced; one nobody is watching just falls out
+    if (waiters.get(did)?.size) enqueue(did);
+    notify(did);
+  }
+});
+
 /** Which tier the returned `profile` came from: `verified` = bound to the chain
  *  by math in this tab (see the header note) · `attributed` = the relay index's
  *  projection, standing in until the verified answer lands. Meaningless when
  *  `profile` is null. */
 export type DidProfileTier = 'attributed' | 'verified';
+
+/** The cache entry as a renderable profile — a verdict that is not one is null. */
+const profileOf = (verdict: ProfileVerdict | undefined): DidProfile | null =>
+  verdict && verdict !== 'unavailable' ? verdict : null;
+
+/** The cache entry as a display state. A missing entry is the pending floor. */
+const stateOf = (did: string): DidProfileState => {
+  if (!cache.has(did)) return 'pending';
+  const hit = cache.get(did);
+  if (hit === 'unavailable') return 'unavailable';
+  return hit ? 'resolved' : 'none';
+};
 
 /**
  * Resolve a DID to its public profile, hydrating in place as the result lands.
@@ -248,10 +321,8 @@ export const useDidProfile = (
   need = true,
   projected?: string,
 ): { profile: DidProfile | null; state: DidProfileState; tier: DidProfileTier } => {
-  const [profile, setProfile] = useState<DidProfile | null>(() => cache.get(did) ?? null);
-  const [state, setState] = useState<DidProfileState>(() =>
-    cache.has(did) ? (cache.get(did) ? 'resolved' : 'none') : 'pending',
-  );
+  const [profile, setProfile] = useState<DidProfile | null>(() => profileOf(cache.get(did)));
+  const [state, setState] = useState<DidProfileState>(() => stateOf(did));
 
   useEffect(() => {
     if (!need || !did) return;
@@ -260,10 +331,10 @@ export const useDidProfile = (
       setState('pending');
     }
     const read = (): void => {
-      if (!cache.has(did)) return;
-      const hit = cache.get(did) ?? null;
-      setProfile(hit);
-      setState(hit ? 'resolved' : 'none');
+      // a dropped entry (the relay-set clear above) returns the row to the
+      // pending floor rather than leaving the old relay set's verdict on screen
+      setProfile(profileOf(cache.get(did)));
+      setState(stateOf(did));
     };
     read();
     let set = waiters.get(did);

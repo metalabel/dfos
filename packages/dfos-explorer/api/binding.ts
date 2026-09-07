@@ -213,10 +213,13 @@ const probeDns = async (host: string): Promise<BindingMethodResult> => {
 // the HTTPS method
 // -----------------------------------------------------------------------------
 
-/** Read a response body as text under the byte cap. Throws past it. */
-const boundedText = async (res: Response): Promise<string> => {
+/** The over-cap signal, distinguishable from any other read failure. */
+const OVER_CAP = 'over-cap';
+
+/** Read a response body as text under the byte cap. Throws {@link OVER_CAP} past it. */
+export const boundedText = async (res: Response): Promise<string> => {
   const declared = Number(res.headers.get('content-length') ?? '0');
-  if (declared > MAX_BODY_BYTES) throw new Error('too-large');
+  if (declared > MAX_BODY_BYTES) throw new Error(OVER_CAP);
   const reader = res.body?.getReader();
   if (!reader) return '';
   const chunks: Uint8Array[] = [];
@@ -227,7 +230,7 @@ const boundedText = async (res: Response): Promise<string> => {
     total += value.byteLength;
     if (total > MAX_BODY_BYTES) {
       await reader.cancel();
-      throw new Error('too-large');
+      throw new Error(OVER_CAP);
     }
     chunks.push(value);
   }
@@ -235,6 +238,22 @@ const boundedText = async (res: Response): Promise<string> => {
     chunks.length === 1 ? chunks[0] : Buffer.concat(chunks as Buffer[]),
   );
 };
+
+/**
+ * What a failed body read means. AN OVER-CAP 200 IS A NON-ANSWER, NOT A FAILED
+ * QUERY: the origin answered, and what it sent is not a DID, because no
+ * conforming body reaches 1024 bytes. That is `malformed` — the non-answer class
+ * the spec's app-description fallback triggers on — and it is the reading the Go
+ * CLI already gives the same input (`classifyWellKnown` in
+ * packages/dfos-cli/internal/cmd/originbinding.go, "A body over the cap is that
+ * same 200-that-is-not-a-DID"). Calling it `error` suppressed the fallback the
+ * CLI performs, so two reference verifiers disagreed on identical bytes.
+ * `error` is kept for a read that genuinely failed. Pure, unit-tested.
+ */
+export const bodyReadFailure = (e: unknown): BindingMethodResult =>
+  e instanceof Error && e.message === OVER_CAP
+    ? { status: 'malformed', reason: 'the document exceeds 1024 bytes' }
+    : { status: 'error', reason: 'the document could not be read' };
 
 const probeHttps = async (host: string): Promise<BindingMethodResult> => {
   const { lookup } = await import('node:dns/promises');
@@ -273,10 +292,7 @@ const probeHttps = async (host: string): Promise<BindingMethodResult> => {
   try {
     return parseDidBody(await boundedText(res));
   } catch (e) {
-    if (e instanceof Error && e.message === 'too-large') {
-      return { status: 'error', reason: 'too-large' };
-    }
-    return { status: 'error', reason: 'the document could not be read' };
+    return bodyReadFailure(e);
   }
 };
 
