@@ -474,7 +474,7 @@ Artifacts keep their own 16384-byte cap; the `services` array keeps its
 | `authKeys` / `assertKeys` / `controllerKeys` | 256 items | Generous ceiling; op-size cap is the real bound |
 | `keyProofs` entries                          | 256 items | Bounds signature checks per operation           |
 | `services` entries                           | 256 items | (see Services)                                  |
-| countersignature `relation`                  | 64 chars  | Open-namespace tag (min 1 when present)         |
+| countersignature `relation`                  | 64 bytes  | Open-namespace tag (min 1 when present)         |
 
 The protocol does not limit individual field string lengths, document content
 size (the protocol commits to a CID, not the document, so large binary media is

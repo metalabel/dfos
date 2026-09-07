@@ -70,3 +70,21 @@ export const decodeMultikey = (multibase: string): { keyBytes: Uint8Array; codec
     `unsupported multikey codec: [0x${bytes[0]?.toString(16)}, 0x${bytes[1]?.toString(16)}]`,
   );
 };
+
+/**
+ * Decode a Multikey multibase string that MUST carry an Ed25519 PUBLIC key
+ *
+ * `decodeMultikey` also accepts the `ed25519-priv` prefix and reports it in
+ * `codec`, which a caller that destructures only `{ keyBytes }` silently
+ * discards — so a private-key-tagged multibase string would verify as if it were
+ * a public key, where the Go reference (DecodeMultikey) accepts the 0xed01
+ * prefix and nothing else. This is the decode every signature path takes, so the
+ * codec assertion cannot be forgotten at the next call site.
+ */
+export const decodeEd25519PublicMultikey = (multibase: string): Uint8Array => {
+  const { keyBytes, codec } = decodeMultikey(multibase);
+  if (codec !== ED25519_PUB_MULTICODEC) {
+    throw new Error('publicKeyMultibase is not an Ed25519 public key');
+  }
+  return keyBytes;
+};

@@ -38,8 +38,14 @@ const MAX_KEYS_PER_ROLE = 256;
  * VALIDITY-determining: MUST match maxKeyProofs in the Go reference.
  */
 export const MAX_KEY_PROOFS = 256;
-/** Max length for a countersignature relation tag (open-namespace string) */
-const MAX_RELATION = 64;
+/**
+ * Max size of a countersignature relation tag (open-namespace string), in UTF-8
+ * BYTES — the unit every DFOS length cap counts, and the unit the Go twin's
+ * `len(rs)` has always counted. Zod's `.max()` counts UTF-16 code units, which
+ * is the same number only for ASCII, so the cap is applied through a byte
+ * measurement rather than `.max()`.
+ */
+const MAX_RELATION_BYTES = 64;
 /**
  * Max number of service entries in an identity's services state — a generous
  * cardinality ceiling on resolution fan-out. Individual entry fields are NOT
@@ -183,7 +189,14 @@ export const parseProtocolTimestampUnix = (value: string): number | null => {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 };
 
-const CIDString = z.string();
+/**
+ * A CID-valued field. Non-empty, because the Go reference hard-errors on an
+ * empty one (`create must have a documentCID`) — a bare `z.string()` here let
+ * `documentCID: ""` verify in TypeScript and fail in Go on the same signed
+ * bytes. Nullability is a separate question each field answers with
+ * `.nullable()`; a null CID is a cleared document, an empty string is nothing.
+ */
+const CIDString = z.string().min(1, 'CID must not be empty');
 
 /** Identity chain: create — genesis operation, starts the chain */
 const IdentityCreate = z.looseObject({
@@ -452,7 +465,13 @@ export const CountersignPayload = z.looseObject({
   type: z.literal('countersign'),
   did: z.string(),
   targetCID: CIDString,
-  relation: z.string().min(1).max(MAX_RELATION).optional(),
+  relation: z
+    .string()
+    .min(1)
+    .refine((value) => new TextEncoder().encode(value).length <= MAX_RELATION_BYTES, {
+      message: `relation exceeds ${MAX_RELATION_BYTES} bytes`,
+    })
+    .optional(),
   createdAt: Iso8601,
 });
 export type CountersignPayload = z.infer<typeof CountersignPayload>;

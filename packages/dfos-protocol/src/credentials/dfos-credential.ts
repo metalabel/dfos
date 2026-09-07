@@ -17,7 +17,7 @@
 
 */
 
-import { decodeMultikey } from '../chain/multikey';
+import { decodeEd25519PublicMultikey } from '../chain/multikey';
 import type { VerifiedIdentity } from '../chain/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { markDependencyMissing } from '../dependency';
@@ -147,7 +147,7 @@ const resolveKeyFromIdentity = (
     throw determinate ? miss : markDependencyMissing(miss);
   }
 
-  const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
+  const keyBytes = decodeEd25519PublicMultikey(key.publicKeyMultibase);
   return keyBytes;
 };
 
@@ -329,8 +329,12 @@ export const verifyDFOSCredential = async (
     throw new CredentialVerificationError('invalid credential signature');
   }
 
-  // verify CID integrity
-  const encoded = await dagCborCanonicalEncode(payload);
+  // Verify CID integrity against the DECODED PAYLOAD, never the parsed one.
+  // `prf` carries a schema default of `[]`, so a credential that omits it on the
+  // wire would be hashed here with a member the issuer never signed — a CID the
+  // Go reference (which hashes the wire map) never derives. The schema
+  // validates; it does not canonicalize.
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
   const credentialCID = encoded.cid.toString();
   if (!decoded.header.cid) {
     throw new CredentialVerificationError('missing cid in credential header');
@@ -491,19 +495,31 @@ const parseResource = (resource: string): { type: string; id: string } | null =>
   return { type: resource.substring(0, colonIdx), id: resource.substring(colonIdx + 1) };
 };
 
+/**
+ * The ASCII whitespace CREDENTIALS.md "Action coverage" rule 2 trims — tab,
+ * newline, vertical tab, form feed, carriage return, space, and nothing else.
+ * Neither language's stock trim is this set: JS `String.trim()` strips the whole
+ * ECMAScript WhiteSpace production (U+FEFF and NBSP among it) while Go's
+ * `strings.TrimSpace` uses `unicode.IsSpace` (which excludes U+FEFF), so a
+ * BOM-prefixed action canonicalized to two different tokens and the two
+ * verifiers reached opposite authorization verdicts on identical signed bytes.
+ */
+const ASCII_TRIM_RE = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g;
+
 /** Parse action string into a set of individual actions.
  *
- * Splits on comma, trims each element, and DROPS empty elements so the action
- * set is canonical: "write," / "read,,write" / "  read , write " all reduce to
- * their non-empty token sets. This converges TS onto the Go ParseActions
- * (delegation.go) so isAttenuated and matchesResource reach identical verdicts
- * across implementations — a divergent empty-string element would otherwise
- * make a child action "write," covered by parent "write" on Go but not TS. */
+ * Splits on comma, trims ASCII whitespace from each element, and DROPS empty
+ * elements so the action set is canonical: "write," / "read,,write" /
+ * "  read , write " all reduce to their non-empty token sets. This converges TS
+ * onto the Go ParseActions (delegation.go) so isAttenuated and matchesResource
+ * reach identical verdicts across implementations — a divergent empty-string
+ * element would otherwise make a child action "write," covered by parent "write"
+ * on Go but not TS. */
 const parseActions = (action: string): Set<string> =>
   new Set(
     action
       .split(',')
-      .map((a) => a.trim())
+      .map((a) => a.replace(ASCII_TRIM_RE, ''))
       .filter((a) => a !== ''),
   );
 

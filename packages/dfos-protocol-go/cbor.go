@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -26,32 +27,54 @@ const maxSafeInteger = 9007199254740991
 // art (go-ipld-prime caps at 1024).
 const maxCanonicalDepth = 1024
 
-// AssertCanonicalNumbers walks v and rejects any number that is not
-// canonicalizable under the DFOS policy: NaN, ±Inf, non-integers, and integers
-// outside ±(2^53-1). Applications must encode such values as strings. A
-// whole, in-range float64 is accepted (it normalizes to int64). This keeps the
-// dag-cbor number encoding deterministic and identical across languages. It also
-// enforces the maxCanonicalDepth nesting guard.
-func AssertCanonicalNumbers(v any) error {
-	return assertCanonicalNumbersDepth(v, 0)
+// AssertCanonicalValue walks v and rejects anything the two reference
+// implementations would not commit to the same bytes for:
+//
+//  1. NUMBERS — NaN, ±Inf, non-integers, and integers outside ±(2^53-1) are not
+//     canonicalizable under the DFOS policy; encode them as strings. A whole,
+//     in-range float64 is accepted (it normalizes to int64).
+//  2. STRINGS — invalid UTF-8, which the CBOR string encoder normalizes away, so
+//     two distinct values would share one CID. The TS twin's equivalent is a
+//     lone UTF-16 surrogate.
+//  3. CID SENTINELS — a map carrying both a "/" and a "bytes" member is the
+//     dag-cbor bytes sentinel: the JS codec either crashes on it or silently
+//     re-reads it as a byte string, while this encoder writes an ordinary map.
+//     Rejected in both languages so neither has to guess.
+//  4. DEPTH — the maxCanonicalDepth nesting guard.
+//
+// MUST match the TS reference (assertCanonicalValue in crypto/multiformats.ts).
+func AssertCanonicalValue(v any) error {
+	return assertCanonicalValueDepth(v, 0)
 }
 
-func assertCanonicalNumbersDepth(v any, depth int) error {
+func assertCanonicalValueDepth(v any, depth int) error {
 	if depth > maxCanonicalDepth {
 		return fmt.Errorf("value nesting exceeds max depth %d", maxCanonicalDepth)
 	}
 	switch val := v.(type) {
 	case map[string]any:
-		for _, vv := range val {
-			if err := assertCanonicalNumbersDepth(vv, depth+1); err != nil {
+		_, hasSlash := val["/"]
+		_, hasBytes := val["bytes"]
+		if hasSlash && hasBytes {
+			return fmt.Errorf(`object carrying both "/" and "bytes" members is not canonicalizable`)
+		}
+		for k, vv := range val {
+			if !utf8.ValidString(k) {
+				return fmt.Errorf("map key is not valid UTF-8 and is not canonicalizable")
+			}
+			if err := assertCanonicalValueDepth(vv, depth+1); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for _, vv := range val {
-			if err := assertCanonicalNumbersDepth(vv, depth+1); err != nil {
+			if err := assertCanonicalValueDepth(vv, depth+1); err != nil {
 				return err
 			}
+		}
+	case string:
+		if !utf8.ValidString(val) {
+			return fmt.Errorf("string is not valid UTF-8 and is not canonicalizable")
 		}
 	case float32:
 		return assertCanonicalFloat(float64(val))
@@ -153,7 +176,7 @@ func NormalizeJSONNumbers(v any) any {
 // DagCborEncode encodes a value in dag-cbor canonical form.
 // Uses CoreDetEncOptions which sorts map keys by length-first then lexicographic.
 func DagCborEncode(v any) ([]byte, error) {
-	if err := AssertCanonicalNumbers(v); err != nil {
+	if err := AssertCanonicalValue(v); err != nil {
 		return nil, err
 	}
 	em, err := cbor.CoreDetEncOptions().EncMode()

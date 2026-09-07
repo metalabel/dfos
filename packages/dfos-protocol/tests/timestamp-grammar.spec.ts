@@ -8,7 +8,7 @@ import { parseProtocolTimestampUnix } from '../src/chain';
 
   The strict gate is TS z.iso.datetime({offset:false, precision:3}) vs the Go
   twin's time.Parse("2006-01-02T15:04:05.000Z") — fixed 3-digit fraction +
-  literal Z, NOT RFC3339Nano. These 22 cases are asserted byte-for-byte
+  literal Z, NOT RFC3339Nano. These 24 cases are asserted byte-for-byte
   identical in the Go twin (dfos-protocol-go/timestamp_grammar_test.go). Keep
   the two vector lists in lockstep.
 
@@ -39,6 +39,8 @@ const vectors: { input: string; valid: boolean }[] = [
   { input: ' 2026-03-07T00:00:00.000Z', valid: false }, // leading space
   { input: '2026-03-07 00:00:00.000Z', valid: false }, // space instead of T
   { input: '2026-03-07T23:59:60.000Z', valid: false }, // leap second
+  { input: '2026-03-07T5:04:05.000Z', valid: false }, // single-digit hour
+  { input: '2026-03-07T00:00:00,000Z', valid: false }, // comma decimal separator
 ];
 
 describe('strict createdAt grammar (Go twin parity)', () => {

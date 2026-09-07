@@ -143,9 +143,13 @@ export const verifyJwt = (options: JwtVerifyOptions): { header: JwtHeader; paylo
   const isValid = isValidEd25519Signature(signingInputBytes, signatureBytes, options.publicKey);
   if (!isValid) throw new JwtVerificationError('Invalid signature');
 
-  // Verify expiration
+  // Verify expiration. `exp` is typed `number` but the payload is a JSON.parse
+  // cast, so the runtime value can be absent or any type: `undefined <= n` and
+  // `"9999999999" <= n` are both false, and an unexpiring token would sail past
+  // a bare comparison. A token whose `exp` is not a safe integer has no
+  // expiration this verifier can read, which is a rejection, not a pass.
   const currentTime = options.currentTime ?? Math.floor(Date.now() / 1000);
-  if (payload.exp <= currentTime) {
+  if (!Number.isSafeInteger(payload.exp) || payload.exp <= currentTime) {
     throw new JwtVerificationError('Token expired');
   }
 

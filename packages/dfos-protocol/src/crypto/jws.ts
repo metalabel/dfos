@@ -8,6 +8,7 @@
 
 import { base64urlDecode, base64urlEncode } from './base64url';
 import { isValidEd25519Signature } from './ed25519';
+import { assertCanonicalJsonText } from './json-scan';
 import { assertJwsProfile } from './jws-profile';
 
 // -----------------------------------------------------------------------------
@@ -21,6 +22,55 @@ export interface JwsHeader {
   /** CIDv1 of the operation payload (dag-cbor + SHA-256), signed in the protected header */
   cid?: string;
 }
+
+// -----------------------------------------------------------------------------
+// decode helpers
+// -----------------------------------------------------------------------------
+
+/**
+ * Decode one base64url JWS segment to the object it denotes, or null.
+ *
+ * `JSON.parse` returns `null` for the text `"null"` and an array for `"[]"`
+ * without throwing, so `as JwsHeader` / `as Record<string, unknown>` is a
+ * compile-time fiction that a hand-built token defeats: every caller then reads
+ * `header.typ` off `null` and gets a raw `TypeError` instead of this module's
+ * error class. The shape check is what makes the cast true.
+ *
+ * The raw text is scanned before it is parsed — duplicate keys and lone
+ * surrogate escapes are only visible there (see json-scan.ts). That scan throws;
+ * a malformed segment returns null.
+ */
+const decodeJwsSegment = (segmentB64: string): Record<string, unknown> | null => {
+  let text: string;
+  try {
+    text = new TextDecoder().decode(base64urlDecode(segmentB64));
+  } catch {
+    return null;
+  }
+  assertCanonicalJsonText(text);
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+};
+
+/**
+ * A protected header is only a `JwsHeader` when `alg`, `typ` and `kid` are
+ * strings and `cid`, when present, is one. Absent or wrongly-typed, and the
+ * decode fails here rather than throwing a `TypeError` out of whichever caller
+ * reads the field first.
+ */
+const asJwsHeader = (raw: Record<string, unknown>): JwsHeader | null => {
+  if (typeof raw['alg'] !== 'string') return null;
+  if (typeof raw['typ'] !== 'string') return null;
+  if (typeof raw['kid'] !== 'string') return null;
+  if ('cid' in raw && typeof raw['cid'] !== 'string') return null;
+  return raw as unknown as JwsHeader;
+};
 
 // -----------------------------------------------------------------------------
 // jws functions
@@ -65,21 +115,28 @@ export const verifyJws = (options: {
 
   const [headerB64, payloadB64, signatureB64] = parts as [string, string, string];
 
-  let header: JwsHeader;
-  let payload: Record<string, unknown>;
+  let rawHeader: Record<string, unknown> | null;
+  let payload: Record<string, unknown> | null;
   try {
-    header = JSON.parse(new TextDecoder().decode(base64urlDecode(headerB64)));
-    payload = JSON.parse(new TextDecoder().decode(base64urlDecode(payloadB64)));
-  } catch {
+    rawHeader = decodeJwsSegment(headerB64);
+    payload = decodeJwsSegment(payloadB64);
+  } catch (e) {
+    // the raw-text scan's verdict (duplicate key, lone surrogate) is a
+    // rejection in this module's vocabulary, not a decode failure
+    throw new JwsVerificationError((e as Error).message);
+  }
+  if (!rawHeader || !payload) {
     throw new JwsVerificationError('Failed to decode token');
   }
 
   // apply the DFOS signature verification profile (alg pin, crit, no
   // header-key-trust) BEFORE any signature check
-  assertJwsProfile(
-    header as unknown as Record<string, unknown>,
-    (m) => new JwsVerificationError(m),
-  );
+  assertJwsProfile(rawHeader, (m) => new JwsVerificationError(m));
+
+  const header = asJwsHeader(rawHeader);
+  if (!header) {
+    throw new JwsVerificationError('Invalid protected header');
+  }
 
   const signingInput = `${headerB64}.${payloadB64}`;
   const signingInputBytes = new TextEncoder().encode(signingInput);
@@ -104,17 +161,20 @@ export const decodeJwsUnsafe = (
   const parts = token.split('.');
   if (parts.length !== 3) return null;
 
+  const [headerB64, payloadB64] = parts as [string, string, string];
+  let rawHeader: Record<string, unknown> | null;
+  let payload: Record<string, unknown> | null;
   try {
-    const [headerB64, payloadB64] = parts as [string, string, string];
-    const header = JSON.parse(new TextDecoder().decode(base64urlDecode(headerB64))) as JwsHeader;
-    const payload = JSON.parse(new TextDecoder().decode(base64urlDecode(payloadB64))) as Record<
-      string,
-      unknown
-    >;
-    return { header, payload };
+    rawHeader = decodeJwsSegment(headerB64);
+    payload = decodeJwsSegment(payloadB64);
   } catch {
+    // duplicate key / lone surrogate — malformed, same answer as a bad decode
     return null;
   }
+  if (!rawHeader || !payload) return null;
+  const header = asJwsHeader(rawHeader);
+  if (!header) return null;
+  return { header, payload };
 };
 
 /**

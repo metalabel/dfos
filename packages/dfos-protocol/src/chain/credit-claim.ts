@@ -37,7 +37,7 @@
 
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { markDependencyMissing } from '../dependency';
-import { decodeMultikey } from './multikey';
+import { decodeEd25519PublicMultikey } from './multikey';
 import { CreditClaimPayload, MAX_CREDIT_CLAIM_SIZE } from './schemas';
 import type { Signer, VerifiedIdentity } from './schemas';
 
@@ -147,7 +147,7 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
     throw markDependencyMissing(invalid(`key ${keyId} not found on identity ${identity.did}`));
   }
 
-  const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
+  const keyBytes = decodeEd25519PublicMultikey(key.publicKeyMultibase);
   return keyBytes;
 };
 
@@ -385,8 +385,9 @@ export const verifyCreditClaim = async (
     throw invalid('invalid credit claim signature');
   }
 
-  // verify CID
-  const encoded = await dagCborCanonicalEncode(payload);
+  // verify CID against the decoded payload, not the parsed one — see the note
+  // in identity-chain.ts: the schema validates, it does not canonicalize
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
   const claimCID = encoded.cid.toString();
   if (!decoded.header.cid) throw invalid('missing cid in credit claim header');
   if (decoded.header.cid !== claimCID) throw invalid('credit claim cid mismatch');

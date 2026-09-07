@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// TestAssertCanonicalNumbers covers the WP-0 number policy: integers in
+// TestAssertCanonicalValue covers the WP-0 number policy: integers in
 // ±(2^53-1) are accepted; non-integers, NaN, ±Inf, and out-of-range integers
 // are rejected so dag-cbor encoding stays byte-identical across languages.
-func TestAssertCanonicalNumbers(t *testing.T) {
+func TestAssertCanonicalValue(t *testing.T) {
 	valid := []any{
 		map[string]any{"version": float64(1), "n": float64(maxSafeInteger)},
 		map[string]any{"neg": float64(-maxSafeInteger)},
@@ -17,7 +17,7 @@ func TestAssertCanonicalNumbers(t *testing.T) {
 		int64(123),
 	}
 	for i, v := range valid {
-		if err := AssertCanonicalNumbers(v); err != nil {
+		if err := AssertCanonicalValue(v); err != nil {
 			t.Errorf("valid[%d]: unexpected error %v", i, err)
 		}
 	}
@@ -32,7 +32,7 @@ func TestAssertCanonicalNumbers(t *testing.T) {
 		int64(maxSafeInteger + 1),
 	}
 	for i, v := range invalid {
-		if err := AssertCanonicalNumbers(v); err == nil {
+		if err := AssertCanonicalValue(v); err == nil {
 			t.Errorf("invalid[%d]: expected rejection, got nil", i)
 		}
 	}
@@ -47,11 +47,11 @@ func TestDagCborEncodeRejectsNonCanonicalNumbers(t *testing.T) {
 	}
 }
 
-// TestAssertCanonicalNumbersWideTypeCoverage confirms the widened type coverage
+// TestAssertCanonicalValueWideTypeCoverage confirms the widened type coverage
 // (uint64/int32/float32/etc.) matches the TS reference: in-range values of any
 // Go numeric kind are accepted, and out-of-range / fractional values are
 // rejected on every kind rather than slipping through a missing case.
-func TestAssertCanonicalNumbersWideTypeCoverage(t *testing.T) {
+func TestAssertCanonicalValueWideTypeCoverage(t *testing.T) {
 	valid := []any{
 		map[string]any{"u8": uint8(255)},
 		map[string]any{"u16": uint16(65535)},
@@ -64,7 +64,7 @@ func TestAssertCanonicalNumbersWideTypeCoverage(t *testing.T) {
 		map[string]any{"uint": uint(123)},
 	}
 	for i, v := range valid {
-		if err := AssertCanonicalNumbers(v); err != nil {
+		if err := AssertCanonicalValue(v); err != nil {
 			t.Errorf("valid[%d]: unexpected error %v", i, err)
 		}
 	}
@@ -75,7 +75,7 @@ func TestAssertCanonicalNumbersWideTypeCoverage(t *testing.T) {
 		map[string]any{"nested": []any{map[string]any{"u": uint64(1 << 60)}}},
 	}
 	for i, v := range invalid {
-		if err := AssertCanonicalNumbers(v); err == nil {
+		if err := AssertCanonicalValue(v); err == nil {
 			t.Errorf("invalid[%d]: expected rejection, got nil", i)
 		}
 	}

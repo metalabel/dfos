@@ -163,14 +163,13 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, err
 	}
 
-	var header struct {
-		Alg string `json:"alg"`
-		Typ string `json:"typ"`
-		Kid string `json:"kid"`
-		CID string `json:"cid"`
-	}
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	// by exact key — see decodeJWSHeader on why a struct decode is not enough
+	header, err := decodeJWSHeader(headerBytes)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode token")
+	}
+	if err := AssertCanonicalJSONText(payloadBytes); err != nil {
+		return nil, err
 	}
 
 	// verify header fields

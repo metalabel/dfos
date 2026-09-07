@@ -77,11 +77,29 @@ func ParseResource(resource string) (string, string, bool) {
 	return resource[:idx], resource[idx+1:], true
 }
 
+// isASCIISpace reports whether r is one of the six ASCII whitespace characters
+// CREDENTIALS.md "Action coverage" rule 2 trims — tab, newline, vertical tab,
+// form feed, carriage return, space, and nothing else.
+//
+// Neither language's stock trim is this set: strings.TrimSpace uses
+// unicode.IsSpace (which excludes U+FEFF, a Cf character) while JS
+// String.trim() strips the whole ECMAScript WhiteSpace production (U+FEFF and
+// NBSP among it). A BOM-prefixed action therefore canonicalized to two different
+// tokens, and the two verifiers reached opposite authorization verdicts on
+// identical signed bytes. TS twin: ASCII_TRIM_RE in dfos-credential.ts.
+func isASCIISpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ':
+		return true
+	}
+	return false
+}
+
 // ParseActions splits a comma-separated action string into a set.
 func ParseActions(action string) map[string]bool {
 	result := make(map[string]bool)
 	for _, a := range strings.Split(action, ",") {
-		a = strings.TrimSpace(a)
+		a = strings.TrimFunc(a, isASCIISpace)
 		if a != "" {
 			result[a] = true
 		}

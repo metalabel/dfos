@@ -42,16 +42,28 @@ import type { Signer } from './schemas';
  * bounded here too, so excluding it cannot smuggle unbounded bytes past both
  * limits — total operation bytes stay ≤ `MAX_OPERATION_SIZE` +
  * `MAX_CREDENTIAL_SIZE`. MUST match the Go reference (`operationSizeForCap`).
+ *
+ * The discount belongs to the operations that can carry an authorization —
+ * update and delete. A `create` is signed by the chain's own creator and has no
+ * `authorization` field, so a member spelled that way on one is an unknown
+ * extension member like any other and counts against the op cap in full;
+ * discounting it would let a create smuggle 256 KiB past the operation limit.
+ *
+ * The cap counts UTF-8 BYTES, as `MAX_CREDENTIAL_SIZE` and CREDENTIALS.md both
+ * say — not UTF-16 code units, which is the same number only for ASCII and is
+ * how the Go twin (`len(auth)`) and this one came to disagree.
  */
 const operationSizeForCap = async (
   op: Record<string, unknown>,
   fullByteLength: number,
 ): Promise<number> => {
+  if (op.type === 'create') return fullByteLength;
   const auth = op.authorization;
   if (typeof auth !== 'string') return fullByteLength;
-  if (auth.length > MAX_CREDENTIAL_SIZE) {
+  const authByteLength = new TextEncoder().encode(auth).length;
+  if (authByteLength > MAX_CREDENTIAL_SIZE) {
     throw new Error(
-      `authorization credential exceeds max size: ${auth.length} > ${MAX_CREDENTIAL_SIZE}`,
+      `authorization credential exceeds max size: ${authByteLength} > ${MAX_CREDENTIAL_SIZE}`,
     );
   }
   const { authorization: _omit, ...rest } = op;
@@ -349,9 +361,11 @@ export const verifyContentChain = async (input: {
       }
     }
 
-    // derive operation CID
-    const encoded = await dagCborCanonicalEncode(op);
-    const opSize = await operationSizeForCap(op as Record<string, unknown>, encoded.bytes.length);
+    // Derive the operation CID from the DECODED PAYLOAD, never from the parsed
+    // `op` — the schema validates, it does not canonicalize. See the same note
+    // in identity-chain.ts.
+    const encoded = await dagCborCanonicalEncode(decoded.payload);
+    const opSize = await operationSizeForCap(decoded.payload, encoded.bytes.length);
     if (opSize > MAX_OPERATION_SIZE) {
       throw new Error(`operation exceeds max size: ${opSize} > ${MAX_OPERATION_SIZE}`);
     }
@@ -521,9 +535,9 @@ export const verifyContentExtensionFromTrustedState = async (input: {
     }
   }
 
-  // derive operation CID
-  const encoded = await dagCborCanonicalEncode(op);
-  const opSize = await operationSizeForCap(op as Record<string, unknown>, encoded.bytes.length);
+  // derive operation CID from the decoded payload — see verifyContentChain
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
+  const opSize = await operationSizeForCap(decoded.payload, encoded.bytes.length);
   if (opSize > MAX_OPERATION_SIZE) {
     throw new Error(`operation exceeds max size: ${opSize} > ${MAX_OPERATION_SIZE}`);
   }

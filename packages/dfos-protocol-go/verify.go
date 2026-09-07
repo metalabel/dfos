@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // maxOperationSize is the max dag-cbor-encoded size (bytes) of a single identity
@@ -33,7 +32,17 @@ const maxKeysPerRole = 256
 // credential legitimately approaches its own (larger) cap. fullEncoded is the
 // already-derived encoding of the complete payload (the common no-authorization
 // case avoids a second encode). MUST match the TS reference (content-chain.ts).
+//
+// The discount belongs to the operations that can carry an authorization —
+// update and delete. A create is signed by the chain's own creator and has no
+// authorization field, so a member spelled that way on one is an unknown
+// extension member like any other and counts against the op cap in full;
+// discounting it would let a create smuggle maxCredentialSize bytes past the
+// operation limit.
 func operationSizeForCap(payload map[string]any, fullEncoded []byte) (int, error) {
+	if payloadString(payload, "type") == "create" {
+		return len(fullEncoded), nil
+	}
 	auth, hasAuth := payload["authorization"].(string)
 	if !hasAuth {
 		return len(fullEncoded), nil
@@ -200,7 +209,8 @@ func validateCreatedAt(createdAt string) error {
 	if createdAt == "" {
 		return fmt.Errorf("missing createdAt")
 	}
-	if _, err := time.Parse(protocolTimeFormat, createdAt); err != nil {
+	// the one parse — grammar plus calendar; see ParseProtocolTimestamp
+	if _, err := ParseProtocolTimestamp(createdAt); err != nil {
 		return fmt.Errorf("invalid createdAt format")
 	}
 	return nil
@@ -215,15 +225,55 @@ func payloadString(m map[string]any, key string) string {
 	return ""
 }
 
-func payloadStringPtr(m map[string]any, key string) *string {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return nil
+// assertContentPayloadFieldTypes type-gates the content-operation payload members
+// the TS schema types as strings before any of them reaches a state transition:
+// the untyped Go map has no schema layer, so this IS the gate. `documentCID` is
+// checked at its own call sites (its absent/null/present split is per-op-type).
+func assertContentPayloadFieldTypes(payload map[string]any) error {
+	for _, key := range []string{"previousOperationCID", "authorization"} {
+		if _, err := payloadStringStrict(payload, key); err != nil {
+			return err
+		}
 	}
-	if s, ok := v.(string); ok {
-		return &s
+	if _, err := payloadStringPtrStrict(payload, "baseDocumentCID"); err != nil {
+		return err
 	}
 	return nil
+}
+
+// payloadStringPtrStrict keeps absent, JSON null, and wrong-type apart, the way
+// the TS schema does (`documentCID: CIDString.nullable()` rejects a non-string
+// outright). payloadStringPtr collapses all three into nil, which on an update
+// operation reads as an explicit "clear the document": `documentCID: false`
+// would pass the presence check and commit the same state transition as
+// `documentCID: null` — a state fork against TS on identical signed bytes.
+//
+// Absent and null both return (nil, nil); the caller decides whether absence is
+// allowed, since only it knows the operation type.
+func payloadStringPtrStrict(m map[string]any, key string) (*string, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a string or null", key)
+	}
+	return &s, nil
+}
+
+// payloadStringStrict is payloadString with the wrong-type case surfaced instead
+// of coerced to "". See payloadStringPtrStrict.
+func payloadStringStrict(m map[string]any, key string) (string, error) {
+	v, ok := m[key]
+	if !ok {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return s, nil
 }
 
 func payloadMultikeyArray(m map[string]any, key string) ([]MultikeyPublicKey, error) {
@@ -1379,7 +1429,16 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 
 		opType := payloadString(payload, "type")
 		createdAt := payloadString(payload, "createdAt")
-		opDID := payloadString(payload, "did")
+		// strict: a non-string `did` is a malformed operation, not an empty one.
+		// The TS schema types it `z.string()` and rejects; coercing to "" here
+		// would report "missing did" for a value that is present and wrong.
+		opDID, err := payloadStringStrict(payload, "did")
+		if err != nil {
+			return nil, fmt.Errorf("log[%d]: %w", idx, err)
+		}
+		if err := assertContentPayloadFieldTypes(payload); err != nil {
+			return nil, fmt.Errorf("log[%d]: %w", idx, err)
+		}
 
 		// validate basics
 		if v, ok := payload["version"].(int64); !ok || v != 1 {
@@ -1497,7 +1556,10 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 			if _, hasDocCID := payload["documentCID"]; !hasDocCID {
 				return nil, fmt.Errorf("log[%d]: update must include documentCID field", idx)
 			}
-			docCID := payloadStringPtr(payload, "documentCID")
+			docCID, err := payloadStringPtrStrict(payload, "documentCID")
+			if err != nil {
+				return nil, fmt.Errorf("log[%d]: %w", idx, err)
+			}
 			currentDocCID = docCID
 		case "delete":
 			isDeleted = true
@@ -1539,7 +1601,14 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 
 	opType := payloadString(payload, "type")
 	createdAt := payloadString(payload, "createdAt")
-	opDID := payloadString(payload, "did")
+	// strict — see the same read in VerifyContentChain
+	opDID, err := payloadStringStrict(payload, "did")
+	if err != nil {
+		return nil, err
+	}
+	if err := assertContentPayloadFieldTypes(payload); err != nil {
+		return nil, err
+	}
 
 	if v, ok := payload["version"].(int64); !ok || v != 1 {
 		return nil, fmt.Errorf("invalid or missing version")
@@ -1631,7 +1700,11 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 		if _, hasDocCID := payload["documentCID"]; !hasDocCID {
 			return nil, fmt.Errorf("update must include documentCID field")
 		}
-		newState.CurrentDocumentCID = payloadStringPtr(payload, "documentCID")
+		docCID, err := payloadStringPtrStrict(payload, "documentCID")
+		if err != nil {
+			return nil, err
+		}
+		newState.CurrentDocumentCID = docCID
 	}
 
 	return &VerifiedContentResult{

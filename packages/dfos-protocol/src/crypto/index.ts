@@ -3,6 +3,7 @@ export * from './ed25519';
 export * from './hash';
 export * from './id';
 export * from './jws';
+export * from './json-scan';
 export * from './jws-profile';
 export * from './jwt';
 export * from './multiformats';
