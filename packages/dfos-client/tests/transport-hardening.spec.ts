@@ -11,6 +11,7 @@
 
 */
 
+import { isDependencyMissing, markDependencyMissing } from '@metalabel/dfos-protocol';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
@@ -70,6 +71,34 @@ describe('fanOutLog', () => {
         throw new Error('invalid signature');
       }),
     ).rejects.toThrow(/failed verification.*invalid signature/);
+  });
+
+  it('surfaces a dependency miss as its own failure, NOT as "failed verification"', async () => {
+    // the candidate log was never judged — a signer identity did not resolve —
+    // so a caller must be able to tell it apart from a log that answered and
+    // failed a signature check (the explorer routes the two to opposite states)
+    const fetchPage = async () => ({ entries: [op('pending')], next: null });
+    const attempt = fanOutLog(fetchPage, [A, B], 1, async () => {
+      throw markDependencyMissing(new Error('unknown identity: did:dfos:absent'));
+    });
+    await expect(attempt).rejects.toThrow(/could not complete.*unknown identity/);
+    await expect(attempt).rejects.not.toThrow(/failed verification/);
+    await expect(attempt.catch((e: unknown) => isDependencyMissing(e))).resolves.toBe(true);
+  });
+
+  it('a real verdict still wins over a dependency miss among the candidates', async () => {
+    // relay A's bytes were JUDGED and rejected; relay B's could not be checked.
+    // The verdict is the stronger statement and is the one reported.
+    let call = 0;
+    const fetchPage = async (url: string) => ({ entries: [op(url)], next: null });
+    const attempt = fanOutLog(fetchPage, [A, B], 1, async () => {
+      call += 1;
+      throw call === 1
+        ? new Error('invalid signature')
+        : markDependencyMissing(new Error('unknown identity: did:dfos:absent'));
+    });
+    await expect(attempt).rejects.toThrow(/failed verification.*invalid signature/);
+    await expect(attempt.catch((e: unknown) => isDependencyMissing(e))).resolves.toBe(false);
   });
 
   it('reports unreachable when no relay answers at all', async () => {

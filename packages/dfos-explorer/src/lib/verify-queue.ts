@@ -32,11 +32,13 @@
 */
 
 import { divergenceErrorFrom } from '@metalabel/dfos-client';
+import type { LogOp } from '@metalabel/dfos-client';
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { getClient, isVerificationFailure } from './client';
 import type { VerifyVerdict } from './db';
 import { getDb } from './db-instance';
-import { subscribeRelays } from './relays';
+import { relaySetKey, subscribeRelays } from './relays';
 import { currentDbGeneration, jitIndexChain, writeIfCurrent } from './sync-store';
 
 /** The chain kinds a browse row can carry — the only two that fold as a history. */
@@ -65,6 +67,19 @@ export interface VerifiedFacts {
   isDeleted: boolean;
   opCount: number;
 }
+
+/** The oldest `createdAt` in a folded log, `''` when none decodes. Recorded on
+ *  the verdict so the "oldest op" figure has a VERIFIED source rather than the
+ *  broader local index, which holds whatever browsing ever touched. Pure. */
+export const oldestOpAtOf = (log: LogOp[]): string => {
+  let oldest = '';
+  for (const op of log) {
+    const at = decodeJwsUnsafe(op.jwsToken)?.payload['createdAt'];
+    if (typeof at !== 'string' || !at) continue;
+    if (!oldest || at < oldest) oldest = at;
+  }
+  return oldest;
+};
 
 export interface VerifyRecord {
   status: VerifyStatus;
@@ -130,6 +145,7 @@ const persistVerdict = async (
   k: string,
   facts: VerifiedFacts,
   generation: number,
+  scope: { relaySet: string; oldestOpAt: string },
 ): Promise<void> => {
   try {
     const db = await getDb();
@@ -139,6 +155,11 @@ const persistVerdict = async (
         opCount: facts.opCount,
         isDeleted: facts.isDeleted,
         verifiedAt: Date.now(),
+        // WHICH RELAY SET this fold ran against. The verdict itself is bound to
+        // the chain by math, but the tally built from it is only ever compared
+        // against one relay set's asserted count (views/home.tsx).
+        relaySet: scope.relaySet,
+        oldestOpAt: scope.oldestOpAt,
       });
     });
   } catch {
@@ -184,6 +205,12 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
       return;
     }
     const client = getClient();
+    // CAPTURED WITH THE CLIENT, NOT AFTER THE AWAIT. `getClient()` is memoized on
+    // the relay set, so this pair is the set the fold actually runs against —
+    // read later, a relay switch landing mid-flight would file the verdict under
+    // the NEW set's key for ops the new relays never served, which is the exact
+    // inheritance the scoping exists to stop.
+    const relaySet = relaySetKey();
     // client.identity/content re-fold the whole chain in the tab; client.log
     // returns the same verified op log we hand to jitIndexChain (fire-and-forget
     // best-effort local indexing, exactly as the detail views do).
@@ -195,7 +222,10 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
       void jitIndexChain(chainId, 'identity-op', log.value, generation);
       const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
       setRecord(k, { status: 'verified', facts });
-      void persistVerdict(k, facts, generation);
+      void persistVerdict(k, facts, generation, {
+        relaySet,
+        oldestOpAt: oldestOpAtOf(log.value),
+      });
     } else {
       const [res, log] = await Promise.all([
         client.content(chainId),
@@ -207,7 +237,10 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         opCount: log.value.length,
       };
       setRecord(k, { status: 'verified', facts });
-      void persistVerdict(k, facts, generation);
+      void persistVerdict(k, facts, generation, {
+        relaySet,
+        oldestOpAt: oldestOpAtOf(log.value),
+      });
     }
   } catch (e) {
     setRecord(k, {

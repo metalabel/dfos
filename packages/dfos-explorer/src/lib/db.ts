@@ -166,6 +166,15 @@ export interface VerifyVerdict {
   isDeleted: boolean;
   /** ms epoch the fold landed — informational (freshness is decided by opCount). */
   verifiedAt: number;
+  /**
+   * The relay set this fold ran against (`relaySetKey()`). The VERDICT is bound
+   * to the chain by math and outlives a relay switch; the TALLY is not, because
+   * it is only ever read against one relay set's asserted count.
+   */
+  relaySet?: string;
+  /** `createdAt` of the oldest operation this fold covered — the only oldest-op
+   *  figure a verification licenses. */
+  oldestOpAt?: string;
 }
 
 export interface ChainsQuery {
@@ -228,13 +237,21 @@ export interface ExplorerDb {
   /** A durable JIT-fold verdict for `${kind}:${chainId}`, or undefined. */
   getVerify(key: string): Promise<VerifyVerdict | undefined>;
   /**
-   * Operations covered by a durable FOLD VERDICT — the sum of `opCount` over the
-   * `verify` store. This is the only op figure in the tab that a verification
-   * licenses: `counts().ops` is a stored-row count, and a row is stored the
-   * moment it is seen, verified or not. The two are never interchangeable, and
-   * only this one may wear green (views/home.tsx).
+   * Operations covered by a durable FOLD VERDICT for `relaySet` — the sum of
+   * `opCount` over the verdicts filed under that relay set. This is the only op
+   * figure in the tab that a verification licenses: `counts().ops` is a stored-row
+   * count, and a row is stored the moment it is seen, verified or not. The two are
+   * never interchangeable, and only this one may wear green (views/home.tsx).
+   *
+   * SCOPED, because the only thing it is ever compared against is one relay set's
+   * asserted op count. Folding 100 operations on relay A and then configuring
+   * relay B, which asserts 50 of its own, used to satisfy `100 >= 50` and paint
+   * B's panel "fully verified locally" with none of B's operations folded.
    */
-  verifiedOpsTotal(): Promise<number>;
+  verifiedOpsTotal(relaySet: string): Promise<number>;
+  /** The oldest operation any fold under `relaySet` covered — `''` when none has.
+   *  Scoped for the same reason as {@link ExplorerDb.verifiedOpsTotal}. */
+  oldestVerifiedOpAt(relaySet: string): Promise<string>;
   /** Persist a JIT-fold verdict so a reload can trust it without re-folding. */
   putVerify(verdict: VerifyVerdict): Promise<void>;
   wipe(): Promise<void>;
@@ -252,7 +269,10 @@ export interface ExplorerDb {
 // bumped 5→6: content rollups gained projected `title`/`snippet` (post/v1 label
 // parity with the relay index). The local index is a disposable cache, so the
 // upgrade wipes+rebuilds and a re-sync repopulates the new projection fields.
-const DB_VERSION = 6;
+// bumped 6→7: verify verdicts gained `relaySet`/`oldestOpAt` so the verified
+// tally is read against the relay set that produced it. A pre-7 verdict carries
+// neither and would count toward no set at all; the wipe re-folds them honestly.
+const DB_VERSION = 7;
 
 // openExplorerDb guards so the open ALWAYS settles (see the open Promise). A
 // version bump can't upgrade while another same-origin tab still holds an
@@ -642,11 +662,26 @@ export const openExplorerDb = async (
   const getVerify = async (k: string): Promise<VerifyVerdict | undefined> =>
     (await req(db.transaction('verify').objectStore('verify').get(k))) as VerifyVerdict | undefined;
 
-  const verifiedOpsTotal = async (): Promise<number> => {
-    const verdicts = (await req(
+  const verdictsFor = async (relaySet: string): Promise<VerifyVerdict[]> => {
+    const all = (await req(
       db.transaction('verify').objectStore('verify').getAll(),
     )) as VerifyVerdict[];
-    return verdicts.reduce((n, v) => n + (typeof v.opCount === 'number' ? v.opCount : 0), 0);
+    return all.filter((v) => v.relaySet === relaySet);
+  };
+
+  const verifiedOpsTotal = async (relaySet: string): Promise<number> =>
+    (await verdictsFor(relaySet)).reduce(
+      (n, v) => n + (typeof v.opCount === 'number' ? v.opCount : 0),
+      0,
+    );
+
+  const oldestVerifiedOpAt = async (relaySet: string): Promise<string> => {
+    let oldest = '';
+    for (const v of await verdictsFor(relaySet)) {
+      if (typeof v.oldestOpAt !== 'string' || !v.oldestOpAt) continue;
+      if (!oldest || v.oldestOpAt < oldest) oldest = v.oldestOpAt;
+    }
+    return oldest;
   };
 
   const putVerify = async (verdict: VerifyVerdict): Promise<void> => {
@@ -682,6 +717,7 @@ export const openExplorerDb = async (
     setCursor,
     getVerify,
     verifiedOpsTotal,
+    oldestVerifiedOpAt,
     putVerify,
     wipe,
     close: () => db.close(),

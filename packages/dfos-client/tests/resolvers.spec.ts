@@ -84,3 +84,51 @@ describe('identity resolution contexts', () => {
     expect((await client.identity(identity.did)).value.authKeys).toEqual(effective?.authKeys);
   });
 });
+
+// -----------------------------------------------------------------------------
+// the basis is an ANSWER, not just a lookup parameter
+// -----------------------------------------------------------------------------
+
+describe('historical resolution — determinate verdicts survive', () => {
+  const RELAY = 'https://relay.test';
+
+  const clientFor = (identity: Awaited<ReturnType<typeof buildIdentity>>) =>
+    createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [identity.did]: identity.log } } }),
+    });
+
+  it('a basis before genesis THROWS rather than reading as "identity not found"', async () => {
+    // `undefined` is what every protocol consumer reads as a retryable
+    // dependency miss. No relay can ever deliver state for an instant that
+    // predates the chain, so the answer is final and has to say so.
+    const identity = await buildIdentity();
+    const { resolveIdentity } = clientFor(identity).callbacks();
+    await expect(resolveIdentity(identity.did, ts(-600))).rejects.toThrow(/no state as of/);
+  });
+
+  it('an unresolvable chain is still an ordinary miss (undefined)', async () => {
+    const identity = await buildIdentity();
+    const other = await buildIdentity();
+    const { resolveIdentity } = clientFor(identity).callbacks();
+    await expect(resolveIdentity(other.did, ts(-1))).resolves.toBeUndefined();
+  });
+
+  it('marks a re-walked historical state DETERMINATE, like the relay resolver does', async () => {
+    // the chain runs PAST the basis, so no operation the basis names can still
+    // arrive: a key missing from this state is a verdict, not a pending sync
+    const identity = await buildIdentity({ rotate: true });
+    const { resolveIdentity } = clientFor(identity).callbacks();
+    const asOf = await resolveIdentity(identity.did, ts(-7));
+    expect(asOf?.basisDeterminate).toBe(true);
+    // the rotation is dated after the basis, so its key is absent from this state
+    expect(asOf?.authKeys.map((k) => k.id)).toEqual([identity.k.keyId]);
+  });
+
+  it('leaves head state INDETERMINATE — a later operation can still be dated at the basis', async () => {
+    const identity = await buildIdentity();
+    const { resolveIdentity } = clientFor(identity).callbacks();
+    const head = await resolveIdentity(identity.did);
+    expect(head?.basisDeterminate).toBeUndefined();
+  });
+});

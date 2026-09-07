@@ -65,6 +65,16 @@ export const normalizeRelayUrl = (raw: string): string | null => {
 
 export const getRelays = (): string[] => [...relays];
 
+/**
+ * The current relay set as ONE opaque identity string.
+ *
+ * Anything a reader is shown ABOUT a relay set — a verified-op tally set against
+ * that set's own asserted count — has to be filed under the set it describes, or
+ * switching relays inherits the previous set's figures. Order is part of the
+ * identity, matching how `lib/client.ts` memoizes its client.
+ */
+export const relaySetKey = (): string => relays.join('|');
+
 export const addRelay = (raw: string): string | null => {
   const url = normalizeRelayUrl(raw);
   if (!url) return null;

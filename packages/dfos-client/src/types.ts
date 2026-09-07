@@ -14,7 +14,15 @@ import type { Attenuation, VerifiedDFOSCredential } from '@metalabel/dfos-protoc
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 
 /** Head/as-of state; excludes the credit-claim projection. */
-export type EffectiveIdentity = VerifiedIdentity & { readonly resolution?: 'effective' };
+export type EffectiveIdentity = VerifiedIdentity & {
+  readonly resolution?: 'effective';
+  /**
+   * True when no operation dated at or before the basis can still arrive and
+   * change this key state — the protocol's `ResolvedIdentity.basisDeterminate`,
+   * which decides whether a missing key is a verdict or a retryable miss.
+   */
+  basisDeterminate?: boolean;
+};
 
 /** Every key ever proved, including memberships absent from effective state. */
 export type EverProvedIdentity = VerifiedIdentity & { readonly resolution: 'ever-proved' };

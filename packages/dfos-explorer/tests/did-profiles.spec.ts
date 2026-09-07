@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cacheIsFresh,
+  documentFailureVerdict,
   PROFILE_TTL_MS,
   publicProfileOf,
   resolveProfileVerdict,
@@ -118,11 +119,35 @@ describe('resolveProfileVerdict — absence and unavailability are different ans
   });
 
   // the privacy invariant, unchanged: bytes no relay serves to an anonymous read
-  // ARE "no public profile" — that is what public-read means empirically
+  // ARE "no public profile" — that is what public-read means empirically. The
+  // client says exactly that with its blob-unserved throw, and NOTHING ELSE does.
   it('is none when the anchored document is not served publicly', async () => {
     expect(
-      await resolveProfileVerdict(DID, { identity: async () => anchored, document: rejects }),
+      await resolveProfileVerdict(DID, {
+        identity: async () => anchored,
+        document: () =>
+          Promise.reject(new Error('no relay served the blob for ct7kkfz7ehzvv6fzvate9rz2874nc3e')),
+      }),
     ).toBeNull();
+  });
+
+  // M-lane-C: this case used to be pinned as `null` — the row printed the flat
+  // assertion "no public profile" for a beat-2 fetch that never completed. A
+  // failure to look is not an absence, at beat 2 any more than at beat 1.
+  it('is UNAVAILABLE when the document fetch could not complete', async () => {
+    expect(
+      await resolveProfileVerdict(DID, { identity: async () => anchored, document: rejects }),
+    ).toBe('unavailable');
+  });
+
+  it('is unavailable when the anchored CHAIN did not resolve either', async () => {
+    expect(
+      await resolveProfileVerdict(DID, {
+        identity: async () => anchored,
+        document: () =>
+          Promise.reject(new Error('identity/content not found on any relay: ct7kkfz')),
+      }),
+    ).toBe('unavailable');
   });
 
   it('is none when the served bytes fail the integrity re-hash', async () => {
@@ -141,5 +166,22 @@ describe('resolveProfileVerdict — absence and unavailability are different ans
         document: async () => ({ value: { decoded: profileDoc, integrity: true } }),
       }),
     ).toMatchObject({ did: DID, name: 'Ada' });
+  });
+});
+
+describe('documentFailureVerdict — beat 2 splits absence from unreachability', () => {
+  it('bytes no relay served are an observed negative', () => {
+    expect(documentFailureVerdict(new Error('no relay served the blob for ct7kk'))).toBeNull();
+  });
+
+  it('everything else is a failure to look', () => {
+    expect(documentFailureVerdict(new Error('fetch failed'))).toBe('unavailable');
+    expect(documentFailureVerdict(new Error('identity/content not found on any relay: x'))).toBe(
+      'unavailable',
+    );
+    expect(documentFailureVerdict(new Error('all candidate logs failed verification: x'))).toBe(
+      'unavailable',
+    );
+    expect(documentFailureVerdict('a string nobody threw as an Error')).toBe('unavailable');
   });
 });

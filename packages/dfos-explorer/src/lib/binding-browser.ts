@@ -65,25 +65,26 @@
 
 */
 
+// The PURE half is shared with the serverless route rather than mirrored: two
+// copies of the same regexes drifted, and only one of them was ever checked
+// against the Go CLI. `api/binding-parse.ts` carries no node builtins, so the
+// bundler pulls it into the tab like any other module.
+import {
+  classifyDidStatus,
+  foldTxtClaims,
+  MAX_BODY_BYTES,
+  parseDidBody,
+  TXT_NAME_PREFIX,
+  WELL_KNOWN_PATH,
+} from '../../api/binding-parse.js';
 import {
   fetchBindingAttestation,
   type BindingMethodResult,
   type BindingProbe,
 } from './origin-binding';
 
-/** A DFOS DID: the 31-char id alphabet the protocol mints. Mirrors api/binding.ts
- *  — the two parsers must read the same bytes the same way, and the route cannot
- *  be imported here (it is Node-only). */
-const DID_RE = /^did:dfos:[2346789acdefhknrtvz]{31}$/;
-/** The DNS attestation's exact value form
- *  (INTEGRATIONS.md, DNS: TXT at `_dfos.<domain>`). */
-const TXT_CLAIM_RE = /^did=(did:dfos:[2346789acdefhknrtvz]{31})$/;
-/** ASCII whitespace only — the spec trims ASCII, not Unicode. */
-const ASCII_WS_RE = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
+export { foldTxtClaims, parseDidBody };
 
-const TXT_NAME_PREFIX = '_dfos.';
-const WELL_KNOWN_PATH = '/.well-known/dfos-did';
-const MAX_BODY_BYTES = 1024;
 const TIMEOUT_MS = 8000;
 
 /** The over-cap signal, thrown by {@link boundedText} and read by its one caller. */
@@ -194,29 +195,6 @@ export const unquoteTxt = (data: string): string => {
 };
 
 /**
- * Fold the `did=` records at a name into a method result — the same reading
- * `parseTxtRecords` does in api/binding.ts, and deliberately identical:
- *
- *   no `did=` record        → `none` (silence: the name may carry other TXT)
- *   more than one           → `contradiction`, whatever the values, INCLUDING two
- *                             records carrying the same DID. The spec forbids
- *                             picking one, and "they happen to agree" is a
- *                             tiebreak by another name.
- *   one, malformed          → `none`. A record that says nothing is a domain
- *                             saying nothing, not a domain contradicting itself.
- */
-export const foldTxtClaims = (records: string[]): BindingMethodResult => {
-  const claims = records.filter((v) => v.startsWith('did='));
-  if (claims.length === 0) {
-    return { status: 'none', reason: `no did= TXT record at ${TXT_NAME_PREFIX}<domain>` };
-  }
-  if (claims.length > 1) return { status: 'contradiction', reason: 'multiple did= records' };
-  const match = TXT_CLAIM_RE.exec(claims[0] ?? '');
-  if (!match) return { status: 'none', reason: 'the did= record is not a DFOS DID' };
-  return { status: 'ok', did: match[1] ?? '' };
-};
-
-/**
  * Read one DoH JSON answer. Pure — the network is the caller's problem.
  *
  * `not-checkable` here means THIS RESOLVER did not answer for us (a body outside
@@ -304,23 +282,6 @@ export const probeDnsFromBrowser = async (host: string): Promise<ChannelAttempt>
 // -----------------------------------------------------------------------------
 
 /**
- * Read a 200 body from `/.well-known/dfos-did`. Mirrors `parseDidBody` in
- * api/binding.ts: exactly one DFOS DID after ASCII trimming attests it, and
- * ANYTHING else is `malformed` — a document that is present and answers nothing,
- * which is the third member of the non-answer class of INTEGRATIONS.md, HTTPS:
- * `/.well-known/dfos-did`, and licenses
- * the app-description fallback exactly as a 404 does.
- */
-export const parseDidBody = (body: string): BindingMethodResult => {
-  const trimmed = body.replace(ASCII_WS_RE, '');
-  if (trimmed === '') return { status: 'malformed', reason: 'the document is empty' };
-  if (!DID_RE.test(trimmed)) {
-    return { status: 'malformed', reason: 'the document is not exactly one DFOS DID' };
-  }
-  return { status: 'ok', did: trimmed };
-};
-
-/**
  * Fetch `https://<host>/.well-known/dfos-did` from the tab.
  *
  * Every failure mode a browser has here — a missing `Access-Control-Allow-Origin`
@@ -356,25 +317,10 @@ export const probeWellKnownFromBrowser = async (host: string): Promise<ChannelAt
       reason: 'the origin sends no cross-origin permission for this path, or it could not be read',
     };
   }
-  if (res.status === 404 || res.status === 410) {
-    return {
-      kind: 'observed',
-      result: {
-        status: 'none',
-        reason: `the origin serves no ${WELL_KNOWN_PATH} (HTTP ${res.status})`,
-      },
-    };
-  }
-  if (!res.ok) {
-    return {
-      kind: 'observed',
-      result: {
-        status: 'error',
-        httpStatus: res.status,
-        reason: 'the origin answered with an error status',
-      },
-    };
-  }
+  // ONLY A 200 REACHES THE BODY — the route and the Go CLI both draw the line
+  // there, so a 201 carrying a valid DID is silence in all three, not a binding
+  const byStatus = classifyDidStatus(res.status);
+  if (byStatus !== null) return { kind: 'observed', result: byStatus };
   let text: string;
   try {
     text = await boundedText(res);

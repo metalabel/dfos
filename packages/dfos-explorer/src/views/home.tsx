@@ -46,7 +46,7 @@ import {
   type LogSource,
 } from '../lib/log-feed';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
-import { getRelays } from '../lib/relays';
+import { getRelays, relaySetKey, subscribeRelays } from '../lib/relays';
 import { getPublicOnly, setPublicOnly } from '../lib/settings';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -106,7 +106,12 @@ interface Observatory {
    */
   verifiedOps: number;
   chains: number;
-  oldestOpAt: string;
+  /**
+   * `createdAt` of the oldest operation a fold under THIS relay set covered. The
+   * local op index is not the source: it holds every row browsing ever touched,
+   * including ops served by a relay set the reader has since replaced.
+   */
+  verifiedOldestOpAt: string;
   storageBytes: number | null;
   /**
    * A LOG SYNC has actually run against some configured relay — sync.ts records a
@@ -148,6 +153,12 @@ interface Observatory {
  * rule ("amber = relay-asserted, green = verified locally") and the glossary
  * defines verified locally as "your browser recomputed the signatures and CIDs
  * itself"; this is that sentence as a function. Pure, unit-tested.
+ *
+ * BOTH FIGURES MUST DESCRIBE THE SAME RELAY SET, and the caller owns that: the
+ * tally is read scoped (`db.verifiedOpsTotal(relaySetKey())`) against the hint
+ * fetched from the same set. Comparing a lifetime tally to a freshly-configured
+ * relay's count is two disjoint populations, and 100 >= 50 said "fully verified"
+ * for a relay whose operations had never been touched.
  */
 export const fullyVerifiedLocally = (verifiedOps: number, assertedOps: number): boolean =>
   assertedOps > 0 && verifiedOps >= assertedOps;
@@ -225,7 +236,8 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const assertedOps = hint.opCount ?? 0;
   const fullyVerified = fullyVerifiedLocally(verifiedOps, assertedOps);
   const complete = logComplete(localOps, assertedOps);
-  const oldest = fullyVerified && obs?.oldestOpAt ? obs.oldestOpAt : hint.oldestOpAt;
+  const oldest =
+    fullyVerified && obs?.verifiedOldestOpAt ? obs.verifiedOldestOpAt : hint.oldestOpAt;
 
   // by-kind: relay-asserted OPERATION proportions — the shape of the log, always
   // available. Not chain counts; see the section header.
@@ -777,6 +789,11 @@ export const Home = () => {
   const sync = useSyncState();
   const [obs, setObs] = useState<Observatory | null>(null);
   const [hint, setHint] = useState<RelayHint>({});
+  // BOTH figures in the band are read per relay set, so a switch re-reads both.
+  // Refreshing one and not the other would compare a new relay's claim against
+  // the old one's verified tally — the very pairing the scoping exists to stop.
+  const [relaySet, setRelaySet] = useState(relaySetKey);
+  useEffect(() => subscribeRelays(() => setRelaySet(relaySetKey())), []);
   const indexed = useIndexCapable();
   const iter2 = useIndexIter2();
   // ordered = the relay is index-capable AND honours `order=`; null while either
@@ -791,11 +808,13 @@ export const Home = () => {
       // honestly instead of an unhandled rejection.
       const db = await getDb().catch(() => null);
       if (dead || !db) return;
-      const [counts, verifiedOps, oldestOpAt, storageBytes, cursors] = await Promise.all([
+      // both verified figures are read for the relay set they will be shown
+      // against — see fullyVerifiedLocally
+      const [counts, verifiedOps, verifiedOldestOpAt, storageBytes, cursors] = await Promise.all([
         db.counts(),
         // the fold verdicts, read beside the row count and never merged with it
-        db.verifiedOpsTotal(),
-        db.oldestOpAt(),
+        db.verifiedOpsTotal(relaySet),
+        db.oldestVerifiedOpAt(relaySet),
         estimateStorageBytes(),
         Promise.all(getRelays().map((relay) => db.getCursor(relay))),
       ]);
@@ -804,7 +823,7 @@ export const Home = () => {
         ops: counts.ops,
         verifiedOps,
         chains: counts.chains,
-        oldestOpAt,
+        verifiedOldestOpAt,
         storageBytes,
         logSynced: cursors.some((c) => c !== undefined),
       });
@@ -812,7 +831,7 @@ export const Home = () => {
     return () => {
       dead = true;
     };
-  }, [sync.dbEpoch, sync.phase]);
+  }, [sync.dbEpoch, sync.phase, relaySet]);
 
   useEffect(() => {
     let dead = false;
@@ -822,7 +841,7 @@ export const Home = () => {
     return () => {
       dead = true;
     };
-  }, []);
+  }, [relaySet]);
 
   return (
     <>

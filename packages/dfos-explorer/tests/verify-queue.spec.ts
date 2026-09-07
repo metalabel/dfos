@@ -1,8 +1,10 @@
-import { DivergenceError } from '@metalabel/dfos-client';
+import { DivergenceError, type LogOp } from '@metalabel/dfos-client';
+import { markDependencyMissing } from '@metalabel/dfos-protocol';
+import { createJws } from '@metalabel/dfos-protocol/crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { observeOnVisible } from '../src/components/index-light';
 import { isVerificationFailure } from '../src/lib/client';
-import { failureStatus, verdictIsFresh } from '../src/lib/verify-queue';
+import { failureStatus, oldestOpAtOf, verdictIsFresh } from '../src/lib/verify-queue';
 
 describe('verify-queue durable-verdict freshness', () => {
   it('trusts a durable verdict when the index gives no opCount hint', () => {
@@ -49,6 +51,45 @@ describe('failureStatus — a failed fold is not one thing', () => {
     expect(failureStatus(new Error('fetch failed'))).toBe('error');
     expect(failureStatus(new Error('content not found on any relay: ct7kk'))).toBe('error');
     expect(failureStatus('a string nobody threw as an Error')).toBe('error');
+  });
+
+  // A signer identity that timed out is a failure to look, not a finding about
+  // the log — it used to arrive wrapped as "failed verification" and stick the
+  // row on terminal red, so scrolling back never retried it.
+  it('a dependency miss is retryable `error`, never terminal `unverified`', () => {
+    const miss = markDependencyMissing(
+      new Error('candidate log verification could not complete: unknown identity: did:dfos:x'),
+    );
+    expect(failureStatus(miss)).toBe('error');
+  });
+
+  it('the marker beats the message: a marked wrapper is still not a verdict', () => {
+    const marked = markDependencyMissing(
+      new Error('all candidate logs failed verification: unknown identity'),
+    );
+    expect(isVerificationFailure(marked)).toBe(false);
+    expect(failureStatus(marked)).toBe('error');
+  });
+});
+
+describe('oldestOpAtOf — the oldest op a fold actually covered', () => {
+  const opAt = async (createdAt: string): Promise<LogOp> => {
+    const jwsToken = await createJws({
+      header: { alg: 'EdDSA', typ: 'did:dfos:identity', kid: 'did:dfos:x#k', cid: 'bafy' },
+      payload: { createdAt },
+      sign: async () => new Uint8Array(64),
+    });
+    return { cid: 'bafy', jwsToken };
+  };
+
+  it('is the minimum createdAt across the log', async () => {
+    const log = [await opAt('2025-01-01T00:00:00.000Z'), await opAt('2024-01-01T00:00:00.000Z')];
+    expect(oldestOpAtOf(log)).toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('is empty for a log nothing decodes from', () => {
+    expect(oldestOpAtOf([{ cid: 'x', jwsToken: 'not.a.jws' }])).toBe('');
+    expect(oldestOpAtOf([])).toBe('');
   });
 });
 

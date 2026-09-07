@@ -46,8 +46,15 @@ export const Panel = (props: {
 
 export const Badge = (props: {
   state: 'ok' | 'bad' | 'warn' | 'neutral';
+  /** the evidence behind the verdict, where a caller retained any — a one-word
+   *  badge is the label, not the finding, and the finding belongs to the reader */
+  title?: string | undefined;
   children: ComponentChildren;
-}) => <span class={`badge ${props.state}`}>{props.children}</span>;
+}) => (
+  <span class={`badge ${props.state}`} title={props.title}>
+    {props.children}
+  </span>
+);
 
 // -----------------------------------------------------------------------------
 // verify pill

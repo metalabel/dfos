@@ -190,6 +190,28 @@ describe('fetchCredentialRevocations — one silent relay is not a clean sweep',
     const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
     expect(revocationStatus(swept, 'cred-A')).toBe('revoked');
   });
+
+  // A proof-less `revoked: true` is a CLAIM. It used to count toward `answered`
+  // and then fall through, so a set where every relay claimed a revocation it
+  // could not prove came back 'unrevoked' — green — off the strongest possible
+  // hint that the credential is dead.
+  it('a revoked:true with no proof is unknown, never a counted negative answer', async () => {
+    stubRelays(() => ({ revoked: true }));
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
+    expect(revocationStatus(swept, 'cred-A')).toBe('unknown');
+  });
+
+  it('a proof-less positive from one relay poisons a clean answer from the other', async () => {
+    stubRelays((url) => (url.startsWith(RELAY_A) ? { revoked: true } : { revoked: false }));
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
+    expect(revocationStatus(swept, 'cred-A')).toBe('unknown');
+  });
+
+  it('a body with no boolean `revoked` is not this route\u2019s answer', async () => {
+    stubRelays(() => ({}));
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A]);
+    expect(revocationStatus(swept, 'cred-A')).toBe('unknown');
+  });
 });
 
 describe('fetchIssuerRevocations — a capped walk cannot establish absence', () => {
@@ -214,5 +236,51 @@ describe('fetchIssuerRevocations — a capped walk cannot establish absence', ()
     const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A]);
     expect(swept.established).toBe(true);
     expect(revocationStatus(swept, 'cred-B')).toBe('active');
+  });
+
+  // page one says "there is more", page two never arrives: the walk stopped with
+  // the feed still going, which is a truncated sweep, not an exhausted one
+  it('a page that fails MID-WALK truncates the sweep rather than ending it', async () => {
+    let page = 0;
+    stubRelays(() => {
+      page += 1;
+      return page === 1 ? { revocations: [], next: 'more' } : null;
+    });
+    const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A]);
+    expect(swept.established).toBe(false);
+    expect(revocationStatus(swept, 'cred-A')).toBe('unknown');
+  });
+
+  it('a relay that never served the feed at all is still just unreachable', async () => {
+    stubRelays(() => null);
+    const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A]);
+    expect(swept.established).toBe(false);
+  });
+
+  it('establishes absence only when EVERY relay in the set completed its walk', async () => {
+    // relay A exhausts its feed, relay B is unreachable — B may be the one
+    // holding the revocation, so A's clean sweep licenses nothing
+    stubRelays((url) => (url.startsWith(RELAY_A) ? { revocations: [] } : null));
+    const partial = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A, RELAY_B]);
+    expect(partial.established).toBe(false);
+    expect(revocationStatus(partial, 'cred-A')).toBe('unknown');
+
+    stubRelays(() => ({ revocations: [] }));
+    const whole = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A, RELAY_B]);
+    expect(whole.established).toBe(true);
+    expect(revocationStatus(whole, 'cred-A')).toBe('active');
+  });
+
+  it('a truncated walk on ONE relay drops the whole set back to unknown', async () => {
+    stubRelays((url) =>
+      url.startsWith(RELAY_A) ? { revocations: [], next: 'more' } : { revocations: [] },
+    );
+    const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A, RELAY_B]);
+    expect(swept.established).toBe(false);
+  });
+
+  it('an empty relay set establishes nothing', async () => {
+    stubRelays(() => ({ revocations: [] }));
+    expect((await fetchIssuerRevocations('did:dfos:iss', [])).established).toBe(false);
   });
 });

@@ -43,7 +43,7 @@
 import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
-import { getRelays, subscribeRelays } from './relays';
+import { relaySetKey, subscribeRelays } from './relays';
 
 /** In-flight point lookups at once — the same politeness budget did-profiles
  *  and content-labels give their row hydrators. */
@@ -101,9 +101,6 @@ const contentCache = new Map<string, IndexContentRow | null>();
 const waiters = new Map<string, Set<() => void>>();
 const queue: { key: string; run: () => Promise<void> }[] = [];
 let active = 0;
-
-/** The configured relay set, as a cache-scoping key. */
-const relaySetKey = (): string => getRelays().join('|');
 
 // A relay change invalidates every hint in flight and at rest. The keys already
 // carry the set, so this is purely about not accumulating dead ones; the hooks
