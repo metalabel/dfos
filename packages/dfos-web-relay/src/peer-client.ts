@@ -56,10 +56,32 @@ export const MAX_PEER_LOG_PAGE_BYTES = 16 << 20; // 16 MB
 
 type PeerLogPage = { entries: PeerLogEntry[]; next: string | null };
 
+/**
+ * Release a body this client has decided not to read.
+ *
+ * REFUSING A PAGE IS NOT THE SAME AS RELEASING THE SOCKET. Under Undici an
+ * unread body holds its connection until GC collects it, so a peer that answers
+ * with an oversized `content-length` would occupy a connection per request —
+ * indefinitely when the caller ran with `timeoutMs: 0`. Cancelling is what the
+ * streamed path already does via `reader.cancel()`; this is the same release for
+ * the path that never acquires a reader. Its own failure is not interesting: the
+ * page is already refused.
+ */
+const discardBody = async (res: Response): Promise<void> => {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // already errored, locked, or disturbed — nothing left to release
+  }
+};
+
 /** Read a response body up to the cap; null past it, or on a read failure. */
 const readBoundedBody = async (res: Response): Promise<string | null> => {
   const declared = Number(res.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > MAX_PEER_LOG_PAGE_BYTES) return null;
+  if (Number.isFinite(declared) && declared > MAX_PEER_LOG_PAGE_BYTES) {
+    await discardBody(res);
+    return null;
+  }
   try {
     if (!res.body) {
       const text = await res.text();

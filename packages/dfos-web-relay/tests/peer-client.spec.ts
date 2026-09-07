@@ -112,6 +112,46 @@ describe('HTTP peer client page bounds', () => {
     expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
   });
 
+  // Refusing a page is not the same as releasing the socket: under Undici an
+  // unread body holds its connection until GC, so a peer answering with an
+  // oversized content-length would occupy one connection per request.
+  it('cancels the body it refuses on the content-length path', async () => {
+    let cancelled = false;
+    const body = {
+      cancel: async () => {
+        cancelled = true;
+      },
+    };
+    const res = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': String(MAX_PEER_LOG_PAGE_BYTES + 1) }),
+      body,
+    } as unknown as Response;
+    const client = createHttpPeerClient({ fetch: async () => res });
+
+    expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
+    expect(cancelled).toBe(true);
+  });
+
+  // A cancel that itself rejects is not interesting — the page is already
+  // refused, and the refusal must still be the answer.
+  it('still refuses the page when cancelling the body throws', async () => {
+    const res = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': String(MAX_PEER_LOG_PAGE_BYTES + 1) }),
+      body: {
+        cancel: async () => {
+          throw new Error('stream already disturbed');
+        },
+      },
+    } as unknown as Response;
+    const client = createHttpPeerClient({ fetch: async () => res });
+
+    expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
+  });
+
   it('refuses a page whose entries are not an array', async () => {
     const client = clientReturning(JSON.stringify({ entries: 'nope', next: null }));
     expect(await client.getOperationLog('http://peer.example', { limit: 10 })).toBeNull();
