@@ -1,5 +1,6 @@
 import { DivergenceError } from '@metalabel/dfos-client';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { observeOnVisible } from '../src/components/index-light';
 import { isVerificationFailure } from '../src/lib/client';
 import { failureStatus, verdictIsFresh } from '../src/lib/verify-queue';
 
@@ -48,6 +49,66 @@ describe('failureStatus — a failed fold is not one thing', () => {
     expect(failureStatus(new Error('fetch failed'))).toBe('error');
     expect(failureStatus(new Error('content not found on any relay: ct7kk'))).toBe('error');
     expect(failureStatus('a string nobody threw as an Error')).toBe('error');
+  });
+});
+
+// the retryable `error` state is only reachable if the viewport trigger is still
+// watching: the observer used to detach on the first intersection, which left a
+// row that failed for want of an answer stuck until it remounted.
+describe('observeOnVisible — the trigger re-arms on every entry', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A stand-in IntersectionObserver whose entries the test drives by hand. */
+  const stubObserver = (): { enter: () => void; leave: () => void; disconnects: () => number } => {
+    let fire: ((entries: { isIntersecting: boolean }[]) => void) | null = null;
+    let disconnects = 0;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
+          fire = cb;
+        }
+        observe(): void {}
+        disconnect(): void {
+          disconnects += 1;
+        }
+      },
+    );
+    return {
+      enter: () => fire?.([{ isIntersecting: true }]),
+      leave: () => fire?.([{ isIntersecting: false }]),
+      disconnects: () => disconnects,
+    };
+  };
+
+  it('calls back on each entry, so a scroll away and back re-enqueues', () => {
+    const io = stubObserver();
+    let calls = 0;
+    const stop = observeOnVisible({} as Element, () => {
+      calls += 1;
+    });
+    io.enter();
+    expect(calls).toBe(1);
+    // still on screen: IntersectionObserver reports TRANSITIONS, so a row that
+    // failed and stayed put does not spin
+    io.enter();
+    expect(calls).toBe(2);
+    io.leave();
+    expect(calls).toBe(2);
+    io.enter();
+    expect(calls).toBe(3);
+    stop();
+    expect(io.disconnects()).toBe(1);
+  });
+
+  it('ignores a report that the element is not intersecting', () => {
+    const io = stubObserver();
+    let calls = 0;
+    observeOnVisible({} as Element, () => {
+      calls += 1;
+    });
+    io.leave();
+    expect(calls).toBe(0);
   });
 });
 

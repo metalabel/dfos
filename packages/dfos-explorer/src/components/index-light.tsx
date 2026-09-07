@@ -4,8 +4,9 @@
 
   Shared by the browse and home surfaces that render relay-index rows. The badge
   reads a row's live verify-queue status; the ref hook enqueues a row's chain for
-  a proof-plane fold the first time it scrolls into view (viewport-priority), so
-  only the rows the eye reaches are ever folded.
+  a proof-plane fold each time it scrolls into view (viewport-priority), so only
+  the rows the eye reaches are ever folded — and a fold that failed for want of
+  an answer gets another go when the row comes back.
 
 */
 
@@ -23,10 +24,40 @@ import { DidChip } from './did-chip';
 import { Badge, OpLink, Term } from './ui';
 
 /**
- * A ref to attach to a row element. The first time the element intersects the
- * viewport, its chain is enqueued for verification (then the observer detaches).
- * Where IntersectionObserver is unavailable, the row enqueues eagerly on mount —
- * correctness over laziness.
+ * Call `onVisible` EVERY time the element enters the viewport, not just the
+ * first time, and stop when the returned teardown runs.
+ *
+ * The observer used to disconnect itself on the first intersection, which was
+ * fine while a fold could only ever happen once — but the verify queue now has a
+ * RETRYABLE failure (`error`: nobody answered, which says nothing about the
+ * chain), and a row whose recovery path is "scroll it back into view" needs the
+ * observer still watching. Staying observed is also why the re-arm is not a
+ * retry LOOP: IntersectionObserver reports transitions, so a row that fails and
+ * stays on screen fires once and waits for the eye to leave and come back.
+ * Enqueueing is idempotent for every other status, so the extra calls are no-ops.
+ */
+export const observeOnVisible = (el: Element, onVisible: () => void): (() => void) => {
+  const io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          onVisible();
+          return;
+        }
+      }
+    },
+    { rootMargin: '100px' },
+  );
+  io.observe(el);
+  return () => io.disconnect();
+};
+
+/**
+ * A ref to attach to a row element. Each time the element intersects the
+ * viewport, its chain is enqueued for verification — the first time to fold it,
+ * and thereafter to re-attempt a fold that failed for want of an answer (see
+ * {@link observeOnVisible}). Where IntersectionObserver is unavailable, the row
+ * enqueues eagerly on mount — correctness over laziness.
  */
 export const useVerifyOnVisible = <T extends HTMLElement>(
   kind: VerifyKind,
@@ -41,20 +72,7 @@ export const useVerifyOnVisible = <T extends HTMLElement>(
       enqueueVerify(kind, chainId, hintOpCount);
       return;
     }
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) {
-            enqueueVerify(kind, chainId, hintOpCount);
-            io.disconnect();
-            return;
-          }
-        }
-      },
-      { rootMargin: '100px' },
-    );
-    io.observe(el);
-    return () => io.disconnect();
+    return observeOnVisible(el, () => enqueueVerify(kind, chainId, hintOpCount));
   }, [kind, chainId, hintOpCount]);
   return ref;
 };
