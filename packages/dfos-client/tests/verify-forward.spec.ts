@@ -93,6 +93,44 @@ describe('identity verify-forward', () => {
     expect(second.trust.unverifiable).toEqual(['tip']);
   });
 
+  it('replays the log when the cached state predates the seenKeys binding', async () => {
+    // A DURABLE CACHE OUTLIVES THE SHAPE IT WAS WRITTEN IN. An IndexedDB row
+    // written before `seenKeys` existed carries no id-to-material binding, and
+    // the extension verifier refuses such a state rather than answering from a
+    // reading that cannot reconstruct one. Without the replay the identity would
+    // fail every subsequent update until someone cleared the cache.
+    const id = await buildIdentity({ rotate: true });
+    const store = memoryStore();
+    const data: Record<string, RelayData> = {
+      [RELAY]: { identities: { [id.did]: [...id.genesisLog] } },
+    };
+    const client = createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data) });
+    await client.identity(id.did);
+
+    // age the cached row back to the pre-seenKeys shape
+    const key = `identity:${id.did}`;
+    const stale = (await store.get(key)) as { state: { seenKeys?: unknown[] } };
+    expect(stale.state.seenKeys?.length).toBeGreaterThan(0);
+    delete stale.state.seenKeys;
+    await store.set(key, stale);
+
+    data[RELAY]!.identities![id.did] = [...id.log];
+    const res = await client.identity(id.did);
+
+    // the answer is the full-verification answer, not a narrower one
+    expect(res.value).toEqual(await verifyIdentityChain({ didPrefix: 'did:dfos', log: id.log }));
+    expect(res.value.authKeys).toHaveLength(2);
+    expect(res.provenance.fromCache).toBe(false);
+
+    // and the row is repaired, so the next update takes the O(1) path again
+    const repaired = (await store.get(key)) as {
+      log: string[];
+      state: { seenKeys?: unknown[] };
+    };
+    expect(repaired.state.seenKeys?.length).toBeGreaterThan(0);
+    expect(repaired.log).toEqual(id.log);
+  });
+
   it('a relay behind the verified cached prefix falls back to the cache, never rolls back', async () => {
     const id = await buildIdentity({ rotate: true });
     const store = memoryStore();

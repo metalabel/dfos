@@ -150,6 +150,92 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 	}
 }
 
+// staleSeenKeysRow rewrites an identity row the way a pre-SeenKeys binary would
+// have written it: everything the current walk produces EXCEPT the chain-wide
+// id-to-material binding.
+func staleSeenKeysRow(t *testing.T, store staleRowStore, did string) StoredIdentityChain {
+	t.Helper()
+	chain, err := store.GetIdentityChain(did)
+	if err != nil || chain == nil {
+		t.Fatalf("read identity chain %s: %v", did, err)
+	}
+	if len(chain.State.SeenKeys) == 0 {
+		t.Fatalf("fixture is already stale — the walk folded no binding: %+v", chain.State)
+	}
+	chain.State.SeenKeys = nil
+	if err := store.RewriteIdentityChainState(*chain); err != nil {
+		t.Fatalf("write stale identity chain %s: %v", did, err)
+	}
+	return *chain
+}
+
+// TestBackfillRestoresSeenKeys: a row written before dfos.IdentityState carried
+// SeenKeys is not merely narrow, it is UNEXTENDABLE — dfos.VerifyIdentityExtension
+// refuses it outright, so the linear ingest path cannot advance that chain at
+// all. The backfill is what makes such a row heal at boot instead of stranding
+// the identity until someone replays it by hand.
+func TestBackfillRestoresSeenKeys(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "backfill-seenkeys.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ingestIdentity(t, r)
+	rotateExistingTestIdentity(t, r, id)
+
+	stale := staleSeenKeysRow(t, store, id.did)
+
+	// BEFORE: the extension verifier says so with a typed error rather than
+	// answering from a reading that cannot reconstruct the binding.
+	if _, err := dfos.VerifyIdentityExtension(stale.State, stale.HeadCID, stale.LastCreatedAt,
+		stale.Log[len(stale.Log)-1]); !errors.Is(err, dfos.ErrIdentityStateNoSeenKeys) {
+		t.Fatalf("a seenKeys-less row must not be extensible: %v", err)
+	}
+
+	logger, logs := backfillTestLogger()
+	if err := backfillProvedKeyState(store, logger, nil); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if !strings.Contains(logs.String(), "backfill complete") {
+		t.Fatalf("a pass that rewrote a row said nothing: %s", logs.String())
+	}
+
+	// AFTER: the binding is back on the row, re-derived by replay.
+	repaired, err := store.GetIdentityChain(id.did)
+	if err != nil || repaired == nil {
+		t.Fatalf("read repaired chain: %v", err)
+	}
+	if len(repaired.State.SeenKeys) == 0 {
+		t.Fatalf("the repaired row has no binding: %+v", repaired.State)
+	}
+	replayed, err := dfos.VerifyIdentityChain(repaired.Log)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(repaired.State.SeenKeys) != len(replayed.State.SeenKeys) {
+		t.Fatalf("seenKeys = %d entries, want the %d a replay derives",
+			len(repaired.State.SeenKeys), len(replayed.State.SeenKeys))
+	}
+	if repaired.HeadCID != stale.HeadCID || repaired.LastCreatedAt != stale.LastCreatedAt {
+		t.Fatalf("head/lastCreatedAt moved: %s/%s, want %s/%s",
+			repaired.HeadCID, repaired.LastCreatedAt, stale.HeadCID, stale.LastCreatedAt)
+	}
+
+	// and a second pass finds nothing to do
+	logger2, logs2 := backfillTestLogger()
+	if err := backfillProvedKeyState(store, logger2, nil); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if logs2.Len() != 0 {
+		t.Fatalf("a repaired corpus must be silent: %s", logs2.String())
+	}
+}
+
 // TestBackfillPrecedesTheIndexRebuild pins the ORDERING, which is the half of
 // this fix that is easy to get wrong and impossible to notice: the projection
 // rebuild reads provedKeyState, so a rebuild that runs against unrepaired rows

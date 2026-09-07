@@ -45,13 +45,26 @@ export interface JwsHeader {
  * payload whose bytes the Go reference refuses outright (`utf8.Valid` in
  * AssertCanonicalJSONText) — the same signed bytes, two verdicts. Undecodable
  * bytes are malformed, not repairable.
+ *
+ * IT ALSO KEEPS THE BOM. `fatal` governs malformed byte sequences only; BOM
+ * stripping is the separate `ignoreBOM` option, which defaults to false —
+ * meaning the BOM IS silently removed. Go hands the raw bytes to
+ * `json.Unmarshal`, which rejects a leading U+FEFF, so a segment signed with a
+ * BOM verified here and failed there on identical bytes. `ignoreBOM: true`
+ * hands the character through, and it is then rejected explicitly: a JWS segment
+ * is canonical JSON, and canonical JSON does not start with a byte order mark.
  */
 const decodeJwsSegment = (segmentB64: string): Record<string, unknown> | null => {
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(segmentB64));
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+      base64urlDecode(segmentB64),
+    );
   } catch {
     return null;
+  }
+  if (text.charCodeAt(0) === 0xfeff) {
+    throw new Error('leading byte order mark is not canonicalizable');
   }
   assertCanonicalJsonText(text);
   let value: unknown;

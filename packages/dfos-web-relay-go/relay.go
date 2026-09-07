@@ -278,7 +278,9 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	// Identity state startup backfill: a row persisted before dfos.IdentityState
 	// carried ProvedKeys unmarshals with an absent has-ever-proved union, and
 	// every has-ever-proved reader then falls back to the narrower effective
-	// arrays — a proved-then-rotated-out key silently stops resolving. Re-walk
+	// arrays — a proved-then-rotated-out key silently stops resolving. A row
+	// persisted before it carried SeenKeys is worse: the linear ingest path
+	// refuses to extend that chain at all until the binding is re-derived. Re-walk
 	// those rows before serving. Runs UNCONDITIONALLY (the historical key
 	// resolver needs it whether or not the index is on) and BEFORE the projection
 	// reset below, so a rebuild triggered by the same upgrade materializes the

@@ -31,8 +31,16 @@ export type AnchorKind = 'chain' | 'artifact' | 'invalid';
  * Enforce the services byte cap on the CBOR-encoded array — same encoding the
  * wire uses, so the bound is identical across implementations. Mirrors the
  * artifact payload size check.
+ *
+ * MEASURE THE RAW DECODED PAYLOAD'S ARRAY, never zod's output. The parameter is
+ * `unknown` to make that hard to get wrong: the schema is a validator, not a
+ * canonicalizer, and its output object is freshly built — a `__proto__` data
+ * member (constructible only by `JSON.parse`) does not survive the copy. Handing
+ * this the parsed `op.services` measured 19 bytes for a 33,032-byte signed
+ * array, which Go's `parseServices` — reading the wire map directly — rejects.
+ * Same rule as the operation CID, and for the same reason.
  */
-export const assertServicesWithinCap = async (services: ServiceEntry[]): Promise<void> => {
+export const assertServicesWithinCap = async (services: unknown): Promise<void> => {
   const encoded = await dagCborCanonicalEncode(services);
   if (encoded.bytes.length > MAX_SERVICES_PAYLOAD_SIZE) {
     throw new Error(

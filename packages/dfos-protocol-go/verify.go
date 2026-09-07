@@ -2,6 +2,7 @@ package dfos
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -234,66 +235,116 @@ func payloadString(m map[string]any, key string) string {
 // is an unknown extension member — preserved and ignored, whatever its type.
 // Typing `authorization` on a create, or `baseDocumentCID` on a delete, would
 // reject an operation TypeScript accepts, which is the same fork in the other
-// direction. `documentCID` is checked at its own call sites: its
-// absent/null/present split is per-op-type too.
+// direction.
+//
+// PRESENCE AND EMPTINESS ARE PART OF THE GATE, not just type. A declared field
+// is REQUIRED in Zod unless it says `.optional()`, and every CID-valued field is
+// `CIDString` = `z.string().min(1)` — `.nullable()` widens it to accept null, it
+// does not relax the minimum for a string that is actually supplied. So a create
+// with `baseDocumentCID` omitted, or an update with `documentCID: ""`, is
+// rejected by TS and MUST be rejected here: Go accepting either advances onto a
+// head TS cannot replay.
 func assertContentPayloadFieldTypes(payload map[string]any, opType string) error {
 	// declared by all three variants
 	if _, err := payloadStringStrict(payload, "did"); err != nil {
 		return err
 	}
 
-	var stringFields []string
-	var nullableCIDFields []string
+	var optionalStrings []string      // `z.string().optional()`
+	var requiredCIDs []string         // `CIDString`
+	var requiredNullableCIDs []string // `CIDString.nullable()`
 	switch opType {
 	case "create":
-		nullableCIDFields = []string{"baseDocumentCID"}
+		requiredCIDs = []string{"documentCID"}
+		requiredNullableCIDs = []string{"baseDocumentCID"}
 	case "update":
-		stringFields = []string{"previousOperationCID", "authorization"}
-		nullableCIDFields = []string{"baseDocumentCID"}
+		optionalStrings = []string{"authorization"}
+		requiredCIDs = []string{"previousOperationCID"}
+		requiredNullableCIDs = []string{"documentCID", "baseDocumentCID"}
 	case "delete":
-		stringFields = []string{"previousOperationCID", "authorization"}
+		optionalStrings = []string{"authorization"}
+		requiredCIDs = []string{"previousOperationCID"}
 	}
 
-	for _, key := range stringFields {
+	for _, key := range optionalStrings {
 		if _, err := payloadStringStrict(payload, key); err != nil {
 			return err
 		}
 	}
-	for _, key := range nullableCIDFields {
-		if _, err := payloadStringPtrStrict(payload, key); err != nil {
+	for _, key := range requiredCIDs {
+		if _, err := payloadCIDStrict(payload, key); err != nil {
+			return err
+		}
+	}
+	for _, key := range requiredNullableCIDs {
+		if _, err := payloadNullableCIDStrict(payload, key); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// payloadStringPtrStrict keeps absent, JSON null, and wrong-type apart, the way
-// the TS schema does (`documentCID: CIDString.nullable()` rejects a non-string
-// outright). payloadStringPtr collapses all three into nil, which on an update
-// operation reads as an explicit "clear the document": `documentCID: false`
-// would pass the presence check and commit the same state transition as
-// `documentCID: null` — a state fork against TS on identical signed bytes.
-//
-// Absent and null both return (nil, nil); the caller decides whether absence is
-// allowed, since only it knows the operation type.
-func payloadStringPtrStrict(m map[string]any, key string) (*string, error) {
+// payloadCIDStrict mirrors `CIDString` — the key is REQUIRED and its value is a
+// non-empty string.
+func payloadCIDStrict(m map[string]any, key string) (string, error) {
 	v, ok := m[key]
-	if !ok || v == nil {
+	if !ok {
+		return "", fmt.Errorf("missing %s", key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if s == "" {
+		return "", fmt.Errorf("%s must not be empty", key)
+	}
+	return s, nil
+}
+
+// payloadNullableCIDStrict mirrors `CIDString.nullable()` — the key is REQUIRED
+// and its value is either JSON null (a cleared document) or a non-empty string.
+// Absent is not null: Zod fails a required member that is undefined.
+func payloadNullableCIDStrict(m map[string]any, key string) (*string, error) {
+	v, ok := m[key]
+	if !ok {
+		return nil, fmt.Errorf("missing %s", key)
+	}
+	if v == nil {
 		return nil, nil
 	}
 	s, ok := v.(string)
 	if !ok {
 		return nil, fmt.Errorf("%s must be a string or null", key)
 	}
+	if s == "" {
+		return nil, fmt.Errorf("%s must not be empty", key)
+	}
 	return &s, nil
 }
 
 // payloadStringStrict is payloadString with the wrong-type case surfaced instead
-// of coerced to "". See payloadStringPtrStrict.
+// of coerced to "". Absent and wrong-type are different facts: coercing the
+// second to "" on an update reads as an explicit "clear the document", so
+// `documentCID: false` would commit the same state transition as
+// `documentCID: null` — a state fork against TS on identical signed bytes.
 func payloadStringStrict(m map[string]any, key string) (string, error) {
 	v, ok := m[key]
 	if !ok {
 		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return s, nil
+}
+
+// payloadStringRequired mirrors a bare `z.string()` member — required, any
+// length, and never coerced from another type.
+func payloadStringRequired(m map[string]any, key string) (string, error) {
+	v, ok := m[key]
+	if !ok {
+		return "", fmt.Errorf("missing %s", key)
 	}
 	s, ok := v.(string)
 	if !ok {
@@ -320,9 +371,20 @@ func payloadMultikeyArray(m map[string]any, key string) ([]MultikeyPublicKey, er
 		if !ok {
 			return nil, fmt.Errorf("%s[%d] is not an object", key, i)
 		}
-		id, _ := obj["id"].(string)
+		// `id` and `publicKeyMultibase` are REQUIRED strings in the TS schema, and
+		// a comma-ok assertion would turn a number, a null or an object into "" —
+		// a key declaration with an empty id folds to a VOID membership and the
+		// operation verifies, where TS rejects the whole operation. Voiding an
+		// unproved membership is not a licence to skip field validation.
+		id, idErr := payloadStringRequired(obj, "id")
+		if idErr != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, idErr)
+		}
+		pkm, pkmErr := payloadStringRequired(obj, "publicKeyMultibase")
+		if pkmErr != nil {
+			return nil, fmt.Errorf("%s[%d]: %w", key, i, pkmErr)
+		}
 		typ, _ := obj["type"].(string)
-		pkm, _ := obj["publicKeyMultibase"].(string)
 		if typ != "Multikey" {
 			return nil, fmt.Errorf("%s[%d]: invalid multikey", key, i)
 		}
@@ -1027,6 +1089,24 @@ func verifyIdentityChain(log []string, basis string) (*VerifiedIdentityResult, e
 	}, nil
 }
 
+// ErrIdentityStateNoSeenKeys says the trusted state cannot be extended
+// incrementally, because it does not carry the chain-wide id-to-material
+// binding. The caller replays the log.
+//
+// THERE IS NO RECONSTRUCTION, and that is the whole point. SeenKeys is a
+// monotonic index that never forgets a key id once the chain declared it — even
+// after the id is dropped from the declared arrays — and nothing else in the
+// state remembers it: an id introduced without a proof and then removed is in
+// neither `declared` (removed) nor `provedKeys` (never proved). Reading the
+// binding off those two arrays therefore treats a re-declaration of that id,
+// bound to DIFFERENT material, as a fresh introduction and accepts it — while a
+// full replay of the same operations rejects it. A fast path that accepts what
+// its own re-verification refuses is worse than one that says it cannot answer.
+//
+// Callers branch with errors.Is; the TS twin is IdentityStateNoSeenKeysError,
+// with this exact message.
+var ErrIdentityStateNoSeenKeys = errors.New("identity state has no seenKeys; replay the chain")
+
 // VerifyIdentityExtension verifies a single new operation against
 // already-verified identity state. O(1) — one signature verification,
 // one state transition.
@@ -1063,14 +1143,12 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	if priorProved.IsZero() {
 		priorProved = priorEffective
 	}
-	// The id-to-material binding this chain has already committed to. Absent, it
-	// is read off declared plus has-ever-proved — complete for any chain that never
-	// dropped an unproved key id, and the only reading available for a state that
-	// did not record the binding.
-	priorSeen := currentState.SeenKeys
-	if len(priorSeen) == 0 {
-		priorSeen = append(flatKeys(priorDeclared), flatKeys(priorProved)...)
+	// The id-to-material binding this chain has already committed to. There is no
+	// fallback: see ErrIdentityStateNoSeenKeys.
+	if len(currentState.SeenKeys) == 0 {
+		return nil, ErrIdentityStateNoSeenKeys
 	}
+	priorSeen := currentState.SeenKeys
 	seenKeys := newKeyMaterialIndex(priorSeen)
 
 	header, payload, err := DecodeJWSUnsafe(newOp)
@@ -1569,18 +1647,17 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		lastCreatedAt = createdAt
 		length++
 
+		// presence, type and non-emptiness are already gated per variant by
+		// assertContentPayloadFieldTypes; these reads only pick the value up
 		switch opType {
 		case "create":
-			docCIDStr := payloadString(payload, "documentCID")
-			if docCIDStr == "" {
-				return nil, fmt.Errorf("log[%d]: create must have a documentCID", idx)
+			docCIDStr, err := payloadCIDStrict(payload, "documentCID")
+			if err != nil {
+				return nil, fmt.Errorf("log[%d]: %w", idx, err)
 			}
 			currentDocCID = &docCIDStr
 		case "update":
-			if _, hasDocCID := payload["documentCID"]; !hasDocCID {
-				return nil, fmt.Errorf("log[%d]: update must include documentCID field", idx)
-			}
-			docCID, err := payloadStringPtrStrict(payload, "documentCID")
+			docCID, err := payloadNullableCIDStrict(payload, "documentCID")
 			if err != nil {
 				return nil, fmt.Errorf("log[%d]: %w", idx, err)
 			}
@@ -1718,10 +1795,8 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 		CreatorDID: currentState.CreatorDID,
 	}
 	if opType == "update" {
-		if _, hasDocCID := payload["documentCID"]; !hasDocCID {
-			return nil, fmt.Errorf("update must include documentCID field")
-		}
-		docCID, err := payloadStringPtrStrict(payload, "documentCID")
+		// gated above by assertContentPayloadFieldTypes; this read picks the value up
+		docCID, err := payloadNullableCIDStrict(payload, "documentCID")
 		if err != nil {
 			return nil, err
 		}

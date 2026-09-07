@@ -4,6 +4,7 @@ import {
   decodeEd25519PublicMultikey,
   encodeEd25519Multikey,
   verifyIdentityChain,
+  verifyIdentityExtensionFromTrustedState,
 } from '../src/chain';
 import type { MultikeyPublicKey, VerifiedIdentity } from '../src/chain';
 import {
@@ -495,5 +496,139 @@ describe('action canonicalization', () => {
     expect(
       isAttenuated(parent, [{ resource: 'chain:abc', action: ' \t\n\v\f\rwrite \t\n\v\f\r' }]),
     ).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The services cap measures the RAW decoded payload, like every other cap
+// -----------------------------------------------------------------------------
+
+/** One service entry whose bulk lives in an own `__proto__` DATA member. */
+const smuggledServices = (): unknown[] =>
+  JSON.parse(
+    `[{"__proto__":${JSON.stringify('a'.repeat(33000))},"id":"relay","type":"DfosRelay","endpoint":"https://r.example"}]`,
+  ) as unknown[];
+
+describe('services byte cap', () => {
+  it('measures a __proto__ member the schema drops, as Go measures the wire array', async () => {
+    const k = makeKey();
+    // `ServiceEntry` is a `catchall(z.unknown())`, so the member is nominally
+    // passed through — but zod builds a FRESH output object, and an own
+    // `__proto__` data property does not survive being copied into one.
+    // Measuring the parsed output saw 19 bytes; the signed array is 33,032, and
+    // Go's parseServices — reading the wire map — rejects it.
+    const services = smuggledServices();
+    expect(Object.keys(services[0] as object)).toContain('__proto__');
+    expect((await dagCborCanonicalEncode(services)).bytes.length).toBeGreaterThan(32768);
+
+    const genesis = await signRaw({
+      typ: 'did:dfos:identity-op',
+      kid: k.keyId,
+      payload: {
+        version: 1,
+        type: 'create',
+        authKeys: [k.key],
+        assertKeys: [k.key],
+        controllerKeys: [k.key],
+        services,
+        createdAt: ts(),
+      },
+      signer: k.signer,
+    });
+    await expect(verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesis] })).rejects.toThrow(
+      /services payload exceeds max size/,
+    );
+  });
+
+  it('measures it on the incremental path too', async () => {
+    const k = makeKey();
+    const create = {
+      version: 1,
+      type: 'create',
+      authKeys: [k.key],
+      assertKeys: [k.key],
+      controllerKeys: [k.key],
+      createdAt: ts(0),
+    };
+    const genesisJws = await signRaw({
+      typ: 'did:dfos:identity-op',
+      kid: k.keyId,
+      payload: create,
+      signer: k.signer,
+    });
+    const state = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesisJws] });
+    const genesisCID = decodeJwsUnsafe(genesisJws)!.header.cid!;
+
+    const updateJws = await signRaw({
+      typ: 'did:dfos:identity-op',
+      kid: `${state.did}#${k.keyId}`,
+      payload: {
+        version: 1,
+        type: 'update',
+        previousOperationCID: genesisCID,
+        authKeys: [k.key],
+        assertKeys: [k.key],
+        controllerKeys: [k.key],
+        services: smuggledServices(),
+        createdAt: ts(1),
+      },
+      signer: k.signer,
+    });
+
+    await expect(
+      verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesisJws, updateJws] }),
+    ).rejects.toThrow(/services payload exceeds max size/);
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: state,
+        headCID: genesisCID,
+        lastCreatedAt: create.createdAt,
+        newOp: updateJws,
+      }),
+    ).rejects.toThrow(/services payload exceeds max size/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// A BOM is not canonicalizable, in either language
+// -----------------------------------------------------------------------------
+
+describe('byte order mark', () => {
+  const BOM = '﻿';
+
+  it('rejects a BOM-prefixed protected header, which Go rejects too', async () => {
+    const k = makeKey();
+    // `fatal: true` governs malformed byte sequences; BOM stripping is the
+    // separate `ignoreBOM` option, which defaults to STRIPPING — so this token
+    // used to verify here and fail Go's json.Unmarshal on identical bytes.
+    const jws = await signRawText(
+      `${BOM}{"alg":"EdDSA","typ":"t","kid":"k"}`,
+      '{"v":1}',
+      k.keypair,
+    );
+    expect(() => decodeJwsUnsafe(jws)).not.toThrow();
+    expect(decodeJwsUnsafe(jws)).toBeNull();
+    expect(() => verifyJws({ token: jws, publicKey: k.keypair.publicKey })).toThrow(
+      /byte order mark/,
+    );
+  });
+
+  it('rejects a BOM-prefixed payload', async () => {
+    const k = makeKey();
+    const jws = await signRawText(
+      '{"alg":"EdDSA","typ":"t","kid":"k"}',
+      `${BOM}{"v":1}`,
+      k.keypair,
+    );
+    expect(decodeJwsUnsafe(jws)).toBeNull();
+    expect(() => verifyJws({ token: jws, publicKey: k.keypair.publicKey })).toThrow(
+      /byte order mark/,
+    );
+  });
+
+  it('still accepts the same document without one', async () => {
+    const k = makeKey();
+    const jws = await signRawText('{"alg":"EdDSA","typ":"t","kid":"k"}', '{"v":1}', k.keypair);
+    expect(decodeJwsUnsafe(jws)?.payload).toEqual({ v: 1 });
   });
 });

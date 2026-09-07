@@ -23,6 +23,7 @@
 
 import {
   decodeMultikey,
+  IdentityStateNoSeenKeysError,
   verifyContentChain,
   verifyContentExtensionFromTrustedState,
   verifyIdentityChain,
@@ -283,17 +284,35 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       let headCID = cached.headCID;
       let lastCreatedAt = cached.lastCreatedAt;
       const log = [...cached.log];
-      for (const entry of entries.slice(cached.log.length)) {
-        const r = await verifyIdentityExtensionFromTrustedState({
-          currentState: state,
-          headCID,
-          lastCreatedAt,
-          newOp: entry.jwsToken,
-        });
-        state = r.state;
-        headCID = r.operationCID;
-        lastCreatedAt = r.createdAt;
-        log.push(entry.jwsToken);
+      try {
+        for (const entry of entries.slice(cached.log.length)) {
+          const r = await verifyIdentityExtensionFromTrustedState({
+            currentState: state,
+            headCID,
+            lastCreatedAt,
+            newOp: entry.jwsToken,
+          });
+          state = r.state;
+          headCID = r.operationCID;
+          lastCreatedAt = r.createdAt;
+          log.push(entry.jwsToken);
+        }
+      } catch (e) {
+        // A DURABLE CACHE OUTLIVES THE SHAPE IT WAS WRITTEN IN. A row persisted
+        // before `seenKeys` existed carries no id-to-material binding, and the
+        // extension verifier refuses such a state outright rather than answering
+        // from a reading that cannot reconstruct one. Replaying the log is
+        // exactly what it asks the caller to do, and the cache write below
+        // persists the replayed state — which carries the binding — so an
+        // identity pays this once rather than failing every update forever.
+        if (!(e instanceof IdentityStateNoSeenKeysError)) throw e;
+        const full = entries.map((entry) => entry.jwsToken);
+        const replayed = await verifyIdentityChain({ didPrefix: DID_PREFIX, log: full });
+        if (replayed.did !== did) {
+          throw new Error(`relay served a mismatched identity: asked ${did}, got ${replayed.did}`);
+        }
+        const last = opMeta(full[full.length - 1]!);
+        return { state: replayed, log: full, headCID: last.cid, lastCreatedAt: last.createdAt };
       }
       return { state, log, headCID, lastCreatedAt };
     };

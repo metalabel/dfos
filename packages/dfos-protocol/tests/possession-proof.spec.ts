@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  IdentityStateNoSeenKeysError,
   signIdentityOperation,
   verifyIdentityChain,
   verifyIdentityExtensionFromTrustedState,
@@ -878,9 +879,10 @@ describe('key-material consistency — the extension verifier returns the full w
     ).rejects.toThrow(/type or public key inconsistency/);
   });
 
-  it('rejects it from a trusted state that predates the binding member', async () => {
-    // A state persisted before `seenKeys` existed, or hand-built by a caller. The
-    // binding is read off declared plus has-ever-proved, and the verdict holds.
+  it('refuses to extend a trusted state that predates the binding member', async () => {
+    // A state persisted before `seenKeys` existed, or hand-built by a caller.
+    // Nothing else in the state can reconstruct the binding, so the fast path
+    // says so with a typed error instead of answering from a narrower reading.
     const g = await genesis();
     const legacyState: VerifiedIdentity = { ...g.state };
     delete legacyState.seenKeys;
@@ -902,7 +904,60 @@ describe('key-material consistency — the extension verifier returns the full w
         lastCreatedAt: g.op.createdAt,
         newOp: op.jwsToken,
       }),
+      // the message is the Go twin's, byte for byte
+    ).rejects.toThrow(new IdentityStateNoSeenKeysError());
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: legacyState,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).rejects.toBeInstanceOf(IdentityStateNoSeenKeysError);
+
+    // a full replay still reaches the real verdict
+    await expect(
+      verifyIdentityChain({ didPrefix: 'did:dfos', log: [g.jwsToken, op.jwsToken] }),
     ).rejects.toThrow(/type or public key inconsistency/);
+  });
+
+  it('refuses a seenKeys-less state even for an entirely valid operation', async () => {
+    // The refusal is a property of the STATE, not of the operation.
+    const g = await genesis();
+    const legacyState: VerifiedIdentity = { ...g.state };
+    delete legacyState.seenKeys;
+    const added = makeKey();
+    const op = await update({
+      did: g.did,
+      prevCID: g.operationCID,
+      minute: 1,
+      signedBy: g.key,
+      authKeys: [g.key.key, added.key],
+      assertKeys: [g.key.key],
+      controllerKeys: [g.key.key],
+      keyProofs: [
+        await proofFor({ key: added, did: g.did, prevCID: g.operationCID, roles: ['auth'] }),
+      ],
+    });
+
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: legacyState,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).rejects.toBeInstanceOf(IdentityStateNoSeenKeysError);
+
+    // the same op extends the complete state
+    await expect(
+      verifyIdentityExtensionFromTrustedState({
+        currentState: g.state,
+        headCID: g.operationCID,
+        lastCreatedAt: g.op.createdAt,
+        newOp: op.jwsToken,
+      }),
+    ).resolves.toBeDefined();
   });
 
   it('admits an ordinary key-add with a valid envelope, and hands on the binding', async () => {

@@ -65,13 +65,15 @@ func TestJWSHeaderDecodesByExactKey(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 
 	// encoding/json would match TYP/KID/CID case-insensitively into the struct;
-	// TypeScript, reading a plain object by exact key, sees none of them
-	token := signRawText(t, `{"alg":"EdDSA","TYP":"x","KID":"k","CID":"bafy"}`, `{"v":1}`, priv)
+	// TypeScript, reading a plain object by exact key, sees none of them. `typ`
+	// is spelled exactly here because it is required — the mis-cased TYP must not
+	// win over it, and KID/CID must not populate at all.
+	token := signRawText(t, `{"alg":"EdDSA","typ":"t","TYP":"x","KID":"k","CID":"bafy"}`, `{"v":1}`, priv)
 	header, _, err := DecodeJWSUnsafe(token)
 	if err != nil {
 		t.Fatalf("DecodeJWSUnsafe: %v", err)
 	}
-	if header.Typ != "" || header.Kid != "" || header.CID != "" {
+	if header.Typ != "t" || header.Kid != "" || header.CID != "" {
 		t.Fatalf("mis-cased header members must not populate typ/kid/cid: %+v", header)
 	}
 
