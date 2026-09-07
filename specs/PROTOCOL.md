@@ -1,7 +1,7 @@
 # DFOS Protocol
 
-DFOS is an identity you hold and content that proves who wrote it. A platform
-can host your identity. It cannot own it.
+DFOS is an open protocol for identities, signed records, and delegated
+permissions that any compatible application can verify for itself.
 
 This document specifies the wire: the byte encodings, the identifier
 derivations, the chain rules, the possession rules, and the verification
