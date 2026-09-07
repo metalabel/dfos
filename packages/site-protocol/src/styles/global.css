@@ -412,6 +412,13 @@ img {
   color: var(--fg);
   margin-bottom: 2rem;
   text-align: center;
+  /* The headline is set in caps by the stylesheet, not by the copy string. */
+  text-transform: uppercase;
+}
+
+/* The closing clause of the headline carries the green. */
+.hero-declaration .green {
+  color: var(--green);
 }
 
 .hero-pitch {
