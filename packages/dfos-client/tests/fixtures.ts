@@ -34,6 +34,11 @@ import {
   type KeyRole,
 } from '@metalabel/dfos-protocol/key-proof';
 import type { PeerClient, PeerLogEntry } from '@metalabel/dfos-web-relay/peer-client';
+import { vi } from 'vitest';
+
+vi.stubGlobal('fetch', async () => {
+  throw new Error('unexpected network request: inject a fetch fixture');
+});
 
 const DOC_CID = 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y';
 const DOC_CID_2 = 'bafkreiupdatedocument000000000000000000000000000000000000000';

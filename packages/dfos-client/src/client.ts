@@ -13,7 +13,6 @@ import {
   CONTENT_ID_ANCHOR_RE,
   verifyRevocation,
   type VerifiedContentChain,
-  type VerifiedIdentity,
 } from '@metalabel/dfos-protocol/chain';
 import { verifyDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -29,6 +28,7 @@ import type {
   Client,
   ClientConfig,
   DocumentBlob,
+  EffectiveIdentity,
   GlobalLogOptions,
   GlobalLogResult,
   LogOp,
@@ -150,7 +150,7 @@ export const createClient = (config: ClientConfig): Client => {
   const identity = async (
     did: string,
     options?: CallOptions,
-  ): Promise<Resolved<VerifiedIdentity>> => {
+  ): Promise<Resolved<EffectiveIdentity>> => {
     const { state, provenance, tipUnverified } = await resolvers.getIdentityChain(did, options);
     const axes: UnverifiableAxis[] = tipUnverified ? ['tip'] : [];
     return { value: state, trust: trust(true, axes), provenance };
@@ -192,7 +192,12 @@ export const createClient = (config: ClientConfig): Client => {
       resolveIdentity: resolvers.callbacks().resolveIdentity,
       nowUnix: Math.floor(nowMs() / 1000),
     });
-    const revoked = await isRevoked(verified.iss, verified.credentialCID);
+    let revoked = false;
+    try {
+      revoked = await isRevoked(verified.iss, verified.credentialCID);
+    } catch {
+      // An unavailable status remains on the revocation unverifiable axis.
+    }
 
     const axes: UnverifiableAxis[] = [];
     if (issuer.tipUnverified) axes.push('tip');
@@ -252,7 +257,12 @@ export const createClient = (config: ClientConfig): Client => {
           resolveIdentity: cb.resolveIdentity,
           nowUnix: Math.floor(nowMs() / 1000),
         });
-        const revoked = await isRevoked(verified.iss, verified.credentialCID);
+        let revoked = false;
+        try {
+          revoked = await isRevoked(verified.iss, verified.credentialCID);
+        } catch {
+          // An unavailable status remains on the revocation unverifiable axis.
+        }
         if (revoked) return { ok: false, error: 'credential revoked', value: verified };
         return { ok: true, value: verified, unverifiable: ['revocation'] };
       }

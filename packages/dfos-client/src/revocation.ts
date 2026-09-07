@@ -37,7 +37,8 @@ interface CredentialStatusBody {
  * (`verifyRevocation`: signature, CID integrity, issuer-only rule) and whose
  * payload binds exactly the queried (issuerDID, credentialCID). Anything less —
  * unreachable relay, negative answer, forged or mismatched proof — moves on to
- * the next relay; false only after the full set has been consulted.
+ * the next relay; false only after the full set has been consulted and at least
+ * one relay answered with a parseable status body. Zero answers throws.
  *
  * When the caller supplies `asOfUnix` (the protocol does, on every cold fold, with
  * each operation's own `createdAt`), a verified revocation only counts if its own
@@ -52,6 +53,7 @@ export const createRevocationChecker = (
 ): RevChecker => {
   const relaySet = normalizeRelays(relays);
   return async (issuerDID: string, credentialCID: string, asOfUnix?: number): Promise<boolean> => {
+    let answered = false;
     for (const url of relaySet) {
       let body: CredentialStatusBody | null = null;
       try {
@@ -61,12 +63,14 @@ export const createRevocationChecker = (
         ).toString();
         const res = await fetchImpl(target);
         // 501 is an explicit capability absence, not a negative revocation
-        // answer. Exclude this relay exactly like an unreachable relay; callers
-        // retain the existing `revocation` unverifiable trust axis when nobody
-        // can answer.
+        // answer. Exclude this relay exactly like an unreachable relay.
         if (res.status === 501) continue;
         if (!res.ok) continue;
         body = (await res.json()) as CredentialStatusBody;
+        if (body === null || typeof body !== 'object' || typeof body.revoked !== 'boolean') {
+          continue;
+        }
+        answered = true;
       } catch {
         continue;
       }
@@ -100,6 +104,7 @@ export const createRevocationChecker = (
         // forged / garbage proof — ignore this relay's claim entirely
       }
     }
+    if (!answered) throw new Error('revocation status unavailable: no relay answered');
     return false;
   };
 };

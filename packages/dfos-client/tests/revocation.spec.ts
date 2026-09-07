@@ -187,18 +187,18 @@ describe('createRevocationChecker', () => {
     expect(await isRevoked(issuer.did, credentialCID)).toBe(true);
   });
 
-  it('returns false only after the full relay set comes up empty', async () => {
+  it('throws when every relay returns 404', async () => {
     const { issuer, credentialCID } = await setup();
     const isRevoked = createRevocationChecker(
       [A, B],
       revocationFetch({}), // both 404
       resolveKeyFor(issuer),
     );
-    expect(await isRevoked(issuer.did, credentialCID)).toBe(false);
+    await expect(isRevoked(issuer.did, credentialCID)).rejects.toThrow(/no relay answered/);
   });
 
   it('excludes 501 relays and surfaces all-unavailable status as unverifiable', async () => {
-    const { issuer, credential, credentialCID } = await setup();
+    const { issuer, credential } = await setup();
     const peerClient = fakePeerClient({ [A]: { identities: { [issuer.did]: issuer.log } } });
     const statuses: number[] = [];
     const noStatusSupport: typeof fetch = async () => {
@@ -207,11 +207,86 @@ describe('createRevocationChecker', () => {
     };
     const client = createClient({ relays: [A], peerClient, fetch: noStatusSupport });
 
-    const result = await client.credential(credential);
-    expect(result.value.credential.credentialCID).toBe(credentialCID);
-    expect(result.value.revoked).toBe(false);
-    expect(result.trust).toEqual({ ok: true, unverifiable: ['revocation'] });
+    await expect(client.credential(credential)).resolves.toMatchObject({
+      value: { revoked: false },
+      trust: { ok: true, unverifiable: ['revocation'] },
+    });
     expect(statuses).toEqual([501]);
+  });
+
+  it.each(['credential', 'resolve'] as const)(
+    '%s preserves the revocation axis when no relay answers',
+    async (method) => {
+      const { issuer, credential, credentialCID } = await setup();
+      const client = createClient({
+        relays: [A],
+        peerClient: fakePeerClient({ [A]: { identities: { [issuer.did]: issuer.log } } }),
+        fetch: async () => {
+          throw new Error('relay offline');
+        },
+      });
+      await expect(client[method](credential)).resolves.toMatchObject({
+        ...(method === 'resolve' ? { kind: 'credential' } : {}),
+        value: { credential: { credentialCID }, revoked: false },
+        trust: { ok: true, unverifiable: ['revocation'] },
+      });
+    },
+  );
+
+  it('verify preserves the revocation axis when no relay answers', async () => {
+    const { issuer, credential, credentialCID } = await setup();
+    const client = createClient({
+      relays: [A],
+      peerClient: fakePeerClient({ [A]: { identities: { [issuer.did]: issuer.log } } }),
+      fetch: async () => {
+        throw new Error('relay offline');
+      },
+    });
+    await expect(client.verify(credential)).resolves.toMatchObject({
+      ok: true,
+      value: { credentialCID },
+      unverifiable: ['revocation'],
+    });
+  });
+
+  it.each(['throws', '501', '500', 'invalid-json', 'invalid-body', 'empty'])(
+    'throws with zero answers: %s',
+    async (mode) => {
+      const { issuer, credentialCID } = await setup();
+      const checker = createRevocationChecker(
+        mode === 'empty' ? [] : [A, B],
+        async () => {
+          if (mode === 'throws') throw new Error('offline');
+          if (mode === '501' || mode === '500') return new Response('{}', { status: Number(mode) });
+          return new Response(mode === 'invalid-json' ? 'not json' : '{}');
+        },
+        resolveKeyFor(issuer),
+      );
+      await expect(checker(issuer.did, credentialCID)).rejects.toThrow(/no relay answered/);
+    },
+  );
+
+  it('accepts one negative answer among unavailable relays in either order', async () => {
+    const { issuer, credentialCID } = await setup();
+    for (const relays of [
+      [A, B],
+      [B, A],
+    ]) {
+      const seen: string[] = [];
+      const checker = createRevocationChecker(
+        relays,
+        async (input) => {
+          const origin = new URL(String(input)).origin;
+          seen.push(origin);
+          return origin === A
+            ? new Response('{}', { status: 501 })
+            : Response.json({ revoked: false });
+        },
+        resolveKeyFor(issuer),
+      );
+      expect(await checker(issuer.did, credentialCID)).toBe(false);
+      expect(seen).toEqual(relays);
+    }
   });
 
   // ---------------------------------------------------------------------------

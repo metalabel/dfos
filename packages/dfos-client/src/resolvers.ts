@@ -29,7 +29,6 @@ import {
   verifyIdentityExtensionFromTrustedState,
   type MultikeyPublicKey,
   type VerifiedContentChain,
-  type VerifiedIdentity,
 } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
@@ -40,7 +39,16 @@ import {
   normalizeRelays,
   StaleAnswerError,
 } from './transport';
-import type { Callbacks, CallOptions, LogOp, Provenance, RevChecker, Store } from './types';
+import type {
+  Callbacks,
+  CallOptions,
+  EffectiveIdentity,
+  EverProvedIdentity,
+  LogOp,
+  Provenance,
+  RevChecker,
+  Store,
+} from './types';
 
 const DID_PREFIX = 'did:dfos';
 
@@ -162,8 +170,9 @@ const opMeta = (jws: string): { cid: string; createdAt: string } => {
  * state that predates the member.
  */
 /** The identity as a credit claim must see it: every key ever proved. */
-const historicalIdentity = (state: VerifiedIdentity): VerifiedIdentity => ({
+const historicalIdentity = (state: EffectiveIdentity): EverProvedIdentity => ({
   ...state,
+  resolution: 'ever-proved',
   ...(state.provedKeys ?? {
     authKeys: state.authKeys,
     assertKeys: state.assertKeys,
@@ -171,7 +180,7 @@ const historicalIdentity = (state: VerifiedIdentity): VerifiedIdentity => ({
   }),
 });
 
-const keyBytesFor = (state: VerifiedIdentity, keyId: string): Uint8Array | null => {
+const keyBytesFor = (state: EffectiveIdentity, keyId: string): Uint8Array | null => {
   const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
     (k) => k.id === keyId,
   );
@@ -191,7 +200,7 @@ export interface ResolverDeps {
 }
 
 export interface IdentityResolution {
-  state: VerifiedIdentity;
+  state: EffectiveIdentity;
   log: string[];
   provenance: Provenance;
   /** True when cache is the only answer or a full relay log exactly matches it. */
@@ -232,13 +241,13 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     const key = cacheKey('identity', did);
     const cached = options?.fresh
       ? undefined
-      : ((await deps.store.get(key)) as CachedChain<VerifiedIdentity> | undefined);
+      : ((await deps.store.get(key)) as CachedChain<EffectiveIdentity> | undefined);
 
     // verification IS the candidate filter: full verify from genesis when cold,
     // O(1) verify-forward from the trusted prefix when cached
     const verifyCandidate = async (
       entries: LogOp[],
-    ): Promise<VerifiedCandidate<VerifiedIdentity>> => {
+    ): Promise<VerifiedCandidate<EffectiveIdentity>> => {
       if (!cached) {
         const log = entries.map((e) => e.jwsToken);
         if (log.length === 0) throw new Error(`identity not found: ${did}`);
@@ -317,7 +326,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         state: candidate.state,
         headCID: candidate.headCID,
         lastCreatedAt: candidate.lastCreatedAt,
-      } satisfies CachedChain<VerifiedIdentity>);
+      } satisfies CachedChain<EffectiveIdentity>);
     }
     return {
       state: candidate.state,
@@ -336,9 +345,9 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
    * is invalid retroactively.
    */
   const stateAsOf = async (
-    resolution: { state: VerifiedIdentity; log: string[] },
+    resolution: { state: EffectiveIdentity; log: string[] },
     basis?: string,
-  ): Promise<VerifiedIdentity> => {
+  ): Promise<EffectiveIdentity> => {
     const { state, log } = resolution;
     const last = log[log.length - 1];
     if (basis === undefined || last === undefined || opMeta(last).createdAt <= basis) return state;
@@ -350,7 +359,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   const resolveIdentity = async (
     did: string,
     basis?: string,
-  ): Promise<VerifiedIdentity | undefined> => {
+  ): Promise<EffectiveIdentity | undefined> => {
     try {
       return await stateAsOf(await getIdentityChain(did), basis);
     } catch {
@@ -374,7 +383,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
    * carve-out. A claim runs no temporal check, so it has no basis and binds a
    * chain rather than a moment (PROTOCOL, Time basis).
    */
-  const resolveClaimantIdentity = async (did: string): Promise<VerifiedIdentity | undefined> => {
+  const resolveClaimantIdentity = async (did: string): Promise<EverProvedIdentity | undefined> => {
     try {
       const { state } = await getIdentityChain(did);
       return historicalIdentity(state);
