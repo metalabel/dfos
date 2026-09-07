@@ -12,7 +12,11 @@
 
 */
 
-import { signIdentityOperation, type IdentityOperation } from '@metalabel/dfos-protocol/chain';
+import {
+  signIdentityOperation,
+  signRevocation,
+  type IdentityOperation,
+} from '@metalabel/dfos-protocol/chain';
 import {
   createDFOSCredential,
   MAX_CREDENTIAL_SIZE,
@@ -1193,6 +1197,42 @@ describe('verifyApiRequest', () => {
     });
     expect(await reasonOf(attempt)).toBe('invalid');
     await expect(attempt).rejects.toThrow(/revoked/);
+  });
+
+  it('answers 503, NOT accept, when a served revocation proof\u2019s key cannot be resolved', async () => {
+    // The relay serves the issuer's GENESIS state and a genuine revocation signed
+    // by a key added later. The proof cannot be checked from here — and a lookup
+    // this client could not make must never read as "not revoked".
+    const user = await buildIdentity({ rotate: true });
+    const rp = await buildIdentity();
+    const { jws, cid } = await issueCredential({ issuer: user, aud: rp.did });
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      credentialCID: cid,
+      kid: rp.kid,
+      sign: rp.k.signer,
+      iat: NOW,
+    });
+    const later = user.rotatedKey!;
+    const revocation = await signRevocation({
+      issuerDID: user.did,
+      credentialCID: cid,
+      signer: later.signer,
+      keyId: later.keyId,
+    });
+    const client = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({
+        // the ROTATION is withheld: this relay only knows the genesis operation
+        [RELAY]: { identities: { [user.did]: user.genesisLog, [rp.did]: rp.log } },
+      }),
+      fetch: async () => Response.json({ revoked: true, revocation: revocation.jwsToken }),
+    });
+    await expect(
+      verifyApiRequest(client, { ...baseInput(), proof, credential: jws }),
+    ).rejects.toMatchObject({ reason: 'unverifiable', phase: 'credential', status: 503 });
   });
 
   it('rejects an expired credential on the at-read wall clock', async () => {

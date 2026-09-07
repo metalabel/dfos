@@ -30,6 +30,20 @@ interface CredentialStatusBody {
   revocation?: string;
 }
 
+/** The one unavailable answer this checker gives, whatever made the status
+ *  unobtainable. Callers branch on the throw, never on the text. */
+const unavailable = (why: string): Error => new Error(`revocation status unavailable: ${why}`);
+
+/**
+ * The signing key behind a positive answer could not be produced.
+ *
+ * A forged proof and an unresolvable key both make `verifyRevocation` throw, and
+ * they are opposite facts: the first is a relay lying, the second is this client
+ * being unable to check. Only the resolver knows which, so the fact is captured
+ * AT the resolver seam rather than guessed from a message downstream.
+ */
+class KeyUnresolvableError extends Error {}
+
 /**
  * Build the default revocation checker over an ordered relay set.
  *
@@ -38,7 +52,9 @@ interface CredentialStatusBody {
  * payload binds exactly the queried (issuerDID, credentialCID). Anything less —
  * unreachable relay, negative answer, forged or mismatched proof — moves on to
  * the next relay; false only after the full set has been consulted and at least
- * one relay answered with a parseable status body. Zero answers throws.
+ * one relay answered with a parseable status body. Zero answers throws, and so
+ * does a positive answer whose signing key this client could not resolve: a
+ * dependency failure is never a negative status.
  *
  * When the caller supplies `asOfUnix` (the protocol does, on every cold fold, with
  * each operation's own `createdAt`), a verified revocation only counts if its own
@@ -52,8 +68,22 @@ export const createRevocationChecker = (
   resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>,
 ): RevChecker => {
   const relaySet = normalizeRelays(relays);
+  // the resolver seam, tagged: everything past it that throws is the PROOF
+  // failing, everything here is this client failing to look
+  const guardedResolveKey = async (kid: string, basis?: string): Promise<Uint8Array> => {
+    try {
+      return await resolveKey(kid, basis);
+    } catch (err) {
+      throw new KeyUnresolvableError(`could not resolve the revocation signing key ${kid}`, {
+        cause: err,
+      });
+    }
+  };
   return async (issuerDID: string, credentialCID: string, asOfUnix?: number): Promise<boolean> => {
     let answered = false;
+    // a positive answer was served and this client could not check it. It is
+    // neither believed nor discarded: the status is simply unobtainable.
+    let unresolvable: KeyUnresolvableError | undefined;
     for (const url of relaySet) {
       let body: CredentialStatusBody | null = null;
       try {
@@ -79,7 +109,10 @@ export const createRevocationChecker = (
 
       // positive answer — believe only the proof, never the boolean
       try {
-        const verified = await verifyRevocation({ jwsToken: body.revocation, resolveKey });
+        const verified = await verifyRevocation({
+          jwsToken: body.revocation,
+          resolveKey: guardedResolveKey,
+        });
         if (verified.did === issuerDID && verified.credentialCID === credentialCID) {
           // as-of gate: a revocation signed AFTER the instant being asked about
           // does not reach back to it. The boundary comes from the VERIFIED
@@ -100,11 +133,21 @@ export const createRevocationChecker = (
         }
         // verified JWS but for a different (issuer, credential) — a replay;
         // keep consulting the remaining relays
-      } catch {
-        // forged / garbage proof — ignore this relay's claim entirely
+      } catch (err) {
+        // A KEY WE COULD NOT RESOLVE IS NOT A FORGERY. Relay A can serve an older
+        // identity state than the one the genuine revocation was signed under, so
+        // the proof is discarded here and `answered` (set by the other relays'
+        // negative-shaped bodies) would then license `false` — a revoked
+        // credential authorized because a lookup failed. Remember it and keep
+        // consulting: a later relay may still prove the revocation outright.
+        if (err instanceof KeyUnresolvableError) unresolvable = err;
+        // anything else is a forged / garbage proof — ignore this relay's claim
       }
     }
-    if (!answered) throw new Error('revocation status unavailable: no relay answered');
+    if (!answered) throw unavailable('no relay answered');
+    // no relay proved a revocation, but one served a proof this client could not
+    // check — the same unobtainable status the zero-answer path reports
+    if (unresolvable) throw unavailable(unresolvable.message);
     return false;
   };
 };

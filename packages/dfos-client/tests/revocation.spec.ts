@@ -368,6 +368,84 @@ describe('createRevocationChecker', () => {
     expect(await isRevoked(issuer.did, credentialCID, asOf)).toBe(true);
   });
 
+  // ---------------------------------------------------------------------------
+  // a dependency failure is never a negative status
+  // ---------------------------------------------------------------------------
+
+  it('THROWS when a served proof\u2019s signing key cannot be resolved', async () => {
+    // Relay A serves an older identity state than the one the genuine revocation
+    // was signed under, so the key does not resolve. Discarding the proof as if
+    // it were forged and answering `false` would authorize a revoked credential
+    // because a lookup failed.
+    const { issuer, credentialCID, revocation } = await setup();
+    const isRevoked = createRevocationChecker(
+      [A],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: revocation.jwsToken } },
+      }),
+      async () => {
+        throw new Error('unknown key on identity');
+      },
+    );
+    await expect(isRevoked(issuer.did, credentialCID)).rejects.toThrow(
+      /revocation status unavailable/,
+    );
+  });
+
+  it('an unresolvable proof poisons a false answer from the REST of the set', async () => {
+    const { issuer, credentialCID, revocation } = await setup();
+    const isRevoked = createRevocationChecker(
+      [A, B],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: revocation.jwsToken } },
+        [B]: { [credentialCID]: { revoked: false } },
+      }),
+      async () => {
+        throw new Error('unknown key on identity');
+      },
+    );
+    await expect(isRevoked(issuer.did, credentialCID)).rejects.toThrow(
+      /revocation status unavailable/,
+    );
+  });
+
+  it('a forged proof is still ignored, not treated as unavailable', async () => {
+    // the discrimination has to cut BOTH ways: an unresolvable key is a failure
+    // to look, a garbage JWS is a relay lying, and only the first is unavailable
+    const { issuer, credentialCID } = await setup();
+    const isRevoked = createRevocationChecker(
+      [A],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: 'eyJmb3JnZWQ.eyJkaWQ.c2ln' } },
+      }),
+      resolveKeyFor(issuer),
+    );
+    expect(await isRevoked(issuer.did, credentialCID)).toBe(false);
+  });
+
+  it('a later relay proving the revocation still answers true', async () => {
+    const { issuer, credentialCID, revocation } = await setup();
+    const rotated = await buildIdentity();
+    const isRevoked = createRevocationChecker(
+      [A, B],
+      revocationFetch({
+        // A's proof is signed by a key this client cannot resolve
+        [A]: { [credentialCID]: { revoked: true, revocation: revocation.jwsToken } },
+        [B]: { [credentialCID]: { revoked: true, revocation: revocation.jwsToken } },
+      }),
+      // the first lookup fails, the second lands
+      (() => {
+        let n = 0;
+        return async (kid: string) => {
+          n += 1;
+          if (n === 1) throw new Error('unknown key on identity');
+          return resolveKeyFor(issuer, rotated)(kid);
+        };
+      })(),
+    );
+    expect(await isRevoked(issuer.did, credentialCID)).toBe(true);
+  });
+
   it('wires end-to-end as the client default (resolveKey through the resolvers)', async () => {
     const { issuer, credential, credentialCID, revocation } = await setup();
     const client = createClient({

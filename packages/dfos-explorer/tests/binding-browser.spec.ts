@@ -245,6 +245,31 @@ describe('probeWellKnownFromBrowser', () => {
     });
   });
 
+  // the two vantages and the Go CLI now share one parser, so the browser reads
+  // the CLI's trim set — vertical tab included — rather than its own
+  it('trims the vertical tab, exactly as the route and the CLI do', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(`\v${DID}\v`, { status: 200 })),
+    );
+    expect(await probeWellKnownFromBrowser('example.com')).toEqual({
+      kind: 'observed',
+      result: { status: 'ok', did: DID },
+    });
+  });
+
+  // only a 200 attests: Go reads the body on `status == http.StatusOK` and drops
+  // every other status into silence. A 201 with a valid DID used to bind here.
+  it('refuses to read a DID out of a 201', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(DID, { status: 201 })),
+    );
+    const out = await probeWellKnownFromBrowser('example.com');
+    expect(out.kind).toBe('observed');
+    if (out.kind === 'observed') expect(out.result.status).toBe('error');
+  });
+
   // present without an answer: the document exists, so the origin is not silent
   it('reads a present non-DID document as malformed', async () => {
     vi.stubGlobal(

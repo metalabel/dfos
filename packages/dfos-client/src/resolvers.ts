@@ -31,6 +31,7 @@ import {
   type MultikeyPublicKey,
   type VerifiedContentChain,
 } from '@metalabel/dfos-protocol/chain';
+import { CredentialVerificationError } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import {
@@ -187,6 +188,22 @@ const keyBytesFor = (state: EffectiveIdentity, keyId: string): Uint8Array | null
   );
   return key ? decodeMultikey(key.publicKeyMultibase).keyBytes : null;
 };
+
+// -----------------------------------------------------------------------------
+// determinate rejection — the basis itself is invalid, not the lookup
+// -----------------------------------------------------------------------------
+
+/**
+ * The basis names an instant BEFORE this chain's genesis, so the identity
+ * provably had no state then.
+ *
+ * A `CredentialVerificationError` on purpose: this is a verdict about the
+ * artifact being checked, and every classifier downstream — the api-auth phase
+ * split, a relay's durable-reject rule — already routes that class as final.
+ * Returning `undefined` instead would mark it a dependency miss, and a
+ * dependency miss is retried forever against an answer that cannot change.
+ */
+export class NoStateAsOfError extends CredentialVerificationError {}
 
 // -----------------------------------------------------------------------------
 // resolvers factory
@@ -362,6 +379,14 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
    * no basis at all; otherwise the log is re-verified to fold the prefix the
    * basis names. Deletion reads head state either way, because a deleted issuer
    * is invalid retroactively.
+   *
+   * ONLY THE RE-WALK BRANCH IS DETERMINATE, and the answer carries which one it
+   * is — the same rule the relay's own resolver states (dfos-web-relay
+   * `resolveIdentityAsOf`). An operation dated AFTER the basis proves this log
+   * holds every operation the basis names, because `createdAt` strictly
+   * increases; a chain ending at or before it proves nothing of the sort. A key
+   * missing from an indeterminate answer is a retryable dependency miss, and
+   * from a determinate one a verdict.
    */
   const stateAsOf = async (
     resolution: { state: EffectiveIdentity; log: string[] },
@@ -370,8 +395,15 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     const { state, log } = resolution;
     const last = log[log.length - 1];
     if (basis === undefined || last === undefined || opMeta(last).createdAt <= basis) return state;
+    const first = log[0];
+    // A basis before genesis names an instant this identity had no state at, and
+    // no later arrival can change that. Answered HERE rather than read off
+    // `verifyIdentityChain`'s message, so the verdict is structural.
+    if (first !== undefined && basis < opMeta(first).createdAt) {
+      throw new NoStateAsOfError(`identity has no state as of ${basis}`);
+    }
     const asOf = await verifyIdentityChain({ didPrefix: DID_PREFIX, log, asOf: basis });
-    return { ...asOf, isDeleted: state.isDeleted };
+    return { ...asOf, isDeleted: state.isDeleted, basisDeterminate: true };
   };
 
   // the bound protocol-lib callbacks — the trunk product
@@ -381,7 +413,12 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   ): Promise<EffectiveIdentity | undefined> => {
     try {
       return await stateAsOf(await getIdentityChain(did), basis);
-    } catch {
+    } catch (err) {
+      // A DETERMINATE REJECTION IS AN ANSWER. `undefined` means "this resolver
+      // does not hold the chain", which every protocol consumer reads as a
+      // retryable dependency miss — so collapsing a verdict into it makes an
+      // unappealable rejection look like a relay that may catch up.
+      if (err instanceof NoStateAsOfError) throw err;
       return undefined;
     }
   };

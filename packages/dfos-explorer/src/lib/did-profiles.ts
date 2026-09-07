@@ -40,7 +40,9 @@
   Caching: verified profiles persist to localStorage with a 1h TTL (names drift
   when a profile chain is updated), bounded so the corpus can't grow the key.
   NEGATIVE verdicts stay in memory for the session only — persisting "no public
-  profile" across a transient relay failure would silently blank real names.
+  profile" across a transient relay failure would silently blank real names. And
+  a failure to LOOK is not a negative at all: both beats report it as
+  `'unavailable'`, which a row renders as "could not look", not as an absence.
 
 */
 
@@ -200,6 +202,29 @@ export interface ProfileSource {
   document(anchor: string): Promise<{ value: { decoded?: unknown; integrity: boolean } }>;
 }
 
+/** The client's message for "every relay was asked for these bytes and none
+ *  served them". Matched as a PREFIX; the contentId is appended. */
+const BLOB_UNSERVED = 'no relay served the blob for ';
+
+/**
+ * What a beat-2 throw established. `client.document` throws for two different
+ * reasons and only one of them is a finding about the identity.
+ *
+ *   the BLOB was not served — the anchored content chain resolved, so the relays
+ *   were reachable, and then none of them handed the bytes to an anonymous read.
+ *   That IS what "not a PUBLIC profile" means empirically (see the header's
+ *   privacy invariant), so it stays `null`.
+ *
+ *   anything else — the content chain did not resolve at all, a dependency did
+ *   not resolve, the fetch never completed. The question went unanswered, and
+ *   printing "no public profile" over it is the row asserting something nobody
+ *   observed. `'unavailable'`, exactly as beat 1 reports the same condition.
+ *
+ * Pure, unit-tested.
+ */
+export const documentFailureVerdict = (err: unknown): null | 'unavailable' =>
+  err instanceof Error && err.message.startsWith(BLOB_UNSERVED) ? null : 'unavailable';
+
 /**
  * Resolve one DID to a verdict, with the two beats caught SEPARATELY because
  * they answer different questions.
@@ -208,10 +233,10 @@ export interface ProfileSource {
  * unreachable relay, a divergence, a chain nobody serves. Nothing was learned
  * about whether a public profile exists, so the verdict is `'unavailable'`.
  *
- * Beat 2 throwing means the chain resolved, named an anchor, and no relay served
- * those bytes to an unauthenticated read. That is what "not a PUBLIC profile"
- * means empirically (see the header's privacy invariant), so it stays `null` —
- * the same verdict as an anchor that resolved to something that is not a profile.
+ * Beat 2 throwing is split by {@link documentFailureVerdict}: bytes no relay
+ * would serve are `null` — the same verdict as an anchor that resolved to
+ * something that is not a profile — and a transport or dependency failure is
+ * `'unavailable'`, like beat 1.
  *
  * Pure of module state, unit-tested.
  */
@@ -234,8 +259,8 @@ export const resolveProfileVerdict = async (
     // committed documentCID. Gated bytes throw (no relay serves them) → none.
     const doc = await client.document(anchor);
     return publicProfileOf(did, doc.value.decoded, doc.value.integrity);
-  } catch {
-    return null;
+  } catch (err) {
+    return documentFailureVerdict(err);
   }
 };
 

@@ -142,11 +142,17 @@ const revocationOpCid = (jws: string): string => {
 /**
  * Walk one relay's issuer feed. `null` when that relay never served it.
  *
- * `truncated` is the page cap having cut the walk off with a cursor still open —
- * observably identical to an exhausted feed in everything except this flag, and
- * the difference is the whole three-state contract: a sweep that stopped early
- * has not seen the revocations past where it stopped, so it cannot license
- * "active" for anything.
+ * `truncated` is the walk having stopped with the feed still going — the page cap
+ * cutting it off with a cursor still open, OR a page that failed to arrive
+ * mid-walk. Both are observably identical to an exhausted feed in everything
+ * except this flag, and the difference is the whole three-state contract: a sweep
+ * that stopped early has not seen the revocations past where it stopped, so it
+ * cannot license "active" for anything.
+ *
+ * THE MID-WALK FAILURE IS THE ONE THAT BIT. Page one answering `{ revocations:
+ * [], next: "more" }` and page two timing out used to exit the loop with
+ * `truncated: false` — a feed reported as complete, holding none of the
+ * revocations the timed-out page carried.
  */
 const issuerFeedFrom = async (
   relay: string,
@@ -164,7 +170,12 @@ const issuerFeedFrom = async (
       revocations?: { credentialCID?: unknown; revocation?: unknown }[];
       next?: unknown;
     } | null;
-    if (!body || !Array.isArray(body.revocations)) break;
+    if (!body || !Array.isArray(body.revocations)) {
+      // a page that never arrived (or arrived off-contract) after the walk had
+      // already started: the feed continues past what this sweep saw
+      if (served) truncated = true;
+      break;
+    }
     served = true;
     for (const entry of body.revocations) {
       if (typeof entry.credentialCID !== 'string' || typeof entry.revocation !== 'string') continue;
@@ -184,11 +195,15 @@ const issuerFeedFrom = async (
 /**
  * Every revocation the relay set attributes to this ISSUER, UNIONED across all
  * relays — one relay serving an empty feed is not evidence that another isn't
- * holding the revocation, so the sweep never stops at the first answer. It
- * `established`es absence only when at least one relay served the feed TO ITS
- * END; a relay whose walk hit the page cap contributes its positives and nothing
- * else, because the revocations past the cap are exactly the ones it did not
- * see. With no complete feed the caller's credentials render unknown, not active.
+ * holding the revocation, so the sweep never stops at the first answer.
+ *
+ * ABSENCE IS ESTABLISHED BY THE SET, NOT BY A MEMBER. Every relay in the set has
+ * to have served its feed TO ITS END: a relay that was unreachable, or whose walk
+ * stopped early, may be the one holding the revocation, and its neighbour's clean
+ * answer says nothing about that. This is the same bar `fetchCredentialRevocations`
+ * applies per credential (`answered === relays.length`). A relay that stopped
+ * early still contributes its positives — those it did see are real. With no
+ * complete sweep the caller's credentials render unknown, not active.
  */
 export const fetchIssuerRevocations = async (
   did: string,
@@ -196,13 +211,14 @@ export const fetchIssuerRevocations = async (
 ): Promise<RevocationView> => {
   const feeds = await Promise.all(relays.map((relay) => issuerFeedFrom(relay, did)));
   const revoked = new Map<string, string>();
-  let established = false;
+  let complete = 0;
   for (const feed of feeds) {
     if (!feed) continue;
-    // POSITIVES always union in; only a COMPLETE walk may establish absence
-    if (!feed.truncated) established = true;
+    // POSITIVES always union in; only a COMPLETE walk counts toward the sweep
+    if (!feed.truncated) complete += 1;
     for (const [cid, op] of feed.revoked) if (!revoked.has(cid)) revoked.set(cid, op);
   }
+  const established = relays.length > 0 && complete === relays.length;
   return { revoked, established, unknown: new Set() };
 };
 
@@ -215,7 +231,9 @@ export const fetchIssuerRevocations = async (
  * some relay in the set was silent while the rest answered clean. The second case
  * is the one the module exists to prevent: the silent relay may be the one
  * holding the revocation, so a clean answer from its neighbour proves nothing,
- * and calling that `unrevoked` would paint a revoked credential green.
+ * and calling that `unrevoked` would paint a revoked credential green. A relay
+ * asserting `revoked: true` with no proof to check is silent in exactly this
+ * sense — it has made a claim, not given an answer.
  */
 const credentialStatusFrom = async (
   credentialCID: string,
@@ -227,10 +245,20 @@ const credentialStatusFrom = async (
       `${relay}${REVOCATIONS}/credential/${encodeURIComponent(credentialCID)}`,
     )) as { revoked?: unknown; revocation?: unknown } | null;
     if (!body) continue; // unreachable / route absent — this relay is silent, ask the next
-    answered += 1;
-    if (body.revoked === true && typeof body.revocation === 'string') {
-      return { revokedByOp: revocationOpCid(body.revocation) };
+    // SHAPE FIRST, exactly as dfos-client's checker does: a body without a
+    // boolean `revoked` is not this route's answer and never counts as one
+    if (typeof body.revoked !== 'boolean') continue;
+    if (body.revoked === true) {
+      if (typeof body.revocation === 'string') {
+        return { revokedByOp: revocationOpCid(body.revocation) };
+      }
+      // A POSITIVE WITH NO PROOF IS ITS OWN UNKNOWN. The relay claims a
+      // revocation and offers nothing to check; believing the boolean is
+      // zero-trust's opposite, and counting it as a routine answer would let an
+      // uncorroborated "revoked" push the credential toward green.
+      continue;
     }
+    answered += 1;
   }
   return answered === relays.length && answered > 0 ? 'unrevoked' : null;
 };

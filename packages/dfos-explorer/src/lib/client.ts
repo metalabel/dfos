@@ -11,6 +11,7 @@
 
 import { createClient, type Client } from '@metalabel/dfos-client';
 import { indexedDbStore } from '@metalabel/dfos-client/store';
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import { getQuorum, getRelays } from './relays';
 
 /**
@@ -39,6 +40,11 @@ const CAUSE_DEPTH = 4;
  * error and its own panel, and callers check it first. Pure, unit-tested.
  */
 export const isVerificationFailure = (err: unknown): boolean => {
+  // A DEPENDENCY MISS IS NOT AN ANSWER. The client marks a throw whose only
+  // obstacle was an identity or key it could not resolve; the log itself was
+  // never judged, so calling it "failed verification here" would print a
+  // terminal red finding for a signer lookup that timed out.
+  if (isDependencyMissing(err)) return false;
   let cursor = err;
   for (let depth = 0; depth < CAUSE_DEPTH && cursor instanceof Error; depth++) {
     if (cursor.message.startsWith(VERIFICATION_FAILURE)) return true;

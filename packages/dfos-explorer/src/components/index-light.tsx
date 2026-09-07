@@ -18,7 +18,12 @@ import type { DocLabel } from '../lib/doc-label';
 import { GLOSSARY } from '../lib/glossary';
 import { projectedName } from '../lib/index-point';
 import { chainKindOf } from '../lib/key-ops';
-import { enqueueVerify, useVerifyStatus, type VerifyKind } from '../lib/verify-queue';
+import {
+  enqueueVerify,
+  useVerifyStatus,
+  type VerifyKind,
+  type VerifyRecord,
+} from '../lib/verify-queue';
 import { ContentChip } from './content-chip';
 import { DidChip } from './did-chip';
 import { Badge, OpLink, Term } from './ui';
@@ -193,16 +198,44 @@ export const ChainCell = (props: { chainId: string }) => {
   }
 };
 
+/**
+ * The evidence a badge carries behind its one word, or nothing.
+ *
+ * The queue already retains what the fold threw (`rec.error`) and the badge used
+ * to ignore it, so a row said "unverifiable" and discarded the only part of that
+ * a reader could act on. It rides on the `title` — available on hover and to a
+ * screen reader — rather than as a second line, because this is a table.
+ *
+ * Only the two FAILURE states carry one: a verified or still-attributed row has
+ * no error to show, and a divergence has its own panel with the whole story.
+ * Pure, unit-tested.
+ */
+export const verifyBadgeEvidence = (rec: VerifyRecord): string | undefined =>
+  (rec.status === 'unverified' || rec.status === 'error') && rec.error ? rec.error : undefined;
+
 /** The one badge vocabulary for an index-light row's verification tier. */
 export const VerifyBadge = (props: { kind: VerifyKind; chainId: string }) => {
   const rec = useVerifyStatus(props.kind, props.chainId);
+  const evidence = verifyBadgeEvidence(rec);
   if (rec.status === 'verified') return <Badge state="ok">verified</Badge>;
   // red is for what a relay DID: a rewritten history, or a log that answered and
   // failed its checks here. A fold that never happened is amber — nothing was
   // established about the chain, and the row re-tries when it is seen again.
   if (rec.status === 'diverged') return <Badge state="bad">diverged</Badge>;
-  if (rec.status === 'unverified') return <Badge state="bad">unverifiable</Badge>;
-  if (rec.status === 'error') return <Badge state="warn">could not verify</Badge>;
+  if (rec.status === 'unverified') {
+    return (
+      <Badge state="bad" title={evidence}>
+        unverifiable
+      </Badge>
+    );
+  }
+  if (rec.status === 'error') {
+    return (
+      <Badge state="warn" title={evidence}>
+        could not verify
+      </Badge>
+    );
+  }
   if (rec.status === 'verifying') {
     return (
       <span class="badge warn">

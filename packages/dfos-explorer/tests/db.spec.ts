@@ -462,28 +462,90 @@ describe('openExplorerDb open-path guards', () => {
 // `counts().ops` is not one — a row lands there the moment it is seen — so the
 // fold verdicts are summed separately, and the two must never be conflated.
 describe('verifiedOpsTotal — the only op figure a fold licenses', () => {
+  const SET_A = 'https://a.example';
+  const SET_B = 'https://b.example';
+
   it('is zero while the index holds rows nobody folded', async () => {
     const db = await freshDb();
     await db.putBatch([op({ cid: 'bafy1' }), op({ cid: 'bafy2' })], []);
     expect((await db.counts()).ops).toBe(2);
-    expect(await db.verifiedOpsTotal()).toBe(0);
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(0);
   });
 
   it('sums the opCount of every durable verdict', async () => {
     const db = await freshDb();
-    await db.putVerify({ key: 'identity:a', opCount: 3, isDeleted: false, verifiedAt: 1 });
-    await db.putVerify({ key: 'content:b', opCount: 4, isDeleted: false, verifiedAt: 2 });
-    expect(await db.verifiedOpsTotal()).toBe(7);
+    const base = { isDeleted: false, relaySet: SET_A };
+    await db.putVerify({ key: 'identity:a', opCount: 3, verifiedAt: 1, ...base });
+    await db.putVerify({ key: 'content:b', opCount: 4, verifiedAt: 2, ...base });
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(7);
     // a re-fold replaces its chain's verdict rather than adding to the total
-    await db.putVerify({ key: 'identity:a', opCount: 5, isDeleted: false, verifiedAt: 3 });
-    expect(await db.verifiedOpsTotal()).toBe(9);
+    await db.putVerify({ key: 'identity:a', opCount: 5, verifiedAt: 3, ...base });
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(9);
+  });
+
+  // M43: the tally is only ever read against ONE relay set's asserted op count,
+  // so folding 100 ops on relay A and then configuring relay B (which asserts 50
+  // of its own) must not satisfy `100 >= 50` and paint B "fully verified".
+  it('never lets one relay set inherit another\u2019s count', async () => {
+    const db = await freshDb();
+    await db.putVerify({
+      key: 'identity:a',
+      opCount: 100,
+      isDeleted: false,
+      verifiedAt: 1,
+      relaySet: SET_A,
+    });
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(100);
+    expect(await db.verifiedOpsTotal(SET_B)).toBe(0);
+  });
+
+  it('a verdict written before the field existed counts toward no set', async () => {
+    const db = await freshDb();
+    await db.putVerify({ key: 'identity:a', opCount: 3, isDeleted: false, verifiedAt: 1 });
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(0);
   });
 
   it('a wipe clears it with the rest of the index', async () => {
     const db = await freshDb();
-    await db.putVerify({ key: 'identity:a', opCount: 3, isDeleted: false, verifiedAt: 1 });
+    await db.putVerify({
+      key: 'identity:a',
+      opCount: 3,
+      isDeleted: false,
+      verifiedAt: 1,
+      relaySet: SET_A,
+    });
     await db.wipe();
-    expect(await db.verifiedOpsTotal()).toBe(0);
+    expect(await db.verifiedOpsTotal(SET_A)).toBe(0);
+  });
+});
+
+describe('oldestVerifiedOpAt — the oldest op a FOLD covered, per relay set', () => {
+  const SET_A = 'https://a.example';
+  const SET_B = 'https://b.example';
+  const verdict = (key: string, oldestOpAt: string, relaySet: string) => ({
+    key,
+    opCount: 1,
+    isDeleted: false,
+    verifiedAt: 1,
+    relaySet,
+    oldestOpAt,
+  });
+
+  it('is the minimum across that set\u2019s verdicts', async () => {
+    const db = await freshDb();
+    await db.putVerify(verdict('identity:a', '2025-06-01T00:00:00.000Z', SET_A));
+    await db.putVerify(verdict('content:b', '2024-01-01T00:00:00.000Z', SET_A));
+    expect(await db.oldestVerifiedOpAt(SET_A)).toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('never reads another relay set\u2019s folds', async () => {
+    const db = await freshDb();
+    await db.putVerify(verdict('identity:a', '2020-01-01T00:00:00.000Z', SET_A));
+    expect(await db.oldestVerifiedOpAt(SET_B)).toBe('');
+  });
+
+  it('is empty when nothing has been folded', async () => {
+    expect(await (await freshDb()).oldestVerifiedOpAt(SET_A)).toBe('');
   });
 });
 

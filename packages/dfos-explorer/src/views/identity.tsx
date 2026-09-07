@@ -1472,8 +1472,10 @@ type ProfileState =
   | { kind: 'chain-gated' }
   /** chain lookup: nothing answered — timeout, 5xx, no reachable relay */
   | { kind: 'chain-unreachable' }
-  /** RED: a relay ANSWERED for the chain and the log it served failed verification here */
-  | { kind: 'chain-unverified' }
+  /** RED: a relay ANSWERED for the chain and the log it served failed verification
+   *  here. `reason` is the verifier's own message — WHICH check failed is the only
+   *  part of this a reader can act on, and the static copy cannot say it. */
+  | { kind: 'chain-unverified'; reason?: string }
   /** bytes: 401/403 — held, and not served to an anonymous read */
   | { kind: 'bytes-gated' }
   /** bytes: 404 or an empty body — the chain is here, its document is not */
@@ -1554,6 +1556,48 @@ const PROFILE_NOTE: Record<
     detail:
       'The anchored chain’s head document verified against its committed CID and does not declare the profile schema. There is nothing here to render as a profile.',
   },
+};
+
+/** The states that render the generic failure card — everything but a resolved
+ *  profile and a divergence, which has its own panel. */
+export type ProfileFailure = Exclude<
+  ProfileState,
+  { kind: 'resolved' } | { kind: 'diverged' }
+>['kind'];
+
+/** What the generic failure card says and offers. Pure, unit-tested; the card
+ *  itself is this plus markup. */
+export interface ProfileFailureCard {
+  state: 'warn' | 'bad';
+  text: string;
+  detail: string;
+  /** the verifier's own message, where the state retained one */
+  reason?: string;
+  /** ALWAYS true — see below. */
+  retry: true;
+}
+
+/**
+ * Read one failure state as the card that renders it.
+ *
+ * TWO RULES LIVE HERE, and both were bugs.
+ *
+ * A RETRY IS UNCONDITIONAL. Only the divergence panel used to have a way back
+ * into the resolve, so every other card was frozen for the life of the mount —
+ * including the two whose own copy says "Retry, or add a relay". Re-asking costs
+ * one round trip and the relay set may have changed under any of these verdicts,
+ * so `retry` is not a per-kind judgement and a new kind cannot arrive without one.
+ *
+ * THE REASON SURVIVES. `chain-unverified` covers a bad signature, a CID mismatch
+ * and a failed authorization; the static copy can only name the class, so the
+ * verifier's own sentence is carried through rather than discarded at the state.
+ */
+export const profileFailureCard = (
+  state: Extract<ProfileState, { kind: ProfileFailure }>,
+): ProfileFailureCard => {
+  const note = PROFILE_NOTE[state.kind];
+  const reason = state.kind === 'chain-unverified' ? state.reason : undefined;
+  return { ...note, ...(reason ? { reason } : {}), retry: true };
 };
 
 /** Served blob bytes → the value they decode to and the CID that value canonically
@@ -1697,7 +1741,9 @@ export const integrityVerdict = (
  */
 const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean }) => {
   const [state, setState] = useState<ProfileState | null>(null);
-  // a pin discard has to re-run the resolve; nothing else re-enters it
+  // The ONE way back into the resolve. A pin discard used to be its only caller,
+  // so every other failure card was frozen until the page was reloaded — two of
+  // them tell the reader to "retry" in so many words, with nothing to press.
   const [reresolve, setReresolve] = useState(0);
 
   useEffect(() => {
@@ -1720,7 +1766,14 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
         // opposite of a relay that never answered, and the proof-plane probe
         // below cannot tell them apart — it would see the same 200 and report
         // "no relay answered". Ask the throw itself first (lib/client.ts).
-        if (isVerificationFailure(e)) return setState({ kind: 'chain-unverified' });
+        if (isVerificationFailure(e))
+          return setState({
+            kind: 'chain-unverified',
+            // keep the verifier's own sentence: "a signature, a CID, or an
+            // authorization did not check out" is three different findings, and
+            // the reader is owed the one that actually happened
+            ...(e instanceof Error && e.message ? { reason: e.message } : {}),
+          });
         // otherwise ask the proof plane directly for a STATUS, so "nobody
         // answered" never renders as "this chain is not held here"
         const claim = await fetchClaim('content', anchor, relays);
@@ -1772,15 +1825,19 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
   if (state.kind === 'diverged') {
     return <DivergedPanel err={state.err} onDiscarded={() => setReresolve((n) => n + 1)} />;
   }
-  const note = PROFILE_NOTE[state.kind];
+  const card = profileFailureCard(state);
   return (
     <div class="profile-card">
       <div class="profile-body">
         <div class="profile-name">
           <b>anchored profile</b>
-          <Pill state={note.state}>{note.text}</Pill>
+          <Pill state={card.state}>{card.text}</Pill>
         </div>
-        <div class="profile-desc">{note.detail}</div>
+        <div class="profile-desc">{card.detail}</div>
+        {card.reason ? <div class="ck-note">{card.reason}</div> : null}
+        <div class="bar" style={{ marginTop: 8 }}>
+          <button onClick={() => setReresolve((n) => n + 1)}>retry</button>
+        </div>
       </div>
     </div>
   );

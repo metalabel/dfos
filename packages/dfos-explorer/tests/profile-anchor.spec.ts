@@ -13,7 +13,13 @@
 */
 
 import { describe, expect, it } from 'vitest';
-import { bytesFailureKind, chainFailureKind, integrityVerdict } from '../src/views/identity';
+import { verifyBadgeEvidence } from '../src/components/index-light';
+import {
+  bytesFailureKind,
+  chainFailureKind,
+  integrityVerdict,
+  profileFailureCard,
+} from '../src/views/identity';
 
 /** One relay's outcome. */
 const at = (status: number, gated = false, relay = `https://r${status}.example`) => ({
@@ -135,5 +141,79 @@ describe('integrityVerdict — self-contradiction is red, skew is not', () => {
 
   it('a chain committing no document is a two-plane disagreement, so skew', () => {
     expect(integrityVerdict('cidA', 'cidA', null)).toBe('skew');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the failure CARD — what a reader is shown, and what they can do about it
+// -----------------------------------------------------------------------------
+
+/** Every kind that renders the generic card. Listed rather than derived, so a new
+ *  failure state in the view fails this file until it has been accounted for. */
+const FAILURE_KINDS = [
+  'chain-absent',
+  'chain-gated',
+  'chain-unreachable',
+  'chain-unverified',
+  'bytes-gated',
+  'bytes-absent',
+  'bytes-unreachable',
+  'mismatch',
+  'skew',
+  'not-profile',
+] as const;
+
+describe('profileFailureCard — a named failure with no way to try again is a dead end', () => {
+  // only the divergence panel used to bump the resolve counter, so a card whose
+  // own copy says "Retry, or add a relay" had nothing to press and a page reload
+  // was the only exit
+  it('offers a retry on EVERY failure kind, transient or terminal', () => {
+    for (const kind of FAILURE_KINDS) {
+      expect(profileFailureCard({ kind }).retry, kind).toBe(true);
+    }
+  });
+
+  it('still carries the copy each kind already had', () => {
+    for (const kind of FAILURE_KINDS) {
+      const card = profileFailureCard({ kind });
+      expect(card.text, kind).toBeTruthy();
+      expect(card.detail, kind).toBeTruthy();
+      expect(['warn', 'bad'], kind).toContain(card.state);
+    }
+  });
+
+  // 'chain-unverified' covers a bad signature, a CID mismatch and a failed
+  // authorization; the static copy names the class, and the verifier's own
+  // sentence is the only part of it a reader can act on
+  it('surfaces the verifier’s reason where the state retained one', () => {
+    const card = profileFailureCard({
+      kind: 'chain-unverified',
+      reason: 'all candidate logs failed verification: cid mismatch',
+    });
+    expect(card.reason).toBe('all candidate logs failed verification: cid mismatch');
+  });
+
+  it('omits the reason rather than inventing one', () => {
+    expect(profileFailureCard({ kind: 'chain-unverified' }).reason).toBeUndefined();
+    expect(profileFailureCard({ kind: 'bytes-absent' }).reason).toBeUndefined();
+  });
+});
+
+// The browse-row twin of the same rule: the queue retains what the fold threw,
+// and a one-word badge over a discarded error tells a reader nothing actionable.
+describe('verifyBadgeEvidence — the badge stops discarding its own evidence', () => {
+  it('carries the error on both failure states', () => {
+    expect(verifyBadgeEvidence({ status: 'unverified', error: 'bad signature' })).toBe(
+      'bad signature',
+    );
+    expect(verifyBadgeEvidence({ status: 'error', error: 'fetch failed' })).toBe('fetch failed');
+  });
+
+  it('shows nothing where there is nothing to show', () => {
+    expect(verifyBadgeEvidence({ status: 'unverified' })).toBeUndefined();
+    expect(verifyBadgeEvidence({ status: 'verified' })).toBeUndefined();
+    expect(verifyBadgeEvidence({ status: 'attributed' })).toBeUndefined();
+    // a divergence has its own panel carrying the whole story
+    expect(verifyBadgeEvidence({ status: 'diverged', error: 'diverged' })).toBeUndefined();
   });
 });

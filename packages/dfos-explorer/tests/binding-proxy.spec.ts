@@ -82,6 +82,18 @@ describe('parseDidBody', () => {
     expect(parseDidBody(`\n  ${DID}\t\r\n`)).toEqual({ status: 'ok', did: DID });
   });
 
+  // the Go CLI's trim set is `" \t\r\n\v\f"` (originbinding.go, `asciiWhitespace`)
+  // and VERTICAL TAB was missing here, so a DID wrapped in `\v` bound in the CLI
+  // and read `malformed` in both explorer parsers
+  it('trims the vertical tab and the form feed, exactly as the CLI does', () => {
+    expect(parseDidBody(`\v${DID}\v`)).toEqual({ status: 'ok', did: DID });
+    expect(parseDidBody(`\f\v ${DID} \v\f`)).toEqual({ status: 'ok', did: DID });
+  });
+
+  it('still refuses a UNICODE space — the spec trims ASCII, not Unicode', () => {
+    expect(parseDidBody(`\u00a0${DID}`).status).toBe('malformed');
+  });
+
   // present but not an attestation: `malformed` rather than `none`, because the
   // document EXISTS and the evidence row says so. Both are non-answers and both
   // license the app-description fallback — the STATUS is what keeps "there is no
@@ -144,10 +156,21 @@ describe('classifyDidStatus', () => {
     }
   });
 
-  // a 2xx settles nothing on its own — the answer is the trimmed body
-  it('leaves a success status to the body', () => {
+  // a 200 settles nothing on its own — the answer is the trimmed body
+  it('leaves a 200 to the body', () => {
     expect(classifyDidStatus(200)).toBeNull();
-    expect(classifyDidStatus(204)).toBeNull();
+  });
+
+  // Go's `classifyWellKnown` reads the body on `status == http.StatusOK` and drops
+  // every other status into `default:` — "silence, with no fallback owed". The
+  // gate here used to admit the whole 2xx range, so a 201 carrying a valid DID
+  // bound in the explorer and said nothing in the CLI, on identical bytes.
+  it('admits ONLY a 200 to the body — every other 2xx is silence', () => {
+    for (const status of [201, 202, 203, 204, 206, 226]) {
+      const out = classifyDidStatus(status);
+      expect(out?.status, String(status)).toBe('error');
+      if (out?.status === 'error') expect(out.httpStatus).toBe(status);
+    }
   });
 });
 

@@ -13,6 +13,7 @@
 
 */
 
+import { isDependencyMissing, markDependencyMissing } from '@metalabel/dfos-protocol';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import type { LogOp, Provenance, RelayResponse } from './types';
 
@@ -131,6 +132,13 @@ export interface FanOutResult<V> {
  * support order and returned with `agreed: false` — the caller reads provenance
  * and decides. Throws only when candidates existed but ALL failed verification.
  * Returns `outcome: 'unreachable'` when no relay answered at all.
+ *
+ * A DEPENDENCY MISS IS NOT A VERDICT. `verifyCandidate` resolves identities and
+ * keys through the caller's resolvers, so a signer lookup that times out throws
+ * here exactly like a bad signature does. When EVERY candidate failed that way
+ * the throw carries the dependency marker and says so, because the two license
+ * opposite behaviour downstream: a failed proof is terminal, a failed lookup is
+ * retryable (see the explorer's verify queue).
  */
 export const fanOutLog = async <V>(
   fetchPage: PageFetcher,
@@ -141,7 +149,19 @@ export const fanOutLog = async <V>(
   const responses: RelayResponse[] = [];
   const byDigest = new Map<string, { url: string; entries: LogOp[]; count: number }>();
   const badDigests = new Set<string>();
+  // a VERDICT: bytes were served and failed a check here
   let lastVerifyError: unknown;
+  // COULD NOT CONCLUDE: a referenced identity or key did not resolve
+  let lastDependencyError: unknown;
+
+  /** Record a rejected candidate under the class its throw belongs to. */
+  const recordFailure = (err: unknown, digest: string): void => {
+    if (!(err instanceof StaleAnswerError)) {
+      if (isDependencyMissing(err)) lastDependencyError = err;
+      else lastVerifyError = err;
+    }
+    badDigests.add(digest);
+  };
 
   for (const url of relays) {
     let entries: LogOp[] | null = null;
@@ -174,8 +194,7 @@ export const fanOutLog = async <V>(
           provenance: { answeredBy: group.url, responses, agreed: true, fromCache: false },
         };
       } catch (err) {
-        if (!(err instanceof StaleAnswerError)) lastVerifyError = err;
-        badDigests.add(digest);
+        recordFailure(err, digest);
       }
     }
   }
@@ -195,8 +214,7 @@ export const fanOutLog = async <V>(
         provenance: { answeredBy: group.url, responses, agreed: false, fromCache: false },
       };
     } catch (err) {
-      if (!(err instanceof StaleAnswerError)) lastVerifyError = err;
-      badDigests.add(digest);
+      recordFailure(err, digest);
     }
   }
 
@@ -210,6 +228,20 @@ export const fanOutLog = async <V>(
     throw new Error(`all candidate logs failed verification: ${message}`, {
       cause: lastVerifyError,
     });
+  }
+
+  // candidates existed, none produced a verdict, and the only thing standing in
+  // the way was a dependency this client could not resolve. Distinct message AND
+  // the marker: the wrap above is what a caller matches on to say "a relay
+  // answered and its log did not check out", and that is not what happened.
+  if (lastDependencyError !== undefined) {
+    const message =
+      lastDependencyError instanceof Error ? lastDependencyError.message : 'unknown error';
+    throw markDependencyMissing(
+      new Error(`candidate log verification could not complete: ${message}`, {
+        cause: lastDependencyError,
+      }),
+    );
   }
 
   // no relay answered at all
