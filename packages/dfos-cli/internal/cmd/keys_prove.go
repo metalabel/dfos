@@ -1274,11 +1274,14 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 // Filing failures reach the command error; the adoption record precedes rename
 // so an interrupted filing cannot make an adopted key an orphan.
 func fileAdoptedKey(answer *presentationAnswer, cer *ceremony, cand *candidateKey, result *proveResult) {
-	if !adoptionNamesAnIdentity(answer, cer) || !strings.HasPrefix(cand.Account, candidateAccountPrefix) {
+	if !adoptionNamesAnIdentity(answer, cer) {
 		return
 	}
 	if err := recordKeyAdoption(cand.PublicKey, answer.DID, answer.KeyID); err != nil {
 		result.FilingError = err.Error()
+		return
+	}
+	if !strings.HasPrefix(cand.Account, candidateAccountPrefix) {
 		return
 	}
 	account := keyAccount(cand.PublicKey)

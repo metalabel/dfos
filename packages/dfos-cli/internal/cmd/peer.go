@@ -770,6 +770,14 @@ var peerPinChecks = map[string]error{}
 // from one that named no identity, which is the same fact arriving over a live
 // connection.
 func verifyPeerPin(name string) error {
+	return verifyPeerPinWithPersistence(name, func(name string, r config.RelayConfig, did string) error {
+		r.DID = did
+		cfg.Relays[name] = r
+		return config.Save(cfg)
+	})
+}
+
+func verifyPeerPinWithPersistence(name string, persist func(string, config.RelayConfig, string) error) error {
 	r, ok := cfg.Relays[name]
 	if !ok || r.URL == "" {
 		return nil
@@ -780,21 +788,13 @@ func verifyPeerPin(name string) error {
 	c := client.New(r.URL)
 	c.Peer = name
 	info, err := c.GetRelayInfo()
-	if err != nil || info.DID == "" {
-		// Two ways to learn nothing: the peer never answered, or it answered
-		// without naming an identity. Neither pins anything. Writing an empty DID
-		// would be worse than writing none — the config would gain a key
-		// indistinguishable from unpinned, the trust announcement would fire on
-		// every invocation because the next one re-reads it as unpinned, and the
-		// entry would never acquire a real pin.
+	if err != nil || (info.DID == "" && r.DID == "") {
 		peerPinChecks[name] = nil
 		return nil
 	}
 
 	if r.DID == "" {
-		r.DID = info.DID
-		cfg.Relays[name] = r
-		if err := config.Save(cfg); err != nil {
+		if err := persist(name, r, info.DID); err != nil {
 			return err
 		}
 		// stderr, so --json stdout stays one document.

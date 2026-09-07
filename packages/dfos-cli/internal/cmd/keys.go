@@ -496,7 +496,7 @@ func buildKeyLedger() (*keyLedger, error) {
 	// path and why it is gated.
 	unplaced := 0
 	for _, h := range order {
-		if h.account == "" || !strings.HasPrefix(h.account, keyAccountPrefix) {
+		if !strings.HasPrefix(h.account, keyAccountPrefix) && !strings.HasPrefix(h.account, candidateAccountPrefix) {
 			continue
 		}
 		_, placed := declaredRoles[h.account]
@@ -940,8 +940,8 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.Status = statusUnreadable
 		entry.Reason = "read adoption record: " + err.Error()
 	} else if adoption != nil {
-		entry.DID, entry.KeyID = adoption.DID, adoption.KeyID
 		if entry.Status == statusOrphan || entry.Status == statusCandidate {
+			entry.DID, entry.KeyID = adoption.DID, adoption.KeyID
 			entry.Status = statusDeclared
 			entry.Reason = "adoption recorded locally; fetch the identity to inspect its chain"
 		}

@@ -142,6 +142,16 @@ func newSyncCmd() *cobra.Command {
 				lr.Relay.RunSequencerAndGossip()
 			}
 
+			chains, err := lr.Store.ListIdentityChains()
+			if err != nil {
+				return fmt.Errorf("read synced identity chains: %w", err)
+			}
+			for _, chain := range chains {
+				if err := promoteCandidateKeys(chain.DID, chain.State); err != nil {
+					return err
+				}
+			}
+
 			if jsonFlag {
 				outputJSON(map[string]any{
 					"peers":     len(targets),
