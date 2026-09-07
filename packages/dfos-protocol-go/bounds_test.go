@@ -21,10 +21,10 @@ func nest(d int) any {
 // recurse until the stack overflows. The boundary holds exactly: a leaf at depth
 // maxCanonicalDepth is accepted; one level deeper is rejected.
 func TestCanonicalDepthGuard(t *testing.T) {
-	if err := AssertCanonicalNumbers(nest(maxCanonicalDepth)); err != nil {
+	if err := AssertCanonicalValue(nest(maxCanonicalDepth)); err != nil {
 		t.Fatalf("nesting at the cap should be accepted, got: %v", err)
 	}
-	if err := AssertCanonicalNumbers(nest(maxCanonicalDepth + 1)); err == nil {
+	if err := AssertCanonicalValue(nest(maxCanonicalDepth + 1)); err == nil {
 		t.Fatal("nesting past the cap should be rejected")
 	}
 }

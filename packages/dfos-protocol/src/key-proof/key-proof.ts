@@ -75,7 +75,7 @@
 
 */
 
-import { decodeMultikey, ED25519_PUB_MULTICODEC, encodeEd25519Multikey } from '../chain/multikey';
+import { decodeEd25519PublicMultikey, encodeEd25519Multikey } from '../chain/multikey';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -549,11 +549,7 @@ const decodeKeyProof = (jws: string, expectedTyp: string): DecodedKeyProof => {
 const verifyKeyProofSignature = (decoded: DecodedKeyProof): void => {
   let keyBytes: Uint8Array;
   try {
-    const key = decodeMultikey(decoded.payload.publicKeyMultibase);
-    if (key.codec !== ED25519_PUB_MULTICODEC) {
-      throw new Error('publicKeyMultibase is not an Ed25519 public key');
-    }
-    keyBytes = key.keyBytes;
+    keyBytes = decodeEd25519PublicMultikey(decoded.payload.publicKeyMultibase);
   } catch (err) {
     throw invalid(
       'signature',

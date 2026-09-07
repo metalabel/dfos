@@ -116,8 +116,9 @@ export const verifyRevocation = async (input: {
     throw new Error('invalid revocation signature');
   }
 
-  // verify CID
-  const encoded = await dagCborCanonicalEncode(payload);
+  // verify CID against the decoded payload, not the parsed one — see the note
+  // in identity-chain.ts: the schema validates, it does not canonicalize
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
   const revocationCID = encoded.cid.toString();
   if (!decoded.header.cid) throw new Error('missing cid in revocation header');
   if (decoded.header.cid !== revocationCID) throw new Error('revocation cid mismatch');

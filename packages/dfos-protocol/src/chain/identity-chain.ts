@@ -50,7 +50,7 @@ import {
   type KeyRole,
 } from '../key-proof';
 import { deriveChainIdentifier } from './derivation';
-import { decodeMultikey } from './multikey';
+import { decodeEd25519PublicMultikey } from './multikey';
 import {
   IdentityOperation,
   MAX_OPERATION_SIZE,
@@ -501,8 +501,13 @@ export const verifyIdentityChain = async (input: {
       }
     }
 
-    // derive operation CID from payload
-    const encoded = await dagCborCanonicalEncode(op);
+    // Derive the operation CID from the DECODED PAYLOAD, never from the parsed
+    // `op`. The schema is a validator, not a canonicalizer: zod's object parse
+    // drops members it does not model (a `__proto__` data property among them)
+    // and injects declared defaults, so hashing its output would commit to
+    // different bytes than the signer hashed and than the Go reference — which
+    // derives every CID from the wire map — hashes. See artifact.ts/countersign.ts.
+    const encoded = await dagCborCanonicalEncode(decoded.payload);
     if (encoded.bytes.length > MAX_OPERATION_SIZE) {
       throw new Error(
         `log[${idx}]: operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`,
@@ -544,7 +549,7 @@ export const verifyIdentityChain = async (input: {
     }
 
     // verify JWS signature
-    const { keyBytes } = decodeMultikey(signingKey.publicKeyMultibase);
+    const keyBytes = decodeEd25519PublicMultikey(signingKey.publicKeyMultibase);
     try {
       verifyJws({ token: jwsToken, publicKey: keyBytes });
     } catch {
@@ -744,8 +749,8 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
     throw new Error('createdAt must be after last op');
   }
 
-  // derive operation CID
-  const encoded = await dagCborCanonicalEncode(op);
+  // derive operation CID from the decoded payload — see verifyIdentityChain
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
   if (encoded.bytes.length > MAX_OPERATION_SIZE) {
     throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
   }
@@ -776,7 +781,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
   }
 
   // verify JWS signature
-  const { keyBytes } = decodeMultikey(signingKey.publicKeyMultibase);
+  const keyBytes = decodeEd25519PublicMultikey(signingKey.publicKeyMultibase);
   try {
     verifyJws({ token: newOp, publicKey: keyBytes });
   } catch {

@@ -2,13 +2,12 @@ package dfos
 
 import (
 	"testing"
-	"time"
 )
 
-// timestampGrammarVectors pins the strict createdAt grammar. The same 22 cases
+// timestampGrammarVectors pins the strict createdAt grammar. The same 24 cases
 // are asserted in the TS twin (dfos-protocol/tests/timestamp-grammar.spec.ts)
 // with byte-identical accept/reject verdicts: the strict gate is Go
-// time.Parse("2006-01-02T15:04:05.000Z") vs TS
+// ParseProtocolTimestamp (grammar regex + time.Parse) vs TS
 // z.iso.datetime({offset:false, precision:3}) — NOT RFC3339Nano. Both require a
 // fixed 3-digit fraction and a literal Z, and both perform full calendar
 // validation (real month/day, leap-second reject, leap-year aware).
@@ -38,13 +37,19 @@ var timestampGrammarVectors = []struct {
 	{" 2026-03-07T00:00:00.000Z", false},     // leading space
 	{"2026-03-07 00:00:00.000Z", false},      // space instead of T
 	{"2026-03-07T23:59:60.000Z", false},      // leap second
+	{"2026-03-07T5:04:05.000Z", false},       // single-digit hour
+	{"2026-03-07T00:00:00,000Z", false},      // comma decimal separator
 }
 
 // TestTimestampGrammarParity asserts the Go strict createdAt grammar matches the
-// TS twin verdict-for-verdict across the 22-case vector set.
+// TS twin verdict-for-verdict across the 24-case vector set.
+//
+// Through ParseProtocolTimestamp, not a bare time.Parse: the last two vectors
+// are exactly the inputs time.Parse accepts against this layout and TS rejects,
+// which is why the grammar regex exists.
 func TestTimestampGrammarParity(t *testing.T) {
 	for _, v := range timestampGrammarVectors {
-		_, err := time.Parse(protocolTimeFormat, v.input)
+		_, err := ParseProtocolTimestamp(v.input)
 		got := err == nil
 		if got != v.valid {
 			t.Errorf("grammar mismatch for %q: got valid=%v, want %v", v.input, got, v.valid)

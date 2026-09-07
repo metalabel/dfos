@@ -15,10 +15,10 @@ import { sha256 } from 'multiformats/hashes/sha2';
  * Canonically encoded a value into an IPLD dag-cbor block
  */
 export const dagCborCanonicalEncode = async (value: unknown) => {
-  // enforce the DFOS number policy on the ORIGINAL value first — JSON.stringify
-  // below silently turns NaN/±Infinity into null, so those must be caught here
-  // before serialization
-  assertCanonicalNumbers(value);
+  // enforce the DFOS canonical-value policy on the ORIGINAL value first —
+  // JSON.stringify below silently turns NaN/±Infinity into null, so those must
+  // be caught here before serialization
+  assertCanonicalValue(value);
 
   // the exact shape that gets CBOR-encoded is the JSON round-trip, not the
   // original — a toJSON()/valueOf() hook can materialize a fraction (or a huge
@@ -26,15 +26,22 @@ export const dagCborCanonicalEncode = async (value: unknown) => {
   // those cannot escape the number policy. (Note: NaN/±Inf become null here, so
   // they are only catchable on the original walk above.)
   const serialized = JSON.parse(JSON.stringify(value));
-  assertCanonicalNumbers(serialized);
+  assertCanonicalValue(serialized);
 
-  return await Block.encode({
-    // removes any undefineds or other non-serializable values (and normalizes
-    // -0 to 0)
-    value: serialized,
-    codec: dagCborCodec,
-    hasher: sha256,
-  });
+  try {
+    return await Block.encode({
+      // removes any undefineds or other non-serializable values (and normalizes
+      // -0 to 0)
+      value: serialized,
+      codec: dagCborCodec,
+      hasher: sha256,
+    });
+  } catch (e) {
+    // an encoder failure is a protocol rejection, not a runtime crash: every
+    // caller of this library (relay, CLI, SDK) must see the module's own Error
+    // vocabulary, never a raw TypeError/RangeError thrown out of the codec
+    throw new Error(`value is not canonically encodable: ${(e as Error).message}`);
+  }
 };
 
 /**
@@ -58,12 +65,31 @@ const MAX_SAFE_CANONICAL_INTEGER = 9007199254740991;
 const MAX_CANONICAL_DEPTH = 1024;
 
 /**
- * Walks a value and rejects any number that is not canonicalizable under the
- * DFOS number policy: NaN, ±Infinity, non-integers, and integers outside
- * ±(2^53-1). Applications must encode such values as strings. Also enforces the
- * MAX_CANONICAL_DEPTH nesting guard.
+ * Matches a high surrogate not followed by a low one, or a low surrogate not
+ * preceded by a high one — the `String.isWellFormed` test without the ES2024
+ * lib. Same expression as the `role` guard in chain/sign-request.ts.
  */
-const assertCanonicalNumbers = (value: unknown, depth = 0): void => {
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Walks a value and rejects anything the two reference implementations would
+ * not commit to the same bytes for:
+ *
+ * 1. NUMBERS — NaN, ±Infinity, non-integers, and integers outside ±(2^53-1) are
+ *    not canonicalizable under the DFOS number policy. Encode them as strings.
+ * 2. STRINGS — an unpaired UTF-16 surrogate. `JSON.stringify` preserves a lone
+ *    surrogate as an escape, but the CBOR string encoder normalizes it to
+ *    U+FFFD, so two distinct payloads would otherwise share one CID. Same test
+ *    the free-form-field guards already use (sign-request.ts `role`).
+ * 3. CID SENTINELS — an object carrying both a `/` and a `bytes` member is the
+ *    dag-cbor bytes sentinel: the JS codec either crashes on it or silently
+ *    re-reads it as a byte string, while the Go reference encodes it as an
+ *    ordinary map. Rejected in both languages so neither has to guess.
+ * 4. DEPTH — the MAX_CANONICAL_DEPTH nesting guard.
+ *
+ * MUST match the Go reference (AssertCanonicalValue in cbor.go).
+ */
+const assertCanonicalValue = (value: unknown, depth = 0): void => {
   if (depth > MAX_CANONICAL_DEPTH) {
     throw new Error(`value nesting exceeds max depth ${MAX_CANONICAL_DEPTH}`);
   }
@@ -83,12 +109,27 @@ const assertCanonicalNumbers = (value: unknown, depth = 0): void => {
     }
     return;
   }
+  if (typeof value === 'string') {
+    if (LONE_SURROGATE_RE.test(value)) {
+      throw new Error('string with an unpaired surrogate is not canonicalizable');
+    }
+    return;
+  }
   if (Array.isArray(value)) {
-    for (const entry of value) assertCanonicalNumbers(entry, depth + 1);
+    for (const entry of value) assertCanonicalValue(entry, depth + 1);
     return;
   }
   if (value !== null && typeof value === 'object') {
-    for (const entry of Object.values(value)) assertCanonicalNumbers(entry, depth + 1);
+    if ('/' in value && 'bytes' in value) {
+      throw new Error('object carrying both "/" and "bytes" members is not canonicalizable');
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      // keys are strings the encoder writes too, so they answer to the same rule
+      if (LONE_SURROGATE_RE.test(key)) {
+        throw new Error('string with an unpaired surrogate is not canonicalizable');
+      }
+      assertCanonicalValue(entry, depth + 1);
+    }
   }
 };
 

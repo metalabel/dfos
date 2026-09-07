@@ -26,7 +26,7 @@ import {
   decodeJwsUnsafe,
   verifyJws,
 } from '../crypto';
-import { decodeMultikey } from './multikey';
+import { decodeEd25519PublicMultikey } from './multikey';
 import {
   CreditClaimPayload,
   MAX_SIGN_REQUEST_PAYLOAD_SIZE,
@@ -143,7 +143,7 @@ const resolveCurrentKey = (identity: VerifiedIdentity, kid: string): Uint8Array 
   if (!key) throw invalid(`key ${keyId} not found on current identity ${identity.did}`);
 
   try {
-    return decodeMultikey(key.publicKeyMultibase).keyBytes;
+    return decodeEd25519PublicMultikey(key.publicKeyMultibase);
   } catch {
     throw invalid(`key ${keyId} on identity ${identity.did} is not a valid Ed25519 multikey`);
   }
@@ -304,9 +304,10 @@ export const verifySignRequest = async (
     }
 
     // 8. CID integrity.
+    // the decoded payload, not the parsed one — see the note in identity-chain.ts
     let encoded: Awaited<ReturnType<typeof dagCborCanonicalEncode>>;
     try {
-      encoded = await dagCborCanonicalEncode(payload);
+      encoded = await dagCborCanonicalEncode(decoded.payload);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw invalid(`failed to derive sign request CID: ${detail}`);

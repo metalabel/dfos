@@ -26,7 +26,7 @@
 
 */
 
-import { decodeMultikey } from '../chain/multikey';
+import { decodeEd25519PublicMultikey } from '../chain/multikey';
 import {
   assertJwsProfile,
   base64urlDecode,
@@ -903,7 +903,10 @@ const verifyProofEnvelope = async (
 
   // 7. Signature.
   try {
-    verifyJws({ token: input.proof, publicKey: decodeMultikey(key.publicKeyMultibase).keyBytes });
+    verifyJws({
+      token: input.proof,
+      publicKey: decodeEd25519PublicMultikey(key.publicKeyMultibase),
+    });
   } catch (err) {
     throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} signature`);
   }

@@ -1,6 +1,7 @@
 package dfos
 
 import (
+	"crypto/ed25519"
 	"fmt"
 
 	"github.com/mr-tron/base58"
@@ -24,6 +25,14 @@ func DecodeMultikey(multibase string) ([]byte, error) {
 	}
 	if len(raw) < 2 || raw[0] != 0xed || raw[1] != 0x01 {
 		return nil, fmt.Errorf("expected ed25519-pub multicodec prefix (0xed01)")
+	}
+	// The multicodec prefix says what the bytes claim to be; the length says
+	// whether they can be it. ed25519.Verify PANICS on a wrong-size key, and a
+	// wrong-size key is an invalid input, never a crash — so the check belongs
+	// here, at the one decode every verification path goes through, rather than
+	// at each call site that remembers to add it. TS twin: multikey.ts.
+	if len(raw)-2 != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("expected a %d-byte ed25519 key, got %d bytes", ed25519.PublicKeySize, len(raw)-2)
 	}
 	return raw[2:], nil
 }
