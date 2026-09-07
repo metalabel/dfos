@@ -670,6 +670,7 @@ const ingestIdentityOp = async (
 
   // extension — find existing chain via kid DID
   const kid = decoded.header.kid;
+  if (kid === undefined) return { cid, status: 'rejected', error: 'kid must be present' };
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) return { cid, status: 'rejected', error: 'non-genesis kid must be a DID URL' };
   const did = kid.substring(0, hashIdx);

@@ -402,6 +402,20 @@ describe('signature verification profile (pragmatic v1)', () => {
     expect(() => verifyJws({ token, publicKey: keypair.publicKey })).not.toThrow();
   });
 
+  it('decodes and verifies without kid when the public key is supplied', () => {
+    const keypair = createNewEd25519Keypair();
+    const header = { alg: 'EdDSA', typ: 'test' };
+    const token = signWithHeader(header, keypair.privateKey);
+    expect(decodeJwsUnsafe(token)).toEqual({ header, payload: { data: 'hello' } });
+    expect(verifyJws({ token, publicKey: keypair.publicKey }).header).toEqual(header);
+  });
+
+  it.each([null, 42, false, [], {}])('rejects non-string kid %j', (kid) => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader({ alg: 'EdDSA', typ: 'test', kid }, keypair.privateKey);
+    expect(decodeJwsUnsafe(token)).toBeNull();
+  });
+
   it('rejects alg "none"', () => {
     const keypair = createNewEd25519Keypair();
     const token = signWithHeader({ alg: 'none', typ: 'test', kid: 'key1' }, keypair.privateKey);

@@ -296,6 +296,7 @@ export const verifyDFOSCredential = async (
 
   // verify kid DID matches issuer
   const kid = decoded.header.kid;
+  if (kid === undefined) throw new CredentialVerificationError('credential kid must be present');
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new CredentialVerificationError('credential kid must be a DID URL');
   const kidDid = kid.substring(0, hashIdx);
@@ -643,7 +644,7 @@ export const decodeDFOSCredentialUnsafe = (
   payload: DFOSCredentialPayload;
 } | null => {
   const decoded = decodeJwsUnsafe(jwsToken);
-  if (!decoded) return null;
+  if (!decoded || decoded.header.kid === undefined) return null;
 
   const result = DFOSCredentialPayload.safeParse(decoded.payload);
   if (!result.success) return null;

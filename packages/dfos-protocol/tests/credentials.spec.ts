@@ -24,6 +24,7 @@ import {
 import {
   base64urlEncode,
   createNewEd25519Keypair,
+  decodeJwsUnsafe,
   generateId,
   signPayloadEd25519,
 } from '../src/crypto';
@@ -427,6 +428,27 @@ describe('parseDfosAuthorization', () => {
 // =============================================================================
 
 describe('dfos credential', () => {
+  it('rejects a missing kid with CredentialVerificationError', async () => {
+    const issuer = makeIdentity();
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
+      exp: futureUnix(60),
+      signer: issuer.signer,
+      keyId: issuer.keyId,
+    });
+    const decoded = decodeJwsUnsafe(token)!;
+    delete decoded.header.kid;
+    const parts = token.split('.');
+    parts[0] = base64urlEncode(JSON.stringify(decoded.header));
+    const withoutKid = parts.join('.');
+    expect(decodeDFOSCredentialUnsafe(withoutKid)).toBeNull();
+    const result = verifyDFOSCredential(withoutKid, { resolveIdentity });
+    await expect(result).rejects.toBeInstanceOf(CredentialVerificationError);
+    await expect(result).rejects.toThrow('credential kid must be present');
+  });
+
   // --- create / verify round-trip ---
 
   it('should create and verify round-trip', async () => {

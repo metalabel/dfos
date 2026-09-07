@@ -525,6 +525,7 @@ export const verifyIdentityChain = async (input: {
 
     // resolve signing key from kid
     const kid = decoded.header.kid;
+    if (kid === undefined) throw new Error(`log[${idx}]: kid must be present`);
     let signingKeyId: string;
     if (kid.includes('#')) {
       const hashIdx = kid.indexOf('#');
@@ -762,6 +763,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
 
   // resolve signing key from kid — must be a DID URL for non-genesis
   const kid = decoded.header.kid;
+  if (kid === undefined) throw new Error('kid must be present');
   if (!kid.includes('#')) {
     throw new Error('non-genesis op kid must be DID URL, got bare key ID');
   }
