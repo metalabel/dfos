@@ -434,6 +434,9 @@ func TestServeBootPinsAnUnpinnedPeer(t *testing.T) {
 	setupSync(t)
 	peer := newFakePeer(t)
 	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL}
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	stderr := captureStderr(t, func() {
 		if err := verifyConfiguredPeerPins(); err != nil {

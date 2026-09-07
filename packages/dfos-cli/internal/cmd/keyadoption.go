@@ -65,6 +65,9 @@ func recordKeyAdoption(publicKey, did, keyID string) error {
 // The caller verifies the chain and binds it to did before promoting any key.
 func promoteCandidateKeys(did string, state protocol.IdentityState) error {
 	for _, row := range stateKeyRoles(did, state) {
+		if row.Void {
+			continue
+		}
 		pub := row.Key.PublicKeyMultibase
 		candidate := candidateAccountPrefix + pub
 		if !keys.HasKey(candidate) {

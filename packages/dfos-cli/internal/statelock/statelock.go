@@ -65,3 +65,15 @@ func Acquire() error {
 	held = f
 	return nil
 }
+
+// AcquireScoped releases a newly acquired lock when the caller finishes. An
+// existing process-lifetime lock remains held. Calls are serialized by the caller.
+func AcquireScoped() (func(), error) {
+	if held != nil {
+		return func() {}, nil
+	}
+	if err := Acquire(); err != nil {
+		return nil, err
+	}
+	return func() { held.Close(); held = nil }, nil
+}

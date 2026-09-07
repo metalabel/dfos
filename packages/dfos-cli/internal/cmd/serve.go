@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/statelock"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
@@ -478,7 +480,7 @@ func verifyConfiguredPeerPins() error {
 		if cfg.Relays[name].URL == "" {
 			continue
 		}
-		if err := verifyPeerPin(name); err != nil {
+		if err := verifyPeerPinWithPersistence(name, persistServePeerPin); err != nil {
 			return err
 		}
 	}
@@ -509,4 +511,31 @@ func peerFlagSuffix(p relay.PeerConfig) string {
 		return ""
 	}
 	return " (disabled: " + strings.Join(off, ", ") + ")"
+}
+
+// Reload under the lock so first contact cannot overwrite concurrent config edits.
+func persistServePeerPin(name string, contacted config.RelayConfig, did string) error {
+	release, err := statelock.AcquireScoped()
+	if err != nil {
+		return err
+	}
+	defer release()
+	latest, err := config.Load()
+	if err != nil {
+		return err
+	}
+	peer, ok := latest.Relays[name]
+	if !ok || peer.URL != contacted.URL {
+		return fmt.Errorf("peer '%s' changed during first contact; restart serve", name)
+	}
+	if peer.DID != "" && peer.DID != did {
+		return errPeerPinMismatch(name, peer.DID, did)
+	}
+	peer.DID = did
+	latest.Relays[name] = peer
+	if err := config.Save(latest); err != nil {
+		return err
+	}
+	cfg.Relays[name] = peer
+	return nil
 }

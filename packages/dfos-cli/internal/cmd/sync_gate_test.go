@@ -113,7 +113,8 @@ var syncHarnessRelay *localrelay.LocalRelay
 
 func setupSync(t *testing.T) {
 	t.Helper()
-	_, _, lr := setupDevices(t)
+	store, _, lr := setupDevices(t)
+	keys = store
 	syncHarnessRelay = lr
 	t.Cleanup(func() { syncHarnessRelay = nil })
 }

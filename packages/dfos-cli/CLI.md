@@ -102,12 +102,13 @@ The CLI is designed for both human operators and coding agents driving it progra
 
 The CLI embeds a full relay locally — the same SQLite-backed relay that runs as a network service via `dfos serve`. Every CLI command reads and writes to this local relay. Running `dfos serve` exposes it over HTTP with peer sync, gossip, and read-through.
 
-The CLI has four layers of state:
+The CLI has five layers of state:
 
 - **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `key:<publicKeyMultibase>` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<custody id>:<name>`, holding its mnemonic. Never written to disk.
 - **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
 - **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain. The directory also holds one `custody-id` file, the 16 hex characters that name this directory's keychain namespace.
-- **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
+- **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. First contact with an unpinned peer records its DID.
+- **Key adoptions** (`~/.dfos/key-adoptions/<sha256(pub)>.json`): receipts recording the adopting DID and key ID for a public key. Successful adoption and candidate promotion during `identity fetch` or `sync` write these receipts. They keep adopted keys out of orphan status when the adopting chain is absent locally. A restore or migration must preserve them alongside the private keys.
 
 `DFOS_CONFIG` names the config **file**, not the directory — `DFOS_CONFIG=/tmp/scratch/config.toml`, not `DFOS_CONFIG=/tmp/scratch`. A path naming a directory is refused with the contract rather than a bare "is a directory". Everything on disk sits beside that file: point it at another directory and the relay database, the credentials, the vaults, and the file-backed keys all move with it.
 
