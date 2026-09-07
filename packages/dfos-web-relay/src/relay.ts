@@ -149,6 +149,20 @@ export const chunkOps = <T>(items: T[], size: number): T[][] => {
 const MAX_BODY_BYTES = 16 << 20;
 
 /**
+ * Ops one read-through may ingest before it gives up. Twin of the Go relay's
+ * `maxOpsPerReadThrough`, which is the same number as its sync-cycle cap: a
+ * request-scoped drain gets no more rope than the timer-scoped one.
+ */
+const MAX_OPS_PER_READ_THROUGH = 5000;
+
+/**
+ * Wall-clock cap on one read-through. Twin of the Go relay's
+ * `readThroughDeadline`. A peer that answers slowly rather than endlessly is the
+ * same problem from the requester's side.
+ */
+const READ_THROUGH_DEADLINE_MS = 30_000;
+
+/**
  * Returns true if a Content-Length header is present and exceeds the 16MB body
  * cap. A missing/unparseable header returns false; readCappedBytes still
  * enforces the limit incrementally while consuming the request stream.
@@ -614,6 +628,27 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return results;
   };
 
+  /**
+   * Drain a peer's log into this relay, restarting once if the peer rejects the
+   * cursor. Returns whether the drain COMPLETED — a caller that gets `false` has
+   * an answer that may be partial.
+   *
+   * BOUNDED, BECAUSE IT RUNS UNDER AN ANONYMOUS GET. Peer sync bounds itself
+   * (`maxOpsPerSyncCycle`) and runs on a timer this relay controls; read-through
+   * runs inside an unauthenticated request for a chain nobody has to have heard
+   * of, so a request for a DID a hostile peer answers with an endless log is a
+   * request that never returns. Three bounds, matching the Go twin's
+   * `readThroughBudget` (routes.go):
+   *
+   *  - an OP BUDGET, so one request cannot ingest an unbounded corpus;
+   *  - a WALL-CLOCK DEADLINE, so a peer that is merely slow cannot hold the
+   *    request open indefinitely;
+   *  - a NON-ADVANCING CURSOR CHECK, because a peer that returns the `next` it
+   *    was just given is an infinite loop no op or time budget describes well.
+   *
+   * Hitting any bound returns "not completed" rather than throwing: the local
+   * store may already hold enough to answer, and the caller decides.
+   */
   const ingestPeerLogWithOneRestart = async (
     getPage: (
       after: string | undefined,
@@ -623,12 +658,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   ): Promise<boolean> => {
     let after: string | undefined;
     let restarted = false;
+    let ops = 0;
+    const deadline = Date.now() + READ_THROUGH_DEADLINE_MS;
     while (true) {
+      if (ops >= MAX_OPS_PER_READ_THROUGH || Date.now() >= deadline) return false;
       const page = await getPage(after);
       if (page === 'invalid-cursor') {
         if (restarted) return false;
         restarted = true;
         after = undefined;
+        ops = 0;
         continue;
       }
       if (!page) return false;
@@ -637,7 +676,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         page.entries.map((entry) => entry.jwsToken),
         'historical',
       );
+      ops += page.entries.length;
       if (!page.next) return true;
+      if (page.next === after) return false;
       after = page.next;
     }
   };
@@ -666,7 +707,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.body(null, 204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Credential',
         'Access-Control-Expose-Headers': 'X-Document-Cid',
       });
     }
@@ -674,7 +715,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // set headers on the final response (survives handler-created responses)
     c.res.headers.set('Access-Control-Allow-Origin', '*');
     c.res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
-    c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Credential');
     c.res.headers.set('Access-Control-Expose-Headers', 'X-Document-Cid');
     return;
   });

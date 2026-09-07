@@ -34,6 +34,7 @@ import { describe, expect, it } from 'vitest';
 import { hasPublicStandingAuth } from '../src/auth';
 import {
   createAsOfKeyResolver,
+  createCurrentKeyResolver,
   ingestOperations,
   resolveIdentityAsOf,
   SIGNING_KEY_NOT_AT_BASIS_ERROR,
@@ -201,6 +202,32 @@ describe('resolveIdentityAsOf', () => {
     // A verdict, and reached without asking the store: no amount of syncing
     // turns a malformed identifier into a DID. Twin of the Go resolver's
     // dfos.ValidateDID gate.
+    const err = await resolve('did:dfos:not-a-did#key_0', ts(T1)).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect((err as Error).message).toMatch(/malformed did:dfos identifier/);
+    expect(isDependencyMissing(err)).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it('rejects a malformed DID on the FIRST-ADMISSION path too', async () => {
+    // The as-of resolver serves replay and peer ingest. The path an attacker
+    // actually reaches is first admission — the unauthenticated
+    // POST /proof/v1/operations — which runs the CURRENT resolver. Classified as
+    // a dependency miss, a malformed signer DID leaves a raw op that is retained
+    // and re-verified forever, and every one-byte variation mints another.
+    const store = new MemoryRelayStore();
+    let reads = 0;
+    const read = store.getIdentityChain.bind(store);
+    store.getIdentityChain = async (did: string) => {
+      reads += 1;
+      return read(did);
+    };
+
+    // createAdmissionKeyResolver(store, 'new') is createFirstAdmissionKeyResolver,
+    // which is this resolver plus an as-of cross-check it never reaches.
+    const resolve = createCurrentKeyResolver(store);
     const err = await resolve('did:dfos:not-a-did#key_0', ts(T1)).then(
       () => undefined,
       (e: unknown) => e,

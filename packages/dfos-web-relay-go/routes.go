@@ -114,7 +114,12 @@ func withCORS(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-		h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// X-Credential is the header a delegated reader presents its credential
+		// in on the blob route. It is not CORS-safelisted, so a preflight that
+		// does not name it fails the request in the browser before it is sent —
+		// the delegated read is specified, implemented, and served, and was
+		// unreachable from a browser for that reason alone.
+		h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Credential")
 		h.Set("Access-Control-Expose-Headers", "X-Document-Cid")
 		if req.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

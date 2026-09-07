@@ -344,3 +344,35 @@ func TestUnconfiguredAuthorityAnswers503(t *testing.T) {
 		t.Fatalf("unconfigured authority: got %d, want 503", w.Code)
 	}
 }
+
+// TestJtiEntryOutlivesTheProofNotItsInsertion: the cache's job is to remember a
+// proof for exactly as long as the proof is still usable, and those are two
+// different clocks. Freshness is evaluated in WHOLE SECONDS — a proof issued at
+// iat is accepted while `now - iat <= W+S` — so it stays acceptable through the
+// entire second iat+W+S. An entry dated from its own insertion expires up to a
+// second before that, and a replay presented in the gap was admitted as fresh by
+// the verifier and as unseen by the cache.
+func TestJtiEntryOutlivesTheProofNotItsInsertion(t *testing.T) {
+	const window, skew = int64(60), int64(60)
+	cache := NewJtiReplayCache()
+
+	// A proof issued at the top of a second, presented 900ms into it.
+	iat := time.Now().Truncate(time.Second)
+	expiresAt := time.Unix(iat.Unix()+window+skew+1, 0)
+	if !cache.InsertIfAbsent("did:dfos:presenter", "jti-1", iat.Add(900*time.Millisecond), expiresAt) {
+		t.Fatal("the first presentation must be admitted")
+	}
+
+	// The last instant the verifier still calls this proof fresh.
+	replay := iat.Add(time.Duration(window+skew)*time.Second + 900*time.Millisecond)
+	if cache.InsertIfAbsent("did:dfos:presenter", "jti-1", replay, expiresAt) {
+		t.Fatal("a replay presented while the proof is STILL FRESH must be refused")
+	}
+
+	// And once the proof is genuinely stale the entry is free to go: it protects
+	// nothing the freshness check does not already refuse.
+	stale := iat.Add(time.Duration(window+skew+2) * time.Second)
+	if !cache.InsertIfAbsent("did:dfos:presenter", "jti-1", stale, expiresAt) {
+		t.Fatal("an entry for a stale proof must not be retained")
+	}
+}

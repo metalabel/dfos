@@ -454,7 +454,7 @@ describe('web relay', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
-      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization');
+      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization, X-Credential');
     });
 
     it('should answer OPTIONS preflight with 204 and the CORS headers', async () => {
@@ -462,7 +462,7 @@ describe('web relay', () => {
       expect(res.status).toBe(204);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
-      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization');
+      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization, X-Credential');
     });
 
     it('should emit CORS headers even on 404 proof-plane reads', async () => {
@@ -3514,6 +3514,45 @@ describe('web relay', () => {
           expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
           expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(2);
         }
+      });
+
+      it('bounds a read-through whose peer never advances its cursor', async () => {
+        // Read-through runs inside an UNAUTHENTICATED GET for a chain nobody has
+        // to have heard of. A peer that answers every page with the cursor it
+        // was just given is an endless walk, and with no op budget, no deadline,
+        // and no advance check the request never returns.
+        const identity = await createIdentity();
+        let pages = 0;
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            pages += 1;
+            return {
+              entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+              // The same `next`, forever.
+              next: 'stuck-cursor',
+            };
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+        const localStore = new MemoryRelayStore();
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        const res = await relay.app.request(`/proof/v1/identities/${identity.did}`);
+        // The walk stopped, and what the peer DID hand over before it stopped is
+        // still served: an incomplete drain is not a failed read.
+        expect(res.status).toBe(200);
+        expect(pages).toBe(2);
       });
 
       it('abandons an identity peer after its restarted walk rejects a second cursor', async () => {

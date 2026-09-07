@@ -3,7 +3,9 @@ package relay
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +51,7 @@ type MemoryStore struct {
 	operationLog      []LogEntry
 	peerCursors       map[string]string
 	rawOps            map[string]rawOpEntry             // cid → entry
+	rawOpSeq          int64                             // arrival counter backing rawOpEntry.seq
 	revocations       map[string]StoredRevocation       // key: "issuerDID::credentialCID"
 	publicCredentials map[string]StoredPublicCredential // key: credential CID
 	signRequests      map[string]StoredSignRequest      // key: request CID
@@ -75,6 +78,11 @@ type rawOpEntry struct {
 	jwsToken string
 	origin   OpOrigin
 	status   string // "pending", "sequenced", "rejected"
+	// seq is arrival order, and it is what gives the pending set a STABLE TOTAL
+	// ORDER. Map iteration has none, so without it the sequencer's keyset cursor
+	// would have nothing to resume against — and the twin's SQLite ordering
+	// (created_at, cid) would have no counterpart here.
+	seq int64
 }
 
 // NewMemoryStore creates a new empty MemoryStore.
@@ -999,21 +1007,42 @@ func (s *MemoryStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin)
 	if _, exists := s.rawOps[cid]; exists {
 		return false, nil
 	}
-	s.rawOps[cid] = rawOpEntry{jwsToken: jwsToken, origin: origin, status: "pending"}
+	s.rawOpSeq++
+	s.rawOps[cid] = rawOpEntry{jwsToken: jwsToken, origin: origin, status: "pending", seq: s.rawOpSeq}
 	return true, nil
 }
 
-func (s *MemoryStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
+func (s *MemoryStore) GetUnsequencedOps(after string, limit int) ([]PendingOp, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []PendingOp
-	for _, entry := range s.rawOps {
-		if entry.status == "pending" {
-			out = append(out, PendingOp{JWSToken: entry.jwsToken, Origin: entry.origin})
-			if len(out) >= limit {
-				break
-			}
+	from := int64(0)
+	if after != "" {
+		parsed, err := strconv.ParseInt(after, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pending-op cursor %q: %w", after, err)
 		}
+		from = parsed
+	}
+	// Arrival order, not map order: the cursor is only meaningful against a
+	// stable total order, so the whole pending set is collected and sorted before
+	// the limit is applied.
+	pending := make([]rawOpEntry, 0, len(s.rawOps))
+	for _, entry := range s.rawOps {
+		if entry.status == "pending" && entry.seq > from {
+			pending = append(pending, entry)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].seq < pending[j].seq })
+	if len(pending) > limit {
+		pending = pending[:limit]
+	}
+	out := make([]PendingOp, 0, len(pending))
+	for _, entry := range pending {
+		out = append(out, PendingOp{
+			JWSToken: entry.jwsToken,
+			Origin:   entry.origin,
+			Cursor:   strconv.FormatInt(entry.seq, 10),
+		})
 	}
 	return out, nil
 }

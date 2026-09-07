@@ -379,12 +379,14 @@ func TestAdmissionJtiIsScopedToThePresenter(t *testing.T) {
 // recordingJtiCache is a JtiCache a deployment could plausibly write — the seam
 // a multi-process relay fills with a shared store's insert-if-absent.
 type recordingJtiCache struct {
-	inserts []string
-	admit   bool
+	inserts      []string
+	lastLifetime time.Duration
+	admit        bool
 }
 
-func (c *recordingJtiCache) InsertIfAbsent(presenterDID, jti string, _ time.Time, ttl time.Duration) bool {
-	c.inserts = append(c.inserts, fmt.Sprintf("%s|%s|%s", presenterDID, jti, ttl))
+func (c *recordingJtiCache) InsertIfAbsent(presenterDID, jti string, now time.Time, expiresAt time.Time) bool {
+	c.inserts = append(c.inserts, fmt.Sprintf("%s|%s", presenterDID, jti))
+	c.lastLifetime = expiresAt.Sub(now)
 	return c.admit
 }
 
@@ -402,10 +404,15 @@ func TestAdmissionConsumesAnInjectedJtiCache(t *testing.T) {
 	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "injected"); got.Code != 200 {
 		t.Fatalf("proven submission: %d %s", got.Code, got.Body.String())
 	}
-	// W + S at their defaults: the entry lives exactly as long as the proof.
-	want := []string{fmt.Sprintf("%s|injected|%s", submitter.did, 120*time.Second)}
+	want := []string{fmt.Sprintf("%s|injected", submitter.did)}
 	if !reflect.DeepEqual(cache.inserts, want) {
 		t.Fatalf("injected cache saw %v, want %v", cache.inserts, want)
+	}
+	// W + S at their defaults is 120s, and the entry must outlive the proof
+	// rather than its own insertion — freshness runs in whole seconds, so the
+	// proof is still acceptable for the remainder of its last second.
+	if cache.lastLifetime <= 120*time.Second {
+		t.Fatalf("entry lifetime %s must exceed the proof's own window of %s", cache.lastLifetime, 120*time.Second)
 	}
 
 	// Its refusal is the relay's refusal — the fleet-wide cache is the authority

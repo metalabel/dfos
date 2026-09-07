@@ -75,10 +75,17 @@ import (
 // corpus that never saw an older binary — re-verifies nothing, writes nothing,
 // and logs nothing. Signature verification is paid only for rows that are
 // genuinely stale, and only once.
-func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
+//
+// RETURNS WHETHER ANY ROW WAS REWRITTEN, because the caller cannot tell
+// otherwise and has to. The rebuild that follows decides whether to re-walk from
+// the stamped projection_version alone, and a corpus that first materialized the
+// `key=` index under the CURRENT version — from the narrow fallback, before this
+// repair existed — carries a stamp that says the rows are already right. Silence
+// here is read as "nothing changed", and the index stays narrow.
+func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) (bool, error) {
 	chains, err := store.ListIdentityChains()
 	if err != nil {
-		return fmt.Errorf("list identity chains: %w", err)
+		return false, fmt.Errorf("list identity chains: %w", err)
 	}
 
 	// Collect first, write second. The scan is the common case and it must not
@@ -93,7 +100,7 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
 		stale = append(stale, chain)
 	}
 	if len(stale) == 0 {
-		return nil
+		return false, nil
 	}
 
 	logger.Info("identity state: backfilling has-ever-proved keys",
@@ -122,7 +129,7 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
 		chain.HeadCID = result.HeadCID
 		chain.LastCreatedAt = result.LastCreatedAt
 		if err := store.RewriteIdentityChainState(chain); err != nil {
-			return fmt.Errorf("rewrite identity chain %s: %w", chain.DID, err)
+			return rewritten > 0, fmt.Errorf("rewrite identity chain %s: %w", chain.DID, err)
 		}
 		rewritten++
 	}
@@ -132,5 +139,5 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
 		"rewritten", rewritten,
 		"skippedClean", len(chains)-len(stale),
 		"failed", failed)
-	return nil
+	return rewritten > 0, nil
 }

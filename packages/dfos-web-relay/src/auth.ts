@@ -116,9 +116,16 @@ export const createCurrentStateProofResolver =
  *
  * The primitive is ATOMIC INSERT-IF-ABSENT (accept iff newly inserted), not the
  * check-and-delete a server-minted nonce would use — the verifier never held the
- * client-chosen jti beforehand. Entries expire after the freshness window
- * (W + S): past that the proof itself is stale, so the cache entry protects
- * nothing.
+ * client-chosen jti beforehand.
+ *
+ * THE ENTRY EXPIRES WITH THE PROOF, NOT WITH ITS INSERTION. The entry protects
+ * nothing once the proof it names is stale — but it must protect until then, and
+ * the two are not the same instant. A proof is accepted while `now - iat <= W+S`
+ * in WHOLE SECONDS, so one issued at `iat` stays fresh through the whole of
+ * second `iat+W+S`; an entry dated from the moment it was inserted expires up to
+ * a second earlier and leaves a gap in which the same proof is still fresh and
+ * no longer remembered. The caller passes the proof's own expiry, which is a
+ * fact about the proof rather than about when it arrived.
  *
  * This in-memory implementation is per-process. The interface is what a
  * store-backed implementation replaces, so a multi-process deployment swaps the
@@ -126,19 +133,24 @@ export const createCurrentStateProofResolver =
  */
 export interface JtiReplayCache {
   /**
-   * Record (presenter, jti) if absent. Returns true when newly inserted (the
-   * proof is fresh), false when the pair was already seen (a replay).
+   * Record (presenter, jti) until `expiresAtMs` if absent. Returns true when
+   * newly inserted (the proof is fresh), false when the pair was already seen (a
+   * replay).
    */
-  insertIfAbsent(presenterDID: string, jti: string, nowMs: number, ttlSeconds: number): boolean;
+  insertIfAbsent(presenterDID: string, jti: string, nowMs: number, expiresAtMs: number): boolean;
 }
 
 export const createJtiReplayCache = (): JtiReplayCache => {
-  // key -> expiry (unix ms). A Map is insertion-ordered, so the prune below can
-  // stop at the first live entry: everything before it expired earlier.
+  // key -> expiry (unix ms). A Map is insertion-ordered and expiries now come
+  // from each proof's own iat, so insertion order tracks expiry order only
+  // approximately — within one freshness window, since iat itself is bounded to
+  // that window. The prune therefore stops at the first live entry as before and
+  // an entry can outlive its window by at most that bound, which costs a little
+  // memory and refuses nothing it should admit.
   const seen = new Map<string, number>();
 
   return {
-    insertIfAbsent(presenterDID, jti, nowMs, ttlSeconds) {
+    insertIfAbsent(presenterDID, jti, nowMs, expiresAtMs) {
       // Prune before the lookup, so an expired entry never reports a replay.
       for (const [key, expiresAt] of seen) {
         if (expiresAt > nowMs) break;
@@ -149,7 +161,7 @@ export const createJtiReplayCache = (): JtiReplayCache => {
       const key = `${presenterDID}\n${jti}`;
       const existing = seen.get(key);
       if (existing !== undefined && existing > nowMs) return false;
-      seen.set(key, nowMs + ttlSeconds * 1000);
+      seen.set(key, expiresAtMs);
       return true;
     },
   };
@@ -304,7 +316,12 @@ export const authenticateIdentityProof = async (
       return { ok: false, status: 503, error: 'authentication unavailable' };
     }
     const nowMs = options.now ? options.now() : Date.now();
-    if (!cache.insertIfAbsent(verified.presenterDID, jti, nowMs, windowSeconds + skewSeconds)) {
+    // Dated off the PROOF's iat, not off arrival. Freshness is evaluated in whole
+    // seconds, so this proof is acceptable through the end of second
+    // iat+W+S; the +1 carries the entry past that last acceptable second rather
+    // than expiring inside it.
+    const expiresAtMs = (verified.payload.iat + windowSeconds + skewSeconds + 1) * 1000;
+    if (!cache.insertIfAbsent(verified.presenterDID, jti, nowMs, expiresAtMs)) {
       return { ok: false, status: 401, error: 'authentication required' };
     }
   }

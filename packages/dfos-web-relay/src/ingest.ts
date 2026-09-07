@@ -500,6 +500,15 @@ export const createCurrentKeyResolver =
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
 
+    // Unmarked, ahead of the store read, exactly as in createAsOfKeyResolver: no
+    // amount of syncing turns a malformed identifier into a DID. Without this the
+    // miss below marks it dependencyMissing, so the raw op is retained and
+    // re-verified forever — and this is the FIRST-ADMISSION path, reachable from
+    // the unauthenticated POST /proof/v1/operations, where every one-byte
+    // variation mints another permanently pending row.
+    if (!isValidDfosDid(did))
+      throw new Error(`malformed did:dfos identifier: ${JSON.stringify(did)}`);
+
     // Only the unknown-identity failure is a dependency miss here. A DELETED
     // identity and a key that is merely no longer current are verdicts this
     // store is already entitled to reach; re-asking later cannot change them.

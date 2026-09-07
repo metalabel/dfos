@@ -28,7 +28,7 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
-import { createRelay, INGESTION_MODES, MemoryRelayStore } from '../src';
+import { createJtiReplayCache, createRelay, INGESTION_MODES, MemoryRelayStore } from '../src';
 import type { AdmissionPolicy, RelayOptions } from '../src';
 
 /**
@@ -325,6 +325,39 @@ describe('ingestion admission', () => {
       return { store, relay, submitter };
     };
 
+    it('keeps an entry until the PROOF is stale, not until its insertion ages out', () => {
+      // The cache's job is to remember a proof for exactly as long as the proof
+      // is still usable, and those are two different clocks. Freshness is
+      // evaluated in WHOLE SECONDS — accepted while `now - iat <= W+S` — so a
+      // proof issued at iat stays acceptable through the whole of second
+      // iat+W+S. An entry dated from its own insertion expires up to a second
+      // before that, and a replay presented in the gap is admitted as fresh by
+      // the verifier and as unseen by the cache.
+      const W = 60;
+      const S = 60;
+      const cache = createJtiReplayCache();
+
+      // A proof issued at the top of a second, presented 900ms into it.
+      const iatMs = Math.floor(Date.now() / 1000) * 1000;
+      const expiresAtMs = iatMs + (W + S + 1) * 1000;
+      expect(cache.insertIfAbsent('did:dfos:presenter', 'jti-1', iatMs + 900, expiresAtMs)).toBe(
+        true,
+      );
+
+      // The last instant the verifier still calls this proof fresh.
+      const replayAtMs = iatMs + (W + S) * 1000 + 900;
+      expect(cache.insertIfAbsent('did:dfos:presenter', 'jti-1', replayAtMs, expiresAtMs)).toBe(
+        false,
+      );
+
+      // Once the proof is genuinely stale the entry is free to go: it protects
+      // nothing the freshness check does not already refuse.
+      const staleAtMs = iatMs + (W + S + 2) * 1000;
+      expect(cache.insertIfAbsent('did:dfos:presenter', 'jti-1', staleAtMs, expiresAtMs)).toBe(
+        true,
+      );
+    });
+
     it('rejects a proof with NO jti — ingestion is write-shaped', async () => {
       const { relay, submitter } = await provenRelay();
       const other = await createIdentity();
@@ -379,11 +412,13 @@ describe('ingestion admission', () => {
       // The in-memory default is per-process, so the interface is the whole
       // mechanism by which a fleet shares one replay window. A seam that cannot
       // be reached from RelayOptions is documentation, not a seam.
-      const inserts: { presenterDID: string; jti: string; ttlSeconds: number }[] = [];
+      const inserts: { presenterDID: string; jti: string }[] = [];
+      let lastLifetimeMs = 0;
       let admit = true;
       const replayCache = {
-        insertIfAbsent(presenterDID: string, jti: string, _nowMs: number, ttlSeconds: number) {
-          inserts.push({ presenterDID, jti, ttlSeconds });
+        insertIfAbsent(presenterDID: string, jti: string, nowMs: number, expiresAtMs: number) {
+          inserts.push({ presenterDID, jti });
+          lastLifetimeMs = expiresAtMs - nowMs;
           return admit;
         },
       };
@@ -396,10 +431,11 @@ describe('ingestion admission', () => {
       expect((await submit(relay, [other.jwsToken], submitter, { jti: 'injected' })).status).toBe(
         200,
       );
-      expect(inserts).toEqual([
-        // W + S at their defaults: the entry lives exactly as long as the proof.
-        { presenterDID: submitter.did, jti: 'injected', ttlSeconds: 120 },
-      ]);
+      expect(inserts).toEqual([{ presenterDID: submitter.did, jti: 'injected' }]);
+      // W + S at their defaults is 120s, and the entry must outlive the PROOF
+      // rather than its own insertion — freshness runs in whole seconds, so the
+      // proof is still acceptable for the remainder of its last second.
+      expect(lastLifetimeMs).toBeGreaterThan(120_000);
 
       // Its refusal is the relay's refusal — the fleet-wide cache is the authority
       // on replay, not this process's memory of what it has seen.

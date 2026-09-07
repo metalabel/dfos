@@ -525,9 +525,15 @@ const (
 )
 
 // PendingOp is one unsequenced raw operation with its durable provenance.
+//
+// Cursor is this row's KEYSET POSITION in the pending set, opaque to the caller
+// and defined by the store. The sequencer passes the last row's cursor back to
+// resume past it, which is what keeps a block of permanently dependency-missing
+// rows from hiding the rest of the queue behind it forever.
 type PendingOp struct {
 	JWSToken string
 	Origin   OpOrigin
+	Cursor   string
 }
 
 // -----------------------------------------------------------------------------
@@ -960,8 +966,18 @@ type RelayWriterState interface {
 	// that counts received entries instead of inserted rows overstates the work
 	// it did by an unbounded margin.
 	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) (inserted bool, err error)
-	// GetUnsequencedOps returns JWS tokens + origins where status = 'pending'.
-	GetUnsequencedOps(limit int) ([]PendingOp, error)
+	// GetUnsequencedOps returns JWS tokens + origins where status = 'pending',
+	// in a stable total order, resuming strictly after the keyset cursor of a
+	// previously returned row ("" starts at the head). Each returned row carries
+	// the cursor that resumes past it.
+	//
+	// THE CURSOR IS NOT AN OPTIMIZATION. Without it, a caller that fetches the
+	// oldest N pending rows always fetches THE SAME N: an op whose dependency
+	// this relay will never hold stays pending forever, and enough of them fill
+	// the window permanently, so every row behind them — including a freshly
+	// pull-synced op whose dependency has since landed — is never selected and
+	// peer ingestion stops converging while direct POSTs keep working.
+	GetUnsequencedOps(after string, limit int) ([]PendingOp, error)
 	MarkOpsSequenced(cids []string) error
 	MarkOpRejected(cid string, reason string) error
 	CountUnsequenced() (int, error)

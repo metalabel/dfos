@@ -48,6 +48,14 @@ export const logOpRejected = (cid: string, reason: string): void => {
 };
 
 /**
+ * How many pending rows one keyset window fetches. Twin of Go's
+ * `sequencerWindowOps`. The window is a WINDOW rather than a head: a pass walks
+ * the whole pending set window by window, so this bounds a single fetch and the
+ * working set it feeds, not how far into the queue the sequencer can see.
+ */
+export const SEQUENCER_WINDOW_OPS = 10000;
+
+/**
  * Process unsequenced raw ops in a fixed-point loop until no more progress
  * is made, under the store's chain-state lock. Returns the JWS tokens of newly
  * sequenced ops and aggregate stats.
@@ -71,9 +79,25 @@ export const sequenceOpsLocked = async (
   const newOps: string[] = [];
   const result: SequenceResult = { sequenced: 0, rejected: 0, pending: 0 };
 
+  // `after` is the keyset position of the last pending row this call has looked
+  // at; `sweptSomething` records whether the sweep from the head has drained
+  // anything. A window that drains nothing no longer ends the pass — it just
+  // moves the cursor on — so ten thousand permanently dependency-missing rows
+  // can no longer hide every row behind them. The pass still restarts from the
+  // head after a sweep that moved something, because an op admitted late in a
+  // sweep can unblock one the sweep already walked past.
+  let after = '';
+  let sweptSomething = false;
+
   for (;;) {
-    const pendingOps = await store.getUnsequencedOps(10000);
-    if (pendingOps.length === 0) break;
+    const pendingOps = await store.getUnsequencedOps(after, SEQUENCER_WINDOW_OPS);
+    if (pendingOps.length === 0) {
+      if (after === '' || !sweptSomething) break;
+      after = '';
+      sweptSomething = false;
+      continue;
+    }
+    after = pendingOps[pendingOps.length - 1]!.cursor;
 
     const indexedResults: Array<{ index: number; result: IngestionResult }> = [];
     for (const origin of ['direct', 'peer'] as const) {
@@ -122,7 +146,10 @@ export const sequenceOpsLocked = async (
       await store.markOpsSequenced(sequencedCIDs);
     }
 
-    if (!progress) break;
+    // A window that drained nothing is walked OVER, not stalled on: the cursor
+    // has already moved past it, so the next iteration reads the next window.
+    // Termination is the cursor, which strictly advances across a finite set.
+    if (progress) sweptSomething = true;
   }
 
   return { newOps, result };

@@ -1094,24 +1094,36 @@ export class MemoryRelayStore
 
   private rawOps = new Map<
     string,
-    { jwsToken: string; origin: OpOrigin; status: 'pending' | 'sequenced' | 'rejected' }
+    {
+      jwsToken: string;
+      origin: OpOrigin;
+      status: 'pending' | 'sequenced' | 'rejected';
+      // Arrival order, and the keyset the sequencer's cursor moves along. The
+      // Go twin's SQLite store orders by (created_at, cid); this one is a Map,
+      // so a counter is what gives the pending set a stable total order.
+      seq: number;
+    }
   >();
+  private rawOpSeq = 0;
 
   async putRawOp(cid: string, jwsToken: string, origin: OpOrigin = 'direct'): Promise<void> {
     if (!this.rawOps.has(cid)) {
-      this.rawOps.set(cid, { jwsToken, origin, status: 'pending' });
+      this.rawOps.set(cid, { jwsToken, origin, status: 'pending', seq: ++this.rawOpSeq });
     }
   }
 
-  async getUnsequencedOps(limit: number): Promise<PendingOp[]> {
-    const out: PendingOp[] = [];
-    for (const entry of this.rawOps.values()) {
-      if (entry.status === 'pending') {
-        out.push({ jwsToken: entry.jwsToken, origin: entry.origin });
-        if (out.length >= limit) break;
-      }
-    }
-    return out;
+  async getUnsequencedOps(after: string, limit: number): Promise<PendingOp[]> {
+    const from = after === '' ? 0 : Number(after);
+    if (!Number.isFinite(from)) throw new Error(`invalid pending-op cursor: ${after}`);
+    const pending = [...this.rawOps.values()]
+      .filter((entry) => entry.status === 'pending' && entry.seq > from)
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, limit);
+    return pending.map((entry) => ({
+      jwsToken: entry.jwsToken,
+      origin: entry.origin,
+      cursor: String(entry.seq),
+    }));
   }
 
   async markOpsSequenced(cids: string[]): Promise<void> {

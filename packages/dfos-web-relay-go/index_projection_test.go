@@ -1,6 +1,9 @@
 package relay
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // ===================================================================
 // the projection is bounded, resumable, and off the accepting path
@@ -161,10 +164,67 @@ func TestProjectionRestartsOnAnUnknownLogCursor(t *testing.T) {
 	if result.Projected == 0 {
 		t.Fatal("an unknown cursor must restart the walk, not stall it")
 	}
-	if !result.CaughtUp {
-		t.Fatalf("the restarted walk did not catch up: %+v", result)
+	// The replay re-walks the creator's genesis, which triggers a sweep, so the
+	// first run leaves work outstanding. What matters is that it converges.
+	if drained := drainIndexProjection(store, 100, 0, r.logger); !drained.CaughtUp {
+		t.Fatalf("the restarted walk did not catch up: %+v", drained)
 	}
 	if indexContentRowByID(t, r.Handler(), content.contentID) == nil {
 		t.Fatal("the replayed walk did not reproduce the content row")
+	}
+}
+
+// TestALateGenesisDirtiesTheContentItReAuthorizes: a genesis is an identity
+// operation like any other, and it can be the LAST piece of a grant rather than
+// the first thing this relay learns.
+//
+// A standalone public credential is admitted on its leaf signature alone — the
+// delegation walk is a READ-time question, not an admission-time one — so a
+// delegated grant lands while an identity in the middle of its prf chain is
+// still unsynced. The walk fails for want of that identity's key, and the
+// content projects private. When the missing genesis finally arrives it is
+// typed "create", which used to fall through the sweep switch and dirty
+// nothing, leaving the row stale until some unrelated operation happened to
+// re-fold it — which breaks the projection's own claim that the incremental
+// path and a full rebuild are interchangeable.
+func TestALateGenesisDirtiesTheContentItReAuthorizes(t *testing.T) {
+	r, store := externalProjectionRelay(t, 100)
+	owner := ingestIdentity(t, r)
+	platform := ingestIdentity(t, r)
+	// The middle of the chain. Minted, never ingested — the unsynced identity.
+	middle := createTestIdentity(t)
+
+	content := createIndexedContent(t, r, store, owner, map[string]any{"$schema": testPostSchema, "title": "late"}, false)
+	resource := "chain:" + content.contentID
+
+	// The interior credentials ride inside prf; only the public leaf is a
+	// standing grant this relay stores.
+	toMiddle, _ := mintDelegatedCredential(t,
+		owner.did, owner.did+"#"+owner.auth.keyID, owner.auth.priv,
+		middle.did, resource, "read", nil, time.Hour)
+	toPlatform, _ := mintDelegatedCredential(t,
+		middle.did, middle.did+"#"+middle.auth.keyID, middle.auth.priv,
+		platform.did, resource, "read", []string{toMiddle}, time.Hour)
+	public, _ := mintDelegatedCredential(t,
+		platform.did, platform.did+"#"+platform.auth.keyID, platform.auth.priv,
+		"*", resource, "read", []string{toPlatform}, time.Hour)
+
+	if res := r.Ingest([]string{public}); res[0].Status != "new" {
+		t.Fatalf("the public leaf must be admitted on its own signature: %+v", res[0])
+	}
+	drainIndexProjection(store, 100, 0, r.logger)
+
+	if indexContentRowByID(t, r.Handler(), content.contentID)["publicRead"] == true {
+		t.Fatal("precondition: with the middle identity unsynced the walk must fail and the row must project private")
+	}
+
+	// The missing genesis arrives.
+	if res := r.Ingest([]string{middle.token}); res[0].Status != "new" {
+		t.Fatalf("ingest the late genesis: %+v", res[0])
+	}
+	drainIndexProjection(store, 100, 0, r.logger)
+
+	if indexContentRowByID(t, r.Handler(), content.contentID)["publicRead"] != true {
+		t.Fatal("the late genesis must dirty the content its arrival re-authorizes")
 	}
 }

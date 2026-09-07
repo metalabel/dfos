@@ -114,7 +114,7 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 			}
 
 			logger, logs := backfillTestLogger()
-			if err := backfillProvedKeyState(store, logger); err != nil {
+			if _, err := backfillProvedKeyState(store, logger); err != nil {
 				t.Fatalf("backfill: %v", err)
 			}
 
@@ -215,6 +215,67 @@ func TestBackfillPrecedesTheIndexRebuild(t *testing.T) {
 	}
 }
 
+// TestBackfillResetsAnAlreadyStampedProjection is the case TestBackfillPrecedesTheIndexRebuild
+// cannot reach, because it resets projection_version to 0 before every boot.
+//
+// Ordering alone is not enough. A relay whose corpus first materialized the
+// `key=` index while running the version that INTRODUCED it built those rows
+// from the narrow fallback and stamped the current version over them. The stamp
+// is the only thing the rebuild consults, so on the upgrade that adds the
+// backfill the rows get repaired and the index does not: the rebuild sees a
+// current stamp and returns early. The backfill has to say it rewrote something,
+// and that has to invalidate the stamp.
+func TestBackfillResetsAnAlreadyStampedProjection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backfill-stamped.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ingestIdentity(t, r)
+	rotateExistingTestIdentity(t, r, id)
+	rotatedOut := id.auth.mk.PublicKeyMultibase
+
+	// The state a relay that first booted on the version that introduced the
+	// index is in: a stale identity row, a `key=` index built from the fallback,
+	// and a stamp that says the projection is already current.
+	staleIdentityRow(t, store, id.did)
+	if err := store.ClearIndexProjection(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetIndexCursor(IndexCursor{}); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := backfillTestLogger()
+	drainIndexProjection(store, DefaultIndexProjectionBudget, 0, logger)
+	if err := store.SetIndexProjectionVersion(IndexProjectionVersion); err != nil {
+		t.Fatal(err)
+	}
+	if got := identityDIDsMatching(t, r, keyQuery(rotatedOut)); len(got) != 0 {
+		t.Fatalf("fixture: the pre-repair index already resolved the rotated-out key (%v)", got)
+	}
+
+	r2, err := NewRelay(RelayOptions{
+		Store:     store,
+		Authority: testAuthority,
+		Identity:  &RelayIdentity{DID: r.DID(), ProfileArtifactJWS: r.ProfileArtifactJWS()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := identityDIDsMatching(t, r2, keyQuery(rotatedOut)); len(got) != 1 || got[0] != id.did {
+		t.Fatalf("a backfill that rewrote rows must force the rebuild: key= matched %v, want [%s]", got, id.did)
+	}
+	if v, _ := store.GetIndexProjectionVersion(); v != IndexProjectionVersion {
+		t.Fatalf("the forced rebuild must re-stamp the version, got %d want %d", v, IndexProjectionVersion)
+	}
+}
+
 // countingPutStore counts identity rewrites, so idempotency can be asserted on
 // the WRITE rather than on the resulting bytes: a second pass that rewrote every
 // row with identical content would be indistinguishable by content alone, and it
@@ -249,7 +310,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 	store := &countingPutStore{MigratableStore: inner}
 	logger, _ := backfillTestLogger()
 
-	if err := backfillProvedKeyState(store, logger); err != nil {
+	if _, err := backfillProvedKeyState(store, logger); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	if store.identityPuts != 1 {
@@ -257,7 +318,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 	}
 
 	logger2, logs2 := backfillTestLogger()
-	if err := backfillProvedKeyState(store, logger2); err != nil {
+	if _, err := backfillProvedKeyState(store, logger2); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	if store.identityPuts != 1 {
@@ -292,7 +353,7 @@ func TestBackfillLeavesAnUnverifiableChainAlone(t *testing.T) {
 	}
 
 	logger, logs := backfillTestLogger()
-	if err := backfillProvedKeyState(store, logger); err != nil {
+	if _, err := backfillProvedKeyState(store, logger); err != nil {
 		t.Fatalf("one unverifiable chain must not fail the pass: %v", err)
 	}
 
@@ -335,7 +396,7 @@ func TestBackfillSkipsChainsWithNoLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger, logs := backfillTestLogger()
-	if err := backfillProvedKeyState(store, logger); err != nil {
+	if _, err := backfillProvedKeyState(store, logger); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 	if logs.Len() != 0 {

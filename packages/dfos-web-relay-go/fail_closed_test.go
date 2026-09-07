@@ -2,9 +2,12 @@ package relay
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // ===================================================================
@@ -394,5 +397,84 @@ func TestReadPathDeniesWhenStoreErrorsAtAnAuthorizationGate(t *testing.T) {
 				t.Fatalf("a store failure at %s must DENY the read, but access was granted", tc.gate)
 			}
 		})
+	}
+}
+
+// ===================================================================
+// 5. the signing deposit path must not read a store error as "not hosted"
+// ===================================================================
+
+// TestSigningDepositDeniesWhenTheLocalIdentityReadFails pins the fail-closed
+// shape of the mailbox deposit resolver.
+//
+// The defect: signingResolvers discarded the error from GetIdentityChain and
+// read the nil chain as "this relay does not host that identity", falling
+// through to the identity bundle the DEPOSITOR supplied in the request body. A
+// transient read failure therefore swapped the relay's own authoritative copy of
+// a chain for the caller's account of it — the one party with a motive to
+// describe it differently — and admitted the deposit on that.
+func TestSigningDepositDeniesWhenTheLocalIdentityReadFails(t *testing.T) {
+	enabled := true
+
+	memory := NewMemoryStore()
+	f := newSigningFixture(t, memory, "deposit-store-error")
+	control, err := NewRelay(RelayOptions{Authority: testAuthority, Store: memory, Signing: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The chain member is the depositor's own account of the requester's
+	// identity. It is a real, verifiable chain — that is the point: the bundle is
+	// only ever meant to stand in for an identity this relay does NOT hold.
+	deposit := map[string]any{
+		"request": f.request, "credential": f.credential, "chain": []string{f.requester.token},
+	}
+	if got := signingRequest(t, control, http.MethodPost, signingBasePath+"/requests", deposit, ""); got.Code != http.StatusCreated {
+		t.Fatalf("control: a healthy store must accept this deposit, got %d %s", got.Code, got.Body.String())
+	}
+
+	broken := &erroringStore{referenceStore: NewMemoryStore()}
+	f2 := newSigningFixture(t, broken.referenceStore, "deposit-store-error-broken")
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: broken, Signing: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken.failIdentityDID = f2.requester.did
+	got := signingRequest(t, r, http.MethodPost, signingBasePath+"/requests", map[string]any{
+		"request": f2.request, "credential": f2.credential, "chain": []string{f2.requester.token},
+	}, "")
+	if got.Code == http.StatusCreated {
+		t.Fatal("a store failure on the local identity read must refuse the deposit, not fall through to the depositor's bundle")
+	}
+}
+
+// TestSigningCredentialDeniesWhenTheIssuerDeletedReadFails is the same rule at
+// the other swallowed error in signing.go: the issuer's deleted-identity gate.
+// A read that failed says nothing about whether the issuer is deleted, so
+// reading it as "not deleted" skips the gate on no evidence.
+func TestSigningCredentialDeniesWhenTheIssuerDeletedReadFails(t *testing.T) {
+	memory := NewMemoryStore()
+	f := newSigningFixture(t, memory, "issuer-deleted-gate")
+	resolve := signingResolvers(memory, nil)
+	verified, err := dfos.VerifySignRequest(f.request, resolve, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := &erroringStore{referenceStore: memory}
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: the same credential, the same healthy resolver, an unbroken gate.
+	if err := r.verifySigningCredential(f.credential, verified, resolve, nil); err != nil {
+		t.Fatalf("control: a healthy store must accept this credential, got %v", err)
+	}
+
+	// Only the gate's own lookup breaks; the resolver passed in stays healthy, so
+	// a refusal is attributable to the gate and not to a failed key resolve.
+	store.failIdentityDID = f.subject.did
+	if err := r.verifySigningCredential(f.credential, verified, resolve, nil); err == nil {
+		t.Fatal("a store failure at the issuer's deleted-identity gate must refuse the credential")
 	}
 }

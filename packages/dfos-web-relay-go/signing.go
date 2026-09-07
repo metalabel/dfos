@@ -103,7 +103,16 @@ func signingResolvers(store RelayReadStore, bundle map[string]bundledSigningIden
 		if hash < 0 {
 			return nil, fmt.Errorf("invalid kid")
 		}
-		if local, _ := store.GetIdentityChain(kid[:hash]); local != nil {
+		// A store error is not "this relay does not host that identity". Falling
+		// through on one would hand the question to the depositor-supplied
+		// bundle — the caller's own account of a chain this relay holds
+		// authoritatively — so a transient read failure has to refuse, the way
+		// the isDeleted closure below already does.
+		local, err := store.GetIdentityChain(kid[:hash])
+		if err != nil {
+			return nil, err
+		}
+		if local != nil {
 			if local.State.IsDeleted {
 				return nil, fmt.Errorf("identity deleted")
 			}
@@ -134,7 +143,13 @@ func (r *Relay) verifySigningCredential(token string, request *dfos.VerifiedSign
 		return fmt.Errorf("invalid credential")
 	}
 	issuer := header.Kid[:strings.Index(header.Kid, "#")]
-	if local, _ := r.readStore.GetIdentityChain(issuer); local != nil && local.State.IsDeleted {
+	// Same rule: a read that failed says nothing about whether the issuer is
+	// deleted, so it must not be read as "not deleted" and skip the gate.
+	local, err := r.readStore.GetIdentityChain(issuer)
+	if err != nil {
+		return err
+	}
+	if local != nil && local.State.IsDeleted {
 		return fmt.Errorf("issuer deleted")
 	}
 	if identity, ok := bundle[issuer]; ok && identity.state.IsDeleted {

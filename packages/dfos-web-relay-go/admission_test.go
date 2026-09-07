@@ -444,7 +444,7 @@ func TestSQLitePendingOpOriginPersistsAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	pending, err := reopened.GetUnsequencedOps(10)
+	pending, err := reopened.GetUnsequencedOps("", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
