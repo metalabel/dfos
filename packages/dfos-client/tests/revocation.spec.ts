@@ -12,6 +12,7 @@
 
 */
 
+import { markDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   decodeMultikey,
   signContentOperation,
@@ -19,17 +20,23 @@ import {
   verifyContentChain,
   type ContentOperation,
 } from '@metalabel/dfos-protocol/chain';
-import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import {
-  createJws,
-  dagCborCanonicalEncode,
-  decodeJwsUnsafe,
-} from '@metalabel/dfos-protocol/crypto';
+  createDFOSCredential,
+  CredentialVerificationError,
+} from '@metalabel/dfos-protocol/credentials';
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
+import { NoStateAsOfError } from '../src/resolvers';
 import { createRevocationChecker } from '../src/revocation';
 import type { RevChecker } from '../src/types';
-import { buildIdentity, fakePeerClient, ts, type BuiltIdentity } from './fixtures';
+import {
+  buildIdentity,
+  fakePeerClient,
+  signRevocationAt,
+  ts,
+  type BuiltIdentity,
+} from './fixtures';
 
 const A = 'https://a.test';
 const B = 'https://b.test';
@@ -60,37 +67,6 @@ const revocationFetch =
 const credCid = (jws: string): string => {
   const decoded = decodeJwsUnsafe(jws);
   return typeof decoded?.header.cid === 'string' ? decoded.header.cid : '';
-};
-
-/**
- * Sign a revocation with a caller-chosen `createdAt`. `signRevocation` stamps
- * Date.now(), which cannot express "revoked before instant X" — the whole point of
- * the as-of gate. Payload shape mirrors signRevocation exactly so the result
- * verifies through the real `verifyRevocation`.
- */
-const signRevocationAt = async (
-  issuer: BuiltIdentity,
-  credentialCID: string,
-  createdAt: string,
-): Promise<string> => {
-  const payload = {
-    version: 1 as const,
-    type: 'revocation' as const,
-    did: issuer.did,
-    credentialCID,
-    createdAt,
-  };
-  const encoded = await dagCborCanonicalEncode(payload);
-  return createJws({
-    header: {
-      alg: 'EdDSA',
-      typ: 'did:dfos:revocation',
-      kid: issuer.kid,
-      cid: encoded.cid.toString(),
-    },
-    payload: payload as unknown as Record<string, unknown>,
-    sign: issuer.k.signer,
-  });
 };
 
 describe('createRevocationChecker', () => {
@@ -402,6 +378,48 @@ describe('createRevocationChecker', () => {
       }),
       async () => {
         throw new Error('unknown key on identity');
+      },
+    );
+    await expect(isRevoked(issuer.did, credentialCID)).rejects.toThrow(
+      /revocation status unavailable/,
+    );
+  });
+
+  it('a resolver VERDICT is an invalid proof, not an unobtainable status', async () => {
+    // A revocation dated before its issuer's genesis names an instant the
+    // identity provably had no state at, so the resolver answers rather than
+    // fails. Tagging that as unresolvable would let ONE relay serving a provably
+    // invalid revocation hold the credential at 503 for everybody, permanently —
+    // and no other relay's negative answer could ever clear it.
+    const { issuer, credentialCID } = await setup();
+    const preGenesis = await signRevocationAt(issuer, credentialCID, ts(-600));
+    const isRevoked = createRevocationChecker(
+      [A, B],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: preGenesis } },
+        [B]: { [credentialCID]: { revoked: false } },
+      }),
+      async () => {
+        throw new NoStateAsOfError('identity has no state as of 2020-01-01T00:00:00.000Z');
+      },
+    );
+    expect(await isRevoked(issuer.did, credentialCID)).toBe(false);
+  });
+
+  it('a dependency-marked resolver miss is still unavailable, verdict class or not', async () => {
+    // `resolveKeyFromIdentity` throws a MARKED CredentialVerificationError when
+    // its answer is indeterminate — same class, opposite meaning, and the marker
+    // is what says so
+    const { issuer, credentialCID, revocation } = await setup();
+    const isRevoked = createRevocationChecker(
+      [A],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: revocation.jwsToken } },
+      }),
+      async () => {
+        throw markDependencyMissing(
+          new CredentialVerificationError('unknown key k on identity did:dfos:x'),
+        );
       },
     );
     await expect(isRevoked(issuer.did, credentialCID)).rejects.toThrow(

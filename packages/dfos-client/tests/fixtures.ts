@@ -22,7 +22,9 @@ import {
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
 import {
+  createJws,
   createNewEd25519Keypair,
+  dagCborCanonicalEncode,
   decodeJwsUnsafe,
   generateId,
   signPayloadEd25519,
@@ -193,6 +195,38 @@ export const buildIdentity = async (opts?: {
     headCID,
     ...(rotatedKey ? { rotatedKey } : {}),
   };
+};
+
+/**
+ * Sign a revocation with a caller-chosen `createdAt`. `signRevocation` stamps
+ * Date.now(), which cannot express "revoked before instant X" — the whole point
+ * of the as-of gate, and the only way to build a revocation dated before its own
+ * issuer's genesis. Payload shape mirrors signRevocation exactly so the result
+ * verifies through the real `verifyRevocation`.
+ */
+export const signRevocationAt = async (
+  issuer: BuiltIdentity,
+  credentialCID: string,
+  createdAt: string,
+): Promise<string> => {
+  const payload = {
+    version: 1 as const,
+    type: 'revocation' as const,
+    did: issuer.did,
+    credentialCID,
+    createdAt,
+  };
+  const encoded = await dagCborCanonicalEncode(payload);
+  return createJws({
+    header: {
+      alg: 'EdDSA',
+      typ: 'did:dfos:revocation',
+      kid: issuer.kid,
+      cid: encoded.cid.toString(),
+    },
+    payload: payload as unknown as Record<string, unknown>,
+    sign: issuer.k.signer,
+  });
 };
 
 export interface BuiltContent {

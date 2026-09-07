@@ -51,9 +51,18 @@ import {
 } from '../src/api-auth';
 import { createClient } from '../src/client';
 import type { RevChecker } from '../src/types';
-import { buildIdentity, cidOf, fakePeerClient, keyProofFor, makeKey } from './fixtures';
+import {
+  buildIdentity,
+  cidOf,
+  fakePeerClient,
+  keyProofFor,
+  makeKey,
+  signRevocationAt,
+  ts,
+} from './fixtures';
 
 const RELAY = 'https://relay.test';
+const OTHER_RELAY = 'https://relay2.test';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1233,6 +1242,45 @@ describe('verifyApiRequest', () => {
     await expect(
       verifyApiRequest(client, { ...baseInput(), proof, credential: jws }),
     ).rejects.toMatchObject({ reason: 'unverifiable', phase: 'credential', status: 503 });
+  });
+
+  it('ACCEPTS when a served revocation is dated before the issuer’s genesis', async () => {
+    // The resolver ANSWERS here — the identity provably had no state at that
+    // instant — so the proof is invalid and the credential is simply not revoked.
+    // Reading that as "the status could not be obtained" would let one relay
+    // serving a provably invalid revocation hold the credential at 503 for
+    // everybody, with no other relay's negative answer able to clear it.
+    const user = await buildIdentity();
+    const rp = await buildIdentity();
+    const { jws, cid } = await issueCredential({ issuer: user, aud: rp.did });
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      credentialCID: cid,
+      kid: rp.kid,
+      sign: rp.k.signer,
+      iat: NOW,
+    });
+    // the fixture's genesis is dated ts(-10); this predates it
+    const preGenesis = await signRevocationAt(user, cid, ts(-600));
+    const client = createClient({
+      relays: [RELAY, OTHER_RELAY],
+      peerClient: fakePeerClient({
+        [RELAY]: { identities: { [user.did]: user.log, [rp.did]: rp.log } },
+        [OTHER_RELAY]: { identities: { [user.did]: user.log, [rp.did]: rp.log } },
+      }),
+      fetch: async (input) =>
+        new URL(String(input)).origin === RELAY
+          ? Response.json({ revoked: true, revocation: preGenesis })
+          : Response.json({ revoked: false }),
+    });
+    const result = await verifyApiRequest(client, {
+      ...baseInput(),
+      proof,
+      credential: jws,
+    });
+    expect(result.subjectDID).toBe(user.did);
   });
 
   it('rejects an expired credential on the at-read wall clock', async () => {

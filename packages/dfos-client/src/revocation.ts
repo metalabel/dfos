@@ -20,7 +20,9 @@
 
 */
 
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import { parseProtocolTimestampUnix, verifyRevocation } from '@metalabel/dfos-protocol/chain';
+import { CredentialVerificationError } from '@metalabel/dfos-protocol/credentials';
 import { REVOCATIONS_BASE_PATH } from '@metalabel/dfos-web-relay/peer-client';
 import { normalizeRelays } from './transport';
 import type { RevChecker } from './types';
@@ -43,6 +45,25 @@ const unavailable = (why: string): Error => new Error(`revocation status unavail
  * AT the resolver seam rather than guessed from a message downstream.
  */
 class KeyUnresolvableError extends Error {}
+
+/**
+ * Is a resolver throw a VERDICT about the proof, rather than a failure to look?
+ *
+ * The resolver answers two different kinds of question and this is the line
+ * between them. A revocation dated before its issuer's genesis names an instant
+ * the identity provably had no state at (`NoStateAsOfError`); a key absent from a
+ * settled historical state is the same sort of answer. Nothing arriving later can
+ * change either, so the proof is simply not one — it does not revoke, and it must
+ * not poison the answer, or one relay serving a provably invalid revocation would
+ * hold the whole credential at 503 forever.
+ *
+ * `CredentialVerificationError` is the protocol's class for exactly that verdict,
+ * and the dependency marker is the protocol's flag for "ask again later" — which
+ * is the one thing a member of that class can be while still not being a verdict,
+ * so the marker is checked first.
+ */
+const isResolverVerdict = (err: unknown): boolean =>
+  err instanceof CredentialVerificationError && !isDependencyMissing(err);
 
 /**
  * Build the default revocation checker over an ordered relay set.
@@ -68,12 +89,15 @@ export const createRevocationChecker = (
   resolveKey: (kid: string, basis?: string) => Promise<Uint8Array>,
 ): RevChecker => {
   const relaySet = normalizeRelays(relays);
-  // the resolver seam, tagged: everything past it that throws is the PROOF
-  // failing, everything here is this client failing to look
+  // The resolver seam. Past it, a throw is the PROOF failing; here, it is either
+  // this client failing to LOOK (tagged, so a negative answer cannot be licensed
+  // over it) or the resolver's own VERDICT that no such state exists (passed
+  // through bare, so it reads as the invalid proof it is).
   const guardedResolveKey = async (kid: string, basis?: string): Promise<Uint8Array> => {
     try {
       return await resolveKey(kid, basis);
     } catch (err) {
+      if (isResolverVerdict(err)) throw err;
       throw new KeyUnresolvableError(`could not resolve the revocation signing key ${kid}`, {
         cause: err,
       });
@@ -141,7 +165,8 @@ export const createRevocationChecker = (
         // credential authorized because a lookup failed. Remember it and keep
         // consulting: a later relay may still prove the revocation outright.
         if (err instanceof KeyUnresolvableError) unresolvable = err;
-        // anything else is a forged / garbage proof — ignore this relay's claim
+        // anything else is a forged / garbage proof, or a resolver VERDICT that
+        // the state the proof names never existed — ignore this relay's claim
       }
     }
     if (!answered) throw unavailable('no relay answered');

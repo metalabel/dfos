@@ -205,6 +205,12 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
       return;
     }
     const client = getClient();
+    // CAPTURED WITH THE CLIENT, NOT AFTER THE AWAIT. `getClient()` is memoized on
+    // the relay set, so this pair is the set the fold actually runs against —
+    // read later, a relay switch landing mid-flight would file the verdict under
+    // the NEW set's key for ops the new relays never served, which is the exact
+    // inheritance the scoping exists to stop.
+    const relaySet = relaySetKey();
     // client.identity/content re-fold the whole chain in the tab; client.log
     // returns the same verified op log we hand to jitIndexChain (fire-and-forget
     // best-effort local indexing, exactly as the detail views do).
@@ -217,7 +223,7 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
       const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
       setRecord(k, { status: 'verified', facts });
       void persistVerdict(k, facts, generation, {
-        relaySet: relaySetKey(),
+        relaySet,
         oldestOpAt: oldestOpAtOf(log.value),
       });
     } else {
@@ -232,7 +238,7 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
       };
       setRecord(k, { status: 'verified', facts });
       void persistVerdict(k, facts, generation, {
-        relaySet: relaySetKey(),
+        relaySet,
         oldestOpAt: oldestOpAtOf(log.value),
       });
     }
