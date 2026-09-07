@@ -76,16 +76,29 @@ import (
 // and logs nothing. Signature verification is paid only for rows that are
 // genuinely stale, and only once.
 //
-// RETURNS WHETHER ANY ROW WAS REWRITTEN, because the caller cannot tell
-// otherwise and has to. The rebuild that follows decides whether to re-walk from
-// the stamped projection_version alone, and a corpus that first materialized the
+// beforeRewrite RUNS ONCE, AFTER THE SCAN FINDS WORK AND BEFORE THE FIRST
+// DURABLE WRITE. The rebuild that follows decides whether to re-walk from the
+// stamped projection_version alone, and a corpus that first materialized the
 // `key=` index under the CURRENT version — from the narrow fallback, before this
-// repair existed — carries a stamp that says the rows are already right. Silence
-// here is read as "nothing changed", and the index stays narrow.
-func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) (bool, error) {
+// repair existed — carries a stamp saying the rows are already right. So the
+// stamp has to be invalidated, and the ORDER of that against the rewrites is the
+// whole of this hook's reason to exist.
+//
+// Invalidating AFTERWARDS leaves a window with no exit. A stop between the last
+// rewrite and the stamp reset — a crash, a SIGKILL, a failed write — leaves
+// repaired rows under a current stamp, and the next boot finds NO stale
+// identities, so it has nothing to infer from and skips the rebuild. Forever:
+// the evidence that a repair happened is exactly what the repair erased.
+// Invalidating first makes an interrupted run resume into a rebuild, because the
+// stamp is the durable record that one is owed. A rebuild that turns out to be
+// unnecessary costs a bounded log re-walk and converges on the same rows; the
+// other direction costs a permanently wrong index.
+//
+// The hook is optional — nil means the caller keeps no such stamp.
+func backfillProvedKeyState(store MigratableStore, logger *slog.Logger, beforeRewrite func() error) error {
 	chains, err := store.ListIdentityChains()
 	if err != nil {
-		return false, fmt.Errorf("list identity chains: %w", err)
+		return fmt.Errorf("list identity chains: %w", err)
 	}
 
 	// Collect first, write second. The scan is the common case and it must not
@@ -100,11 +113,19 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) (bool, e
 		stale = append(stale, chain)
 	}
 	if len(stale) == 0 {
-		return false, nil
+		return nil
 	}
 
 	logger.Info("identity state: backfilling has-ever-proved keys",
 		"stale", len(stale), "examined", len(chains))
+
+	// Ahead of every durable write below, so a stop anywhere in the loop resumes
+	// into a rebuild rather than into silence.
+	if beforeRewrite != nil {
+		if err := beforeRewrite(); err != nil {
+			return err
+		}
+	}
 
 	// Row by row, and that is fine: the rewrites are independent of each other,
 	// and a boot interrupted midway leaves the unrepaired rows still zero, which
@@ -129,7 +150,7 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) (bool, e
 		chain.HeadCID = result.HeadCID
 		chain.LastCreatedAt = result.LastCreatedAt
 		if err := store.RewriteIdentityChainState(chain); err != nil {
-			return rewritten > 0, fmt.Errorf("rewrite identity chain %s: %w", chain.DID, err)
+			return fmt.Errorf("rewrite identity chain %s: %w", chain.DID, err)
 		}
 		rewritten++
 	}
@@ -139,5 +160,5 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) (bool, e
 		"rewritten", rewritten,
 		"skippedClean", len(chains)-len(stale),
 		"failed", failed)
-	return rewritten > 0, nil
+	return nil
 }

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -114,7 +115,7 @@ func TestBackfillProvedKeyStateRestoresRotatedOutKeys(t *testing.T) {
 			}
 
 			logger, logs := backfillTestLogger()
-			if _, err := backfillProvedKeyState(store, logger); err != nil {
+			if err := backfillProvedKeyState(store, logger, nil); err != nil {
 				t.Fatalf("backfill: %v", err)
 			}
 
@@ -276,6 +277,100 @@ func TestBackfillResetsAnAlreadyStampedProjection(t *testing.T) {
 	}
 }
 
+// haltingRewriteStore performs an identity rewrite for real and then fails, which
+// is how a boot that is KILLED mid-repair looks to the boot after it: the durable
+// write landed, and nothing that was supposed to follow it did.
+type haltingRewriteStore struct {
+	*SQLiteStore
+	halt bool
+}
+
+func (s *haltingRewriteStore) RewriteIdentityChainState(chain StoredIdentityChain) error {
+	if err := s.SQLiteStore.RewriteIdentityChainState(chain); err != nil {
+		return err
+	}
+	if s.halt {
+		return errors.New("simulated stop after the rewrite landed")
+	}
+	return nil
+}
+
+// TestBackfillResumesAfterAStopBetweenTheRewriteAndTheStamp pins the ORDER of the
+// two durable writes the startup repair makes, which is a different property from
+// making them both happen.
+//
+// Invalidate the projection stamp AFTER the rewrites and there is a window with
+// no exit: a stop in between leaves repaired rows under a current stamp, and the
+// next boot finds no stale identities, so it has nothing to infer from and skips
+// the rebuild forever. The evidence a repair was owed is exactly what the repair
+// erased. Invalidating first makes the stamp the durable record of the debt.
+func TestBackfillResumesAfterAStopBetweenTheRewriteAndTheStamp(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backfill-interrupted.db")
+	base, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer base.Close()
+
+	r, err := NewRelay(RelayOptions{Store: base, Authority: testAuthority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ingestIdentity(t, r)
+	rotateExistingTestIdentity(t, r, id)
+	rotatedOut := id.auth.mk.PublicKeyMultibase
+
+	// The pre-repair world: a stale identity row, a `key=` index built from the
+	// narrow fallback, and a stamp claiming the projection is current.
+	staleIdentityRow(t, base, id.did)
+	if err := base.ClearIndexProjection(); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.SetIndexCursor(IndexCursor{}); err != nil {
+		t.Fatal(err)
+	}
+	logger, _ := backfillTestLogger()
+	drainIndexProjection(base, DefaultIndexProjectionBudget, 0, logger)
+	if err := base.SetIndexProjectionVersion(IndexProjectionVersion); err != nil {
+		t.Fatal(err)
+	}
+	if got := identityDIDsMatching(t, r, keyQuery(rotatedOut)); len(got) != 0 {
+		t.Fatalf("fixture: the pre-repair index already resolved the rotated-out key (%v)", got)
+	}
+
+	// BOOT ONE dies the instant its rewrite lands.
+	halting := &haltingRewriteStore{SQLiteStore: base, halt: true}
+	if _, err := NewRelay(RelayOptions{Store: halting, Authority: testAuthority}); err == nil {
+		t.Fatal("the interrupted boot must fail rather than continue")
+	}
+
+	// The row was repaired, so the marker the repair reads is gone. The only
+	// thing that can still say a rebuild is owed is the stamp.
+	repaired, err := base.GetIdentityChain(id.did)
+	if err != nil || repaired == nil {
+		t.Fatalf("read the repaired chain: %v", err)
+	}
+	if repaired.State.ProvedKeys.IsZero() {
+		t.Fatal("fixture: the interrupted boot must have landed its rewrite")
+	}
+	if v, _ := base.GetIndexProjectionVersion(); v != 0 {
+		t.Fatalf("the stamp must be invalidated BEFORE the rewrite, got version %d", v)
+	}
+
+	// BOOT TWO is ordinary, finds nothing stale, and rebuilds anyway.
+	r2, err := NewRelay(RelayOptions{
+		Store:     base,
+		Authority: testAuthority,
+		Identity:  &RelayIdentity{DID: r.DID(), ProfileArtifactJWS: r.ProfileArtifactJWS()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := identityDIDsMatching(t, r2, keyQuery(rotatedOut)); len(got) != 1 || got[0] != id.did {
+		t.Fatalf("the boot after an interrupted repair must still rebuild: key= matched %v, want [%s]", got, id.did)
+	}
+}
+
 // countingPutStore counts identity rewrites, so idempotency can be asserted on
 // the WRITE rather than on the resulting bytes: a second pass that rewrote every
 // row with identical content would be indistinguishable by content alone, and it
@@ -310,7 +405,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 	store := &countingPutStore{MigratableStore: inner}
 	logger, _ := backfillTestLogger()
 
-	if _, err := backfillProvedKeyState(store, logger); err != nil {
+	if err := backfillProvedKeyState(store, logger, nil); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	if store.identityPuts != 1 {
@@ -318,7 +413,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 	}
 
 	logger2, logs2 := backfillTestLogger()
-	if _, err := backfillProvedKeyState(store, logger2); err != nil {
+	if err := backfillProvedKeyState(store, logger2, nil); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	if store.identityPuts != 1 {
@@ -353,7 +448,7 @@ func TestBackfillLeavesAnUnverifiableChainAlone(t *testing.T) {
 	}
 
 	logger, logs := backfillTestLogger()
-	if _, err := backfillProvedKeyState(store, logger); err != nil {
+	if err := backfillProvedKeyState(store, logger, nil); err != nil {
 		t.Fatalf("one unverifiable chain must not fail the pass: %v", err)
 	}
 
@@ -396,7 +491,7 @@ func TestBackfillSkipsChainsWithNoLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger, logs := backfillTestLogger()
-	if _, err := backfillProvedKeyState(store, logger); err != nil {
+	if err := backfillProvedKeyState(store, logger, nil); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
 	if logs.Len() != 0 {

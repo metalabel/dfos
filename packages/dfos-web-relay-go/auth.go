@@ -265,7 +265,22 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 		// iat+window+skew; the +1 carries the entry past that last acceptable
 		// second rather than expiring inside it.
 		proofExpiry := time.Unix(verified.Payload.Iat+window+skew+1, 0)
-		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, time.Now(), proofExpiry) {
+
+		// AND THE PROOF MUST STILL BE FRESH RIGHT HERE, not merely when the
+		// verifier looked. Freshness was decided against the `now` handed to
+		// VerifyIdentityProof above, and a key resolution sits between that
+		// instant and this one — a store read, which on a slow or contended store
+		// can outlast the window. Without this check, a proof that expired in the
+		// gap would be recorded with an ALREADY-PAST expiry, which every
+		// concurrent copy of the same proof then prunes on its way in: each one
+		// finds the cache empty, inserts, and authenticates. An expiring proof
+		// would become an unlimited one, and the replay cache would be doing the
+		// opposite of its job.
+		now := time.Now()
+		if !proofExpiry.After(now) {
+			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+		}
+		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, now, proofExpiry) {
 			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
 		}
 	}

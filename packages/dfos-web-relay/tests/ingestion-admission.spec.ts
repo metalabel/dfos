@@ -28,7 +28,13 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
-import { createJtiReplayCache, createRelay, INGESTION_MODES, MemoryRelayStore } from '../src';
+import {
+  authenticateIdentityProof,
+  createJtiReplayCache,
+  createRelay,
+  INGESTION_MODES,
+  MemoryRelayStore,
+} from '../src';
 import type { AdmissionPolicy, RelayOptions } from '../src';
 
 /**
@@ -356,6 +362,77 @@ describe('ingestion admission', () => {
       expect(cache.insertIfAbsent('did:dfos:presenter', 'jti-1', staleAtMs, expiresAtMs)).toBe(
         true,
       );
+    });
+
+    it('refuses a proof that expired during verification instead of caching it', async () => {
+      // Freshness was decided inside the `await`, and a key resolution — a store
+      // read — sits between that instant and the insert. A proof that expires in
+      // that gap must be REFUSED, not recorded with an already-past expiry.
+      //
+      // Recording it is the dangerous outcome, not merely a useless one: an
+      // already-expired entry is pruned by the very next insert, so every
+      // concurrent copy of the same proof finds the cache empty, inserts, and
+      // authenticates. The one proof whose window just closed would become the
+      // one proof with no replay bound at all.
+      const W = 1;
+      const S = 1;
+      const { store, relay } = await relayWith();
+      const submitter = await createIdentity();
+      expect((await submit(relay, [submitter.jwsToken])).status).toBe(200);
+
+      const iatSeconds = Math.floor(Date.now() / 1000);
+      const t0 = iatSeconds * 1000;
+      let clockMs = t0;
+
+      // The store read is where the time goes. Advancing the clock inside it is
+      // the same shape as a slow or contended store, made deterministic.
+      const stallingStore = new Proxy(store, {
+        get(target, prop, receiver) {
+          if (prop === 'getIdentityChain') {
+            return async (did: string) => {
+              clockMs = t0 + (W + S + 1) * 1000; // exactly the entry's expiry
+              return target.getIdentityChain(did);
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+
+      const body = new TextEncoder().encode(JSON.stringify({ operations: [] }));
+      const { proof } = await signApiIdentityRequest({
+        method: 'POST',
+        host: AUTHORITY,
+        path: OPERATIONS_PATH,
+        body,
+        kid: `${submitter.did}#${submitter.authKeyId}`,
+        sign: submitter.sign,
+        iat: iatSeconds,
+        extraMembers: { jti: 'expires-in-the-gap' },
+      });
+
+      const inserts: string[] = [];
+      const outcome = await authenticateIdentityProof({
+        authHeader: `DFOS ${proof}`,
+        method: 'POST',
+        path: OPERATIONS_PATH,
+        body,
+        authority: AUTHORITY,
+        store: stallingStore,
+        requireJti: true,
+        windowSeconds: W,
+        skewSeconds: S,
+        now: () => clockMs,
+        replayCache: {
+          insertIfAbsent(presenterDID: string, jti: string) {
+            inserts.push(`${presenterDID}|${jti}`);
+            return true;
+          },
+        },
+      });
+
+      expect(outcome).toEqual({ ok: false, status: 401, error: 'authentication required' });
+      expect(inserts).toEqual([]);
     });
 
     it('rejects a proof with NO jti — ingestion is write-shaped', async () => {
