@@ -422,8 +422,8 @@ img {
   line-height: 1.7;
   color: rgba(255, 255, 255, 0.7);
   text-align: center;
-  margin-bottom: 2rem;
-  max-width: 620px;
+  margin-bottom: 0;
+  max-width: 480px;
 }
 
 /* ── Below Hero ── */
@@ -432,7 +432,7 @@ img {
   position: relative;
   z-index: 2;
   text-align: center;
-  padding: 2.5rem 2.5rem 0;
+  padding: 3.5rem 2.5rem 2.5rem;
   opacity: 0;
   animation: heroFadeIn 1.4s ease-out 1.2s forwards;
 }
@@ -487,10 +487,24 @@ img {
   margin-right: 0.6em;
 }
 
+/* In the hero the list takes the headline treatment: green serif, centered,
+   sitting between the pitch and the CTA row. The marker would hang ragged off
+   centered lines, so the hero variant drops it. */
 .action-list--hero {
-  color: rgba(255, 255, 255, 0.85);
-  text-align: left;
-  max-width: 620px;
+  font-family: var(--font-heading);
+  font-size: clamp(1.15rem, 2.1vw, 1.5rem);
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  color: var(--green);
+  text-align: center;
+  gap: 0.35rem;
+  /* Wide enough that the longest line stays one line at the top of the clamp. */
+  max-width: 920px;
+  margin: 0 auto 2.5rem;
+}
+
+.action-list--hero li::before {
+  content: none;
 }
 
 /* ── Hero Animations ── */
@@ -1649,7 +1663,6 @@ a.card:hover {
 
   .hero-pitch {
     font-size: 0.85rem;
-    margin-bottom: 1.5rem;
   }
 
   .action-list {
@@ -1657,8 +1670,12 @@ a.card:hover {
     gap: 0.5rem;
   }
 
+  .action-list--hero {
+    font-size: 1.25rem;
+  }
+
   .hero-below {
-    padding: 2rem 1.5rem 0;
+    padding: 3rem 1.5rem 2.5rem;
   }
 
   .hero-cta {
