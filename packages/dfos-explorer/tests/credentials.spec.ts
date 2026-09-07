@@ -7,11 +7,11 @@ import {
   summarizeAuthorization,
 } from '../src/lib/credentials';
 import type { ExplorerOp } from '../src/lib/db';
+import { mockJws } from './fixtures/mock-jws';
 
-const b64url = (v: unknown): string => Buffer.from(JSON.stringify(v)).toString('base64url');
 const credOp = (cid: string, payload: Record<string, unknown>): ExplorerOp => ({
   cid,
-  jwsToken: `${b64url({ typ: 'did:dfos:credential' })}.${b64url(payload)}.sig`,
+  jwsToken: mockJws({ typ: 'did:dfos:credential' }, payload),
   kind: 'credential',
   chainId: 'did:dfos:issuer',
   type: '',
@@ -73,7 +73,7 @@ const idxRow = (
   aud: '*',
   att,
   exp,
-  jwsToken: `${b64url({ typ: 'did:dfos:credential' })}.${b64url({ aud, att, exp })}.sig`,
+  jwsToken: mockJws({ typ: 'did:dfos:credential' }, { aud, att, exp }),
 });
 
 describe('grantsFromIndex', () => {
@@ -122,7 +122,7 @@ describe('grantsFromIndex', () => {
 });
 
 const authToken = (payload: Record<string, unknown>): string =>
-  `${b64url({ typ: 'did:dfos:credential' })}.${b64url(payload)}.sig`;
+  mockJws({ typ: 'did:dfos:credential' }, payload);
 
 describe('summarizeAuthorization', () => {
   it('decodes a well-formed embedded credential into a compact summary', () => {

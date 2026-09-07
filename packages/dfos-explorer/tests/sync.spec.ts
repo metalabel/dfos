@@ -4,12 +4,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openExplorerDb } from '../src/lib/db';
 import { indexChainOps, syncAll, syncFromRelay } from '../src/lib/sync';
-
-// unsigned JWS-shaped token — decodeJwsUnsafe only decodes, never verifies
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
-
-const mkJws = (header: Record<string, unknown>, payload: Record<string, unknown>): string =>
-  `${b64url(header)}.${b64url(payload)}.sig`;
+import { mockJws } from './fixtures/mock-jws';
 
 interface FakeEntry {
   cid: string;
@@ -26,7 +21,7 @@ const entry = (
   type = 'create',
 ): FakeEntry => ({
   cid,
-  jwsToken: mkJws({ typ: `did:dfos:${kind}`, kid: `${chainId}#key1` }, { type, createdAt }),
+  jwsToken: mockJws({ typ: `did:dfos:${kind}`, kid: `${chainId}#key1` }, { type, createdAt }),
   kind,
   chainId,
 });

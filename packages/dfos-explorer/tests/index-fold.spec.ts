@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { foldIndexChain, isIndexDocument } from '../src/lib/index-fold';
 import { parseMediaObject, rawCidOf } from '../src/lib/media';
 import type { OpRow } from '../src/lib/op-rows';
-
-const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+import { mockJws } from './fixtures/mock-jws';
 
 const mkRow = async (
   cid: string,
@@ -12,11 +11,14 @@ const mkRow = async (
   doc: unknown,
 ): Promise<{ row: OpRow; body: string | null; documentCID: string | null }> => {
   const documentCID = doc === null ? null : (await dagCborCanonicalEncode(doc)).cid.toString();
-  const jwsToken = `${b64url({ typ: 'did:dfos:content-op', kid: 'did:dfos:aaa#k' })}.${b64url({
-    type: 'update',
-    createdAt,
-    documentCID,
-  })}.sig`;
+  const jwsToken = mockJws(
+    { typ: 'did:dfos:content-op', kid: 'did:dfos:aaa#k' },
+    {
+      type: 'update',
+      createdAt,
+      documentCID,
+    },
+  );
   return {
     row: { cid, jwsToken, type: 'update', createdAt, kid: 'did:dfos:aaa#k' },
     body: doc === null ? null : JSON.stringify(doc),
