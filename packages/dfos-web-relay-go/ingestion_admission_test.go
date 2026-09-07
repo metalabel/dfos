@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -376,15 +377,91 @@ func TestAdmissionJtiIsScopedToThePresenter(t *testing.T) {
 	}
 }
 
+// stallingReadStore delays the key-resolution read the proof verifier makes,
+// which is the real gap between "the verifier decided this proof was fresh" and
+// "the replay cache records it". A slow or contended store is all it takes; the
+// sleep just makes the gap deterministic.
+type stallingReadStore struct {
+	referenceStore
+	mu       sync.Mutex
+	stall    time.Duration
+	stallDID string
+	armed    bool // set AFTER construction, so the boot path does not spend it
+	fired    bool
+}
+
+// arm makes the NEXT read of stallDID stall. Relay construction reads the store
+// too, and a stall spent there would be over before the request under test began.
+func (s *stallingReadStore) arm(did string, stall time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stallDID, s.stall, s.armed, s.fired = did, stall, true, false
+}
+
+func (s *stallingReadStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
+	s.mu.Lock()
+	stall := time.Duration(0)
+	if s.armed && !s.fired && did == s.stallDID {
+		s.fired = true
+		stall = s.stall
+	}
+	s.mu.Unlock()
+	if stall > 0 {
+		time.Sleep(stall)
+	}
+	return s.referenceStore.GetIdentityChain(did)
+}
+
+// TestExpiredProofIsRefusedRatherThanCached: freshness was decided against the
+// `now` the verifier was handed, and a store read sits between that instant and
+// the insert. A proof that expires in that gap must be REFUSED here, not
+// recorded with an already-past expiry.
+//
+// Recording it is the dangerous outcome, not merely a useless one: an entry that
+// is already expired is pruned by the very next insert, so every concurrent copy
+// of the same proof finds the cache empty, inserts, and authenticates. The one
+// proof whose window just closed would become the one proof with no replay bound
+// at all.
+func TestExpiredProofIsRefusedRatherThanCached(t *testing.T) {
+	memory := NewMemoryStore()
+	submitter := createTestIdentity(t)
+	if res := IngestOperations([]string{submitter.token}, memory); res[0].Status != "new" {
+		t.Fatalf("seed submitter: %+v", res[0])
+	}
+
+	// W=1, S=1, so the entry expiry is iat+3 and a stall past that closes the
+	// window while verification is still in flight.
+	stalling := &stallingReadStore{referenceStore: memory}
+	cache := &recordingJtiCache{admit: true}
+	r, _ := admissionRelay(t, RelayOptions{
+		Store:              stalling,
+		JtiCache:           cache,
+		ProofWindowSeconds: 1,
+		ProofSkewSeconds:   1,
+	})
+	stalling.arm(submitter.did, 3100*time.Millisecond)
+
+	other := createTestIdentity(t)
+	got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "expires-in-the-gap")
+	if got.Code != http.StatusUnauthorized {
+		t.Fatalf("a proof that expired before the insert must be refused: %d %s", got.Code, got.Body.String())
+	}
+	if len(cache.inserts) != 0 {
+		t.Fatalf("an expired proof must never reach the replay cache, got %v", cache.inserts)
+	}
+}
+
 // recordingJtiCache is a JtiCache a deployment could plausibly write — the seam
 // a multi-process relay fills with a shared store's insert-if-absent.
 type recordingJtiCache struct {
-	inserts []string
-	admit   bool
+	inserts      []string
+	lastLifetime time.Duration
+	admit        bool
 }
 
-func (c *recordingJtiCache) InsertIfAbsent(presenterDID, jti string, _ time.Time, ttl time.Duration) bool {
-	c.inserts = append(c.inserts, fmt.Sprintf("%s|%s|%s", presenterDID, jti, ttl))
+func (c *recordingJtiCache) InsertIfAbsent(presenterDID, jti string, now time.Time, expiresAt time.Time) bool {
+	c.inserts = append(c.inserts, fmt.Sprintf("%s|%s", presenterDID, jti))
+	c.lastLifetime = expiresAt.Sub(now)
 	return c.admit
 }
 
@@ -402,10 +479,15 @@ func TestAdmissionConsumesAnInjectedJtiCache(t *testing.T) {
 	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "injected"); got.Code != 200 {
 		t.Fatalf("proven submission: %d %s", got.Code, got.Body.String())
 	}
-	// W + S at their defaults: the entry lives exactly as long as the proof.
-	want := []string{fmt.Sprintf("%s|injected|%s", submitter.did, 120*time.Second)}
+	want := []string{fmt.Sprintf("%s|injected", submitter.did)}
 	if !reflect.DeepEqual(cache.inserts, want) {
 		t.Fatalf("injected cache saw %v, want %v", cache.inserts, want)
+	}
+	// W + S at their defaults is 120s, and the entry must outlive the proof
+	// rather than its own insertion — freshness runs in whole seconds, so the
+	// proof is still acceptable for the remainder of its last second.
+	if cache.lastLifetime <= 120*time.Second {
+		t.Fatalf("entry lifetime %s must exceed the proof's own window of %s", cache.lastLifetime, 120*time.Second)
 	}
 
 	// Its refusal is the relay's refusal — the fleet-wide cache is the authority

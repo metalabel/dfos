@@ -334,7 +334,11 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	const (
 		wantOrigin  = "*"
 		wantMethods = "GET, POST, PUT, OPTIONS"
-		wantHeaders = "Content-Type, Authorization"
+		// X-Credential is how a delegated reader presents its credential on the
+		// blob route. Left out of the preflight answer, the browser refuses to
+		// send the request at all — a route the relay serves and the spec
+		// documents, unreachable from the one client CORS exists for.
+		wantHeaders = "Content-Type, Authorization, X-Credential"
 		// X-Document-Cid is the blob route's claim about which document it is
 		// sending. Unexposed, a cross-origin reader cannot check served bytes
 		// against the SERVING relay's own claim, so a relay contradicting itself

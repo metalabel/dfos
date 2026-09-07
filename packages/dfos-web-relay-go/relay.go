@@ -119,6 +119,13 @@ type Relay struct {
 	// backlog that ends on an exact multiple of the cap is the case the
 	// caught-up logging has to get right) without minting thousands of ops.
 	maxOpsPerSyncCycle int
+	// sequencerWindowOps is how many pending rows one keyset window fetches,
+	// defaulted from the package constant of the same name. A field for the same
+	// reason as maxOpsPerSyncCycle above: the behavior worth testing is what
+	// happens when a window fills entirely with rows that cannot advance, and
+	// proving that at the production window size costs ten thousand signature
+	// verifications per pass to say something a window of four says exactly.
+	sequencerWindowOps int
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -277,7 +284,31 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	// reset below, so a rebuild triggered by the same upgrade materializes the
 	// `key=` index from repaired state rather than from the fallback.
 	if migratable, ok := store.(MigratableStore); ok {
-		if err := backfillProvedKeyState(migratable, logger); err != nil {
+		// A backfill that rewrites rows changes the very state the `key=` index is
+		// folded FROM, and the rebuild below reads only the stamped
+		// projection_version to decide whether to re-walk. A corpus that first
+		// materialized that index under the CURRENT version — from the narrow
+		// fallback, before this repair existed — is therefore stamped as already
+		// correct and would take the early-return branch. Invalidating the stamp
+		// is what makes the two migrations one upgrade instead of two that pass in
+		// the night.
+		//
+		// It runs BEFORE the rewrites, not after: see backfillProvedKeyState's
+		// beforeRewrite contract. A stop between the last rewrite and a trailing
+		// reset would leave repaired rows under a current stamp, which no later
+		// boot can detect — the rows it would have inferred from are the ones the
+		// repair already fixed.
+		var beforeRewrite func() error
+		if rebuildable, ok := store.(RebuildableIndexStore); ok {
+			beforeRewrite = func() error {
+				logger.Info("index projection: invalidating the version stamp ahead of an identity-state backfill")
+				if err := rebuildable.SetIndexProjectionVersion(0); err != nil {
+					return fmt.Errorf("invalidate index projection version: %w", err)
+				}
+				return nil
+			}
+		}
+		if err := backfillProvedKeyState(migratable, logger, beforeRewrite); err != nil {
 			return nil, fmt.Errorf("backfill identity proved keys: %w", err)
 		}
 	}
@@ -352,6 +383,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		peerSync:           peerSync,
 		peerPins:           make(map[string]peerPinVerdict),
 		maxOpsPerSyncCycle: maxOpsPerSyncCycle,
+		sequencerWindowOps: sequencerWindowOps,
 	}, nil
 }
 

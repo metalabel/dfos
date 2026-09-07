@@ -571,6 +571,13 @@ export type OpOrigin = 'direct' | 'peer';
 export interface PendingOp {
   jwsToken: string;
   origin: OpOrigin;
+  /**
+   * This row's KEYSET POSITION in the pending set, opaque to the caller and
+   * defined by the store. The sequencer passes the last row's cursor back to
+   * resume past it, which is what keeps a block of permanently
+   * dependency-missing rows from hiding the rest of the queue behind it.
+   */
+  cursor: string;
 }
 
 /** Ephemeral courier state for one sign request. */
@@ -1129,8 +1136,19 @@ export interface SigningStore {
 export interface RelayWriterState {
   /** Store a raw JWS token by CID and durable origin — absent origin is direct. */
   putRawOp(cid: string, jwsToken: string, origin?: OpOrigin): Promise<void>;
-  /** JWS tokens and durable origins for unsequenced (pending) ops. */
-  getUnsequencedOps(limit: number): Promise<PendingOp[]>;
+  /**
+   * JWS tokens and durable origins for unsequenced (pending) ops, in a stable
+   * total order, resuming strictly after the keyset cursor of a previously
+   * returned row ('' starts at the head).
+   *
+   * THE CURSOR IS NOT AN OPTIMIZATION. Without it, a caller that fetches the
+   * oldest N pending rows always fetches THE SAME N: an op whose dependency this
+   * relay will never hold stays pending forever, and enough of them fill the
+   * window permanently, so every row behind them — including a freshly
+   * pull-synced op whose dependency has since landed — is never selected and
+   * peer ingestion stops converging while direct POSTs keep working.
+   */
+  getUnsequencedOps(after: string, limit: number): Promise<PendingOp[]>;
   markOpsSequenced(cids: string[]): Promise<void>;
   markOpRejected(cid: string, reason: string): Promise<void>;
   countUnsequenced(): Promise<number>;

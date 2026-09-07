@@ -260,6 +260,65 @@ func TestUnansweredPinIsNotAMismatch(t *testing.T) {
 	}
 }
 
+// TestPeerPinUnansweredRecheckPreservesMismatch is the other direction of the
+// same rule: "no evidence" cannot ESTABLISH a mismatch, and it cannot RETRACT
+// one either. A peer caught serving the wrong DID that then goes quiet is still
+// a peer caught serving the wrong DID — if silence cleared the verdict, the
+// control would be one dropped connection away from being lifted by whoever it
+// was suppressing.
+func TestPeerPinUnansweredRecheckPreservesMismatch(t *testing.T) {
+	peerStore := NewMemoryStore()
+	id := createTestIdentity(t)
+	IngestOperations([]string{id.token}, peerStore)
+
+	r, mock := pinnedRelay(t, peerStore, otherRelayDID, pinnedRelayDID)
+	if err := r.SyncFromPeers(); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.PeerSyncStatuses()["http://peer-a"]; st.PinMismatch == nil {
+		t.Fatal("precondition: the served DID must establish the mismatch first")
+	}
+
+	// The peer stops answering, and the standing verdict is aged past its
+	// recheck window so the next touch re-asks.
+	mock.didErr = errors.New("dial tcp: connection refused")
+	r.peerPinMu.Lock()
+	verdict := r.peerPins["http://peer-a"]
+	verdict.checkedAt = time.Now().Add(-2 * peerPinRecheck)
+	r.peerPins["http://peer-a"] = verdict
+	r.peerPinMu.Unlock()
+
+	before := mock.operationLogHits.Load()
+	if err := r.SyncFromPeers(); err != nil {
+		t.Fatal(err)
+	}
+	if mock.operationLogHits.Load() != before {
+		t.Error("an unanswered recheck must not resume traffic to a peer with a standing mismatch")
+	}
+	if st := r.PeerSyncStatuses()["http://peer-a"]; st.PinMismatch == nil {
+		t.Error("the standing mismatch must survive an unanswered recheck")
+	}
+
+	// And the peer actually answering with the pinned DID does clear it.
+	mock.didErr = nil
+	mock.did = otherRelayDID
+	r.peerPinMu.Lock()
+	verdict = r.peerPins["http://peer-a"]
+	verdict.checkedAt = time.Now().Add(-2 * peerPinRecheck)
+	r.peerPins["http://peer-a"] = verdict
+	r.peerPinMu.Unlock()
+
+	if err := r.SyncFromPeers(); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.PeerSyncStatuses()["http://peer-a"]; st.PinMismatch != nil {
+		t.Errorf("a served DID that matches must clear the mismatch, got %q", *st.PinMismatch)
+	}
+	if mock.operationLogHits.Load() == before {
+		t.Error("a peer that answers with the pinned DID must be pulled from again")
+	}
+}
+
 // TestPeerPinVerdictIsCached: the gate is hit on every sync tick, every gossip
 // chunk, and every read-through miss. One well-known fetch per recheck window
 // is what keeps that affordable.

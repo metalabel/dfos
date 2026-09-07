@@ -384,9 +384,10 @@ func advanceSweep(sweep IndexSweepState, store IndexReadStore, cap int, dirty *p
 // Mapping:
 //   - any operation      → the signer key it verified against
 //   - identity op        → dirty that identity, record its proved keys; "delete"
-//     sweeps the currently-public content subset, "restore" and "update" sweep all
-//     content (a suspended row, and a row whose grant died with a rotated-out key,
-//     are no longer in the public subset)
+//     sweeps the currently-public content subset, "create", "restore" and "update"
+//     sweep all content (a suspended row, a row whose grant died with a rotated-out
+//     key, and a row whose grant's issuer chain had not arrived yet are all outside
+//     the public subset)
 //   - content op         → dirty that content row (+ anchored identities), record
 //     the accepted signer
 //   - artifact           → the standalone artifact row
@@ -443,6 +444,21 @@ func projectLogEntry(entry LogEntry, store IndexProjectionStore, rows *IndexRowB
 		switch payload["type"] {
 		case "delete":
 			return &IndexSweepState{Scope: IndexSweepPublic}, nil
+		case "create":
+			// A genesis is not always the FIRST thing this relay learns about an
+			// identity. A delegated public credential is admitted on its leaf
+			// signature alone, so a grant whose parent issuer is still unsynced is
+			// stored while the chain that authorizes it does not yet exist here —
+			// and the content it names projects as private. The parent's arrival is
+			// a `create`, and without this case it dirtied nothing, so the content
+			// stayed private until some unrelated touch happened to re-fold it.
+			// A newly-synced identity can only ever ADD standing authority, never
+			// remove it, so the same all-scope sweep restore and update already take
+			// is the right shape here. Coarse on purpose: the precise alternative is
+			// a credential-dependencies reverse index, and a sweep is already
+			// budgeted, resumable, and COALESCED — a burst of genesis operations
+			// costs one sweep, not one per identity.
+			return &IndexSweepState{Scope: IndexSweepAll}, nil
 		case "restore":
 			return &IndexSweepState{Scope: IndexSweepAll}, nil
 		case "update":

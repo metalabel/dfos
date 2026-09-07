@@ -110,17 +110,25 @@ func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 //
 // The primitive is ATOMIC INSERT-IF-ABSENT (accept iff newly inserted), not the
 // check-and-delete a server-minted nonce would use — the verifier never held the
-// client-chosen jti beforehand. Entries expire after the freshness window
-// (W + S): past that the proof itself is stale, so the entry protects nothing.
+// client-chosen jti beforehand.
+//
+// THE ENTRY EXPIRES WITH THE PROOF, NOT WITH ITS INSERTION. The entry protects
+// nothing once the proof it names is stale — but it must protect until then, and
+// the two are not the same instant. A proof is accepted while `now - iat <=
+// window` in WHOLE SECONDS, so one issued at iat stays fresh through the whole
+// of second iat+window+skew; an entry dated from the moment it was inserted
+// expires up to a second earlier and leaves a gap in which the same proof is
+// still fresh and no longer remembered. The caller passes the proof's own
+// expiry, which is a fact about the proof rather than about when it arrived.
 //
 // It is an INTERFACE because the default implementation is per-process: a
 // multi-process deployment injects one whose insert-if-absent is atomic across
 // the fleet (RelayOptions.JtiCache). Twin of the TS JtiReplayCache interface.
 type JtiCache interface {
-	// InsertIfAbsent records (presenterDID, jti) if absent. It returns true when
-	// newly inserted (the proof is fresh) and false when the pair was already seen
-	// within its lifetime (a replay).
-	InsertIfAbsent(presenterDID, jti string, now time.Time, ttl time.Duration) bool
+	// InsertIfAbsent records (presenterDID, jti) until expiresAt if absent. It
+	// returns true when newly inserted (the proof is fresh) and false when the
+	// pair was already seen within its lifetime (a replay).
+	InsertIfAbsent(presenterDID, jti string, now time.Time, expiresAt time.Time) bool
 }
 
 // JtiReplayCache is the default JtiCache — in-memory and per-process.
@@ -134,23 +142,23 @@ func NewJtiReplayCache() *JtiReplayCache {
 }
 
 // InsertIfAbsent implements JtiCache.
-func (c *JtiReplayCache) InsertIfAbsent(presenterDID, jti string, now time.Time, ttl time.Duration) bool {
+func (c *JtiReplayCache) InsertIfAbsent(presenterDID, jti string, now time.Time, expiresAt time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Prune before the lookup, so an expired entry never reports a replay. The
 	// map is small by construction (one window's worth of write-shaped proofs).
-	for key, expiresAt := range c.seen {
-		if !expiresAt.After(now) {
+	for key, entryExpiry := range c.seen {
+		if !entryExpiry.After(now) {
 			delete(c.seen, key)
 		}
 	}
 	// Newline-joined: a DID cannot contain one, so no (did, jti) pair can be
 	// spelled two ways or collide with another pair's concatenation.
 	key := presenterDID + "\n" + jti
-	if expiresAt, exists := c.seen[key]; exists && expiresAt.After(now) {
+	if entryExpiry, exists := c.seen[key]; exists && entryExpiry.After(now) {
 		return false
 	}
-	c.seen[key] = now.Add(ttl)
+	c.seen[key] = expiresAt
 	return true
 }
 
@@ -252,8 +260,27 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 		if !ok || jti == "" || len(jti) > MaxJtiBytes {
 			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
 		}
-		ttl := time.Duration(window+skew) * time.Second
-		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, time.Now(), ttl) {
+		// Dated off the PROOF's iat, not off arrival. Freshness is evaluated in
+		// whole seconds, so this proof is acceptable through the end of second
+		// iat+window+skew; the +1 carries the entry past that last acceptable
+		// second rather than expiring inside it.
+		proofExpiry := time.Unix(verified.Payload.Iat+window+skew+1, 0)
+
+		// AND THE PROOF MUST STILL BE FRESH RIGHT HERE, not merely when the
+		// verifier looked. Freshness was decided against the `now` handed to
+		// VerifyIdentityProof above, and a key resolution sits between that
+		// instant and this one — a store read, which on a slow or contended store
+		// can outlast the window. Without this check, a proof that expired in the
+		// gap would be recorded with an ALREADY-PAST expiry, which every
+		// concurrent copy of the same proof then prunes on its way in: each one
+		// finds the cache empty, inserts, and authenticates. An expiring proof
+		// would become an unlimited one, and the replay cache would be doing the
+		// opposite of its job.
+		now := time.Now()
+		if !proofExpiry.After(now) {
+			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+		}
+		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, now, proofExpiry) {
 			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
 		}
 	}

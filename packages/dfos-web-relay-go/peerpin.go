@@ -21,7 +21,11 @@ package relay
 //     undecodable are all "no evidence", never "a different identity" — the same
 //     rule the CLI's verifyPeerPin follows. An offline peer is a reachability
 //     problem, and the operation the caller was running reports it in its own
-//     words.
+//     words. "No evidence" cuts one way only: it cannot establish a mismatch,
+//     and it cannot clear one either. A peer already proven to serve the wrong
+//     DID stays suppressed through every silent recheck, because going quiet is
+//     not an answer and a control that a hostile peer can lift by refusing to
+//     reply is not a control.
 //   - It does not check what it cannot check. A PeerClient that does not
 //     implement IdentifyingPeerClient (every in-process test mock) has no way to
 //     ask, and a pin nothing can verify is not a pin that failed.
@@ -44,11 +48,26 @@ import (
 // request; short enough that a moved pin stops the traffic promptly.
 const peerPinRecheck = 60 * time.Second
 
+// peerPinAnswer is what a check actually learned, as distinct from what it
+// decided. The two are not the same question: "did not answer" clears the touch
+// when nothing was known before, but it is not a match, so it may neither
+// establish a mismatch nor retract one. Collapsing the three into the nil-ness
+// of an error loses exactly that distinction.
+type peerPinAnswer int
+
+const (
+	peerPinUnanswered peerPinAnswer = iota
+	peerPinMatched
+	peerPinMismatched
+)
+
 // peerPinVerdict is one peer's cached answer. mismatch nil means the peer is
-// cleared for traffic — either it served the pinned DID, or the question could
-// not be answered and absence of contact is not evidence.
+// cleared for traffic; on an unanswered check it is whatever the previous
+// verdict held, so silence carries a standing mismatch forward rather than
+// resetting it.
 type peerPinVerdict struct {
 	checkedAt time.Time
+	answer    peerPinAnswer
 	mismatch  error
 }
 
@@ -84,34 +103,45 @@ func (r *Relay) peerPinned(peer PeerConfig) error {
 	// right trade against a global stall.
 	served, err := identifier.GetPeerDID(peer.URL)
 
-	var mismatch error
-	switch {
-	case err != nil || served == "":
-		// No answer. Not evidence of a changed identity — cache the clearance so
-		// an unreachable peer costs one well-known attempt per recheck window
-		// rather than one per touch.
-	case served != peer.DID:
-		mismatch = fmt.Errorf("peer %s is not the relay it is pinned to: pinned %s, serves %s",
-			peer.URL, peer.DID, served)
-	}
-
 	r.peerPinMu.Lock()
 	previous, hadPrevious := r.peerPins[peer.URL]
-	r.peerPins[peer.URL] = peerPinVerdict{checkedAt: time.Now(), mismatch: mismatch}
+	next := peerPinVerdict{checkedAt: time.Now()}
+	switch {
+	case err != nil || served == "":
+		// No answer. Cache the attempt so an unreachable peer costs one
+		// well-known fetch per recheck window rather than one per touch — but
+		// carry the previous verdict's mismatch forward. Overwriting it with a
+		// clean one would let a peer that is provably serving the wrong DID
+		// resume sync, gossip, read-through, and blob traffic by doing nothing
+		// but failing to reply once.
+		next.answer = peerPinUnanswered
+		if hadPrevious {
+			next.mismatch = previous.mismatch
+		}
+	case served != peer.DID:
+		next.answer = peerPinMismatched
+		next.mismatch = fmt.Errorf("peer %s is not the relay it is pinned to: pinned %s, serves %s",
+			peer.URL, peer.DID, served)
+	default:
+		next.answer = peerPinMatched
+	}
+	r.peerPins[peer.URL] = next
 	r.peerPinMu.Unlock()
 
 	// Announce the EDGES only. A standing mismatch re-confirmed every recheck
 	// window is the same fact, and repeating it every cycle buries the moment it
-	// started under identical lines.
-	changed := !hadPrevious || (previous.mismatch == nil) != (mismatch == nil)
+	// started under identical lines. Both edges are gated on what the peer
+	// actually said, not merely on the error going nil: only a served DID that
+	// matches resumes traffic, so silence never prints "now matches".
+	changed := !hadPrevious || (previous.mismatch == nil) != (next.mismatch == nil)
 	switch {
-	case mismatch != nil && changed:
+	case next.answer == peerPinMismatched && changed:
 		r.logger.Warn("peer pin mismatch — suppressing all traffic to this peer",
 			"peer", peer.URL, "pinned", peer.DID, "serves", served)
-	case mismatch == nil && changed && hadPrevious:
+	case next.answer == peerPinMatched && changed && hadPrevious:
 		r.logger.Info("peer pin now matches — resuming traffic", "peer", peer.URL, "did", peer.DID)
 	}
-	return mismatch
+	return next.mismatch
 }
 
 // recordPeerPin folds a pin verdict into the peer's sync status, so a peer the

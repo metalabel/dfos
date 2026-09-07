@@ -65,7 +65,18 @@ func NewHttpPeerClient() *HttpPeerClient {
 	}
 }
 
-func (c *HttpPeerClient) fetchLog(rawURL, after string) (*PeerLogPage, error) {
+// maxPeerLogPageBytes caps a single peer log page read in fetchLog, the way
+// maxWellKnownBytes caps the descriptor and maxRequestBodyBytes caps a blob.
+// Read-through reaches this decode from unauthenticated GETs, and the ops and
+// deadline budgets that bound read-through are only consulted after the decode
+// has already returned — so the page itself has to be bounded here or a single
+// hostile response is unbounded work no later check can undo.
+const maxPeerLogPageBytes = 16 << 20 // 16 MB
+
+// fetchLog reads one log page from a peer. limit is the page size this relay
+// asked for: a peer that returns more entries than were requested is answering
+// a question nobody posed, so the page is refused rather than drained.
+func (c *HttpPeerClient) fetchLog(rawURL, after string, limit int) (*PeerLogPage, error) {
 	resp, err := c.client.Get(rawURL)
 	if err != nil {
 		return nil, err
@@ -78,8 +89,11 @@ func (c *HttpPeerClient) fetchLog(rawURL, after string) (*PeerLogPage, error) {
 		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
 	}
 	var page PeerLogPage
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, err
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxPeerLogPageBytes)).Decode(&page); err != nil {
+		return nil, fmt.Errorf("peer log page: %w", err)
+	}
+	if limit > 0 && len(page.Entries) > limit {
+		return nil, fmt.Errorf("peer returned %d log entries for a limit of %d", len(page.Entries), limit)
 	}
 	return &page, nil
 }
@@ -98,7 +112,7 @@ func (c *HttpPeerClient) GetIdentityLog(peerURL, did string, after string, limit
 	}
 	u.RawQuery = q.Encode()
 
-	return c.fetchLog(u.String(), after)
+	return c.fetchLog(u.String(), after, limit)
 }
 
 func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, limit int) (*PeerLogPage, error) {
@@ -115,7 +129,7 @@ func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, 
 	}
 	u.RawQuery = q.Encode()
 
-	return c.fetchLog(u.String(), after)
+	return c.fetchLog(u.String(), after, limit)
 }
 
 // GetBlob fetches raw document bytes from peerURL's content plane. The blob
@@ -194,7 +208,7 @@ func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int
 	}
 	u.RawQuery = q.Encode()
 
-	return c.fetchLog(u.String(), after)
+	return c.fetchLog(u.String(), after, limit)
 }
 
 func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) error {

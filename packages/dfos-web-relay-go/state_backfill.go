@@ -75,7 +75,27 @@ import (
 // corpus that never saw an older binary — re-verifies nothing, writes nothing,
 // and logs nothing. Signature verification is paid only for rows that are
 // genuinely stale, and only once.
-func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
+//
+// beforeRewrite RUNS ONCE, AFTER THE SCAN FINDS WORK AND BEFORE THE FIRST
+// DURABLE WRITE. The rebuild that follows decides whether to re-walk from the
+// stamped projection_version alone, and a corpus that first materialized the
+// `key=` index under the CURRENT version — from the narrow fallback, before this
+// repair existed — carries a stamp saying the rows are already right. So the
+// stamp has to be invalidated, and the ORDER of that against the rewrites is the
+// whole of this hook's reason to exist.
+//
+// Invalidating AFTERWARDS leaves a window with no exit. A stop between the last
+// rewrite and the stamp reset — a crash, a SIGKILL, a failed write — leaves
+// repaired rows under a current stamp, and the next boot finds NO stale
+// identities, so it has nothing to infer from and skips the rebuild. Forever:
+// the evidence that a repair happened is exactly what the repair erased.
+// Invalidating first makes an interrupted run resume into a rebuild, because the
+// stamp is the durable record that one is owed. A rebuild that turns out to be
+// unnecessary costs a bounded log re-walk and converges on the same rows; the
+// other direction costs a permanently wrong index.
+//
+// The hook is optional — nil means the caller keeps no such stamp.
+func backfillProvedKeyState(store MigratableStore, logger *slog.Logger, beforeRewrite func() error) error {
 	chains, err := store.ListIdentityChains()
 	if err != nil {
 		return fmt.Errorf("list identity chains: %w", err)
@@ -98,6 +118,14 @@ func backfillProvedKeyState(store MigratableStore, logger *slog.Logger) error {
 
 	logger.Info("identity state: backfilling has-ever-proved keys",
 		"stale", len(stale), "examined", len(chains))
+
+	// Ahead of every durable write below, so a stop anywhere in the loop resumes
+	// into a rebuild rather than into silence.
+	if beforeRewrite != nil {
+		if err := beforeRewrite(); err != nil {
+			return err
+		}
+	}
 
 	// Row by row, and that is fine: the rewrites are independent of each other,
 	// and a boot interrupted midway leaves the unrepaired rows still zero, which

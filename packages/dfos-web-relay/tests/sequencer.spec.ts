@@ -274,6 +274,47 @@ describe('dependency convergence', () => {
 });
 
 // ---------------------------------------------------------------------------
+// (5) a stuck head window must not starve the tail
+// ---------------------------------------------------------------------------
+
+describe('pending-set starvation', () => {
+  // The window is narrowed rather than the fixture enlarged: what is under test
+  // is a window that fills entirely with rows that cannot advance, and ten
+  // thousand of them prove nothing four do not.
+  class NarrowWindowStore extends MemoryRelayStore {
+    override async getUnsequencedOps(after: string, _limit: number) {
+      return super.getUnsequencedOps(after, 4);
+    }
+  }
+
+  it('sequences an op sitting behind a full window of permanently pending ops', async () => {
+    const store = new NarrowWindowStore();
+
+    // Four content ops whose signing identity this relay will never hold. A
+    // dependency-missing op is cheap to mint and never drains: nothing rejects
+    // it, nothing ages it out, it just stays pending.
+    for (let i = 0; i < 4; i++) {
+      const stranger = await createIdentity();
+      const stuck = await createContentOp(stranger);
+      await store.putRawOp(stuck.operationCID, stuck.jwsToken);
+    }
+
+    // And behind them, one perfectly ingestible op.
+    const good = await createIdentity();
+    await store.putRawOp(good.operationCID, good.jwsToken);
+    expect(await store.countUnsequenced()).toBe(5);
+
+    const { result } = await sequenceOps(store);
+
+    expect(result.sequenced).toBe(1);
+    expect(await store.getIdentityChain(good.did)).toBeDefined();
+    // The stuck rows are untouched, which is the point: they are walked over,
+    // not evicted. Eviction is a separate policy question.
+    expect(await store.countUnsequenced()).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (2) identity conflicts → permanent rejection on direct and peer paths
 // ---------------------------------------------------------------------------
 describe('identity linearity', () => {

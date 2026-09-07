@@ -71,11 +71,14 @@ CREATE TABLE IF NOT EXISTS blobs (
 	PRIMARY KEY (creator_did, document_cid)
 );
 
--- UNIQUE: one op appends exactly one log row, so a second row for the same CID
--- can only be a double append. On a database created before this index was
--- unique, IF NOT EXISTS is a no-op and the old non-unique index survives —
--- upgradeOperationLogCIDIndex below does the conversion.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_log_cid ON operation_log(cid);
+-- idx_operation_log_cid IS DELIBERATELY ABSENT HERE. It is unique — one op
+-- appends exactly one log row, so a second row for the same CID can only be a
+-- double append — and a unique index cannot be declared in the schema an open
+-- runs FIRST. A crash midway through the conversion below leaves duplicate rows
+-- with no index, and a CREATE UNIQUE INDEX IF NOT EXISTS at this point would
+-- then fail on those very rows, on every subsequent boot, before the repair that
+-- removes them ever got to run: an interrupted migration would make the database
+-- permanently un-openable. upgradeOperationLogCIDIndex owns the index outright.
 
 CREATE TABLE IF NOT EXISTS peer_cursors (
 	peer_url TEXT PRIMARY KEY,
@@ -97,6 +100,10 @@ CREATE TABLE IF NOT EXISTS raw_ops (
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_ops_status ON raw_ops(status);
+
+-- Backs the sequencer's keyset walk: status equality, then (created_at, cid) as
+-- the ordering and range the cursor moves along.
+CREATE INDEX IF NOT EXISTS idx_raw_ops_status_created ON raw_ops(status, created_at, cid);
 
 DROP TABLE IF EXISTS pending_ops;
 
@@ -434,16 +441,23 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	return &SQLiteStore{db: writeDB, readDB: readDB}, nil
 }
 
-// upgradeOperationLogCIDIndex converts a pre-existing non-unique
-// idx_operation_log_cid into a unique one. The log is append-only and one op
-// appends exactly one row, so a duplicate CID is never legitimate data — it is a
-// double append the old index could not refuse.
+// upgradeOperationLogCIDIndex owns idx_operation_log_cid: it creates the unique
+// index on a fresh database, and converts a pre-existing non-unique one. The log
+// is append-only and one op appends exactly one row, so a duplicate CID is never
+// legitimate data — it is a double append the old index could not refuse.
 //
 // CREATE UNIQUE INDEX IF NOT EXISTS does NOT upgrade an index that already
 // exists under that name, so the conversion has to be explicit: drop the old
 // index, delete any duplicate rows it let through, recreate it unique. The
 // surviving row is the LOWEST seq — the first receipt, which is the one
 // /proof/v1/log cursors and the ingested_at stamps already reflect.
+//
+// ALL THREE STATEMENTS RUN IN ONE TRANSACTION. As three autocommits, a crash
+// between the drop and the delete left a database carrying duplicate CIDs and no
+// index — a state the next boot could not repair, because it re-declared the
+// unique index during schema creation and failed on those rows before reaching
+// this function. An interrupted migration is not supposed to cost the operator
+// the database.
 //
 // Skipped entirely once the index is unique, so the duplicate scan is a
 // one-time upgrade cost rather than something every boot pays.
@@ -459,18 +473,27 @@ func upgradeOperationLogCIDIndex(db *sql.DB) error {
 		return fmt.Errorf("inspect idx_operation_log_cid: %w", err)
 	}
 
-	if _, err := db.Exec("DROP INDEX IF EXISTS idx_operation_log_cid"); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin idx_operation_log_cid upgrade: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DROP INDEX IF EXISTS idx_operation_log_cid"); err != nil {
 		return fmt.Errorf("drop idx_operation_log_cid: %w", err)
 	}
-	if _, err := db.Exec(
+	if _, err := tx.Exec(
 		`DELETE FROM operation_log WHERE seq NOT IN (SELECT MIN(seq) FROM operation_log GROUP BY cid)`,
 	); err != nil {
 		return fmt.Errorf("dedupe operation_log: %w", err)
 	}
-	if _, err := db.Exec(
+	if _, err := tx.Exec(
 		"CREATE UNIQUE INDEX idx_operation_log_cid ON operation_log(cid)",
 	); err != nil {
 		return fmt.Errorf("create unique idx_operation_log_cid: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit idx_operation_log_cid upgrade: %w", err)
 	}
 	return nil
 }
@@ -2135,10 +2158,23 @@ func (s *SQLiteStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin)
 }
 
 // GetUnsequencedOps returns JWS tokens for ops that haven't been sequenced yet.
-func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
+// pendingOpCursor encodes a raw op's keyset position. created_at is a SQLite
+// datetime string and cid is base32, so neither carries the separator.
+func pendingOpCursor(createdAt, cid string) string { return createdAt + "|" + cid }
+
+// CAST(created_at AS TEXT) IS LOAD-BEARING, NOT TIDINESS. The column is declared
+// DATETIME, and the driver reformats a DATETIME column on read — the row stores
+// "2026-09-07 03:42:31" and comes back as "2026-09-07T03:42:31Z". A cursor built
+// from the reformatted value matches NOTHING when it is bound back into the
+// comparison, so the walk silently ends after one page. The cast returns the
+// stored text, which is the only value the comparison can be spoken in.
+func (s *SQLiteStore) GetUnsequencedOps(after string, limit int) ([]PendingOp, error) {
+	createdAt, cid, _ := strings.Cut(after, "|")
 	rows, err := s.readerDB().Query(
-		"SELECT jws_token, origin FROM raw_ops WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
-		limit,
+		`SELECT jws_token, origin, CAST(created_at AS TEXT), cid FROM raw_ops
+		 WHERE status = 'pending' AND (created_at, cid) > (?, ?)
+		 ORDER BY created_at ASC, cid ASC LIMIT ?`,
+		createdAt, cid, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -2147,12 +2183,14 @@ func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
 	var pending []PendingOp
 	for rows.Next() {
 		var op PendingOp
-		if err := rows.Scan(&op.JWSToken, &op.Origin); err != nil {
+		var rowCreatedAt, rowCID string
+		if err := rows.Scan(&op.JWSToken, &op.Origin, &rowCreatedAt, &rowCID); err != nil {
 			return nil, err
 		}
 		if op.Origin != OpOriginPeer {
 			op.Origin = OpOriginDirect
 		}
+		op.Cursor = pendingOpCursor(rowCreatedAt, rowCID)
 		pending = append(pending, op)
 	}
 	return pending, rows.Err()

@@ -31,8 +31,32 @@ export { REVOCATIONS_BASE_PATH } from './revocations';
  * `options.fetch` injects the fetch implementation (timeouts, retries, tests);
  * defaults to `globalThis.fetch`.
  */
-export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerClient => {
-  const fetchImpl: typeof fetch = options?.fetch ?? ((input, init) => fetch(input, init));
+/**
+ * Per-request timeout for every peer call this client makes.
+ *
+ * `fetch` has no default timeout, so a peer that accepts a connection and then
+ * says nothing holds the caller forever. That matters most on READ-THROUGH,
+ * which runs inside an unauthenticated GET for a chain nobody has to have heard
+ * of: without this the request-side deadline can only be checked BETWEEN pages,
+ * never during one, so a single unanswered page outlives every bound above it.
+ * Matches the Go twin's `http.Client{Timeout: 30 * time.Second}`.
+ */
+export const PEER_REQUEST_TIMEOUT_MS = 30_000;
+
+export const createHttpPeerClient = (options?: {
+  fetch?: typeof fetch;
+  /** Per-request timeout in milliseconds; 0 disables it. */
+  timeoutMs?: number;
+}): PeerClient => {
+  const inner: typeof fetch = options?.fetch ?? ((input, init) => fetch(input, init));
+  const timeoutMs = options?.timeoutMs ?? PEER_REQUEST_TIMEOUT_MS;
+  // Threaded through every call site rather than left to each one to remember:
+  // an unbounded peer read is exactly the kind of thing that gets added back by
+  // the next method someone writes.
+  const fetchImpl: typeof fetch = (input, init) =>
+    timeoutMs > 0
+      ? inner(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(timeoutMs) })
+      : inner(input, init);
 
   return {
     async getIdentityLog(peerUrl, did, params) {

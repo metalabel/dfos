@@ -49,12 +49,18 @@ func (r *Relay) runSequencerUnderLock() ([]string, SequenceResult) {
 // sequencerBatchOps bounds how many pending ops one pass hands to
 // IngestOperations at a time.
 //
-// A single pass can drain up to GetUnsequencedOps' limit (10k), and that whole
+// A single window can drain up to sequencerWindowOps (10k) rows, and that whole
 // set is classified, dependency-sorted, and held in memory together. Chunking
 // bounds that working set and the latency of one turn; it is NOT a transaction
 // boundary — the atomic unit is one operation, owned by the store (see
 // RelayWriteStore.Commit).
 const sequencerBatchOps = 1000
+
+// sequencerWindowOps is how many pending rows one keyset window fetches. The
+// window is a WINDOW now rather than a head: a pass walks the whole pending set
+// window by window, so this bounds a single fetch and the working set it feeds,
+// not how far into the queue the sequencer can see.
+const sequencerWindowOps = 10000
 
 // runSequencerLocked is the sequencer inner loop. Caller must hold ingestMu.
 func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
@@ -66,12 +72,29 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 		opts = append(opts, WithLogDisabled())
 	}
 
+	// after is the keyset position of the last pending row this call has looked
+	// at; sweepProgress records whether the sweep from the head has drained
+	// anything. A window that drains nothing no longer ends the pass — it just
+	// moves the cursor on — so ten thousand permanently dependency-missing rows
+	// can no longer hide every row behind them. The pass still restarts from the
+	// head after a sweep that moved something, because an op admitted late in a
+	// sweep can unblock one the sweep already walked past.
 	prevPending := -1
+	after := ""
+	sweepProgress := false
 	for {
-		pendingOps, err := r.writerState.GetUnsequencedOps(10000)
-		if err != nil || len(pendingOps) == 0 {
+		pendingOps, err := r.writerState.GetUnsequencedOps(after, r.sequencerWindowOps)
+		if err != nil {
 			break
 		}
+		if len(pendingOps) == 0 {
+			if after == "" || !sweepProgress {
+				break
+			}
+			after, sweepProgress = "", false
+			continue
+		}
+		after = pendingOps[len(pendingOps)-1].Cursor
 
 		progress := false
 		aborted := false
@@ -119,10 +142,16 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 		}
 
 		if !progress {
-			break
+			// This window drained nothing. The cursor has already moved past it,
+			// so the next iteration reads the NEXT window rather than re-reading
+			// this one — which is the whole point: a stuck block is walked over,
+			// not stalled on. Termination is the cursor, which strictly advances
+			// across a finite set.
+			continue
 		}
+		sweepProgress = true
 
-		// Livelock backstop: a pass that claims progress MUST shrink the pending
+		// Livelock backstop: a window that claims progress MUST shrink the pending
 		// set. If it didn't, no forward progress is possible — the same pending
 		// ops re-verify identically next pass — so break instead of spinning at
 		// ~100% CPU holding ingestMu. With the drain keyed on the storage CID
