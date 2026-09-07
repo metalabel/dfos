@@ -1,8 +1,8 @@
 # DFOS
 
-DFOS is an identity you hold and content that proves who wrote it. A platform can host your identity. It cannot own it.
+DFOS is an open protocol for identities, signed records, and delegated permissions that any compatible application can verify for itself.
 
-An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations. Proofs verify offline, in any language, from any copy. Content chains reference documents by hash. The protocol does not encrypt, and whoever serves a document can read it.
+Identity derives from Ed25519 signed operations, and an identifier derives from its genesis operation. Proofs verify offline, in any language, from any copy. Content chains reference documents by hash. The protocol does not encrypt, and whoever serves a document can read it. Which view of an identity you follow is a choice of relay.
 
 This repository contains the protocol specification, reference implementations in TypeScript and Go, cross-language verification suites, and the CLI.
 

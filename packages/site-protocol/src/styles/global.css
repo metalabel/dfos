@@ -414,12 +414,6 @@ img {
   text-align: center;
 }
 
-.hero-declaration .green {
-  display: block;
-  margin-top: 0.6em;
-  color: var(--green);
-}
-
 .hero-pitch {
   font-family: var(--font-body);
   font-weight: 400;
@@ -428,8 +422,8 @@ img {
   line-height: 1.7;
   color: rgba(255, 255, 255, 0.7);
   text-align: center;
-  margin-bottom: 0;
-  max-width: 480px;
+  margin-bottom: 2rem;
+  max-width: 620px;
 }
 
 /* ── Below Hero ── */
@@ -438,21 +432,9 @@ img {
   position: relative;
   z-index: 2;
   text-align: center;
-  padding: 3.5rem 2.5rem 2.5rem;
+  padding: 2.5rem 2.5rem 0;
   opacity: 0;
   animation: heroFadeIn 1.4s ease-out 1.2s forwards;
-}
-
-.hero-headline {
-  font-family: var(--font-heading);
-  font-weight: 400;
-  font-size: clamp(1.6rem, 3.2vw, 2.4rem);
-  letter-spacing: -0.01em;
-  line-height: 1.3;
-  color: var(--green);
-  margin-bottom: 2.5rem;
-  margin-top: 0;
-  text-align: center;
 }
 
 .hero-cta {
@@ -483,23 +465,32 @@ img {
   text-decoration: none;
 }
 
-/* ── Hero Typewriter ── */
+/* ── Action Lists ──
+   Short capability or affordance lines: one sentence each, green marker. Used
+   in the hero (centered over the painting) and in the get-started section. */
 
-.hero-typed {
-  visibility: hidden;
+.action-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.6rem;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--teal);
 }
 
-.hero-typed.typing {
-  visibility: visible;
+.action-list li::before {
+  content: '—';
+  color: var(--green);
+  margin-right: 0.6em;
 }
 
-.hero-typed .char {
-  opacity: 0;
-}
-
-.hero-typed .char.visible {
-  opacity: 1;
-  transition: opacity 0.05s ease-in;
+.action-list--hero {
+  color: rgba(255, 255, 255, 0.85);
+  text-align: left;
+  max-width: 620px;
 }
 
 /* ── Hero Animations ── */
@@ -835,12 +826,30 @@ img {
   margin-bottom: 1.5rem;
 }
 
-.landing-section .section-body {
+.landing-section .section-body,
+.dark-section .section-body {
   color: var(--teal);
   font-size: 1rem;
   line-height: 1.8;
   max-width: 650px;
   margin-bottom: 2.5rem;
+}
+
+/* ═══ Section CTAs ═══
+   The one-or-two forward links that close a landing section. */
+
+.section-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-bottom: 0;
+}
+
+.section-cta {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--green);
 }
 
 /* ═══ Card Grid ═══ */
@@ -1337,6 +1346,11 @@ a.card:hover {
   font-size: 0.95rem;
   line-height: 1.8;
   max-width: 600px;
+  margin-bottom: 2rem;
+}
+
+.get-started .action-list {
+  max-width: 600px;
   margin-bottom: 3rem;
 }
 
@@ -1427,6 +1441,9 @@ a.card:hover {
   line-height: 1.8;
   color: var(--teal);
   margin-bottom: 0;
+  /* The documented `content create` line is longer than the block; scroll it
+     rather than wrapping, so a copied command stays one command. */
+  overflow-x: auto;
 }
 
 .quickstart-pre code {
@@ -1632,10 +1649,16 @@ a.card:hover {
 
   .hero-pitch {
     font-size: 0.85rem;
+    margin-bottom: 1.5rem;
   }
 
-  .hero-headline {
-    font-size: 1.4rem;
+  .action-list {
+    font-size: 0.85rem;
+    gap: 0.5rem;
+  }
+
+  .hero-below {
+    padding: 2rem 1.5rem 0;
   }
 
   .hero-cta {

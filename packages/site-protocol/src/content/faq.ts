@@ -12,9 +12,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What is the DFOS Protocol?',
     answer:
-      'An open protocol for cryptographic identity and verifiable content. Signed chains establish identity, commit content, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.',
+      'An open protocol for identities, signed records, and delegated permissions that any compatible application can verify for itself. Signed chains establish identity, commit documents, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.',
     answerHtml:
-      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Signed chains</a> establish identity, commit content, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.',
+      'An open protocol for identities, signed records, and delegated permissions that any compatible application can verify for itself. <a href="/spec">Signed chains</a> establish identity, commit documents, and produce proofs anyone can verify offline, in any language, from any source. Authorship is verifiable without trusting any server. Which view of an identity you follow is a choice of relay.',
   },
   {
     question: 'Who holds my keys?',
@@ -47,9 +47,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'Do I need to run a server or connect to a network?',
     answer:
-      "No. Verification is offline and self-contained. A signed chain carries everything needed to verify it: public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync, no API to call. Given a chain and a public key, any standard Ed25519 library in any language can verify it. Relays are useful for storage and distribution, and recovery is the one operation that needs one: recovering the identities a seed phrase controls asks a relay's key index which identities each derived key has been proved into.",
+      "No. Verification is offline and self-contained. A signed chain carries everything needed to verify it: public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync, no API to call. A verifier needs standard cryptographic components — an Ed25519 implementation, a dag-cbor encoder, and SHA-256 — plus the identifier derivation and the chain rules, and no DFOS software. Relays are useful for storage and distribution, and recovery is the one operation that needs one: recovering the identities a seed phrase controls asks a relay's key index which identities each derived key has been proved into.",
     answerHtml:
-      'No. Verification is offline and self-contained. A signed chain carries everything needed to verify it: public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync, no API to call. Given a chain and a public key, any standard Ed25519 library in any language can verify it. Relays are useful for storage and distribution, and recovery is the one operation that needs one: recovering the identities a seed phrase controls asks a <a href="/relay#index-capability-index">relay\'s key index</a> which identities each derived key has been proved into.',
+      'No. Verification is offline and self-contained. A signed chain carries everything needed to verify it: public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync, no API to call. A verifier needs standard cryptographic components — an Ed25519 implementation, a dag-cbor encoder, and SHA-256 — plus the identifier derivation and the chain rules, and no DFOS software. Relays are useful for storage and distribution, and recovery is the one operation that needs one: recovering the identities a seed phrase controls asks a <a href="/relay#index-capability-index">relay\'s key index</a> which identities each derived key has been proved into.',
   },
   {
     question: 'What languages are supported?',
