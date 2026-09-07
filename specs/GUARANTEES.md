@@ -98,7 +98,9 @@ list is the set of sources the subject stands behind
 
 **Choosing peers chooses a view.** Peer-log ingestion inherits the peer's
 admission discipline, so which peers a relay syncs from decides which view of a
-divergent identity it ends up serving
+divergent identity it ends up serving. A peer's operations are re-verified
+locally before storage, so a peer cannot get an invalid operation accepted; what
+it can impose is a view, cost, and noise
 ([RELAY, Peering](https://protocol.dfos.com/relay#peering-convention)).
 
 **A carried chain is a view too.** An identity chain carried inside a sign-in or
@@ -215,6 +217,13 @@ of now, so a rotated-out key's sign-in, request proof, and freshly presented
 credential all fail
 ([PROTOCOL, Time basis](https://protocol.dfos.com/spec#time-basis)).
 
+**Deleting an identity retracts what it issued, backwards.** Deletion is the one
+credential rule that does not run against the basis: while an issuer identity is
+deleted, the credentials it issued authorize nothing at any point in history, and
+verification of committed operations that relied on one rejects until a `restore`
+reopens the identity
+([CREDENTIALS, Deleted issuers](https://protocol.dfos.com/credentials#deleted-issuers)).
+
 **Rotate first, then delete.** A `restore` operation needs only a controller key
 of the deleted head state, so an identity deleted while a compromised key is still
 current is reopenable by exactly that key. A key rotated out before the delete is
@@ -263,16 +272,10 @@ left to right, never a parsed epoch and never a locale-aware collation
 
 ## Adversaries
 
-| Adversary                                               | What holds against it                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A relay serving you**                                 | It can withhold, serve stale state, reorder, serve different views to different readers, censor, refuse to admit, and read every blob it stores. It cannot forge a chain or an operation: every ingest path re-derives the CID and checks the signature, and every read is re-derivable by the reader.                                                                                                      |
-| **The platform holding a controller key on your chain** | Acting entirely within the rules, it can remove any key including one you hold, delete and restore the identity, refuse to sequence your writes, and serve the view it admitted. It cannot forge a signature from a key it does not hold, act silently (every change is a signed operation on the chain), or recall copies peers already hold.                                                              |
-| **A peer relay**                                        | Its operations are fully re-verified locally before storage, so it cannot get an invalid operation accepted. Peer-log ingestion inherits the peer's admission discipline, so a peer does influence which view of a divergent identity a relay serves, and it can impose cost and noise. Choosing peers is a trust decision.                                                                                 |
-| **An unauthenticated submitter**                        | Operations self-authenticate, so malformed or unsigned submissions are rejected. It can impose CPU and storage cost, and a carried identity chain reaches ingestion through a consumer's own fetch with no POST. Size and cardinality caps bound one operation; rate limiting is the deployment's.                                                                                                          |
-| **A holder of a public write credential**               | An `aud: "*"` credential granting `write` is a bearer grant: anyone holding the bytes can attach it and write to the covered chains, and a public `chain:*` write grant is world-writable across every chain rooted at the issuer. Public credentials are read-scoped by convention, and revocation is the remedy ([CREDENTIALS](https://protocol.dfos.com/credentials#aud--plus-write-is-a-bearer-grant)). |
-| **A party who captured a credential**                   | Without the audience key the credential authorizes nothing: a request proof binds `{method, host, path, bodyHash, credentialCID, iat}` to the audience key, which never crosses a channel. A captured proof replays only as the byte-identical request, to the same host, inside the freshness window.                                                                                                      |
-| **A party who compromised a domain**                    | It can silence or contradict an origin binding, which reads `stale` or `broken`, both visible verdicts. It cannot extend the bound identity's chain or move the binding to itself unseen ([INTEGRATIONS, Origin binding](https://protocol.dfos.com/integrations#origin-binding)).                                                                                                                           |
-| **A party who intercepts a ceremony code**              | Resolving a code discloses the ceremony context, including which public identity it adopts into, and lets the interceptor attempt one presentation with a key of its own. The gates are the operator's ceremony authorization and the human's fingerprint comparison, and the disclosure is the price of consent ([INTEGRATIONS, Key ceremonies](https://protocol.dfos.com/integrations#key-ceremonies)).   |
+What a relay, a custodian, a peer, and a submitter can each do is stated above,
+under the mechanism that bounds it. What follows is the residue: the adversaries
+no rule in this corpus reaches, the strength of the identifier, and the risks the
+corpus accepts.
 
 ### Adversaries this corpus is not designed against
 
@@ -317,9 +320,28 @@ genesis CID and the Ed25519 signatures are unaffected by the truncation
   regretted credential runs until every relay that ingested it holds the
   revocation. An API host resolving revocations from the relays its users' chains
   list, on a cache interval it chooses, is choosing its revocation latency.
+- **A public `write` credential is a bearer grant.** An `aud: "*"` credential
+  granting `write` lets anyone holding the bytes attach it and write to the
+  covered chains, and a public `chain:*` write grant is world-writable across
+  every chain rooted at the issuer. Public credentials are read-scoped by
+  convention, and revocation is the remedy
+  ([CREDENTIALS](https://protocol.dfos.com/credentials#aud--plus-write-is-a-bearer-grant)).
 - **Within-window replay of an identical proven request is accepted** on
-  read-shaped surfaces. Write-shaped surfaces close it with the required `jti`
-  replay cache.
+  read-shaped surfaces. A request proof binds
+  `{method, host, path, bodyHash, credentialCID, iat}` to the audience key, which
+  never crosses a channel, so a captured credential or proof replays only as the
+  byte-identical request, to the same host, inside that window. Write-shaped
+  surfaces close it with the required `jti` replay cache.
+- **A compromised domain can silence or contradict an origin binding.** Both read
+  as a visible verdict, `stale` or `broken`, and the holder can neither extend the
+  bound identity's chain nor move the binding to itself unseen
+  ([INTEGRATIONS, Origin binding](https://protocol.dfos.com/integrations#origin-binding)).
+- **Resolving an intercepted ceremony code discloses the ceremony context**,
+  including which public identity it adopts into, and lets the interceptor attempt
+  one presentation with a key of its own. The gates are the operator's ceremony
+  authorization and the human's fingerprint comparison, and the disclosure is the
+  price of consent
+  ([INTEGRATIONS, Key ceremonies](https://protocol.dfos.com/integrations#key-ceremonies)).
 - **Sign-in controls live in the relying party.** Nonce, redirect-URI validation,
   challenge-DID binding, and timestamp windows are the verifying party's, and
   nothing on the wire reveals a party that skipped them.

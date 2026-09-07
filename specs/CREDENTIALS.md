@@ -85,21 +85,9 @@ Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 byt
 | `att` | 32 items | Generous for multi-resource grants; min 1 (a zero-`att` credential grants nothing) |
 | `prf` | 1 item   | Single-parent (linear) delegation                                                  |
 
-### CID derivation
+### Addressing and encoding
 
-The credential payload is content-addressed using the same scheme as all protocol objects:
-
-```
-dagCborCanonicalEncode(payload) -> SHA-256 -> CIDv1 (dag-cbor + SHA-256)
-```
-
-The resulting CID is embedded in the JWS protected header as `cid`. This makes the credential a stable, addressable artifact, used for revocation references and audit trails.
-
-**CID integrity check:** during verification, the payload is re-encoded and the derived CID is compared against the `cid` header value. Mismatch is a verification failure.
-
-### JWS encoding
-
-The credential is signed as a JWS Compact Serialization token (`header.payload.signature`). The payload is JSON-encoded, not dag-cbor, in the JWS body, following standard JWS conventions. dag-cbor is used only for CID derivation.
+A credential is addressed and encoded like every other protocol artifact: dag-cbor canonical encoding to a CIDv1 carried in the `cid` protected header and re-derived at verification, a JSON payload in the JWS body, and the compact serialization on the wire ([PROTOCOL, CID construction](https://protocol.dfos.com/spec#cid-construction-dag-cbor--sha-256), [JWS envelope format](https://protocol.dfos.com/spec#jws-envelope-format)). The CID is what a revocation names.
 
 ---
 
@@ -127,7 +115,7 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 
 **Key resolution.** The signing key is resolved from `kid` against the issuer's identity chain, in that identity's effective state as of the [basis time](https://protocol.dfos.com/spec#time-basis). A credential carried inline in a committed operation therefore still verifies after the issuer rotates that key out, and the same key signs nothing new once it is gone. Any key role (auth, assert, controller) may sign a credential; the protocol does not restrict which role.
 
-Revocation, not rotation, is how an issuer kills a credential ahead of its expiry.
+The two withdrawals differ in reach. Rotating the signing key out ends every fresh presentation signed under it at once, because an ephemeral presentation resolves the key at the chain head, and it takes every other credential that key signed with it. Revocation is how an issuer withdraws one specific credential ahead of its expiry while the key keeps signing everything else.
 
 ---
 
@@ -384,7 +372,7 @@ R.createdAt <= T
 
 The boundary is **inclusive**: a revocation signed at the same second as an operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it; a caller that re-verifies the revocation JWS reads the boundary out of the verified bytes. The rule applies at every level of the presented credential, leaf and each parent, all evaluated at that one basis.
 
-For a committed operation the basis is the operation's `createdAt`, so revoking a credential does not undo operations already in the log: an operation authorized when it was signed keeps verifying, and a parent revoked after the operation does not invalidate it either. That is the append-only semantics of a content chain, and it makes every verifier reach the same verdict forever.
+For a committed operation the basis is the operation's `createdAt`, so revoking a credential does not undo operations already in the log: an operation authorized when it was signed keeps verifying, and a parent revoked after the operation does not invalidate it either. That is the append-only semantics of a content chain, and it makes every verifier reach the same verdict forever, with one exception: while the issuing identity is deleted, the credentials it issued authorize nothing anywhere in history (**Deleted issuers**, below).
 
 **Admission is separate.** Whether to admit a NEW operation is a local freshness decision, not a validity decision: a relay that holds a revocation for the authorizing credential refuses the operation whatever its `createdAt` claims. Two relays on either side of a revocation's arrival reach different admission verdicts, and nothing in the log depends on when a relay chose to admit an operation.
 

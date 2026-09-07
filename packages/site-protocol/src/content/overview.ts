@@ -36,14 +36,6 @@ The public record contains signed commitments and identity metadata. It does not
 
 The protocol commits to a document via an unsalted \`dag-cbor\` → SHA-256 CID. The commitment binds; it does not hide. Anyone holding the CID can test a candidate document against it and learn whether the guess was right, so a document drawn from a small or guessable space is not confidential against a party that holds its CID, and two chains that committed the same bytes are visibly the same bytes. Confidentiality of the documents themselves is enforced above the protocol, by whoever serves them. There is no end-to-end encryption here, and the security posture of a document is the security posture of the party serving it.
 
-## The Dark Forest
-
-The internet is not a public square. Much of the creative and social coordination that matters happens in private groups, closed communities, and invite-only spaces. That is where real work gets done, real relationships form, and real culture develops. The topology is private-first.
-
-A design in which proof and content travel together does not serve that topology: to check a piece of content you generally have to be able to read it. DFOS separates them. The proof plane is public — signed chains carrying identity, signed attribution, and the hash of every document committed, verifiable by anyone holding a copy. The content plane is the documents, served by whoever holds the bytes under that host's own access control, and they do not travel with the proofs.
-
-This separation is architectural, not a privacy setting. It is an engineering response to the structural condition of where the internet actually lives.
-
 ## What the Protocol Is
 
 The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit documents, and produce proofs. It defines [identifiers derived from a genesis operation](https://protocol.dfos.com/did-method) (\`did:dfos\`), [content-addressed commitments](https://protocol.dfos.com/content-model) via CID, and a [relay network](https://protocol.dfos.com/relay) of verifying HTTP endpoints that each re-verify what they distribute. Which view of an identity you follow is a choice of relay.
@@ -76,12 +68,4 @@ The specification iterates in place and carries the version of the release it sh
 The executable suites in [\`packages/protocol-verify\`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify) and [\`packages/relay-conformance\`](https://github.com/metalabel/dfos/tree/main/packages/relay-conformance) are the conformance definition. The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows, installable via Homebrew, Docker, or a single curl command.
 
 Discussion happens in the [DFOS](https://nce.dfos.com) space. Read the [full specification](https://protocol.dfos.com/spec), read what the protocol [guarantees and does not](https://protocol.dfos.com/guarantees), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
-
-## How It Compares
-
-**Blockchain identity** systems anchor trust in a shared ledger: verifying an identity means syncing with or querying the chain. The DFOS Protocol anchors trust in cryptographic signatures alone, with no consensus layer, no gas fees, and no chain state to maintain. Verification is a function of the chains rather than of ledger state, and content-chain forks converge deterministically without coordination, which makes the protocol simpler, faster, and fully transport-agnostic.
-
-**Public-by-default social protocols** (AT Protocol, nostr, Farcaster) publish posts and profiles as public documents, and to verify a piece of content you generally have to be able to read it. The proof and the content travel together. The DFOS Protocol inverts this: the proof plane is the only public surface, and the documents are served by whoever holds the bytes, under that host's own access control.
-
-**AT Protocol** (Bluesky) shares foundations with DFOS — signed data, content-addressed storage, DIDs — but differs in topology, as above, and in identity resolution. An AT Protocol \`did:plc\` resolves through plc.directory, a registry Bluesky operates, whereas a \`did:dfos\` derives from its genesis operation and needs no external directory to resolve. AT Protocol is also a full social networking protocol, with federation, data repositories, and application schemas, where the DFOS Protocol is narrower by design: cryptographic primitives only, agnostic to transport, federation, and application semantics.
 `;
