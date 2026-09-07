@@ -296,16 +296,22 @@ describe('runAppFallback', () => {
     });
   });
 
-  it('is silent on absence, transport failure, and our own route failing', async () => {
+  it('is silent on absence and on a transport failure the ROUTE reported', async () => {
     stubApp({ status: 'no-app-description', httpStatus: 404 });
     expect((await runAppFallback('example.com', DID)).kind).toBe('silent');
     stubApp({ status: 'timeout' });
     expect((await runAppFallback('example.com', DID)).kind).toBe('silent');
+  });
+
+  // M62: the explorer's OWN lookup route falling over is not the domain going
+  // quiet. Folding it into `silent` let a `stale` verdict — "bound (stale) —
+  // domain silent" — be printed about a domain nobody managed to ask.
+  it('reports our own route failing as proxy-unavailable, never silence', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('nope', { status: 500 })),
     );
-    expect((await runAppFallback('example.com', DID)).kind).toBe('silent');
+    expect((await runAppFallback('example.com', DID)).kind).toBe('proxy-unavailable');
   });
 
   it('is silent on a structurally invalid document or one with no client_did', async () => {
@@ -413,6 +419,32 @@ describe('assessBinding', () => {
     const out = assessBinding(DID, claimed, silentProbe);
     expect(out).toMatchObject({ kind: 'stale', domain: 'example.com' });
     if (out.kind === 'stale') expect(out.reasons).toHaveLength(2);
+  });
+
+  // M62: `stale` says "the domain is silent". When the only leg left to ask went
+  // unread because the EXPLORER's own lookup route failed, nothing was observed
+  // about the domain at all, and the fourth state exists for exactly that.
+  it('is proxy-unavailable — not stale — when our own fallback route failed', () => {
+    const out = assessBinding(DID, claimed, answered({ status: 'none' }, { status: 'none' }), {
+      kind: 'proxy-unavailable',
+      reason: 'the app-description route answered 500',
+    });
+    expect(out).toEqual({
+      kind: 'proxy-unavailable',
+      domain: 'example.com',
+      reason: 'the app-description route answered 500',
+    });
+  });
+
+  it('an unread fallback leg never lands in the silences of a bound verdict', () => {
+    const out = assessBinding(
+      DID,
+      claimed,
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      { kind: 'proxy-unavailable', reason: 'the app-description route answered 500' },
+    );
+    expect(out.kind).toBe('bound');
+    if (out.kind === 'bound') expect(out.silences.join(' ')).not.toMatch(/app-fallback/);
   });
 
   it('is stale — not broken — when the lookups merely failed', () => {
@@ -795,6 +827,22 @@ describe('assessDomainBinding', () => {
       null,
     );
     expect(out.kind).toBe('stale');
+  });
+
+  // M62, the domain-first half: /api/binding up, /api/wellknown down. The
+  // fallback leg was never read, so it is neither an answer nor a silence.
+  it('is proxy-unavailable when the fallback leg went unread by our own route', () => {
+    const out = assessDomainBinding(
+      host,
+      answered({ status: 'none' }, { status: 'none' }),
+      { kind: 'proxy-unavailable', reason: 'the app-description route answered 500' },
+      null,
+    );
+    expect(out).toEqual({
+      kind: 'proxy-unavailable',
+      domain: host,
+      reason: 'the app-description route answered 500',
+    });
   });
 
   it('keeps our own route failing as its own state, never as silence', () => {

@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExplorerOp } from '../src/lib/db';
 import {
   emptyRevocations,
+  fetchCredentialRevocations,
+  fetchIssuerRevocations,
   localRevocations,
   mergeRevocations,
   revocationStatus,
@@ -138,5 +140,79 @@ describe('mergeRevocations — union of sources', () => {
       view({ unknown: new Set(['cred-B']) }),
     );
     expect(revocationStatus(merged, 'cred-B')).toBe('unknown');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the network sweeps — where "unknown" is actually decided
+// -----------------------------------------------------------------------------
+
+const RELAY_A = 'https://a.example';
+const RELAY_B = 'https://b.example';
+
+/** Route the stubbed fetch by URL; a handler returning null is an unreachable
+ *  relay (the transport throws, exactly as `getJson` sees it). */
+const stubRelays = (route: (url: string) => unknown): void => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      const body = route(url);
+      if (body === null) throw new Error('network down');
+      return Response.json(body);
+    }),
+  );
+};
+
+describe('fetchCredentialRevocations — one silent relay is not a clean sweep', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // M39: `answered` used to flip true on the FIRST relay that replied, so a set
+  // where relay A answered `revoked: false` and relay B never answered returned
+  // 'unrevoked' — green — though B may be the one holding the revocation.
+  it('a credential one relay answered clean while another stayed silent is UNKNOWN', async () => {
+    stubRelays((url) => (url.startsWith(RELAY_A) ? { revoked: false } : null));
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
+    expect(swept.unknown.has('cred-A')).toBe(true);
+    expect(revocationStatus(swept, 'cred-A')).toBe('unknown');
+  });
+
+  it('every relay answering clean is the only thing that licenses active', async () => {
+    stubRelays(() => ({ revoked: false }));
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
+    expect(swept.unknown.has('cred-A')).toBe(false);
+    expect(revocationStatus(swept, 'cred-A')).toBe('active');
+  });
+
+  it('a positive from any relay still wins immediately, silent neighbours or not', async () => {
+    stubRelays((url) =>
+      url.startsWith(RELAY_A) ? null : { revoked: true, revocation: 'not-a-jws' },
+    );
+    const swept = await fetchCredentialRevocations(['cred-A'], [RELAY_A, RELAY_B]);
+    expect(revocationStatus(swept, 'cred-A')).toBe('revoked');
+  });
+});
+
+describe('fetchIssuerRevocations — a capped walk cannot establish absence', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // M40: the page cap used to exit the loop in the same observable state as an
+  // exhausted feed, so a revocation past the cap rendered its credential active.
+  it('a feed still paging at the cap contributes positives but establishes nothing', async () => {
+    // every page hands back another cursor — the walk is cut off, never exhausted
+    stubRelays(() => ({
+      revocations: [{ credentialCID: 'cred-A', revocation: 'not-a-jws' }],
+      next: 'more',
+    }));
+    const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A]);
+    expect(swept.revoked.has('cred-A')).toBe(true);
+    expect(swept.established).toBe(false);
+    expect(revocationStatus(swept, 'cred-B')).toBe('unknown');
+  });
+
+  it('a feed that ends within the cap establishes absence for what it swept', async () => {
+    stubRelays(() => ({ revocations: [{ credentialCID: 'cred-A', revocation: 'not-a-jws' }] }));
+    const swept = await fetchIssuerRevocations('did:dfos:iss', [RELAY_A]);
+    expect(swept.established).toBe(true);
+    expect(revocationStatus(swept, 'cred-B')).toBe('active');
   });
 });

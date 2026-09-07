@@ -13,6 +13,40 @@ import { createClient, type Client } from '@metalabel/dfos-client';
 import { indexedDbStore } from '@metalabel/dfos-client/store';
 import { getQuorum, getRelays } from './relays';
 
+/**
+ * The message dfos-client's fan-out wraps a rejected candidate in
+ * (`transport.ts`: "candidates existed but every one failed verification — that
+ * is an error, not an absence"). Matched as a PREFIX because the original error
+ * is appended, and the original is also carried as `cause`.
+ */
+const VERIFICATION_FAILURE = 'all candidate logs failed verification';
+
+/** How far down a `cause` chain to look — mirrors the client's own unwrap. */
+const CAUSE_DEPTH = 4;
+
+/**
+ * Did this throw mean "a relay ANSWERED, and what it served did not verify here"?
+ *
+ * The distinction the explorer cannot render honestly without: a chain read
+ * fails either because nobody answered (a timeout, a network failure — the
+ * question was never put) or because somebody answered with bytes that failed a
+ * signature or CID check in this tab. Those are opposite statements, and the
+ * client already separates them — it returns `unreachable` for the first and
+ * THROWS the wrapper above for the second — so a caller that treats every throw
+ * as silence prints the inverse of what happened.
+ *
+ * Never a substitute for `divergenceErrorFrom`: a divergence is its own typed
+ * error and its own panel, and callers check it first. Pure, unit-tested.
+ */
+export const isVerificationFailure = (err: unknown): boolean => {
+  let cursor = err;
+  for (let depth = 0; depth < CAUSE_DEPTH && cursor instanceof Error; depth++) {
+    if (cursor.message.startsWith(VERIFICATION_FAILURE)) return true;
+    cursor = cursor.cause;
+  }
+  return false;
+};
+
 let cached: { key: string; client: Client } | null = null;
 
 export const getClient = (): Client => {

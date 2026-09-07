@@ -123,8 +123,21 @@ export const DocName = (props: { label: DocLabel; tier?: ContentLabelTier }) => 
  * falling back to its DID — the DID has its own column here.
  */
 export const IdentityName = (props: { row: IndexIdentityRow; seen: boolean }) => {
-  const { profile, tier } = useDidProfile(props.row.did, props.seen, projectedName(props.row));
-  if (!profile) return <span class="muted">— no public profile</span>;
+  const { profile, state, tier } = useDidProfile(
+    props.row.did,
+    props.seen,
+    projectedName(props.row),
+  );
+  // "no public profile" is a FINDING about the identity, so it is printed only
+  // where the resolve actually made it — an unreachable relay says nothing about
+  // this identity and gets its own, weaker line (lib/did-profiles.ts).
+  if (!profile) {
+    return (
+      <span class="muted">
+        {state === 'unavailable' ? '— profile unavailable' : '— no public profile'}
+      </span>
+    );
+  }
   return (
     <span
       class={tier === 'verified' ? 'did-name' : 'attr'}
@@ -166,7 +179,12 @@ export const ChainCell = (props: { chainId: string }) => {
 export const VerifyBadge = (props: { kind: VerifyKind; chainId: string }) => {
   const rec = useVerifyStatus(props.kind, props.chainId);
   if (rec.status === 'verified') return <Badge state="ok">verified</Badge>;
-  if (rec.status === 'error') return <Badge state="bad">unverifiable</Badge>;
+  // red is for what a relay DID: a rewritten history, or a log that answered and
+  // failed its checks here. A fold that never happened is amber — nothing was
+  // established about the chain, and the row re-tries when it is seen again.
+  if (rec.status === 'diverged') return <Badge state="bad">diverged</Badge>;
+  if (rec.status === 'unverified') return <Badge state="bad">unverifiable</Badge>;
+  if (rec.status === 'error') return <Badge state="warn">could not verify</Badge>;
   if (rec.status === 'verifying') {
     return (
       <span class="badge warn">

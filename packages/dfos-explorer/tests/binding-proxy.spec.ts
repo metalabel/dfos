@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { classifyDidStatus, parseDidBody, parseTxtRecords } from '../api/binding';
+import {
+  bodyReadFailure,
+  boundedText,
+  classifyDidStatus,
+  parseDidBody,
+  parseTxtRecords,
+} from '../api/binding';
+import { fallbackEligible } from '../src/lib/origin-binding';
+
+/** The route's own cap (api/binding.ts) — not exported, mirrored here. */
+const MAX_BODY_BYTES = 1024;
 
 // The binding route's judgement lives in these two pure parsers: what a TXT name
 // is saying, and what a /.well-known/dfos-did body is saying. Everything else in
@@ -138,5 +148,46 @@ describe('classifyDidStatus', () => {
   it('leaves a success status to the body', () => {
     expect(classifyDidStatus(200)).toBeNull();
     expect(classifyDidStatus(204)).toBeNull();
+  });
+});
+
+// M61: an over-cap 200 is a 200 THAT IS NOT A DID — the non-answer the fallback
+// exists for — not a query failure. Classifying it `error` excluded it from
+// `fallbackEligible`, so the explorer never ran the app-description fallback the
+// Go CLI runs on the same bytes.
+describe('an over-cap body is a non-answer, and the fallback fires on it', () => {
+  const oversized = (): Response => new Response('x'.repeat(MAX_BODY_BYTES * 2), { status: 200 });
+
+  it('boundedText refuses a declared content-length over the cap before reading', async () => {
+    const res = new Response('x', {
+      status: 200,
+      headers: { 'content-length': String(MAX_BODY_BYTES * 2) },
+    });
+    await expect(boundedText(res)).rejects.toThrow();
+  });
+
+  it('an over-cap read is malformed, never error', async () => {
+    const err = await boundedText(oversized()).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(bodyReadFailure(err)).toEqual({
+      status: 'malformed',
+      reason: 'the document exceeds 1024 bytes',
+    });
+  });
+
+  it('a genuine read failure stays a query failure', () => {
+    expect(bodyReadFailure(new Error('socket hang up')).status).toBe('error');
+  });
+
+  it('and malformed is fallback-eligible, matching the CLI', () => {
+    expect(
+      fallbackEligible({
+        kind: 'answered',
+        https: { status: 'malformed', reason: 'the document exceeds 1024 bytes' },
+        dns: { status: 'none' },
+      }),
+    ).toBe(true);
   });
 });

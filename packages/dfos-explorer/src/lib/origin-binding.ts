@@ -246,7 +246,9 @@ export const fetchBindingAttestation = async (host: string): Promise<BindingProb
 export type FallbackResult =
   | { kind: 'attests'; did: string }
   | { kind: 'answers-other'; did: string }
-  | { kind: 'silent'; reason: string };
+  | { kind: 'silent'; reason: string }
+  /** OUR lookup route failed — see {@link AppAttestation} */
+  | { kind: 'proxy-unavailable'; reason: string };
 
 /**
  * What the app description answered ON ITS OWN TERMS, with no candidate DID in
@@ -254,7 +256,17 @@ export type FallbackResult =
  * nothing but its app description, that document's `client_did` IS the candidate,
  * and there is nothing yet to compare it against.
  */
-export type AppAttestation = { kind: 'answers'; did: string } | { kind: 'silent'; reason: string };
+export type AppAttestation =
+  | { kind: 'answers'; did: string }
+  | { kind: 'silent'; reason: string }
+  /**
+   * OUR app-description lookup route failed — the same fourth state
+   * {@link BindingProbe} carries for the primary channel, and for the same
+   * reason: the explorer's own route falling over is not the domain going quiet,
+   * and folding it into `silent` makes the verdict say "domain silent" about a
+   * domain nobody asked.
+   */
+  | { kind: 'proxy-unavailable'; reason: string };
 
 /**
  * Fetch `/.well-known/dfos-app.json` and read its `client_did`. Rung 1 does the
@@ -269,10 +281,7 @@ export type AppAttestation = { kind: 'answers'; did: string } | { kind: 'silent'
 export const readAppAttestation = async (host: string): Promise<AppAttestation> => {
   const outcome = await fetchAppDocument(host);
   if (outcome.kind === 'proxy-unavailable') {
-    return {
-      kind: 'silent',
-      reason: `the app-description lookup route failed — ${outcome.reason}`,
-    };
+    return { kind: 'proxy-unavailable', reason: outcome.reason };
   }
   if (outcome.kind === 'unreachable') {
     return { kind: 'silent', reason: outcome.reason };
@@ -305,7 +314,7 @@ export const readAppAttestation = async (host: string): Promise<AppAttestation> 
  *  Split from the fetch so the domain-first walk can read the same document
  *  BEFORE it has a candidate, and judge it once the chain resolves. */
 export const appFallbackAgainst = (answer: AppAttestation, candidate: string): FallbackResult =>
-  answer.kind === 'silent'
+  answer.kind !== 'answers'
     ? answer
     : answer.did === candidate
       ? { kind: 'attests', did: answer.did }
@@ -473,13 +482,21 @@ export const assessBinding = (
       details.push(
         `the app description at this origin names a different identity — ${fallback.did}`,
       );
-    } else silences.push(`app-fallback — ${fallback.reason}`);
+    } else if (fallback.kind === 'silent') silences.push(`app-fallback — ${fallback.reason}`);
+    // 'proxy-unavailable' contributes NOTHING to silences — our route failing is
+    // not the domain saying nothing. It is read below, where it matters.
   }
 
   // a contradiction anywhere is the verdict: never a tiebreak, never averaged
   // against an attestation that happens to agree
   if (details.length > 0) return { kind: 'broken', domain, details };
   if (attested.length > 0) return { kind: 'bound', domain, attestedBy: attested, silences };
+  // nothing attested. If the fallback leg — the last channel that could have
+  // answered — went unread because OUR route failed, the honest verdict is our
+  // own state, not `stale`, which is a claim about the DOMAIN's silence.
+  if (fallback?.kind === 'proxy-unavailable') {
+    return { kind: 'proxy-unavailable', domain, reason: fallback.reason };
+  }
   return { kind: 'stale', domain, reasons: silences };
 };
 
@@ -545,7 +562,9 @@ const domainAnswers = (
   silences: string[];
 } => {
   const readings: ChannelReading[] = [readChannel('https', probe.https)];
-  if (fallback) {
+  // a fallback leg our own route could not read contributes NOTHING — neither an
+  // answer nor a silence, because nothing about the domain was observed
+  if (fallback && fallback.kind !== 'proxy-unavailable') {
     readings.push(
       fallback.kind === 'answers'
         ? { kind: 'answer', method: 'app-fallback', did: fallback.did }
@@ -621,6 +640,11 @@ export const assessDomainBinding = (
 
   const candidate = answers[0]?.did;
   if (candidate === undefined) {
+    // OUR route failing on the one leg left to ask is our state, never the
+    // domain's silence — the same rule assessBinding applies
+    if (fallback?.kind === 'proxy-unavailable') {
+      return { kind: 'proxy-unavailable', domain, reason: fallback.reason };
+    }
     // nothing published at all: unverifiable, not contradicted
     return { kind: 'stale', domain, reasons: silences };
   }

@@ -86,6 +86,45 @@ const WELL_KNOWN_PATH = '/.well-known/dfos-did';
 const MAX_BODY_BYTES = 1024;
 const TIMEOUT_MS = 8000;
 
+/** The over-cap signal, thrown by {@link boundedText} and read by its one caller. */
+const OVER_CAP = 'over-cap';
+
+/**
+ * Read a response body as text UNDER the byte cap, throwing {@link OVER_CAP} past
+ * it. The mirror of `api/binding.ts`'s `boundedText`, and the reason it is a
+ * streamed read rather than `res.text()` followed by a measurement: the cap has
+ * to bound the MEMORY, not just the verdict. A declared content-length over the
+ * cap is refused before a byte is read; otherwise the reader is cancelled the
+ * moment the running total passes it, so a fast origin cannot push an unbounded
+ * body into the tab. `AbortSignal.timeout` bounds duration only.
+ */
+const boundedText = async (res: Response): Promise<string> => {
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) throw new Error(OVER_CAP);
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw new Error(OVER_CAP);
+    }
+    chunks.push(value);
+  }
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+};
+
 /** The DoH endpoints, in the order they are tried. */
 export const DOH_PROVIDERS: readonly { name: string; url: string }[] = [
   { name: 'Cloudflare', url: 'https://cloudflare-dns.com/dns-query' },
@@ -338,17 +377,18 @@ export const probeWellKnownFromBrowser = async (host: string): Promise<ChannelAt
   }
   let text: string;
   try {
-    text = await res.text();
-  } catch {
+    text = await boundedText(res);
+  } catch (e) {
+    // a conforming body is under a hundred bytes; anything past the cap is not
+    // one, and the read was ABANDONED at the cap rather than measured after the
+    // fact — see boundedText
+    if (e instanceof Error && e.message === OVER_CAP) {
+      return {
+        kind: 'observed',
+        result: { status: 'malformed', reason: 'the document is far larger than one DID' },
+      };
+    }
     return { kind: 'not-checkable', reason: 'the document could not be read' };
-  }
-  // a conforming body is under a hundred bytes; anything past the cap is not one,
-  // and is not read further
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    return {
-      kind: 'observed',
-      result: { status: 'malformed', reason: 'the document is far larger than one DID' },
-    };
   }
   return { kind: 'observed', result: parseDidBody(text) };
 };
