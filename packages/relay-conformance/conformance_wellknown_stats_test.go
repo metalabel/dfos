@@ -31,6 +31,7 @@ import (
 var kindBuckets = []string{"identity", "content", "artifact", "credential", "countersign", "revocation"}
 
 func TestWellKnownEnrichment(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 
 	// Ingest a known identity + content so the relay's log is non-empty and the

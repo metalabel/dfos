@@ -10,6 +10,9 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./...
 
 # Against the TS relay (starts it automatically)
 ./scripts/run-conformance.sh
+
+# Against the Go CLI relay (temporary SQLite database)
+CONFORMANCE_RELAY=go ./scripts/run-conformance.sh
 ```
 
 Authenticated requests sign an identity proof bound to the relay's own configured
@@ -18,6 +21,26 @@ authority, so the target must be booted with one (`authority` /
 answers 503. The suite binds proofs to the authority of the URL it dials; set
 `RELAY_AUTHORITY` when the relay is configured for a different host than the one
 you reach it at, as behind a proxy or a tunnel.
+
+## Served-corpus index checks
+
+For a relay with `write: false` and `index: true`, query its existing corpus:
+
+```bash
+CONFORMANCE_SERVED_CORPUS=1 RELAY_URL=http://localhost:4444 \
+  go test -v -count=1 -run 'TestIndex|TestWellKnownEnrichment' ./...
+```
+
+Fixture-dependent index tests and well-known enrichment skip with a named reason.
+`TestIndexServedCorpus` checks identity and operation envelopes, ordering, cursor
+round-trips, and filters without writing. Empty corpora still exercise envelope
+and parameter checks; positive controls needing a served row explicitly skip.
+Run against a quiescent corpus for pagination comparisons. The write-disabled
+runner includes these checks against both reference relays' out-of-band seeds.
+
+Set `REQUIRE_INDEX_KEY_FILTERS=1` to fail, rather than skip, when the behavioral
+`key=` or `signerKey=` probe finds an ignored filter or lacks a probe corpus.
+The reference-relay CI jobs require these filters.
 
 ## Coverage
 
@@ -66,6 +89,14 @@ The test suite depends on [`dfos-protocol-go`](../dfos-protocol-go) for protocol
 | `scripts/serve-proof-required.ts` | Start a proof-required TS relay, plus an open seed door on the next port   |
 | `scripts/serve-signing.ts`        | Start a signing-enabled TS relay for conformance testing                   |
 | `scripts/serve-write-disabled.ts` | Start a seeded, write-disabled TS relay for read-only conformance testing  |
+
+Additional capability runners (both TS and Go):
+
+- `scripts/run-content-disabled.sh` — content routes return 501.
+- `scripts/run-revocations-disabled.sh` — revocation routes return 501.
+
+Their TS and Go serve fixtures live under `scripts/`. The Go fixture sources
+build using the existing relay module, without adding conformance dependencies.
 
 ## License
 

@@ -32,6 +32,7 @@ package conformance
 
 import (
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -56,6 +57,9 @@ func requireSignerKeyFilter(t *testing.T, base string) {
 		t.Fatalf("GET /index/v0/operations: status %d", resp.StatusCode)
 	}
 	if len(unfiltered.Operations) == 0 {
+		if os.Getenv("REQUIRE_INDEX_KEY_FILTERS") == "1" {
+			t.Fatal("required index key filter has no corpus for its behavioral probe")
+		}
 		t.Skip("relay's operation index is empty — no corpus to probe signerKey= against")
 	}
 
@@ -70,6 +74,9 @@ func requireSignerKeyFilter(t *testing.T, base string) {
 		t.Fatalf("signerKey= probe: status %d, want 200 (the value is opaque — there is no format to 400 on)", resp.StatusCode)
 	}
 	if len(probe.Operations) != 0 {
+		if os.Getenv("REQUIRE_INDEX_KEY_FILTERS") == "1" {
+			t.Fatal("required index key filter returned rows for an unmatchable key")
+		}
 		t.Skip("relay does not implement signerKey= on /index/v0/operations (an unmatchable value returned rows) — skipping")
 	}
 }
@@ -236,6 +243,7 @@ func equalSorted(a, b []string) bool {
 // this filter silently, returning a plausible-looking answer that is simply
 // missing a row kind. Naming the genesis CID is what turns that into a failure.
 func TestIndexOperationsSignerKeyPerRowKind(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	c := buildSignerKeyCorpus(t, base)
@@ -312,6 +320,7 @@ func contains(haystack []string, needle string) bool {
 // a 400 — including the two well-formed protocol strings a caller is most likely
 // to paste by mistake, a kid and a DID. Neither is a public key.
 func TestIndexOperationsSignerKeyIsOpaque(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	c := buildSignerKeyCorpus(t, base)
@@ -371,6 +380,7 @@ func TestIndexOperationsSignerKeyIsOpaque(t *testing.T) {
 // properties the route shares with its siblings: filters AND, and the filtered
 // feed drains through the ordered cursor exactly once under BOTH orderings.
 func TestIndexOperationsSignerKeyComposesAndPages(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	c := buildSignerKeyCorpus(t, base)
@@ -447,6 +457,7 @@ func TestIndexOperationsSignerKeyComposesAndPages(t *testing.T) {
 // of a key-addressed audit filter, since the rows that matter most to a holder
 // recovering from key loss are exactly the ones signed by keys no longer current.
 func TestIndexOperationsSignerKeySurvivesRotation(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	c := buildSignerKeyCorpus(t, base)
@@ -534,6 +545,7 @@ func TestIndexOperationsSignerKeySurvivesRotation(t *testing.T) {
 // not anything. The honest answer for a key no chain proved is no rows, rather
 // than a row keyed by evidence that never existed.
 func TestIndexOperationsSignerKeyOmitsUnprovedSigner(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := relayURL(t)
 	requireIndexCapability(t, base)
 	id := createIdentity(t, base)

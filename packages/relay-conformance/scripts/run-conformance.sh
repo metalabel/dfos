@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Run Go conformance tests against the local TS Hono relay.
+# Run Go conformance tests against the local TS relay (default) or Go CLI.
 #
 # Usage:
 #   cd packages/relay-conformance && ./scripts/run-conformance.sh
 #
-# Starts a TS relay on a random port, runs `go test`, then kills the relay.
+# CONFORMANCE_RELAY=go selects the Go CLI with a temporary SQLite store.
+# Starts a relay on a random port, runs vet and tests, then kills the relay.
 
 set -euo pipefail
 
@@ -39,6 +40,7 @@ stop_tree() {
 cleanup() {
   stop_tree "$RELAY_PID"
   RELAY_PID=""
+  if [ -n "${GO_RUN_DIR:-}" ]; then rm -rf "$GO_RUN_DIR"; fi
 }
 # EXIT alone is not enough. A run interrupted with Ctrl-C, or killed by whatever
 # supervises it, is exactly when a relay gets orphaned — and bash does not run an
@@ -86,9 +88,15 @@ PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.get
 assert_port_free "$PORT"
 
 # start the relay in the background, as the leader of its own process group
-echo "Starting TS relay on port $PORT..."
+echo "Starting ${CONFORMANCE_RELAY:-ts} relay on port $PORT..."
 set -m
-pnpm --filter @metalabel/dfos-web-relay exec tsx "$SCRIPT_DIR/serve-conformance.ts" "$PORT" &
+if [ "${CONFORMANCE_RELAY:-ts}" = "go" ]; then
+  GO_RUN_DIR="$(mktemp -d)"
+  go -C "$CONFORMANCE_DIR/../dfos-cli" build -o "$GO_RUN_DIR/dfos" ./cmd/dfos
+  DFOS_CONFIG="$GO_RUN_DIR/config.toml" "$GO_RUN_DIR/dfos" serve --port "$PORT" --db "$GO_RUN_DIR/relay.db" --authority "localhost:$PORT" &
+else
+  pnpm --filter @metalabel/dfos-web-relay exec tsx "$SCRIPT_DIR/serve-conformance.ts" "$PORT" &
+fi
 RELAY_PID=$!
 set +m
 disown "$RELAY_PID" 2>/dev/null || true
@@ -117,4 +125,5 @@ echo ""
 # run Go conformance tests. Its exit status is the script's: `set -e` propagates
 # a failure and the EXIT trap still reaps the relay on the way out.
 cd "$CONFORMANCE_DIR"
+go vet ./...
 RELAY_URL="http://localhost:$PORT" go test -v -count=1 ./...

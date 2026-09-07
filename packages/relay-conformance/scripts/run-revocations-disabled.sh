@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 #
-# Run the write-disabled (lite / pull-only) conformance variant against BOTH
-# reference relays — the TS Hono relay and the Go relay — each booted in
-# write:false mode with a user identity seeded OUT-OF-BAND (not via POST).
-#
-# Proves a read-only node passes conformance: POST /proof/v1/operations → 501,
-# and every proof-plane read route serves chains whose resolved state
-# independently recomputes from their log.
+# Run the revocations-disabled conformance variant against BOTH reference relays.
+# Each twin advertises capabilities.revocations:false, returns 501 from every
+# /revocations/v0 route, and leaves the proof/content planes enabled.
 #
 # Usage:
-#   cd packages/relay-conformance && ./scripts/run-write-disabled.sh
+#   cd packages/relay-conformance && ./scripts/run-revocations-disabled.sh
 
 set -euo pipefail
 
@@ -25,12 +21,12 @@ GO_PID=""
 #
 # The TS relay runs under a `pnpm ... exec` wrapper that does NOT propagate
 # SIGTERM to the node grandchild, so killing the wrapper pid leaves node holding
-# the port (and `wait`-ing on the wrapper hangs forever). Each relay is started
-# under job control (`set -m`) so it leads its OWN process group, whose id is the
-# leader's pid — the negative-pid form below reaches every descendant at once.
-# This replaces a `pkill -f serve-write-disabled\.ts`, which reaped by script
-# path and so reached MACHINE-WIDE: a concurrent run in another worktree, or
-# another checkout of this repo, was fair game.
+# the port. Each relay is started under job control (`set -m`) so it leads its
+# OWN process group, whose id is the leader's pid — the negative-pid form below
+# reaches every descendant at once. This replaces a `pkill -f
+# serve-revocations-disabled\.ts`, which reaped by script path and so reached
+# MACHINE-WIDE: a concurrent run in another worktree, or another checkout of this
+# repo, was fair game.
 stop_tree() {
   local pid="$1"
   [ -n "$pid" ] || return 0
@@ -87,8 +83,8 @@ PY
 # A relay leaked by an earlier run is the one failure this variant cannot report
 # honestly: it would answer as if it were the relay we just booted, and serve an
 # OLD build's verdicts to a NEW suite. A green from that is worse than a red —
-# and this variant is especially exposed, since a leaked WRITE-ENABLED relay
-# makes every write-disabled test self-skip and the run reports success having
+# and this variant is especially exposed, since a leaked INDEX-ENABLED relay
+# makes every revocations-disabled test self-skip and the run reports success having
 # asserted nothing. So refuse the port instead of quietly sharing it.
 assert_port_free() {
   local port="$1"
@@ -102,7 +98,6 @@ assert_port_free() {
 
 wait_ready() {
   local port="$1" pid="$2"
-  # up to ~30s — tsx cold start can be slow on first invocation
   for _ in $(seq 1 150); do
     if curl -s "http://localhost:$port/.well-known/dfos-relay" > /dev/null 2>&1; then
       return 0
@@ -118,60 +113,49 @@ wait_ready() {
 }
 
 run_variant() {
-  local label="$1" port="$2" logfile="$3"
-  local did
-  did="$(grep -m1 '^SEEDED_DID=' "$logfile" | cut -d= -f2- || true)"
+  local label="$1" port="$2"
   echo ""
-  echo "=== $label write-disabled relay on :$port (seeded did=${did:-none}) ==="
+  echo "=== $label revocations-disabled relay on :$port ==="
   curl -fsS "http://localhost:$port/.well-known/dfos-relay" |
-    python3 -c 'import json, sys; assert json.load(sys.stdin)["capabilities"]["write"] is False, "expected disabled capability"'
+    python3 -c 'import json, sys; assert json.load(sys.stdin)["capabilities"]["revocations"] is False, "expected disabled capability"'
   cd "$CONFORMANCE_DIR"
   go vet ./...
-  CONFORMANCE_SERVED_CORPUS=1 REQUIRE_INDEX_KEY_FILTERS=1 RELAY_URL="http://localhost:$port" WRITE_DISABLED_SEED_DID="$did" \
-    go test -v -count=1 -timeout 90s -run 'TestWriteDisabled|TestIndex|TestWellKnownEnrichment' ./...
+  RELAY_URL="http://localhost:$port" \
+    go test -v -count=1 -timeout 90s -run 'TestRevocationsDisabled' ./...
 }
 
-# ---------------------------------------------------------------------------
-# TS reference relay
-# ---------------------------------------------------------------------------
 TS_PORT="$(free_port)"
 assert_port_free "$TS_PORT"
-TS_LOG="$(mktemp)"
-echo "Starting TS write-disabled relay on :$TS_PORT..."
+echo "Starting TS revocations-disabled relay on :$TS_PORT..."
 set -m
 pnpm --filter @metalabel/dfos-web-relay exec tsx \
-  "$SCRIPT_DIR/serve-write-disabled.ts" "$TS_PORT" > "$TS_LOG" 2>&1 &
+  "$SCRIPT_DIR/serve-revocations-disabled.ts" "$TS_PORT" &
 TS_PID=$!
 set +m
 disown "$TS_PID" 2>/dev/null || true
 wait_ready "$TS_PORT" "$TS_PID"
-run_variant "TS" "$TS_PORT" "$TS_LOG"
+run_variant "TS" "$TS_PORT"
 stop_ts
-rm -f "$TS_LOG"
 
-# ---------------------------------------------------------------------------
-# Go reference relay
-# ---------------------------------------------------------------------------
 echo ""
-echo "Building Go write-disabled relay..."
+echo "Building Go revocations-disabled relay..."
 GO_BIN_DIR="$(mktemp -d)"
-GO_BIN="$GO_BIN_DIR/write-disabled-serve"
-( cd "$RELAY_GO_DIR" && go build -o "$GO_BIN" ./cmd/write-disabled-serve )
+GO_BIN="$GO_BIN_DIR/revocations-disabled-serve"
+( cd "$RELAY_GO_DIR" && go build -o "$GO_BIN" "$SCRIPT_DIR/serve-revocations-disabled.go" )
 
 GO_PORT="$(free_port)"
 assert_port_free "$GO_PORT"
-GO_LOG="$(mktemp)"
-echo "Starting Go write-disabled relay on :$GO_PORT..."
+echo "Starting Go revocations-disabled relay on :$GO_PORT..."
 set -m
-"$GO_BIN" "$GO_PORT" > "$GO_LOG" 2>&1 &
+"$GO_BIN" "$GO_PORT" &
 GO_PID=$!
 set +m
 disown "$GO_PID" 2>/dev/null || true
 wait_ready "$GO_PORT" "$GO_PID"
-run_variant "Go" "$GO_PORT" "$GO_LOG"
+run_variant "Go" "$GO_PORT"
 stop_go
-rm -f "$GO_LOG"
+
 rm -rf "$GO_BIN_DIR"
 
 echo ""
-echo "✓ write-disabled conformance passed against both TS and Go reference relays"
+echo "✓ revocations-disabled conformance passed against both TS and Go reference relays"

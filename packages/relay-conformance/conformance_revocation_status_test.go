@@ -18,6 +18,7 @@
 package conformance
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -287,5 +288,42 @@ func TestRevocationStatusMalformedDID(t *testing.T) {
 	resp := getJSON(t, base+"/revocations/v1/issuer/did:dfos:tooshort", &body)
 	if resp.StatusCode != 400 {
 		t.Fatalf("malformed DID: status %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRevocationStatusMultiIssuerTiebreak(t *testing.T) {
+	base := relayURL(t)
+	requireRevocationsCapability(t, base)
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reverse=%t", reverse), func(t *testing.T) {
+			issuers := []identity{createIdentity(t, base), createIdentity(t, base)}
+			if issuers[0].did > issuers[1].did {
+				issuers[0], issuers[1] = issuers[1], issuers[0]
+			}
+			cid, _, err := dfos.DocumentCID(map[string]any{"multiIssuer": issuers[0].did})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens := make([]string, 2)
+			for i, issuer := range issuers {
+				tokens[i], _ = createRevocation(t, issuer.did, cid, issuer.auth)
+			}
+			order := []int{0, 1}
+			if reverse {
+				order = []int{1, 0}
+			}
+			for _, i := range order {
+				postOperationsAccepted(t, base, []string{tokens[i]})
+			}
+			var body struct {
+				CredentialCID string `json:"credentialCID"`
+				Revoked       bool   `json:"revoked"`
+				Revocation    string `json:"revocation"`
+			}
+			resp := getJSON(t, base+"/revocations/v1/credential/"+cid, &body)
+			if resp.StatusCode != 200 || body.CredentialCID != cid || !body.Revoked || body.Revocation != tokens[0] {
+				t.Fatalf("multi-issuer projection: status %d body %+v, want smallest issuer %s", resp.StatusCode, body, issuers[0].did)
+			}
+		})
 	}
 }

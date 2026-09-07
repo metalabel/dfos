@@ -69,6 +69,7 @@ func TestIndexDisabledRoutes501(t *testing.T) {
 // the query projection: proof ingestion/reads and authenticated blob I/O remain
 // live on an otherwise-default relay.
 func TestIndexDisabledAdjacentSurfacesUnaffected(t *testing.T) {
+	skipServedCorpusFixture(t)
 	base := indexDisabledBase(t)
 	creator := createIdentity(t, base)
 	cc := createContent(t, base, creator)

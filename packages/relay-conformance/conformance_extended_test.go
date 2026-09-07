@@ -50,11 +50,12 @@ func TestContentRejectPostDelete(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for post-delete content operation")
 	}
 }
@@ -187,11 +188,12 @@ func TestControllerKeyRotation(t *testing.T) {
 	body := readBody(t, res)
 	var results struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
 		} `json:"results"`
 	}
 	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
+	if res.StatusCode != 200 || len(results.Results) != 1 || results.Results[0].Status != "rejected" {
 		t.Fatal("expected error for rotated-out controller key")
 	}
 
