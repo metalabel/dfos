@@ -454,7 +454,9 @@ describe('web relay', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
-      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization, X-Credential');
+      expect(res.headers.get('access-control-allow-headers')).toBe(
+        'Content-Type, Authorization, X-Credential',
+      );
     });
 
     it('should answer OPTIONS preflight with 204 and the CORS headers', async () => {
@@ -462,7 +464,9 @@ describe('web relay', () => {
       expect(res.status).toBe(204);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
-      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization, X-Credential');
+      expect(res.headers.get('access-control-allow-headers')).toBe(
+        'Content-Type, Authorization, X-Credential',
+      );
     });
 
     it('should emit CORS headers even on 404 proof-plane reads', async () => {
