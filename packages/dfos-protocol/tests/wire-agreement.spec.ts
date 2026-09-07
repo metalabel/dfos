@@ -247,9 +247,12 @@ describe('protected header shape', () => {
     expect(decodeJwsUnsafe(token)).toBeNull();
   });
 
-  it('a header with no kid is refused before any caller reads it', async () => {
+  it('a header with no kid decodes for envelope-specific validation', async () => {
     const token = await signRawText('{"alg":"EdDSA","typ":"did:dfos:credential"}', '{}', keypair);
-    expect(decodeJwsUnsafe(token)).toBeNull();
+    expect(decodeJwsUnsafe(token)).toEqual({
+      header: { alg: 'EdDSA', typ: 'did:dfos:credential' },
+      payload: {},
+    });
   });
 
   it('a header with a non-string kid is refused', async () => {

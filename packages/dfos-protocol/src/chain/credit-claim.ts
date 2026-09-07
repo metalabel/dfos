@@ -322,16 +322,8 @@ export const verifyCreditClaim = async (
   const decoded = decodeJwsUnsafe(jwsToken);
   if (!decoded) throw invalid('failed to decode credit claim JWS');
 
-  // Validate the header SHAPE before touching any field. decodeJwsUnsafe
-  // JSON.parses the protected header and CASTS it to JwsHeader — a compile-time
-  // assertion, not a runtime guarantee — so on a decodable-but-malformed token
-  // `kid` may be absent, null, or a number. Reading it unguarded raises a raw
-  // TypeError out of `kid.indexOf('#')`, which is not a CreditClaimVerifyError and
-  // so lands in verifyCreditEntry's catch-all as **unverifiable** — reporting a
-  // malformed claim as "could not check" when we did check and it is malformed.
-  // A bad header is invalid.
-  const rawHeader = decoded.header as unknown as Record<string, unknown>;
-  if (typeof rawHeader['typ'] !== 'string' || typeof rawHeader['kid'] !== 'string') {
+  // Credit claims require a kid even though the generic JWS decoder does not.
+  if (typeof decoded.header.kid !== 'string') {
     throw invalid('credit claim header must carry a string typ and kid');
   }
 

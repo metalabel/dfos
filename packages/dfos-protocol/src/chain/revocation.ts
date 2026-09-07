@@ -101,6 +101,7 @@ export const verifyRevocation = async (input: {
 
   // verify kid DID matches payload did (only the issuer can revoke)
   const kid = decoded.header.kid;
+  if (kid === undefined) throw new Error('kid must be present');
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new Error('revocation kid must be a DID URL');
   const kidDid = kid.substring(0, hashIdx);

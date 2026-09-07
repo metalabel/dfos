@@ -361,7 +361,7 @@ export interface SignKeyProofInput {
  * The protected header is EXACTLY `{"alg":"EdDSA","typ":"<purpose>"}` — two
  * members, no `kid` (the key is in no chain and rides in the payload) and no
  * `cid` (there is no operation to bind). It is assembled by hand rather than
- * through `createJws`, whose `JwsHeader` requires a `kid` this envelope must not
+ * through `createJws`, whose header input requires a `kid` this envelope must not
  * carry.
  *
  * HOLDER OBLIGATIONS THIS FUNCTION CANNOT DISCHARGE (INTEGRATIONS.md, Holder

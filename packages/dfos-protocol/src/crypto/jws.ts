@@ -18,7 +18,7 @@ import { assertJwsProfile } from './jws-profile';
 export interface JwsHeader {
   alg: 'EdDSA';
   typ: string;
-  kid: string;
+  kid?: string;
   /** CIDv1 of the operation payload (dag-cbor + SHA-256), signed in the protected header */
   cid?: string;
 }
@@ -65,15 +65,15 @@ const decodeJwsSegment = (segmentB64: string): Record<string, unknown> | null =>
 };
 
 /**
- * A protected header is only a `JwsHeader` when `alg`, `typ` and `kid` are
- * strings and `cid`, when present, is one. Absent or wrongly-typed, and the
+ * A protected header requires string `alg` and `typ`; `kid` and `cid` must
+ * be strings when present. Missing required or wrongly-typed fields mean the
  * decode fails here rather than throwing a `TypeError` out of whichever caller
  * reads the field first.
  */
 const asJwsHeader = (raw: Record<string, unknown>): JwsHeader | null => {
   if (typeof raw['alg'] !== 'string') return null;
   if (typeof raw['typ'] !== 'string') return null;
-  if (typeof raw['kid'] !== 'string') return null;
+  if ('kid' in raw && typeof raw['kid'] !== 'string') return null;
   if ('cid' in raw && typeof raw['cid'] !== 'string') return null;
   return raw as unknown as JwsHeader;
 };
@@ -89,7 +89,7 @@ const asJwsHeader = (raw: Record<string, unknown>): JwsHeader | null => {
  * signature (64 bytes)
  */
 export const createJws = async (options: {
-  header: JwsHeader;
+  header: JwsHeader & { kid: string };
   payload: Record<string, unknown>;
   sign: (message: Uint8Array) => Promise<Uint8Array>;
 }): Promise<string> => {

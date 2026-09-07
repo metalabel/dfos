@@ -57,7 +57,8 @@ const verifyBundle = async (tokens: string[]): Promise<Map<string, BundledIdenti
     } else {
       const kid = decoded.header.kid;
       const hash = typeof kid === 'string' ? kid.indexOf('#') : -1;
-      if (hash < 0) throw new Error('invalid identity operation kid in chain bundle');
+      if (kid === undefined || hash < 0)
+        throw new Error('invalid identity operation kid in chain bundle');
       did = kid.substring(0, hash);
     }
     grouped.set(did, [...(grouped.get(did) ?? []), token]);

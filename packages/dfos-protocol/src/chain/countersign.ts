@@ -99,6 +99,7 @@ export const verifyCountersignature = async (input: {
 
   // verify kid DID matches payload did
   const kid = decoded.header.kid;
+  if (kid === undefined) throw new Error('kid must be present');
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new Error('countersignature kid must be a DID URL');
   const kidDid = kid.substring(0, hashIdx);

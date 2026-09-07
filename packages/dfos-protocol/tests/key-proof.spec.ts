@@ -21,6 +21,7 @@ import { encodeEd25519Multikey } from '../src/chain/multikey';
 import {
   base64urlDecode,
   base64urlEncode,
+  decodeJwsUnsafe,
   importEd25519Keypair,
   isValidEd25519Signature,
   signPayloadEd25519,
@@ -847,5 +848,12 @@ describe('key-proof verification — chain walk', () => {
     expect(() => verifyChainKeyProof(VECTOR_JWS, walkFor({ expectedTyp: '' }))).toThrow(
       /registered purpose value/,
     );
+  });
+});
+
+it('decodes a real key-proof envelope through the public JWS decoder', () => {
+  expect(decodeJwsUnsafe(VECTOR_JWS)).toEqual({
+    header: { alg: 'EdDSA', typ: KEY_ADD_JWS_TYP },
+    payload: JSON.parse(VECTOR_CANONICAL),
   });
 });

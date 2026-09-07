@@ -134,6 +134,18 @@ describe('identity chain', () => {
     return { ...k, op, jwsToken, operationCID, identity };
   };
 
+  it('rejects a missing identity kid with the malformed-header error', async () => {
+    const { jwsToken } = await createGenesis();
+    const decoded = decodeJwsUnsafe(jwsToken)!;
+    delete decoded.header.kid;
+    const parts = jwsToken.split('.');
+    parts[0] = base64urlEncode(JSON.stringify(decoded.header));
+    const result = verifyIdentityChain({ didPrefix: 'did:dfos', log: [parts.join('.')] });
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.not.toBeInstanceOf(TypeError);
+    await expect(result).rejects.toThrow('log[0]: kid must be present');
+  });
+
   // --- basic lifecycle ---
 
   it('should create and verify identity from genesis', async () => {

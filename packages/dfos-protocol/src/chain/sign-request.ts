@@ -257,7 +257,7 @@ export const verifySignRequest = async (
     assertJwsProfile(rawHeader as Record<string, unknown>, invalid);
     if (
       typeof (rawHeader as Record<string, unknown>)['typ'] !== 'string' ||
-      typeof (rawHeader as Record<string, unknown>)['kid'] !== 'string'
+      typeof decoded.header.kid !== 'string'
     ) {
       throw invalid('sign request header must carry a string typ and kid');
     }

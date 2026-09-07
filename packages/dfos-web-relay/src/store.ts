@@ -491,12 +491,14 @@ export class MemoryRelayStore
     // dedup by witness DID (kid DID prefix), not just exact token match
     const decoded = decodeJwsUnsafe(jwsToken);
     if (decoded) {
-      const kid = decoded.header.kid as string;
+      const kid = decoded.header.kid;
+      if (kid === undefined) throw new Error('countersignature kid must be present');
       const witnessDID = kid.includes('#') ? kid.split('#')[0] : kid;
       for (const cs of existing) {
         const d = decodeJwsUnsafe(cs);
         if (!d) continue;
-        const existingKid = d.header.kid as string;
+        const existingKid = d.header.kid;
+        if (existingKid === undefined) throw new Error('countersignature kid must be present');
         const existingDID = existingKid.includes('#') ? existingKid.split('#')[0] : existingKid;
         if (existingDID === witnessDID) return; // same witness, dedup
       }
