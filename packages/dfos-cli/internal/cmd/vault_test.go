@@ -229,6 +229,11 @@ func TestVaultShowHidesTheMnemonicUntilAskedAndConfirmed(t *testing.T) {
 		t.Fatalf("vault show --json carries a mnemonic field: %v", out)
 	}
 
+	// Exercise the interactive branch; noninteractive refusal has its own regression.
+	oldInteractive := revealStdinIsInteractive
+	revealStdinIsInteractive = func() bool { return true }
+	t.Cleanup(func() { revealStdinIsInteractive = oldInteractive })
+
 	// The reveal is barred by a typed confirmation, and a wrong answer prints
 	// nothing.
 	wrong := newVaultShowCmd()

@@ -58,8 +58,13 @@ type Client struct {
 // New creates a new relay client.
 func New(baseURL string) *Client {
 	return &Client{
-		BaseURL:    baseURL,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		BaseURL: baseURL,
+		HTTPClient: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return fmt.Errorf("redirect not followed")
+			},
+		},
 	}
 }
 

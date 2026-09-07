@@ -950,11 +950,12 @@ func burnedCeremonyAdvice(cand *candidateKey) string {
 // --- the command ---
 
 type proveResult struct {
-	Audience string `json:"audience"`
-	Code     string `json:"code"`
-	Present  string `json:"present"`
-	Carriage string `json:"carriage"`
-	Purpose  string `json:"purpose"`
+	FilingError string `json:"filingError,omitempty"`
+	Audience    string `json:"audience"`
+	Code        string `json:"code"`
+	Present     string `json:"present"`
+	Carriage    string `json:"carriage"`
+	Purpose     string `json:"purpose"`
 
 	// The position the envelope binds — the three members that make this proof
 	// consent to ONE introduction rather than to a key in general.
@@ -1250,6 +1251,9 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 		applyWaitOutcome(waitForCeremonyDecision(cer, cand, opts.description), result, cer, cand)
 	}
 
+	if result.FilingError != "" {
+		return fmt.Errorf("record adopted key: %s", result.FilingError)
+	}
 	if jsonFlag {
 		outputJSON(result)
 		return nil
@@ -1267,20 +1271,22 @@ func runKeysProve(cmd *cobra.Command, input string, opts proveOptions) error {
 // account is filed there because something else named it, and moving it on an
 // operator's say-so would take that key away from whatever was using it.
 //
-// A rename that fails is not an error the ceremony reports. The key is held
-// either way, under the account this result already names, and a keystore that
-// would not rename it is a local condition — nothing about the adoption, which
-// happened on a chain this machine does not custody.
+// Filing failures reach the command error; the adoption record precedes rename
+// so an interrupted filing cannot make an adopted key an orphan.
 func fileAdoptedKey(answer *presentationAnswer, cer *ceremony, cand *candidateKey, result *proveResult) {
 	if !adoptionNamesAnIdentity(answer, cer) || !strings.HasPrefix(cand.Account, candidateAccountPrefix) {
 		return
 	}
-	account := keyAccount(cand.PublicKey)
-	if keys.HasKey(account) {
+	if err := recordKeyAdoption(cand.PublicKey, answer.DID, answer.KeyID); err != nil {
+		result.FilingError = err.Error()
 		return
 	}
-	if err := keys.RenameKey(cand.Account, account); err != nil {
-		return
+	account := keyAccount(cand.PublicKey)
+	if !keys.HasKey(account) {
+		if err := keys.RenameKey(cand.Account, account); err != nil {
+			result.FilingError = err.Error()
+			return
+		}
 	}
 	result.Account = account
 	if !cand.Minted || cand.Vault == "" {
@@ -1292,10 +1298,13 @@ func fileAdoptedKey(answer *presentationAnswer, cer *ceremony, cand *candidateKe
 			roles = append(roles, string(role))
 		}
 	}
-	_ = getVaults().Record(cand.Vault, vault.MintedKey{
+	err := getVaults().Record(cand.Vault, vault.MintedKey{
 		Index: cand.VaultIndex, DID: answer.DID, KeyID: answer.KeyID,
 		Roles: roles, PublicKey: cand.PublicKey,
 	})
+	if err != nil {
+		result.FilingError = err.Error()
+	}
 }
 
 // adoptionNamesAnIdentity reports whether a presentation actually said the key

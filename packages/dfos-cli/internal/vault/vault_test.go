@@ -485,3 +485,48 @@ func TestReconcileIsIdempotentAndOnlyRaisesTheCounter(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadRejectsEmptyFingerprint(t *testing.T) {
+	for _, data := range []string{"", "name = 'personal'\n", "fingerprint = ''\n"} {
+		s := newTestStore(t)
+		if err := os.WriteFile(s.metaPath("personal"), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Load("personal"); err == nil {
+			t.Fatalf("accepted corrupt metadata %q", data)
+		}
+	}
+}
+
+func TestUncommittedMetadataLeavesCounterIntact(t *testing.T) {
+	s := newTestStore(t)
+	meta, _, err := s.Create("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.NextIndex = 7
+	if err := s.save(meta); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := os.CreateTemp(s.dir, ".personal.toml.*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pending.WriteString("fingerprint = 'partial'\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load("personal")
+	if err != nil || loaded.NextIndex != 7 {
+		t.Fatalf("pending write changed metadata: %+v %v", loaded, err)
+	}
+}
+
+func TestInvalidMnemonicErrorDoesNotEchoInput(t *testing.T) {
+	phrase := strings.Repeat("privateword ", 11) + "secretword"
+	if err := ValidateMnemonic(phrase); err == nil || strings.Contains(err.Error(), "privateword") || strings.Contains(err.Error(), "secretword") {
+		t.Fatalf("mnemonic validation leaked input: %v", err)
+	}
+}

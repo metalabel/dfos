@@ -186,12 +186,13 @@ type keyLedgerEntry struct {
 	// key nor an orphan — and the two readers that care (this ledger's reason
 	// line, and the one-key-one-DID pre-flight in `keys prove`) both have to tell
 	// it apart from a key that works.
-	Void        bool                `json:"void,omitempty"`
-	Deleted     bool                `json:"identityDeleted,omitempty"`
-	Vault       *keyVaultProvenance `json:"vault,omitempty"`
-	Recoverable bool                `json:"recoverableFromVault"`
-	Prunable    bool                `json:"prunable"`
-	Reason      string              `json:"reason,omitempty"`
+	Void              bool                `json:"void,omitempty"`
+	Deleted           bool                `json:"identityDeleted,omitempty"`
+	Vault             *keyVaultProvenance `json:"vault,omitempty"`
+	Recoverable       bool                `json:"recoverableFromVault"`
+	VaultsUnavailable string              `json:"vaultsUnavailable,omitempty"`
+	Prunable          bool                `json:"prunable"`
+	Reason            string              `json:"reason,omitempty"`
 	// AsOf is the basis of a NEGATIVE chain-derived verdict about this key: the
 	// local relay's head for the declaring identity, and when that head was
 	// written. It is set on `superseded` and on nothing else, because that is the
@@ -267,7 +268,8 @@ func buildKeyLedger() (*keyLedger, error) {
 	mintedPublic := map[string]string{}
 	mintedDID := map[string]string{}
 	mintedKeyID := map[string]string{}
-	if vaults, err := getVaults().List(); err == nil {
+	vaults, vaultsErr := getVaults().List()
+	if vaultsErr == nil {
 		for _, meta := range vaults {
 			for _, rec := range meta.Minted {
 				prov := &keyVaultProvenance{
@@ -575,8 +577,12 @@ func buildKeyLedger() (*keyLedger, error) {
 		fmt.Fprintf(os.Stderr, "Reading %d key(s) from %s to recover their public keys…\n", unresolved, keys.Backend())
 	}
 
+	if vaultsErr != nil {
+		ledger.Limit = strings.TrimSpace(ledger.Limit + " vault records unavailable: " + vaultsErr.Error())
+	}
 	for _, h := range order {
 		ledger.Entries = append(ledger.Entries, classifyKey(h.account, h.ref, classifyInputs{
+			vaultsErr:       vaultsErr,
 			declaredRoles:   declaredRoles,
 			voidRoles:       voidRoles,
 			declaredPublic:  declaredPublic,
@@ -734,6 +740,7 @@ func placementsFromLog(chain *relay.StoredIdentityChain, want map[string]bool) m
 }
 
 type classifyInputs struct {
+	vaultsErr     error
 	declaredRoles map[string][]string
 	// voidRoles are the `<role> (void)` markers for memberships a chain declares
 	// and no proof admitted — kept apart from declaredRoles so "does this key
@@ -769,6 +776,9 @@ type classifyInputs struct {
 // through to a status that is not that one. Uncertainty is not an orphan.
 func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 	entry := keyLedgerEntry{Account: account, Backend: keys.Backend(), Origin: originUnknown}
+	if in.vaultsErr != nil {
+		entry.VaultsUnavailable = in.vaultsErr.Error()
+	}
 
 	if account == "" {
 		entry.Ref = ref
@@ -877,6 +887,13 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.Origin = originCandidate
 		entry.Status = statusCandidate
 		entry.Reason = "presented to a key-add ceremony — the chain that adopts it is not this machine's, so nothing here declares it"
+		if len(in.declaredRoles[account]) > 0 || len(in.voidRoles[account]) > 0 {
+			entry.Status = statusDeclared
+			entry.DID, entry.KeyID = in.accountDID[account], in.accountKeyID[account]
+			entry.Roles = append(append([]string{}, in.declaredRoles[account]...), in.voidRoles[account]...)
+			entry.Void = len(in.declaredRoles[account]) == 0
+			entry.Reason = "the local chain declares this candidate key"
+		}
 	default:
 		entry.Status = statusUnrecognized
 		entry.Reason = "not an account shape this CLI writes"
@@ -912,6 +929,23 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.PublicKey = protocol.EncodeMultikey(priv.Public().(ed25519.PublicKey))
 	}
 
+	if in.vaultsErr != nil {
+		entry.VaultsUnavailable = in.vaultsErr.Error()
+		if entry.Status == statusOrphan {
+			entry.Status = statusUnrecognized
+			entry.Reason = "vault records unavailable; custody cannot be established"
+		}
+	}
+	if adoption, err := readKeyAdoption(entry.PublicKey); err != nil {
+		entry.Status = statusUnreadable
+		entry.Reason = "read adoption record: " + err.Error()
+	} else if adoption != nil {
+		entry.DID, entry.KeyID = adoption.DID, adoption.KeyID
+		if entry.Status == statusOrphan || entry.Status == statusCandidate {
+			entry.Status = statusDeclared
+			entry.Reason = "adoption recorded locally; fetch the identity to inspect its chain"
+		}
+	}
 	entry.Prunable = entry.Status == statusOrphan
 	return entry
 }
@@ -957,7 +991,7 @@ func newKeysListCmd() *cobra.Command {
 
 func printKeyLedger(l *keyLedger) {
 	fmt.Printf("Keys:      %d held (%s)\n", len(l.Entries), l.Backend)
-	if !l.Enumerated {
+	if l.Limit != "" {
 		fmt.Printf("  Listing: partial — %s\n", l.Limit)
 	}
 	if len(l.Entries) == 0 {
@@ -1175,6 +1209,8 @@ func printKeyFacts(e keyLedgerEntry) {
 	if e.Vault != nil {
 		fmt.Printf("  Vault:     %s [%s] at %s\n", e.Vault.Name, e.Vault.Fingerprint, e.Vault.Path)
 		fmt.Printf("  Recovery:  derivable from vault '%s' phrase at %s\n", e.Vault.Name, e.Vault.Path)
+	} else if e.VaultsUnavailable != "" {
+		fmt.Printf("  Recovery:  unknown — vault records unavailable: %s\n", e.VaultsUnavailable)
 	} else {
 		fmt.Printf("  Vault:     none — no vault record names this key, so this keystore is its only copy\n")
 	}
@@ -1453,6 +1489,9 @@ type keyRemoval struct {
 // it will. It is the single place the removable set is decided, so the help
 // text, the `keys show` hint, and the command itself cannot drift apart.
 func keyRemovalRefusal(e keyLedgerEntry) error {
+	if e.VaultsUnavailable != "" {
+		return fmt.Errorf("vault records unavailable; cannot establish the cost of removing this key")
+	}
 	switch e.Status {
 	case statusCandidate, statusOrphan:
 		return nil
