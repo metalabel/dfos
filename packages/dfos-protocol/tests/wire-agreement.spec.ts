@@ -74,16 +74,28 @@ const signRaw = async (input: {
   });
 };
 
+/** A JWS whose protected header and payload are the given raw BYTES */
+const signRawBytes = async (
+  headerBytes: Uint8Array,
+  payloadBytes: Uint8Array,
+  keypair: ReturnType<typeof createNewEd25519Keypair>,
+): Promise<string> => {
+  const signingInput = `${base64urlEncode(headerBytes)}.${base64urlEncode(payloadBytes)}`;
+  const sig = await signPayloadEd25519(new TextEncoder().encode(signingInput), keypair.privateKey);
+  return `${signingInput}.${base64urlEncode(sig)}`;
+};
+
 /** A JWS whose protected header and payload are the given raw JSON TEXT */
 const signRawText = async (
   headerText: string,
   payloadText: string,
   keypair: ReturnType<typeof createNewEd25519Keypair>,
-): Promise<string> => {
-  const signingInput = `${base64urlEncode(headerText)}.${base64urlEncode(payloadText)}`;
-  const sig = await signPayloadEd25519(new TextEncoder().encode(signingInput), keypair.privateKey);
-  return `${signingInput}.${base64urlEncode(sig)}`;
-};
+): Promise<string> =>
+  signRawBytes(
+    new TextEncoder().encode(headerText),
+    new TextEncoder().encode(payloadText),
+    keypair,
+  );
 
 /** An own `__proto__` DATA property — the only way to make one is through JSON */
 const withOwnProto = (value: Record<string, unknown>): Record<string, unknown> =>
@@ -318,6 +330,38 @@ describe('raw-text gates on a signed document', () => {
     const decoded = decodeJwsUnsafe(token);
     expect(decoded).not.toBeNull();
     expect(decoded!.payload['a']).toBe('😀');
+  });
+
+  it('rejects invalid UTF-8 in a payload string rather than repairing it', async () => {
+    // a raw 0xFF inside a JSON string. A lenient TextDecoder turns it into
+    // U+FFFD and this side would then scan, parse and verify a payload whose
+    // bytes Go refuses outright (utf8.Valid in AssertCanonicalJSONText) — the
+    // same signed bytes, two verdicts. Go twin:
+    // TestInvalidUTF8InASignedDocumentIsMalformed.
+    const payloadBytes = new Uint8Array([
+      ...new TextEncoder().encode('{"a":"'),
+      0xff,
+      ...new TextEncoder().encode('"}'),
+    ]);
+    const token = await signRawBytes(
+      new TextEncoder().encode('{"alg":"EdDSA","typ":"t","kid":"k"}'),
+      payloadBytes,
+      keypair,
+    );
+    expect(decodeJwsUnsafe(token)).toBeNull();
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
+      /Failed to decode token/,
+    );
+  });
+
+  it('rejects invalid UTF-8 in the protected header', async () => {
+    const headerBytes = new Uint8Array([
+      ...new TextEncoder().encode('{"alg":"EdDSA","typ":"'),
+      0xff,
+      ...new TextEncoder().encode('","kid":"k"}'),
+    ]);
+    const token = await signRawBytes(headerBytes, new TextEncoder().encode('{"a":1}'), keypair);
+    expect(decodeJwsUnsafe(token)).toBeNull();
   });
 });
 

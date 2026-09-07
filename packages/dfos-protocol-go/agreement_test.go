@@ -145,6 +145,29 @@ func TestLoneSurrogateEscapeIsMalformed(t *testing.T) {
 	}
 }
 
+func TestInvalidUTF8InASignedDocumentIsMalformed(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+
+	// a raw 0xFF inside a JSON string. encoding/json repairs it to U+FFFD, and a
+	// lenient TextDecoder on the TS side does the same, so without a gate the two
+	// verifiers would each hash a repaired value and each call the token fine —
+	// while a third implementation might hash the bytes as they stand.
+	payload := []byte(`{"a":"`)
+	payload = append(payload, 0xff, '"', '}')
+	token := signRawText(t, `{"alg":"EdDSA","typ":"t","kid":"k"}`, string(payload), priv)
+	if _, _, err := DecodeJWSUnsafe(token); err == nil {
+		t.Fatal("expected an invalid-UTF-8 rejection, got none")
+	}
+
+	header := []byte(`{"alg":"EdDSA","typ":"`)
+	header = append(header, 0xff)
+	header = append(header, []byte(`","kid":"k"}`)...)
+	badHeader := signRawText(t, string(header), `{"a":1}`, priv)
+	if _, _, err := DecodeJWSUnsafe(badHeader); err == nil {
+		t.Fatal("expected an invalid-UTF-8 rejection in the header, got none")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // H1 / H3 — the canonical-value walk agrees with the TS twin
 // ---------------------------------------------------------------------------
@@ -241,7 +264,7 @@ func TestContentUpdateRejectsNonStringDocumentCID(t *testing.T) {
 	}
 }
 
-func TestContentPayloadFieldTypesAreGated(t *testing.T) {
+func TestContentPayloadFieldTypesAreGatedPerVariant(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
 	genJWS, did, _ := testSignIdentityGenesis(t, NewMultikeyPublicKey(keyID, pub), keyID, priv, "2026-03-07T00:00:00.000Z")
 	if _, err := VerifyIdentityChain([]string{genJWS}); err != nil {
@@ -251,23 +274,83 @@ func TestContentPayloadFieldTypesAreGated(t *testing.T) {
 	resolver := func(k string, _ string) (ed25519.PublicKey, error) { return pub, nil }
 	docCID, _, _ := DocumentCID(map[string]any{"hello": "world"})
 
-	for name, payload := range map[string]map[string]any{
-		"did": {
-			"version": int64(1), "type": "create", "did": int64(7),
-			"documentCID": docCID, "baseDocumentCID": nil, "createdAt": "2026-03-07T00:00:01.000Z",
-		},
-		"baseDocumentCID": {
+	createWith := func(extra map[string]any) map[string]any {
+		p := map[string]any{
 			"version": int64(1), "type": "create", "did": did,
-			"documentCID": docCID, "baseDocumentCID": int64(1), "createdAt": "2026-03-07T00:00:01.000Z",
-		},
-		"authorization": {
-			"version": int64(1), "type": "create", "did": did,
-			"documentCID": docCID, "baseDocumentCID": nil, "authorization": int64(1),
+			"documentCID": docCID, "baseDocumentCID": nil,
 			"createdAt": "2026-03-07T00:00:01.000Z",
+		}
+		for k, v := range extra {
+			p[k] = v
+		}
+		return p
+	}
+
+	// ContentCreate declares neither `authorization` nor `previousOperationCID`,
+	// and it is a looseObject — so a member spelled either way is an unknown
+	// extension member of any type, which TypeScript preserves and ignores.
+	// Typing it here would reject an operation the TS reference accepts: the same
+	// fork, pointed the other way.
+	for name, extra := range map[string]map[string]any{
+		"authorization null on create":        {"authorization": nil},
+		"authorization non-string on create":  {"authorization": int64(1)},
+		"previousOperationCID null on create": {"previousOperationCID": nil},
+		"unknown member on create":            {"whatever": []any{int64(1)}},
+	} {
+		token := testSignContentUpdateRaw(t, createWith(extra), kid, priv)
+		if _, err := VerifyContentChain([]string{token}, resolver, true); err != nil {
+			t.Errorf("%s: expected acceptance, got %v", name, err)
+		}
+	}
+
+	genesisJWS := testSignContentUpdateRaw(t, createWith(nil), kid, priv)
+	_, _, genesisCID, err := DagCborCID(createWith(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ContentDelete declares neither documentCID nor baseDocumentCID
+	deleteJWS := testSignContentUpdateRaw(t, map[string]any{
+		"version": int64(1), "type": "delete", "did": did,
+		"previousOperationCID": genesisCID, "baseDocumentCID": int64(1),
+		"createdAt": "2026-03-07T00:00:02.000Z",
+	}, kid, priv)
+	if _, err := VerifyContentChain([]string{genesisJWS, deleteJWS}, resolver, true); err != nil {
+		t.Errorf("baseDocumentCID on a delete is an unknown member: %v", err)
+	}
+
+	// and the members each variant DOES declare are typed
+	for name, payload := range map[string]map[string]any{
+		"did on create":             createWith(map[string]any{"did": int64(7)}),
+		"baseDocumentCID on create": createWith(map[string]any{"baseDocumentCID": int64(1)}),
+		"authorization on update": {
+			"version": int64(1), "type": "update", "did": did,
+			"previousOperationCID": genesisCID, "documentCID": docCID,
+			"baseDocumentCID": nil, "authorization": int64(1),
+			"createdAt": "2026-03-07T00:00:02.000Z",
+		},
+		"previousOperationCID on update": {
+			"version": int64(1), "type": "update", "did": did,
+			"previousOperationCID": int64(1), "documentCID": docCID,
+			"baseDocumentCID": nil, "createdAt": "2026-03-07T00:00:02.000Z",
+		},
+		"documentCID on update": {
+			"version": int64(1), "type": "update", "did": did,
+			"previousOperationCID": genesisCID, "documentCID": false,
+			"baseDocumentCID": nil, "createdAt": "2026-03-07T00:00:02.000Z",
+		},
+		"authorization on delete": {
+			"version": int64(1), "type": "delete", "did": did,
+			"previousOperationCID": genesisCID, "authorization": int64(1),
+			"createdAt": "2026-03-07T00:00:02.000Z",
 		},
 	} {
 		token := testSignContentUpdateRaw(t, payload, kid, priv)
-		if _, err := VerifyContentChain([]string{token}, resolver, true); err == nil {
+		log := []string{genesisJWS, token}
+		if payload["type"] == "create" {
+			log = []string{token}
+		}
+		if _, err := VerifyContentChain(log, resolver, true); err == nil {
 			t.Errorf("%s: expected a type rejection, got none", name)
 		}
 	}

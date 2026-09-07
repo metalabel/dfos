@@ -225,18 +225,44 @@ func payloadString(m map[string]any, key string) string {
 	return ""
 }
 
-// assertContentPayloadFieldTypes type-gates the content-operation payload members
-// the TS schema types as strings before any of them reaches a state transition:
-// the untyped Go map has no schema layer, so this IS the gate. `documentCID` is
-// checked at its own call sites (its absent/null/present split is per-op-type).
-func assertContentPayloadFieldTypes(payload map[string]any) error {
-	for _, key := range []string{"previousOperationCID", "authorization"} {
+// assertContentPayloadFieldTypes type-gates the content-operation payload
+// members the TS schema types before any of them reaches a state transition:
+// the untyped Go map has no schema layer, so this IS the gate.
+//
+// PER VARIANT, mirroring ContentCreate / ContentUpdate / ContentDelete member
+// for member. Each is a `z.looseObject`, so a member a variant does not declare
+// is an unknown extension member — preserved and ignored, whatever its type.
+// Typing `authorization` on a create, or `baseDocumentCID` on a delete, would
+// reject an operation TypeScript accepts, which is the same fork in the other
+// direction. `documentCID` is checked at its own call sites: its
+// absent/null/present split is per-op-type too.
+func assertContentPayloadFieldTypes(payload map[string]any, opType string) error {
+	// declared by all three variants
+	if _, err := payloadStringStrict(payload, "did"); err != nil {
+		return err
+	}
+
+	var stringFields []string
+	var nullableCIDFields []string
+	switch opType {
+	case "create":
+		nullableCIDFields = []string{"baseDocumentCID"}
+	case "update":
+		stringFields = []string{"previousOperationCID", "authorization"}
+		nullableCIDFields = []string{"baseDocumentCID"}
+	case "delete":
+		stringFields = []string{"previousOperationCID", "authorization"}
+	}
+
+	for _, key := range stringFields {
 		if _, err := payloadStringStrict(payload, key); err != nil {
 			return err
 		}
 	}
-	if _, err := payloadStringPtrStrict(payload, "baseDocumentCID"); err != nil {
-		return err
+	for _, key := range nullableCIDFields {
+		if _, err := payloadStringPtrStrict(payload, key); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1429,16 +1455,14 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 
 		opType := payloadString(payload, "type")
 		createdAt := payloadString(payload, "createdAt")
-		// strict: a non-string `did` is a malformed operation, not an empty one.
-		// The TS schema types it `z.string()` and rejects; coercing to "" here
-		// would report "missing did" for a value that is present and wrong.
-		opDID, err := payloadStringStrict(payload, "did")
-		if err != nil {
+		// strict: a non-string `did` (or any other member this variant declares)
+		// is a malformed operation, not an empty one. The TS schema types them
+		// and rejects; coercing to "" here would report "missing did" for a
+		// value that is present and wrong.
+		if err := assertContentPayloadFieldTypes(payload, opType); err != nil {
 			return nil, fmt.Errorf("log[%d]: %w", idx, err)
 		}
-		if err := assertContentPayloadFieldTypes(payload); err != nil {
-			return nil, fmt.Errorf("log[%d]: %w", idx, err)
-		}
+		opDID := payloadString(payload, "did")
 
 		// validate basics
 		if v, ok := payload["version"].(int64); !ok || v != 1 {
@@ -1601,14 +1625,11 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 
 	opType := payloadString(payload, "type")
 	createdAt := payloadString(payload, "createdAt")
-	// strict — see the same read in VerifyContentChain
-	opDID, err := payloadStringStrict(payload, "did")
-	if err != nil {
+	// strict — see the same gate in VerifyContentChain
+	if err := assertContentPayloadFieldTypes(payload, opType); err != nil {
 		return nil, err
 	}
-	if err := assertContentPayloadFieldTypes(payload); err != nil {
-		return nil, err
-	}
+	opDID := payloadString(payload, "did")
 
 	if v, ok := payload["version"].(int64); !ok || v != 1 {
 		return nil, fmt.Errorf("invalid or missing version")

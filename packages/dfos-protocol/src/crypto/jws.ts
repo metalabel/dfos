@@ -39,11 +39,17 @@ export interface JwsHeader {
  * The raw text is scanned before it is parsed — duplicate keys and lone
  * surrogate escapes are only visible there (see json-scan.ts). That scan throws;
  * a malformed segment returns null.
+ *
+ * The decoder is FATAL. A lenient `TextDecoder` repairs an invalid UTF-8
+ * sequence to U+FFFD, which would let this side scan, parse and verify a
+ * payload whose bytes the Go reference refuses outright (`utf8.Valid` in
+ * AssertCanonicalJSONText) — the same signed bytes, two verdicts. Undecodable
+ * bytes are malformed, not repairable.
  */
 const decodeJwsSegment = (segmentB64: string): Record<string, unknown> | null => {
   let text: string;
   try {
-    text = new TextDecoder().decode(base64urlDecode(segmentB64));
+    text = new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(segmentB64));
   } catch {
     return null;
   }
