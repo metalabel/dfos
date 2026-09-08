@@ -331,7 +331,18 @@ genesis CID and the Ed25519 signatures are unaffected by the truncation
   `{method, host, path, bodyHash, credentialCID, iat}` to the audience key, which
   never crosses a channel, so a captured credential or proof replays only as the
   byte-identical request, to the same host, inside that window. Write-shaped
-  surfaces close it with the required `jti` replay cache.
+  surfaces close it with the required `jti` replay cache, and a replay answers
+  409 ([INTEGRATIONS, API security notes](https://protocol.dfos.com/integrations#api-security-notes)).
+- **A host-form `api:` grant is temporally open.** `api:<host>` covers every
+  space the subject is in, including spaces joined after consent, and every
+  child form registered under an action it carries. Consent says so, and the
+  registration invariant bounds what a child may add
+  ([CREDENTIALS, `api:<host>`](https://protocol.dfos.com/credentials#apihost-credential-gated-api-access)).
+- **A space named at consent is issued whether or not the user is in it.** The
+  entry is inert against live standing, so the app learns nothing it did not
+  already assert, and a covered space the subject is not in serves the anonymous
+  projection rather than a refusal
+  ([INTEGRATIONS, Scopes and credentials](https://protocol.dfos.com/integrations#scopes-and-credentials)).
 - **A compromised domain can silence or contradict an origin binding.** Both read
   as a visible verdict, `stale` or `broken`, and the holder can neither extend the
   bound identity's chain nor move the binding to itself unseen

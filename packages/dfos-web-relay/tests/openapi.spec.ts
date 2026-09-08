@@ -386,6 +386,23 @@ describe('openapi', () => {
     expect(key['schema']).toEqual({ type: 'string' });
   });
 
+  it('advertises the replay verdict on every write-shaped route', () => {
+    // The status code is the normative machine signal, so a verdict the relay
+    // answers and the document omits is a caller that cannot branch on it.
+    // Ingestion and blob upload are the write-shaped pair: both require jti,
+    // both record it, and both can answer 409.
+    for (const [path, method] of [
+      ['/proof/v1/operations', 'post'],
+      ['/content/{contentId}/blob/{ref}', 'put'],
+    ] as const) {
+      const responses = object(object(openapi.paths[path]![method])['responses']);
+      expect(responses, `${method.toUpperCase()} ${path} omits the replay verdict`).toHaveProperty(
+        '409',
+      );
+      expect(String(object(responses['409'])['description'])).toMatch(/jti/);
+    }
+  });
+
   it('adopts the API-AUTH advertising convention for its security schemes', () => {
     const schemes = openapi.components.securitySchemes;
 

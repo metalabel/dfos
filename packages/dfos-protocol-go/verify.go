@@ -1357,7 +1357,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 // WRITE-path hardening (mirrors the relay READ path / the TS twin):
 //   - issuer-isDeleted gate (via opts.isDeleted)
 //   - aud:"*" wildcard accepted (subject="" + explicit aud check)
-//   - action/resource matched via matchesResource (comma-split + scan-ALL att
+//   - action/resource matched via MatchesResource (comma-split + scan-ALL att
 //     entries), not the first-entry break in verifyCredentialCore
 //   - explicit LEAF revocation check (verifyDelegationChain covers PARENTS only)
 func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt string, resolveKey KeyResolver, opts contentVerifyOpts) error {
@@ -1432,9 +1432,9 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 
 	// resource + action coverage — scan ALL att entries with comma-split actions
-	// (matchesResource), not verifyCredentialCore's first-recognized-entry break.
+	// (MatchesResource), not verifyCredentialCore's first-recognized-entry break.
 	childAtt := ParseAtt(vcPayload)
-	if !matchesResource(childAtt, "chain:"+contentID, "write") {
+	if !MatchesResource(childAtt, "chain:"+contentID, "write") {
 		return fmt.Errorf("credential does not cover write access to chain:%s", contentID)
 	}
 
@@ -1451,12 +1451,19 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	return nil
 }
 
-// matchesResource reports whether an att array covers a requested
-// resource+action. Mirrors the relay READ path (auth.go matchesResource) and
-// the TS protocol matchesResource: comma-split actions, scan ALL entries,
-// chain:* wildcard. Lives in the protocol package so the write path no longer
-// depends on verifyCredentialCore's first-entry convenience fields.
-func matchesResource(att []AttEntry, resource, action string) bool {
+// MatchesResource reports whether an att array covers a requested
+// resource+action: comma-split actions, scan ALL entries, chain:* wildcard, and
+// the api: hierarchy in which a bare host covers every space at it.
+//
+// ONE IMPLEMENTATION FOR EVERY SURFACE. The relay read path, the relay write
+// path, and the mailbox deposit check all call this; the relay's own copy is
+// gone, because two copies of a coverage rule are two authorization verdicts
+// waiting to disagree. Twin of the TS protocol matchesResource.
+//
+// An api: request is answered by the api: hierarchy ALONE — a malformed api:
+// entry never covers a request, not even a byte-identical one, so a shape the
+// grammar cannot read cannot authorize anything.
+func MatchesResource(att []AttEntry, resource, action string) bool {
 	reqType, reqID, ok := ParseResource(resource)
 	if !ok {
 		return false
@@ -1484,6 +1491,13 @@ func matchesResource(att []AttEntry, resource, action string) bool {
 		// chain:* covers any chain: request
 		if entryType == "chain" && entryID == "*" && reqType == "chain" {
 			return true
+		}
+		// api: covers by hierarchy, and by nothing else
+		if entryType == "api" && reqType == "api" {
+			if ApiResourceCovers(entry.Resource, resource) {
+				return true
+			}
+			continue
 		}
 		// exact resource match
 		if entryType == reqType && entryID == reqID {

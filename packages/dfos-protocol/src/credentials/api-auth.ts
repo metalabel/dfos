@@ -71,6 +71,12 @@ export const EMPTY_BODY_SHA256 = '47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU';
 /** Size cap on the serialized proof token, checked BEFORE any decode. */
 export const MAX_REQUEST_PROOF_SIZE = 4096;
 
+/**
+ * Cap on the `jti` member, in UTF-8 bytes. There is no floor: uniqueness is the
+ * member's job, and a verifier's replay cache is what enforces it.
+ */
+export const MAX_JTI_BYTES = 256;
+
 /** RECOMMENDED acceptance window `W` — how old a proof may be, in seconds. */
 export const DEFAULT_PROOF_WINDOW_SECONDS = 60;
 
@@ -113,6 +119,11 @@ export interface RequestProofPayload {
   credentialCID: string;
   /** Issued-at — unix seconds (positive integer). */
   iat: number;
+  /**
+   * The registered additive member: a per-request unique value, at most
+   * `MAX_JTI_BYTES` UTF-8 bytes. Emitted after `iat`, in the additive block.
+   */
+  jti?: string;
 }
 
 /**
@@ -131,6 +142,11 @@ export interface IdentityProofPayload {
   bodyHash: string;
   /** Issued-at — unix seconds (positive integer). */
   iat: number;
+  /**
+   * The registered additive member: a per-request unique value, at most
+   * `MAX_JTI_BYTES` UTF-8 bytes. Emitted after `iat`, in the additive block.
+   */
+  jti?: string;
 }
 
 /**
@@ -160,6 +176,8 @@ export interface ParsedProofPayload {
   bodyHash: string;
   credentialCID?: string;
   iat: number;
+  /** The registered additive member, when the proof carries one. */
+  jti?: string;
 }
 
 /**
@@ -207,8 +225,64 @@ const BASE64URL_32 = /^[A-Za-z0-9_-]{43}$/;
 // Additive member names are restricted to a conservative ASCII set so that
 // lexicographic ordering is IDENTICAL in TS (UTF-16 code units) and Go (bytes).
 const EXTRA_MEMBER_NAME = /^[A-Za-z0-9_.-]+$/;
-// The canonical members, which an additive member may never shadow.
+// The canonical members, which an additive member may never shadow. `jti` is
+// NOT among them: it is the REGISTERED ADDITIVE member, emitted in the additive
+// block after `iat`, so a proof that carries none has the same bytes it always
+// had.
 const CANONICAL_MEMBERS = new Set(['method', 'host', 'path', 'bodyHash', 'credentialCID', 'iat']);
+
+/**
+ * The `jti` bound, in one place for the producer and the verifier: a non-empty
+ * string of at most `MAX_JTI_BYTES` UTF-8 bytes. A present `jti` outside it is
+ * invalid whether or not the route requires one.
+ */
+const assertJtiBound = (jti: string, label: string): void => {
+  if (jti === '' || encoder.encode(jti).length > MAX_JTI_BYTES) {
+    throw new Error(
+      `invalid ${label}: jti must be a non-empty string of at most ${MAX_JTI_BYTES} bytes`,
+    );
+  }
+};
+
+/**
+ * Fold a typed `jti` into the additive-member map. ONE MEMBER, ONE SOURCE:
+ * naming it both ways is refused rather than resolved, because a silent winner
+ * would sign bytes one of the two callers never chose.
+ */
+const withJti = (
+  extra: ProofExtraMembers | undefined,
+  jti: string | undefined,
+  label: string,
+): ProofExtraMembers | undefined => {
+  if (jti === undefined) return extra;
+  if (extra && 'jti' in extra) {
+    throw new Error(`invalid ${label}: jti is named twice — pass it typed or in extraMembers`);
+  }
+  assertJtiBound(jti, label);
+  return { ...extra, jti };
+};
+
+/**
+ * The additive members a payload actually emits: the caller's `extraMembers`
+ * plus a `jti` carried on the payload itself. Both spellings reach the same
+ * canonical bytes, so a signer's choice of surface never moves the signature.
+ */
+const emittedExtraMembers = (
+  parsed: ParsedProofPayload,
+  extra: ProofExtraMembers | undefined,
+  label: string,
+): [string, string][] => canonicalExtraMembers(withJti(extra, parsed.jti, label), label);
+
+/**
+ * Mint a `jti`: 128 bits from the platform CSPRNG, unpadded base64url (22
+ * characters). Uniqueness is per (presenter DID, freshness window), which this
+ * much randomness makes a collision no deployment will observe.
+ */
+export const generateJti = (): string => {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return base64urlEncode(bytes);
+};
 
 const assertNoLoneSurrogate = (value: string, field: string, label: string): void => {
   if (LONE_SURROGATE.test(value)) {
@@ -282,9 +356,31 @@ const validateProofPayload = (value: unknown, shape: ProofShape): ParsedProofPay
     throw new Error(`invalid ${label}: iat must be a positive integer`);
   }
 
-  return shape.credentialed
-    ? { method, host, path, bodyHash, credentialCID: raw['credentialCID'] as string, iat }
-    : { method, host, path, bodyHash, iat };
+  // `jti` is the one REGISTERED additive member, so it is the one additive
+  // member with rules. A present value outside them is an invalid proof whether
+  // or not this route requires a `jti` at all — the alternative is a member the
+  // signature covers that no verifier agrees on.
+  const rawJti = raw['jti'];
+  let jti: string | undefined;
+  if (rawJti !== undefined) {
+    if (typeof rawJti !== 'string') {
+      throw new Error(
+        `invalid ${label}: jti must be a non-empty string of at most ${MAX_JTI_BYTES} bytes`,
+      );
+    }
+    assertJtiBound(rawJti, label);
+    jti = rawJti;
+  }
+
+  return {
+    method,
+    host,
+    path,
+    bodyHash,
+    ...(shape.credentialed ? { credentialCID: raw['credentialCID'] as string } : {}),
+    iat,
+    ...(jti !== undefined ? { jti } : {}),
+  };
 };
 
 const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
@@ -296,6 +392,7 @@ const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
     bodyHash: parsed.bodyHash,
     credentialCID: parsed.credentialCID as string,
     iat: parsed.iat,
+    ...(parsed.jti !== undefined ? { jti: parsed.jti } : {}),
   };
 };
 
@@ -307,6 +404,7 @@ const validateIdentityProofPayload = (value: unknown): IdentityProofPayload => {
     path: parsed.path,
     bodyHash: parsed.bodyHash,
     iat: parsed.iat,
+    ...(parsed.jti !== undefined ? { jti: parsed.jti } : {}),
   };
 };
 
@@ -397,12 +495,14 @@ const proofPayloadObject = (
 export const apiRequestSigningInput = (
   payload: RequestProofPayload,
   extraMembers?: ProofExtraMembers,
-): Uint8Array =>
-  proofSigningInput(
-    validateProofPayload(payload, REQUEST_PROOF_SHAPE),
+): Uint8Array => {
+  const parsed = validateProofPayload(payload, REQUEST_PROOF_SHAPE);
+  return proofSigningInput(
+    parsed,
     REQUEST_PROOF_SHAPE,
-    canonicalExtraMembers(extraMembers, REQUEST_PROOF_SHAPE.label),
+    emittedExtraMembers(parsed, extraMembers, REQUEST_PROOF_SHAPE.label),
   );
+};
 
 /**
  * The identity proof's canonical signing input — five members, in the fixed
@@ -415,12 +515,14 @@ export const apiRequestSigningInput = (
 export const apiIdentitySigningInput = (
   payload: IdentityProofPayload,
   extraMembers?: ProofExtraMembers,
-): Uint8Array =>
-  proofSigningInput(
-    validateProofPayload(payload, IDENTITY_PROOF_SHAPE),
+): Uint8Array => {
+  const parsed = validateProofPayload(payload, IDENTITY_PROOF_SHAPE);
+  return proofSigningInput(
+    parsed,
     IDENTITY_PROOF_SHAPE,
-    canonicalExtraMembers(extraMembers, IDENTITY_PROOF_SHAPE.label),
+    emittedExtraMembers(parsed, extraMembers, IDENTITY_PROOF_SHAPE.label),
   );
+};
 
 /**
  * The `bodyHash` member: canonical unpadded base64url of the SHA-256 of the
@@ -476,9 +578,16 @@ export interface SignApiRequestInput {
   /** Issued-at override — unix seconds. Default `Math.floor(Date.now() / 1000)`. */
   iat?: number;
   /**
+   * The registered additive member, per-request unique and at most
+   * `MAX_JTI_BYTES` bytes — required by a deployment that gates WRITES with this
+   * envelope (INTEGRATIONS.md, API security notes). `generateJti()` mints one.
+   * It emits the same bytes as `extraMembers: { jti }`, and naming it both ways
+   * throws.
+   */
+  jti?: string;
+  /**
    * ADDITIVE members, appended after the canonical order in lexicographic name
-   * order. `{ jti }` is the registered one — required by a deployment that gates
-   * WRITES with this envelope (INTEGRATIONS.md, API security notes).
+   * order. `{ jti }` is the registered one, and has the typed field above.
    */
   extraMembers?: ProofExtraMembers;
 }
@@ -502,11 +611,12 @@ export const signApiRequest = async (
     bodyHash: sha256BodyHash(input.body ?? EMPTY_BODY),
     credentialCID: input.credentialCID,
     iat: input.iat ?? Math.floor(Date.now() / 1000),
+    ...(input.jti !== undefined ? { jti: input.jti } : {}),
   });
   if (!input.kid.includes('#')) {
     throw new Error('invalid request proof: kid must be a DID URL');
   }
-  const extra = canonicalExtraMembers(input.extraMembers, REQUEST_PROOF_SHAPE.label);
+  const extra = emittedExtraMembers(payload, input.extraMembers, REQUEST_PROOF_SHAPE.label);
 
   const proof = await createJws({
     header: { alg: 'EdDSA', typ: REQUEST_PROOF_JWS_TYP, kid: input.kid },
@@ -538,9 +648,16 @@ export interface SignApiIdentityRequestInput {
   /** Issued-at override — unix seconds. Default `Math.floor(Date.now() / 1000)`. */
   iat?: number;
   /**
+   * The registered additive member, per-request unique and at most
+   * `MAX_JTI_BYTES` bytes. A WRITE-SHAPED surface — relay ingestion, blob
+   * upload — REQUIRES it (INTEGRATIONS.md, API security notes). `generateJti()`
+   * mints one. It emits the same bytes as `extraMembers: { jti }`, and naming it
+   * both ways throws.
+   */
+  jti?: string;
+  /**
    * ADDITIVE members, appended after the canonical order in lexicographic name
-   * order. `{ jti }` is the registered one, and a WRITE-SHAPED surface — relay
-   * ingestion, blob upload — REQUIRES it (INTEGRATIONS.md, API security notes).
+   * order. `{ jti }` is the registered one, and has the typed field above.
    */
   extraMembers?: ProofExtraMembers;
 }
@@ -564,11 +681,12 @@ export const signApiIdentityRequest = async (
     path: input.path,
     bodyHash: sha256BodyHash(input.body ?? EMPTY_BODY),
     iat: input.iat ?? Math.floor(Date.now() / 1000),
+    ...(input.jti !== undefined ? { jti: input.jti } : {}),
   });
   if (!input.kid.includes('#')) {
     throw new Error('invalid identity proof: kid must be a DID URL');
   }
-  const extra = canonicalExtraMembers(input.extraMembers, IDENTITY_PROOF_SHAPE.label);
+  const extra = emittedExtraMembers(payload, input.extraMembers, IDENTITY_PROOF_SHAPE.label);
 
   const proof = await createJws({
     header: { alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: input.kid },
@@ -616,13 +734,26 @@ export const buildApiIdentityHeaders = (input: { proof: string }): { Authorizati
  * The verdict class. Branch on `reason`, never on message text.
  *
  * - `invalid` — checked and failed.
+ * - `replayed` — checked, VALID, and already spent: this `jti` was seen inside
+ *   the proof's own freshness window. Its own verdict rather than an `invalid`
+ *   one because the caller's answer differs — re-read state, do not re-sign the
+ *   same request.
+ * - `uncovered` — the credential is VALID and simply does not reach this route's
+ *   resource and action. Distinct from `invalid` because nothing is wrong with
+ *   the artifact: a route offering optional authentication serves its anonymous
+ *   projection on an `uncovered` verdict, and still refuses an `invalid` one.
  * - `unverifiable` — could not check (an unresolvable presenter, an unreachable
  *   revocation source). A transient resolution failure is the server's
  *   condition, not the caller's.
  * - `config` — the DEPLOYMENT is misconfigured (a `W + S` over the 300-second
  *   ceiling, or an empty required action). Not a judgment about the artifact.
  */
-export type RequestProofFailureReason = 'invalid' | 'unverifiable' | 'config';
+export type RequestProofFailureReason =
+  | 'invalid'
+  | 'replayed'
+  | 'uncovered'
+  | 'unverifiable'
+  | 'config';
 
 /**
  * The verification phase a failure arose in. Load-bearing for HTTP mapping: an
@@ -636,7 +767,7 @@ export type RequestProofFailurePhase = 'proof' | 'credential' | 'config';
 export class ApiRequestVerifyError extends Error {
   readonly reason: RequestProofFailureReason;
   readonly phase: RequestProofFailurePhase;
-  /** Recommended HTTP status: 401 proof-invalid, 403 credential-invalid, 503 unverifiable, 500 config. */
+  /** Recommended HTTP status: 401 proof-invalid, 403 credential-invalid or uncovered, 409 replayed, 503 unverifiable, 500 config. */
   readonly status: number;
 
   constructor(
@@ -656,6 +787,22 @@ export class ApiRequestVerifyError extends Error {
 /** invalid, proof phase → 401. */
 export const invalidProof = (message: string) =>
   new ApiRequestVerifyError('invalid', 'proof', 401, message);
+/**
+ * replayed, proof phase → 409. The proof verified; its `jti` was already spent.
+ * The cache belongs to the deployment, so this is the constructor every consumer
+ * classifies a replay with rather than a status each one picks.
+ */
+export const replayedProof = (message: string) =>
+  new ApiRequestVerifyError('replayed', 'proof', 409, message);
+/**
+ * uncovered, credential phase → 403. The credential verified and simply does not
+ * reach this route's resource and action. Its own verdict because a route
+ * offering optional authentication answers it with the anonymous projection a
+ * caller presenting nothing would get — a credential only ever ADDS — while an
+ * `invalid` credential is refused outright.
+ */
+export const uncoveredProof = (message: string) =>
+  new ApiRequestVerifyError('uncovered', 'credential', 403, message);
 /** unverifiable, proof phase → 503. */
 export const unverifiableProof = (message: string) =>
   new ApiRequestVerifyError('unverifiable', 'proof', 503, message);
@@ -675,8 +822,17 @@ export const misconfiguredProof = (message: string) =>
 export interface ProofPresenterState {
   /** Current-state deletion. A deleted presenter's proofs are INVALID (401). */
   isDeleted: boolean;
-  /** Current keys, any role. */
-  keys: readonly { id: string; publicKeyMultibase: string }[];
+  /**
+   * Current keys, any role. `roles` is OPTIONAL and the resolver's to supply: a
+   * key may hold several, and a deployment gating writes decides for itself
+   * which role may sign. The verifier never reads it — it hands the matched
+   * key's roles back on the verified envelope.
+   */
+  keys: readonly {
+    id: string;
+    publicKeyMultibase: string;
+    roles?: readonly ('auth' | 'assert' | 'controller')[];
+  }[];
 }
 
 /**
@@ -718,6 +874,12 @@ export interface ProofEnvelopeInput {
   skewSeconds?: number;
   /** Clock injection (unix ms). Default `Date.now()`. */
   now?: () => number;
+  /**
+   * Require the registered `jti` member. Default false. A verifier gating WRITES
+   * sets it on every write-shaped route and records the value in its own replay
+   * cache; a read-shaped route may ignore the member entirely.
+   */
+  requireJti?: boolean;
 }
 
 /**
@@ -765,11 +927,10 @@ export interface VerifiedProofEnvelope {
   /**
    * The DECODED payload object, unknown members included.
    *
-   * ADDITIVE MEMBERS ARE READ FROM HERE, at the consuming layer, AFTER
-   * verification — the signature already covers them, and the canonical member
-   * set stays closed. `jti` is the case this exists for: the envelope verifier
-   * ignores it per MUST-ignore-unknown, and a write-gating deployment reads it
-   * off this object and applies its own replay discipline.
+   * UNREGISTERED ADDITIVE MEMBERS ARE READ FROM HERE, at the consuming layer,
+   * AFTER verification — the signature already covers them, and the canonical
+   * member set stays closed. The registered `jti` has its own field above; every
+   * other additive member is ignored per MUST-ignore-unknown and survives here.
    */
   rawPayload: Record<string, unknown>;
   /** THE PRINCIPAL — the `kid`'s DID. */
@@ -778,6 +939,17 @@ export interface VerifiedProofEnvelope {
   kid: string;
   /** The integer unix seconds the freshness check used. */
   now: number;
+  /**
+   * The registered `jti`, when the proof carried one — the value a write-gating
+   * deployment records in its replay cache, keyed with `presenterDID`.
+   */
+  jti?: string;
+  /**
+   * The matched key's roles, when the resolver supplied them. A deployment
+   * gating writes with an identity proof applies its own rule here: a key whose
+   * only effective role is `controller` should not stand for a write.
+   */
+  keyRoles?: readonly ('auth' | 'assert' | 'controller')[];
 }
 
 /**
@@ -848,6 +1020,11 @@ const verifyProofEnvelope = async (
   } catch (err) {
     throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} payload`);
   }
+  // A route that requires `jti` requires it as part of the schema: an absent one
+  // is an invalid proof, not a missing option.
+  if (input.requireJti === true && payload.jti === undefined) {
+    throw invalidProof(`invalid ${shape.label}: jti is required on this route`);
+  }
 
   // 4. Freshness — integer Unix seconds on both sides, so the boundary does not
   // turn on sub-second precision. AGE and FORWARD SKEW are separate bounds:
@@ -911,7 +1088,15 @@ const verifyProofEnvelope = async (
     throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} signature`);
   }
 
-  return { payload, rawPayload, presenterDID, kid, now };
+  return {
+    payload,
+    rawPayload,
+    presenterDID,
+    kid,
+    now,
+    ...(payload.jti !== undefined ? { jti: payload.jti } : {}),
+    ...(key.roles !== undefined ? { keyRoles: key.roles } : {}),
+  };
 };
 
 /**

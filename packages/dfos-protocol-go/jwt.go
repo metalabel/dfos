@@ -347,9 +347,9 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 
 	// Derive convenience fields from the first att entry that grants a recognized
 	// action. Actions are comma-separated strings ("read", "write", "read,write")
-	// split with ParseActions, matching IsAttenuated / matchesResource semantics.
+	// split with ParseActions, matching IsAttenuated / MatchesResource semantics.
 	// These fields are best-effort metadata: the authoritative resource+action
-	// check is the caller's (the relay's matchesResource), and the TS reference
+	// check is the caller's (MatchesResource), and the TS reference
 	// applies no action allowlist. A credential whose att grants only unrecognized
 	// actions leaves these fields empty rather than being rejected here — the
 	// previous exact-match allowlist hard-rejected the spec-valid combined

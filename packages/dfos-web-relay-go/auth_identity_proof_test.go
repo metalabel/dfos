@@ -231,10 +231,12 @@ func TestBlobUploadIdentityProofBindings(t *testing.T) {
 		dfos.IdentityProofOptions{ExtraMembers: dfos.ProofExtraMembers{"jti": "go-upload-1"}})); got != 200 {
 		t.Fatalf("valid upload: got %d, want 200", got)
 	}
-	// The byte-identical request inside the freshness window is a REPLAY.
+	// The byte-identical request inside the freshness window is a REPLAY — 409,
+	// its own verdict. The proof authenticated; it was already spent, and a caller
+	// told 401 would retry the same envelope forever.
 	if got := send(proofFor(t, creator, http.MethodPut, c.blobPath(), body,
-		dfos.IdentityProofOptions{ExtraMembers: dfos.ProofExtraMembers{"jti": "go-upload-1"}})); got != 401 {
-		t.Fatalf("replayed jti: got %d, want 401", got)
+		dfos.IdentityProofOptions{ExtraMembers: dfos.ProofExtraMembers{"jti": "go-upload-1"}})); got != 409 {
+		t.Fatalf("replayed jti: got %d, want 409", got)
 	}
 	// A jti over the cap is refused; the cap is identical in both relays.
 	if got := send(proofFor(t, creator, http.MethodPut, c.blobPath(), body,

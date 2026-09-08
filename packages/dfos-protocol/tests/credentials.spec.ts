@@ -8,13 +8,17 @@ import {
   CredentialVerificationError,
   decodeDFOSCredentialUnsafe,
   EMPTY_BODY_SHA256,
+  generateJti,
   IDENTITY_PROOF_JWS_TYP,
   isAttenuated,
   matchesResource,
+  MAX_JTI_BYTES,
   MAX_REQUEST_PROOF_SIZE,
   parseDfosAuthorization,
+  replayedProof,
   signApiIdentityRequest,
   signApiRequest,
+  uncoveredProof,
   verifyDelegationChain,
   verifyDFOSCredential,
   verifyIdentityProofEnvelope,
@@ -401,6 +405,140 @@ describe('identity proof envelope', () => {
     expect(segment).toBe(
       base64urlEncode(apiIdentitySigningInput(payload, { jti: 'jti-fixed-0001' })),
     );
+  });
+
+  // --- the registered `jti` member ---
+
+  /*
+    THE BYTE-IDENTITY PIN. `jti` reached through the typed field and `jti`
+    reached through the additive-member map are ONE member: if the two spellings
+    ever emitted different bytes, a signer and a verifier that each picked a
+    different surface would fork on identical inputs.
+  */
+  it('signs the same bytes for a typed jti and an extraMembers jti', async () => {
+    const id = makeIdentity();
+    const typed = await signIdentityProof(id, { iat: 1772841600, jti: 'jti-fixed-0001' });
+    const viaMap = await signIdentityProof(id, {
+      iat: 1772841600,
+      extraMembers: { jti: 'jti-fixed-0001' },
+    });
+    expect(typed.proof.split('.')[1]).toBe(viaMap.proof.split('.')[1]);
+    expect(typed.proof).toBe(viaMap.proof);
+    expect(typed.payload.jti).toBe('jti-fixed-0001');
+  });
+
+  it('refuses a jti named twice — one member, one source', async () => {
+    const id = makeIdentity();
+    await expect(signIdentityProof(id, { jti: 'a', extraMembers: { jti: 'b' } })).rejects.toThrow(
+      /jti is named twice/,
+    );
+  });
+
+  it('returns the jti on the verified envelope', async () => {
+    const id = makeIdentity();
+    const jti = generateJti();
+    const { proof } = await signIdentityProof(id, { jti });
+    const verified = await verifyIdentityProofEnvelope(
+      expectations({ proof }),
+      resolverFor({ [id.did]: proofPresenter(id) }),
+    );
+    expect(verified.jti).toBe(jti);
+    expect(verified.payload.jti).toBe(jti);
+    // 128 bits, unpadded base64url.
+    expect(jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
+  });
+
+  it('refuses an absent jti on a route that requires one', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof, requireJti: true }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
+
+    const withJti = await signIdentityProof(id, { jti: generateJti() });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof: withJti.proof, requireJti: true }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).resolves.toMatchObject({ presenterDID: id.did });
+  });
+
+  // The bound holds whether or not the route asks for the member: a value the
+  // signature covers is either valid or the proof is not.
+  it('refuses a jti over the byte cap, at sign time and at verify time', async () => {
+    const id = makeIdentity();
+    const oversized = 'a'.repeat(MAX_JTI_BYTES + 1);
+    await expect(signIdentityProof(id, { jti: oversized })).rejects.toThrow(/at most 256 bytes/);
+    await expect(signIdentityProof(id, { jti: '' })).rejects.toThrow(/at most 256 bytes/);
+
+    // Signed through the additive-member path, which does not know the bound,
+    // then presented to a route that does not require a jti at all.
+    const { proof } = await signIdentityProof(id, { extraMembers: { jti: oversized } });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+  });
+
+  it('measures the cap in UTF-8 BYTES, not characters', async () => {
+    const id = makeIdentity();
+    // 128 characters, two bytes each.
+    await expect(signIdentityProof(id, { jti: 'é'.repeat(128) })).resolves.toBeTruthy();
+    await expect(signIdentityProof(id, { jti: 'é'.repeat(129) })).rejects.toThrow(
+      /at most 256 bytes/,
+    );
+  });
+
+  it('hands back the matched key’s roles when the resolver supplies them', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    const verified = await verifyIdentityProofEnvelope(expectations({ proof }), async () => ({
+      isDeleted: false,
+      keys: id.identity.authKeys.map((key) => ({ ...key, roles: ['auth', 'assert'] as const })),
+    }));
+    expect(verified.keyRoles).toEqual(['auth', 'assert']);
+  });
+});
+
+// =============================================================================
+// the replayed verdict
+// =============================================================================
+
+/*
+  The replay cache belongs to the deployment, so the protocol never returns this
+  verdict itself. The CONSTRUCTOR lives here so every consumer classifies a
+  spent jti the same way: 409, not the 401 an unchecked proof gets, because the
+  caller's answer differs — re-read state rather than re-sign the same request.
+*/
+describe('replayedProof', () => {
+  it('is a proof-phase 409, distinct from invalid', () => {
+    const err = replayedProof('request already seen');
+    expect(err).toBeInstanceOf(ApiRequestVerifyError);
+    expect(err.reason).toBe('replayed');
+    expect(err.phase).toBe('proof');
+    expect(err.status).toBe(409);
+  });
+});
+
+/*
+  The other verdict that is not a complaint about the artifact. The credential
+  holds and does not reach the route, so a route offering optional authentication
+  serves its anonymous projection rather than refusing — an answer an `invalid`
+  credential can never earn, which is why the two share a status but not a reason.
+*/
+describe('uncoveredProof', () => {
+  it('is a credential-phase 403, distinct from invalid', () => {
+    const err = uncoveredProof('credential does not cover read:posts on api:api.dfos.com');
+    expect(err).toBeInstanceOf(ApiRequestVerifyError);
+    expect(err.reason).toBe('uncovered');
+    expect(err.phase).toBe('credential');
+    expect(err.status).toBe(403);
   });
 });
 

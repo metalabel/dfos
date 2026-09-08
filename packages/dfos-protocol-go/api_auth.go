@@ -2,6 +2,7 @@ package dfos
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -83,6 +84,13 @@ const (
 	// that size was the reason. Set MaxBodyBytes to the transport cap; this
 	// default is for a deployment that has not got one.
 	MaxBodyBytesDefault = 1 << 20
+	// MaxJtiBytes caps the registered jti member, in UTF-8 bytes.
+	//
+	// A replay cache keyed on a caller-chosen string is a caller-controlled
+	// allocation, so the key needs a bound; 256 bytes is generous for any UUID,
+	// ULID, or random token. There is no floor — a verifier cannot measure
+	// entropy — though at least 128 bits of randomness is RECOMMENDED.
+	MaxJtiBytes = 256
 )
 
 // Sentinel errors for the consumer-visible verdicts. Callers branch with
@@ -101,6 +109,18 @@ var (
 	ErrRequestProofUnverifiable = errors.New("api auth proof unverifiable")
 	ErrRequestProofConfig       = errors.New("api auth verifier misconfigured")
 )
+
+// ErrRequestProofReplayed is the third proof-phase verdict: the proof is valid,
+// and it was already spent. A route renders it 409, not 401 — the two say
+// different things to a client, and a caller told "unauthenticated" about a
+// proof that authenticated retries the same envelope forever, where a caller
+// told "already seen" re-reads state instead.
+//
+// THE PROTOCOL VERIFIER NEVER RETURNS IT. Uniqueness is a question about
+// (presenter DID, jti) across a freshness window, which only the consumer's
+// replay cache can answer. The sentinel is exported so every consumer that does
+// answer it classifies the answer identically.
+var ErrRequestProofReplayed = errors.New("api auth proof replayed")
 
 // ErrProofPresenterInvalid lets a KeyResolver classify its OWN failure as a
 // judgment about the presenter rather than an outage.
@@ -123,6 +143,7 @@ var (
 	ErrIdentityProofInvalid      = ErrRequestProofInvalid
 	ErrIdentityProofUnverifiable = ErrRequestProofUnverifiable
 	ErrIdentityProofConfig       = ErrRequestProofConfig
+	ErrIdentityProofReplayed     = ErrRequestProofReplayed
 )
 
 // RequestProofPayload is the closed API-AUTH 0.1 proof schema. All six members
@@ -135,6 +156,10 @@ type RequestProofPayload struct {
 	BodyHash      string
 	CredentialCID string
 	Iat           int64
+	// JTI is the registered ADDITIVE member, empty when absent. It is not a
+	// seventh canonical member: on the emit side it rides the additive path in
+	// lexicographic order after iat, so bytes without one are unchanged.
+	JTI string
 }
 
 // IdentityProofPayload is the identity proof's schema: the request proof's five
@@ -146,6 +171,9 @@ type IdentityProofPayload struct {
 	Path     string
 	BodyHash string
 	Iat      int64
+	// JTI is the registered ADDITIVE member, empty when absent — see
+	// RequestProofPayload.JTI.
+	JTI string
 }
 
 // proofShape is how the INTERNALS see the two artifacts. One member-rules
@@ -207,7 +235,9 @@ type ProofExtraMembers map[string]string
 // so lexicographic ordering is IDENTICAL in Go (bytes) and TS (UTF-16 units).
 var extraMemberNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// canonicalMembers are the members an additive member may never shadow.
+// canonicalMembers are the members an additive member may never shadow. jti is
+// NOT among them: it is the registered ADDITIVE member, so a proof carrying one
+// keeps the same canonical prefix as a proof without one.
 var canonicalMembers = map[string]struct{}{
 	"method": {}, "host": {}, "path": {}, "bodyHash": {}, "credentialCID": {}, "iat": {},
 }
@@ -243,6 +273,34 @@ func canonicalExtraMembers(extra ProofExtraMembers, label string) ([]extraMember
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out, nil
+}
+
+// mergeProofJTI folds a typed jti into the additive-member map.
+//
+// ONE MEMBER, ONE SOURCE. The typed field and ExtraMembers{"jti": …} are two
+// spellings of the same member, so naming it twice is a build error rather than
+// a silent precedence rule — and because the typed field lands in the same map,
+// the two spellings emit BYTE-IDENTICAL proofs.
+//
+// The bound is checked here, on the typed path, where the caller asked for the
+// registered member by name. ExtraMembers stays the unchecked escape hatch it
+// already is; a jti that breaks the bound is refused by the VERIFIER either way.
+func mergeProofJTI(extra ProofExtraMembers, jti, label string) (ProofExtraMembers, error) {
+	if jti == "" {
+		return extra, nil
+	}
+	if _, clash := extra["jti"]; clash {
+		return nil, fmt.Errorf("invalid %s: jti is set twice, as the typed member and in ExtraMembers", label)
+	}
+	if len(jti) > MaxJtiBytes {
+		return nil, fmt.Errorf("invalid %s: jti must be a non-empty string of at most %d bytes", label, MaxJtiBytes)
+	}
+	merged := make(ProofExtraMembers, len(extra)+1)
+	for name, value := range extra {
+		merged[name] = value
+	}
+	merged["jti"] = jti
+	return merged, nil
 }
 
 // An HTTP method token per RFC 9110 tchar, with the lowercase letters removed:
@@ -362,7 +420,11 @@ func proofSigningInput(payload proofPayload, shape proofShape, extra []extraMemb
 // six members, method, host, path, bodyHash, credentialCID, iat. Byte-for-byte
 // identical to the TS apiRequestSigningInput.
 func ApiRequestSigningInput(payload RequestProofPayload, extra ProofExtraMembers) ([]byte, error) {
-	members, err := canonicalExtraMembers(extra, requestProofShape.label)
+	merged, err := mergeProofJTI(extra, payload.JTI, requestProofShape.label)
+	if err != nil {
+		return nil, err
+	}
+	members, err := canonicalExtraMembers(merged, requestProofShape.label)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +436,11 @@ func ApiRequestSigningInput(payload RequestProofPayload, extra ProofExtraMembers
 // minus credentialCID, from the same encoder, under the same member rules.
 // Byte-for-byte identical to the TS apiIdentitySigningInput.
 func ApiIdentitySigningInput(payload IdentityProofPayload, extra ProofExtraMembers) ([]byte, error) {
-	members, err := canonicalExtraMembers(extra, identityProofShape.label)
+	merged, err := mergeProofJTI(extra, payload.JTI, identityProofShape.label)
+	if err != nil {
+		return nil, err
+	}
+	members, err := canonicalExtraMembers(merged, identityProofShape.label)
 	if err != nil {
 		return nil, err
 	}
@@ -389,6 +455,17 @@ func Sha256BodyHash(body []byte) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
+// GenerateJTI mints the RECOMMENDED jti: 128 random bits, unpadded base64url,
+// 22 characters. Any non-empty string within MaxJtiBytes is legal; this is the
+// one a caller with no reason to choose otherwise should use.
+func GenerateJTI() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
 // RequestProofOptions carries optional build inputs.
 type RequestProofOptions struct {
 	// Body is the application body octets; nil or empty hashes to EmptyBodySHA256.
@@ -400,6 +477,14 @@ type RequestProofOptions struct {
 	// WRITE-SHAPED surface — relay ingestion, blob upload — REQUIRES it
 	// (INTEGRATIONS.md, API security notes).
 	ExtraMembers ProofExtraMembers
+	// JTI is the registered additive member by its own name — the same wire
+	// member as ExtraMembers{"jti": …}, emitted through the same path and
+	// producing identical bytes. Naming it in both places is an error.
+	//
+	// A write-gating deployment requires it on every write-shaped route; a
+	// read-shaped route ignores it, so attaching one is never wrong.
+	// GenerateJTI mints the recommended value.
+	JTI string
 }
 
 // IdentityProofOptions is the same optional build inputs, under the name an
@@ -413,11 +498,15 @@ type IdentityProofOptions = RequestProofOptions
 // would sort nothing but would HTML-escape the path and marshal from a map in a
 // shape this contract does not permit.
 func buildProof(payload proofPayload, shape proofShape, kid string,
-	privateKey ed25519.PrivateKey, extra ProofExtraMembers) (string, error) {
+	privateKey ed25519.PrivateKey, extra ProofExtraMembers, jti string) (string, error) {
 	if !strings.Contains(kid, "#") {
 		return "", fmt.Errorf("invalid %s: kid must be a DID URL", shape.label)
 	}
-	members, err := canonicalExtraMembers(extra, shape.label)
+	merged, err := mergeProofJTI(extra, jti, shape.label)
+	if err != nil {
+		return "", err
+	}
+	members, err := canonicalExtraMembers(merged, shape.label)
 	if err != nil {
 		return "", err
 	}
@@ -454,7 +543,7 @@ func BuildRequestProof(method, host, path, credentialCID, kid string,
 	return buildProof(proofPayload{
 		Method: method, Host: host, Path: path,
 		BodyHash: Sha256BodyHash(opts.Body), CredentialCID: credentialCID, Iat: proofIat(opts.Iat),
-	}, requestProofShape, kid, privateKey, opts.ExtraMembers)
+	}, requestProofShape, kid, privateKey, opts.ExtraMembers, opts.JTI)
 }
 
 // BuildIdentityProof signs one request as a BARE IDENTITY — BuildRequestProof
@@ -468,7 +557,7 @@ func BuildIdentityProof(method, host, path, kid string,
 	return buildProof(proofPayload{
 		Method: method, Host: host, Path: path,
 		BodyHash: Sha256BodyHash(opts.Body), Iat: proofIat(opts.Iat),
-	}, identityProofShape, kid, privateKey, opts.ExtraMembers)
+	}, identityProofShape, kid, privateKey, opts.ExtraMembers, opts.JTI)
 }
 
 // RequestProofExpectations is what the VERIFIER holds about the request it is
@@ -500,6 +589,14 @@ type RequestProofExpectations struct {
 	// MaxBodyBytesDefault, a non-nil *0 means "no body permitted". An over-cap
 	// body is refused before the SHA-256.
 	MaxBodyBytes *int64
+	// RequireJTI marks a WRITE-SHAPED route: a proof arriving without the
+	// registered jti member is INVALID here, because the route's uniqueness
+	// discipline has nothing to key on without it. Read-shaped routes leave it
+	// false and rely on the freshness window alone.
+	//
+	// Requiring it is not recording it. The (presenter DID, jti) cache belongs to
+	// the consumer; this flag only guarantees there is a value to record.
+	RequireJTI bool
 }
 
 // IdentityProofExpectations is the same verifier-held state, under the name an
@@ -572,6 +669,7 @@ func (e RequestProofExpectations) bounds() (window, skew int64, err error) {
 type verifiedEnvelope struct {
 	payload      proofPayload
 	rawPayload   map[string]any
+	jti          string
 	presenterDID string
 	kid          string
 }
@@ -650,9 +748,9 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 		return nil, fmt.Errorf("%w: %s payload is not valid UTF-8", ErrRequestProofInvalid, shape.label)
 	}
 	// The DECODED payload, unknown members included. ADDITIVE MEMBERS ARE READ
-	// FROM HERE, at the consuming layer, AFTER verification — the signature
-	// already covers them and the canonical member set stays closed. jti is the
-	// case this exists for.
+	// FROM HERE — the registered jti just below, and anything a consumer reads at
+	// its own layer after verification. The signature already covers them and the
+	// canonical member set stays closed.
 	var rawPayload map[string]any
 	if err := json.Unmarshal(payloadBytes, &rawPayload); err != nil {
 		return nil, fmt.Errorf("%w: %s payload is not valid JSON", ErrRequestProofInvalid, shape.label)
@@ -690,6 +788,24 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	}
 	if schemaErr := validateProofPayload(payload, shape); schemaErr != nil {
 		return nil, fmt.Errorf("%w: %s", ErrRequestProofInvalid, schemaErr)
+	}
+
+	// 3b. The registered ADDITIVE member. jti is absent by default, and a present
+	// one is held to its rule WHETHER OR NOT this route requires it: the member
+	// has one meaning across the family, not one per route, so a verifier that
+	// only checked it where it mattered would accept bytes another verifier
+	// refuses.
+	var jti string
+	if rawJti, present := rawPayload["jti"]; present {
+		value, isString := rawJti.(string)
+		if !isString || value == "" || len(value) > MaxJtiBytes {
+			return nil, fmt.Errorf("%w: invalid %s: jti must be a non-empty string of at most %d bytes",
+				ErrRequestProofInvalid, shape.label, MaxJtiBytes)
+		}
+		jti = value
+	}
+	if expect.RequireJTI && jti == "" {
+		return nil, fmt.Errorf("%w: invalid %s: jti is required on this route", ErrRequestProofInvalid, shape.label)
 	}
 
 	// 4. Freshness — integer Unix seconds on both sides, so the boundary does not
@@ -750,6 +866,7 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	return &verifiedEnvelope{
 		payload:      payload,
 		rawPayload:   rawPayload,
+		jti:          jti,
 		presenterDID: header.Kid[:strings.Index(header.Kid, "#")],
 		kid:          header.Kid,
 	}, nil
@@ -760,7 +877,8 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 type VerifiedRequestProof struct {
 	Payload RequestProofPayload
 	// RawPayload is the decoded payload object, unknown members included — where
-	// a consumer reads an ADDITIVE member (jti) the envelope verifier ignored.
+	// a consumer reads an ADDITIVE member the envelope verifier does not.
+	// The registered one, jti, arrives on Payload.JTI.
 	RawPayload map[string]any
 	// PresenterDID is the kid's DID portion.
 	PresenterDID string
@@ -774,7 +892,8 @@ type VerifiedRequestProof struct {
 type VerifiedIdentityProof struct {
 	Payload IdentityProofPayload
 	// RawPayload is the decoded payload object, unknown members included — where
-	// a consumer reads an ADDITIVE member (jti) the envelope verifier ignored.
+	// a consumer reads an ADDITIVE member the envelope verifier does not.
+	// The registered one, jti, arrives on Payload.JTI.
 	RawPayload map[string]any
 	// PresenterDID is the kid's DID portion: WHO the request is from. What that
 	// DID may do is the resource's local policy.
@@ -800,6 +919,7 @@ func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
 		Payload: RequestProofPayload{
 			Method: env.payload.Method, Host: env.payload.Host, Path: env.payload.Path,
 			BodyHash: env.payload.BodyHash, CredentialCID: env.payload.CredentialCID, Iat: env.payload.Iat,
+			JTI: env.jti,
 		},
 		RawPayload:   env.rawPayload,
 		PresenterDID: env.presenterDID,
@@ -841,6 +961,7 @@ func VerifyIdentityProof(proofToken string, expect IdentityProofExpectations,
 		Payload: IdentityProofPayload{
 			Method: env.payload.Method, Host: env.payload.Host, Path: env.payload.Path,
 			BodyHash: env.payload.BodyHash, Iat: env.payload.Iat,
+			JTI: env.jti,
 		},
 		RawPayload:   env.rawPayload,
 		PresenterDID: env.presenterDID,

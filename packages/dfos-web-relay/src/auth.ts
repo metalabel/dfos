@@ -44,16 +44,11 @@ export const DEFAULT_PROOF_WINDOW_SECONDS = 60;
 export const DEFAULT_PROOF_SKEW_SECONDS = 60;
 
 /**
- * Cap on the `jti` member, in UTF-8 bytes.
- *
- * A replay cache keyed on a caller-chosen string is a caller-controlled memory
- * allocation, so the key needs a bound. 256 bytes is generous for any UUID,
- * ULID, or random token and is enforced IDENTICALLY by the Go twin — a jti one
- * relay accepts and the other refuses would fork the admission decision.
+ * Cap on the `jti` member, in UTF-8 bytes — the PROTOCOL's bound, re-exported
+ * rather than restated. A relay carrying its own copy could drift from the
+ * verifier that actually enforces it, which is the fork this re-export forbids.
  */
-export const MAX_JTI_BYTES = 256;
-
-const JTI_ENCODER = new TextEncoder();
+export { MAX_JTI_BYTES } from '@metalabel/dfos-protocol/credentials';
 
 // -----------------------------------------------------------------------------
 // current-state key resolution
@@ -280,6 +275,7 @@ export const authenticateIdentityProof = async (
         body: options.body,
         windowSeconds,
         skewSeconds,
+        requireJti: options.requireJti,
         ...(options.maxBodyBytes !== undefined ? { maxBodyBytes: options.maxBodyBytes } : {}),
         ...(options.now ? { now: options.now } : {}),
       },
@@ -301,14 +297,17 @@ export const authenticateIdentityProof = async (
   }
 
   if (options.requireJti) {
-    // jti is an UNKNOWN member to the envelope verifier (MUST-ignore-unknown),
-    // read here, AFTER verification, off the decoded payload the signature
-    // already covers. The canonical member set stays closed.
-    const jti = verified.rawPayload['jti'];
-    if (typeof jti !== 'string' || jti === '') {
-      return { ok: false, status: 401, error: 'authentication required' };
-    }
-    if (JTI_ENCODER.encode(jti).length > MAX_JTI_BYTES) {
+    // `jti` is a REGISTERED member, so its schema — present, non-empty, within
+    // the byte cap — is the envelope verifier's to enforce, and `requireJti`
+    // above made an absent one an invalid proof. Every one of those verdicts
+    // arrived as a 401 through the catch. What is left for the relay is the one
+    // thing a verifier cannot decide alone: whether this proof was already
+    // spent, which is REPLAYED — 409, its own verdict, because the proof was
+    // checked and was valid.
+    const jti = verified.jti;
+    if (jti === undefined) {
+      // Unreachable while `requireJti` is passed through, and fail-closed if it
+      // ever is not.
       return { ok: false, status: 401, error: 'authentication required' };
     }
     const cache = options.replayCache;
@@ -335,7 +334,9 @@ export const authenticateIdentityProof = async (
       return { ok: false, status: 401, error: 'authentication required' };
     }
     if (!cache.insertIfAbsent(verified.presenterDID, jti, nowMs, expiresAtMs)) {
-      return { ok: false, status: 401, error: 'authentication required' };
+      // REPLAYED, not unauthenticated: retrying these bytes can never succeed,
+      // so the client is told to re-read state rather than to re-authenticate.
+      return { ok: false, status: 409, error: 'request already seen' };
     }
   }
 

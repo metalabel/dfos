@@ -233,19 +233,24 @@ This is the broadest resource scope. Common use: granting a collaborator access 
 
 ### Attenuation between forms
 
-| Parent    | Child     | Valid? | Reason                                    |
-| --------- | --------- | ------ | ----------------------------------------- |
-| `chain:*` | `chain:*` | Yes    | Exact match                               |
-| `chain:*` | `chain:X` | Yes    | Narrowing from wildcard to specific chain |
-| `chain:X` | `chain:X` | Yes    | Exact match                               |
-| `chain:X` | `chain:*` | No     | Widening from specific to wildcard        |
+| Parent           | Child            | Valid? | Reason                                    |
+| ---------------- | ---------------- | ------ | ----------------------------------------- |
+| `chain:*`        | `chain:*`        | Yes    | Exact match                               |
+| `chain:*`        | `chain:X`        | Yes    | Narrowing from wildcard to specific chain |
+| `chain:X`        | `chain:X`        | Yes    | Exact match                               |
+| `chain:X`        | `chain:*`        | No     | Widening from specific to wildcard        |
+| `api:H`          | `api:H`          | Yes    | Exact match                               |
+| `api:H`          | `api:H/spaces/X` | Yes    | Narrowing from the host to one space      |
+| `api:H/spaces/X` | `api:H/spaces/X` | Yes    | Exact match                               |
+| `api:H/spaces/X` | `api:H`          | No     | Widening from one space to the host       |
+| `api:H/spaces/X` | `api:H/spaces/Y` | No     | A sibling space is not narrower           |
 
-The resource hierarchy from broadest to narrowest is `chain:*` > `chain:X`. Each delegation hop moves down this hierarchy, never up.
+The resource hierarchies from broadest to narrowest are `chain:*` > `chain:X` and `api:H` > `api:H/spaces/X`. Each delegation hop moves down a hierarchy, never up, and never across hosts.
 
 Two of these rules are general, normative for **every** resource form, not just `chain:`:
 
 - **Coverage never crosses resource types.** A `chain:` entry never covers a `mailbox:` request, nor any other pairing, in the delegation walk and in request matching alike.
-- **For every non-`chain:` form, attenuation narrows by exact byte equality of the full resource string.** The wildcard is a `chain:`-only concept: a literal `*` id in any other type is an ordinary id covering only itself. Exact equality is what a registered form gets unless its own registration says otherwise, and none does.
+- **A non-`chain:` form narrows by exact byte equality of the full resource string unless its registration defines a hierarchy.** [`api:`](#apihost-credential-gated-api-access) does, one level deep and enumerated; `mailbox:` and every unregistered id do not. The wildcard is a `chain:`-only concept: a literal `*` id in any other type is an ordinary id covering only itself.
 
 ### `mailbox:<id>`, signing mailbox deposit
 
@@ -263,12 +268,29 @@ Grants the audience the right to **deposit** sign requests into the subject's re
 
 Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's lowercase authority: the bare hostname on the default HTTPS port, `host:port` otherwise, never a scheme or path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere.
 
+Two forms are registered, one level deep:
+
+| Form                     | Covers                                                |
+| ------------------------ | ----------------------------------------------------- |
+| `api:<host>`             | The whole API at that authority, every space included |
+| `api:<host>/spaces/<id>` | One space at that authority                           |
+
+`<id>` is the space's protocol DID with the `did:dfos:` prefix stripped, exactly 31 characters of the [identifier alphabet](https://protocol.dfos.com/did-method#31-abnf), as `mailbox:<id>` names a DID; never a subdomain and never a platform entity id. The form is a resource id, not an HTTP path: unversioned, and the hierarchy is enumerated, so a further child is one more row here, never a path grammar. An `api:` string that is neither form is an unregistered id: it never covers a request, and a delegation carries it only byte-identically.
+
 ```json
 { "resource": "api:api.dfos.com", "action": "read:profile" }
 ```
 
-- **Actions are enumerated registry tokens**, defined in [INTEGRATIONS](https://protocol.dfos.com/integrations#the-apihost-resource-and-its-actions), which registers `read:profile`, `read:email`, and `read:memberships`. Growth is enumeration: a grant carrying several tokens is an ordinary comma-separated list, narrowed by dropping tokens. Per the [action lattice](#action-coverage) there is no action wildcard, so `read:*` is a literal token no route requires and an entry carrying it grants nothing. It does not widen in attenuation either: `{read:*}` narrows only from a parent that also carries `read:*`.
-- **Exact match only.** Delegation follows the general non-`chain:` rule in [Attenuation between forms](#attenuation-between-forms). No wildcard form is defined, `api:*` is an ordinary id covering only itself and is never a served host, and coverage never crosses resource types.
+```json
+{
+  "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+  "action": "read:posts,write:comments"
+}
+```
+
+- **Coverage is equal-or-ancestor.** `api:<host>` covers itself and every `api:<host>/spaces/<id>` at that host; a space form covers only itself. Coverage never crosses hosts (a non-default port is part of the host) and never crosses resource types. `api:*` is an ordinary id covering only itself and is never a served host. One rule decides request matching and the [attenuation walk](#attenuation-between-forms) alike, so a host grant narrows to one space and a space grant never widens.
+- **Registration invariant.** A child form registered here MUST NOT let an existing host grant reach anything its action tokens did not already describe: the host form means every space at the host, and a space is what every space-level token already names.
+- **Actions are enumerated registry tokens**, defined in [INTEGRATIONS](https://protocol.dfos.com/integrations#the-apihost-resource-and-its-actions), which registers `read:profile`, `read:email`, and `read:memberships` at the account level and `read:posts`, `write:upvotes`, `write:comments`, and `write:posts` at the space level. Growth is enumeration: a grant carrying several tokens is an ordinary comma-separated list, narrowed by dropping tokens. Per the [action lattice](#action-coverage) there is no action wildcard, so `read:*` is a literal token no route requires and an entry carrying it grants nothing. It does not widen in attenuation either: `{read:*}` narrows only from a parent that also carries `read:*`.
 - **The consuming rules live in [INTEGRATIONS](https://protocol.dfos.com/integrations#verification-algorithm)**, including the ones that give the form its teeth: a credential is exercised only alongside a **request proof** signed by the leaf audience's key, so a bare credential authorizes nothing on that surface; **no credential in the presented chain may carry `aud: "*"`**, refused at every level and not just the leaf, because a public parent would let a stranger self-issue a passing leaf; and the chain's **root `iss` is the subject whose data is served**, so the credential selects the subject.
 
 ---

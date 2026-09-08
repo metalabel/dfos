@@ -427,9 +427,14 @@ const issueCredential = async (input: {
   return { jws, cid: cidOf(jws) };
 };
 
+/** The two space ids of examples/api-resource-coverage.json, so one answer sheet
+ *  serves the hierarchy tests in both packages. */
+const SPACE_A = '9ctvrdn9vedda7efetrhcdakfh4cr2k';
+const SPACE_B = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
+
 /** The honest happy path: user → RP credential, RP signs a proof over the request. */
 const buildGrant = async (
-  overrides: { att?: Attenuation[]; host?: string } = {},
+  overrides: { att?: Attenuation[]; host?: string; jti?: string } = {},
 ): Promise<{
   user: Identity;
   rp: Identity;
@@ -453,6 +458,7 @@ const buildGrant = async (
     kid: rp.kid,
     sign: rp.k.signer,
     iat: NOW,
+    ...(overrides.jti !== undefined ? { jti: overrides.jti } : {}),
   });
   return { user, rp, credential: jws, credentialCID: cid, proof };
 };
@@ -894,7 +900,8 @@ describe('verifyApiRequest', () => {
     expect(proofErr?.status).toBe(401);
     // A credential-layer failure (wrong host → coverage miss is credential-phase;
     // here a host mismatch is proof-phase, so use a coverage miss instead): ask
-    // for an action the grant does not carry.
+    // for an action the grant does not carry. A valid credential that does not
+    // reach the route is `uncovered`, which is a 403 all the same.
     const credErr = await errorOf(
       verifyApiRequest(clientFor([grant.user, grant.rp]), {
         ...baseInput(),
@@ -903,7 +910,7 @@ describe('verifyApiRequest', () => {
         action: 'read:posts',
       }),
     );
-    expect(credErr?.reason).toBe('invalid');
+    expect(credErr?.reason).toBe('uncovered');
     expect(credErr?.phase).toBe('credential');
     expect(credErr?.status).toBe(403);
   });
@@ -1332,7 +1339,9 @@ describe('verifyApiRequest', () => {
         proof: grant.proof,
         credential: grant.credential,
       });
-      expect(await reasonOf(attempt), name).toBe('invalid');
+      // Every one of these credentials is VALID and simply does not reach the
+      // route, which is `uncovered` rather than `invalid`.
+      expect(await reasonOf(attempt), name).toBe('uncovered');
       await expect(attempt, name).rejects.toThrow(/does not cover/);
     }
   });
@@ -1349,6 +1358,182 @@ describe('verifyApiRequest', () => {
     });
     expect(result.action).toBe('read:posts');
   });
+
+  // --- the required resource, and the api: hierarchy ---
+
+  it('defaults the required resource to api:<host> and reports it back', async () => {
+    const grant = await buildGrant();
+    const result = await verifyApiRequest(clientFor([grant.user, grant.rp]), {
+      ...baseInput(),
+      proof: grant.proof,
+      credential: grant.credential,
+    });
+    expect(result.resource).toBe(`api:${HOST}`);
+  });
+
+  /*
+    ANCESTOR COVERAGE, in the direction that is safe: a grant naming the bare
+    host reaches every space on it, and a grant naming one space reaches only
+    that space. The reverse — a space-scoped grant spending on the account-level
+    route — is the widening this hierarchy exists to refuse.
+  */
+  it('lets a bare-host grant cover a space-addressed route', async () => {
+    const grant = await buildGrant({
+      att: [{ resource: `api:${HOST}`, action: 'read:posts,write:comments' }],
+    });
+    const result = await verifyApiRequest(clientFor([grant.user, grant.rp]), {
+      ...baseInput(),
+      proof: grant.proof,
+      credential: grant.credential,
+      resource: `api:${HOST}/spaces/${SPACE_A}`,
+      action: 'write:comments',
+    });
+    expect(result.resource).toBe(`api:${HOST}/spaces/${SPACE_A}`);
+    expect(result.host).toBe(HOST);
+  });
+
+  it('lets a space-scoped grant cover its own space and refuses every other demand', async () => {
+    const grant = await buildGrant({
+      att: [{ resource: `api:${HOST}/spaces/${SPACE_A}`, action: 'read:posts' }],
+    });
+    // A fresh client per attempt: presenter resolution fails closed on a cached
+    // tip, and reusing one would answer the second call from cache.
+    const spend = (resource: string) =>
+      verifyApiRequest(clientFor([grant.user, grant.rp]), {
+        ...baseInput(),
+        proof: grant.proof,
+        credential: grant.credential,
+        resource,
+        action: 'read:posts',
+      });
+
+    await expect(spend(`api:${HOST}/spaces/${SPACE_A}`)).resolves.toMatchObject({
+      resource: `api:${HOST}/spaces/${SPACE_A}`,
+    });
+    // the bare host — widening
+    expect(await errorOf(spend(`api:${HOST}`))).toMatchObject({
+      reason: 'uncovered',
+      phase: 'credential',
+      status: 403,
+    });
+    // a sibling space
+    expect(await errorOf(spend(`api:${HOST}/spaces/${SPACE_B}`))).toMatchObject({
+      reason: 'uncovered',
+      status: 403,
+    });
+  });
+
+  /*
+    The required resource is DEPLOYMENT CONFIG, so a bad one is a 500 and never a
+    verdict about the caller. A resource naming another authority would let the
+    request binding and the grant name two different origins, which is the whole
+    property the host member carries.
+  */
+  it('refuses a required resource that is malformed or names another authority', async () => {
+    const grant = await buildGrant();
+    for (const resource of [
+      `api:api.example.org`,
+      `api:api.example.org/spaces/${SPACE_A}`,
+      `api:${HOST}/topics/${SPACE_A}`,
+      `api:${HOST}/spaces/`,
+      `chain:${SPACE_A}`,
+      HOST,
+    ]) {
+      const error = await errorOf(
+        verifyApiRequest(clientFor([grant.user, grant.rp]), {
+          ...baseInput(),
+          proof: grant.proof,
+          credential: grant.credential,
+          resource,
+        }),
+      );
+      expect(error, resource).toMatchObject({ reason: 'config', phase: 'config', status: 500 });
+    }
+  });
+
+  /*
+    THE TWO 403s ARE DIFFERENT ANSWERS, and the whole reason `uncovered` is its
+    own verdict. A credential that holds and does not reach this route is a
+    request a route offering optional authentication can still serve — with the
+    anonymous projection, because a credential only ever ADDS. A credential that
+    does not hold is refused, and no projection follows from it.
+  */
+  it('separates a credential that does not reach the route from one that does not hold', async () => {
+    const uncovered = await buildGrant({
+      att: [{ resource: `api:${HOST}`, action: 'read:profile' }],
+    });
+    expect(
+      await errorOf(
+        verifyApiRequest(clientFor([uncovered.user, uncovered.rp]), {
+          ...baseInput(),
+          proof: uncovered.proof,
+          credential: uncovered.credential,
+          action: 'write:posts',
+        }),
+      ),
+    ).toMatchObject({ reason: 'uncovered', phase: 'credential', status: 403 });
+
+    // A credential audienced to someone other than the proof's signer does not
+    // hold at all — the possession this surface rests on was never proven.
+    const stranger = await buildIdentity();
+    const misaudienced = await buildGrant();
+    const wrongAud = await issueCredential({ issuer: misaudienced.user, aud: stranger.did });
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      credentialCID: wrongAud.cid,
+      kid: misaudienced.rp.kid,
+      sign: misaudienced.rp.k.signer,
+      iat: NOW,
+    });
+    expect(
+      await errorOf(
+        verifyApiRequest(clientFor([misaudienced.user, misaudienced.rp, stranger]), {
+          ...baseInput(),
+          proof,
+          credential: wrongAud.jws,
+        }),
+      ),
+    ).toMatchObject({ reason: 'invalid', phase: 'credential', status: 403 });
+  });
+
+  // --- the registered jti ---
+
+  it('requires a jti when the route asks for one, and carries it back', async () => {
+    const absent = await buildGrant();
+    expect(
+      await errorOf(
+        verifyApiRequest(clientFor([absent.user, absent.rp]), {
+          ...baseInput(),
+          proof: absent.proof,
+          credential: absent.credential,
+          requireJti: true,
+        }),
+      ),
+    ).toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
+
+    const present = await buildGrant({ jti: 'jti-verify-fixed-0001' });
+    const result = await verifyApiRequest(clientFor([present.user, present.rp]), {
+      ...baseInput(),
+      proof: present.proof,
+      credential: present.credential,
+      requireJti: true,
+    });
+    expect(result.jti).toBe('jti-verify-fixed-0001');
+  });
+
+  // The roles travel so a write-gating deployment can apply its own rule about
+  // which role may sign; the kit states nothing about which.
+  it('reports the signing key’s roles', async () => {
+    const grant = await buildGrant();
+    const result = await verifyApiRequest(clientFor([grant.user, grant.rp]), {
+      ...baseInput(),
+      proof: grant.proof,
+      credential: grant.credential,
+    });
+    expect(result.keyRoles).toEqual(['auth', 'assert', 'controller']);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -1357,7 +1542,7 @@ describe('verifyApiRequest', () => {
 
 /** One identity, one proof over the canonical request. No credential anywhere. */
 const buildIdentityProof = async (
-  overrides: { host?: string; path?: string; iat?: number } = {},
+  overrides: { host?: string; path?: string; iat?: number; jti?: string } = {},
 ): Promise<{ signer: Identity; proof: string }> => {
   const signer = await buildIdentity();
   const { proof } = await signApiIdentityRequest({
@@ -1367,6 +1552,7 @@ const buildIdentityProof = async (
     kid: signer.kid,
     sign: signer.k.signer,
     iat: overrides.iat ?? NOW,
+    ...(overrides.jti !== undefined ? { jti: overrides.jti } : {}),
   });
   return { signer, proof };
 };
@@ -1662,6 +1848,31 @@ describe('verifyApiIdentityRequest', () => {
     expect(err?.status).toBe(500);
     expect(err?.message).toMatch(/300 seconds/);
   });
+
+  // Same discipline as the credentialed artifact; here the signer IS the
+  // principal, so the replay cache is keyed on the DID that signed.
+  it('requires a jti when the route asks for one, and carries it back with the key roles', async () => {
+    const absent = await buildIdentityProof();
+    expect(
+      await errorOf(
+        verifyApiIdentityRequest(clientFor([absent.signer]), {
+          ...baseInput(),
+          proof: absent.proof,
+          requireJti: true,
+        }),
+      ),
+    ).toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
+
+    const present = await buildIdentityProof({ jti: 'jti-identity-fixed-0001' });
+    const result = await verifyApiIdentityRequest(clientFor([present.signer]), {
+      ...baseInput(),
+      proof: present.proof,
+      requireJti: true,
+    });
+    expect(result.jti).toBe('jti-identity-fixed-0001');
+    expect(result.rawPayload['jti']).toBe('jti-identity-fixed-0001');
+    expect(result.keyRoles).toEqual(['auth', 'assert', 'controller']);
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -1911,6 +2122,57 @@ describe('createApiAuthFetch', () => {
 
     await signed(new Request('https://api.dfos.com/v0/profile'));
     expect(sink.calls[0]!.redirect).toBe('manual');
+  });
+
+  /*
+    The default is WRITES: a replayed read buys an attacker the read they could
+    have made anyway, so paying for the member there is a cost with no property
+    behind it. Every jti is minted per request — a value reused across two is the
+    one thing that makes the member useless.
+  */
+  it('attaches a jti to writes and not to safe methods, by default', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile'));
+    await signed(new Request('https://api.dfos.com/v0/profile', { method: 'HEAD' }));
+    await signed(new Request('https://api.dfos.com/v0/posts', { method: 'POST', body: '{}' }));
+    await signed(new Request('https://api.dfos.com/v0/posts/x', { method: 'DELETE' }));
+    await signed(new Request('https://api.dfos.com/v0/posts', { method: 'POST', body: '{}' }));
+
+    const jtis = sink.calls.map((call) => proofPayload(sentProof(call)).jti);
+    expect(jtis[0]).toBeUndefined();
+    expect(jtis[1]).toBeUndefined();
+    expect(jtis[2]).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(jtis[3]).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(jtis[4]).not.toBe(jtis[2]);
+  });
+
+  it.each([
+    ['always', true, true],
+    ['never', false, false],
+  ] as const)('honors jti: %s on a read and a write', async (mode, onRead, onWrite) => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+      jti: mode,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile'));
+    await signed(new Request('https://api.dfos.com/v0/posts', { method: 'POST', body: '{}' }));
+
+    expect(proofPayload(sentProof(sink.calls[0]!)).jti !== undefined).toBe(onRead);
+    expect(proofPayload(sentProof(sink.calls[1]!)).jti !== undefined).toBe(onWrite);
   });
 
   it('sends through globalThis.fetch when no transport is supplied', async () => {

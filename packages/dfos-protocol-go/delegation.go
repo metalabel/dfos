@@ -2,6 +2,7 @@ package dfos
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -77,6 +78,60 @@ func ParseResource(resource string) (string, string, bool) {
 	return resource[:idx], resource[idx+1:], true
 }
 
+// apiSpaceIDRe is the space half of an api: child resource: 31 characters of the
+// identifier alphabet every DFOS id is encoded in, prefix-stripped — never a
+// full DID.
+var apiSpaceIDRe = regexp.MustCompile(`^[2346789acdefhknrtvz]{31}$`)
+
+// ParseApiResource splits an api: resource into its host and, when the resource
+// names one, the space under it. ok is false for a resource of any other type
+// and for a MALFORMED api: id, which covers nothing and is never a required
+// resource.
+//
+// The grammar is exactly two forms — api:<host> and api:<host>/spaces/<id> — so
+// the id splits on its FIRST '/' and whatever follows must be literally
+// spaces/<id>. Reading anything else as a deeper path would let an unregistered
+// child name inherit a bare host's authority. Twin of the TS parseApiResource.
+func ParseApiResource(resource string) (host, spaceID string, ok bool) {
+	resourceType, id, split := ParseResource(resource)
+	if !split || resourceType != "api" {
+		return "", "", false
+	}
+	slash := strings.Index(id, "/")
+	if slash < 0 {
+		if id == "" {
+			return "", "", false
+		}
+		return id, "", true
+	}
+	host = id[:slash]
+	child, hasChild := strings.CutPrefix(id[slash+1:], "spaces/")
+	if host == "" || !hasChild || !apiSpaceIDRe.MatchString(child) {
+		return "", "", false
+	}
+	return host, child, true
+}
+
+// ApiResourceCovers reports whether a well-formed api: entry covers a
+// well-formed api: required resource: the same host, and either the entry is
+// the bare host — the registered ancestor of every space at it — or it names
+// the same space.
+//
+// A malformed api: resource on either side covers nothing and is covered by
+// nothing, itself included: a hierarchy this grammar cannot read never
+// authorizes a request. Twin of the TS apiResourceCovers.
+func ApiResourceCovers(entry, required string) bool {
+	entryHost, entrySpace, ok := ParseApiResource(entry)
+	if !ok {
+		return false
+	}
+	requiredHost, requiredSpace, ok := ParseApiResource(required)
+	if !ok {
+		return false
+	}
+	return entryHost == requiredHost && (entrySpace == "" || entrySpace == requiredSpace)
+}
+
 // isASCIISpace reports whether r is one of the six ASCII whitespace characters
 // CREDENTIALS.md "Action coverage" rule 2 trims — tab, newline, vertical tab,
 // form feed, carriage return, space, and nothing else.
@@ -110,13 +165,16 @@ func ParseActions(action string) map[string]bool {
 // IsAttenuated checks if childAtt is a valid attenuation of parentAtt.
 // Every entry in childAtt must be covered by at least one entry in parentAtt.
 //
-// Coverage for chain resources honors the chain:* wildcard; every other
-// resource type (mailbox:<id>, and any form a future capability registers)
-// narrows by exact byte equality of the full resource string ONLY — the
-// wildcard is a chain:-only concept, a literal '*' id elsewhere is an ordinary
-// id covering only itself, and coverage never crosses resource types. MUST
-// match the TS twin (isAttenuated in dfos-credential.ts) verdict-for-verdict;
-// see CREDENTIALS.md "Resource Types".
+// Coverage for chain resources honors the chain:* wildcard, and api: resources
+// narrow down the one other registered hierarchy: api:<host> carries every
+// api:<host>/spaces/<id> under it. Every other resource type (mailbox:<id>, and
+// any form a future capability registers) narrows by exact byte equality of the
+// full resource string ONLY — the wildcard is a chain:-only concept, a literal
+// '*' id elsewhere is an ordinary id covering only itself, and coverage never
+// crosses resource types. A malformed api: id has no hierarchy to read, so it
+// travels only on a byte-identical parent, exactly as an unregistered form
+// does. MUST match the TS twin (isAttenuated in dfos-credential.ts)
+// verdict-for-verdict; see CREDENTIALS.md "Resource Types".
 func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 	for _, child := range childAtt {
 		childType, childID, ok := ParseResource(child.Resource)
@@ -159,7 +217,15 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 					break
 				}
 			} else if childType != "chain" && parentType != "chain" {
-				// non-chain forms narrow by exact byte equality only — no wildcard
+				// api: is the one hierarchy outside chain:; every other non-chain form
+				// narrows by exact byte equality only — no wildcard. Byte equality is
+				// checked second so a malformed api: id is still carried by an
+				// identical parent.
+				if childType == "api" && parentType == "api" &&
+					ApiResourceCovers(parent.Resource, child.Resource) {
+					covered = true
+					break
+				}
 				if child.Resource == parent.Resource {
 					covered = true
 					break

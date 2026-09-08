@@ -227,7 +227,7 @@ with exit 1 when no relay could answer — silence is never agreement) · `keys`
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
 **Keys** (`dfos keys …`) — `list` · `show` · `prune` · `remove <key-id|public-key|account>` (one named key, dry run until `--yes`, `candidate` and `orphan` only) · `prove <code-or-uri>` (present a key to a key-add ceremony: a carriage is an authority and a code, and the identity, roles, chain head and nonce all come from resolving it; mints or names a key, shows the identity and the roles being consented to, refuses a key any identity has ever proved, posts one seven-member key-possession envelope and never retries. Presenting is not adoption — the key stays a local candidate until a chain declares it)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
-**Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
+**Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions, `--spaces all|<id,id>` to narrow the ask to particular spaces) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `repin` · `remove` · `list` · `info` · `gc`
 **Auth** (`dfos auth …`) — `proof` · `status`
 **API client** (`dfos api …`) — `add` · `list` · `refresh` · `rm` · `call`
@@ -418,8 +418,10 @@ the user issued to it.
 
 The delegated profile spends a credential obtained by `dfos login --host <name-or-host>`,
 which lists the actions that host advertises and asks which of them to request. The
-credential is matched to the host by its `api:<host>` attenuation, not by its audience.
-`dfos creds list` shows what is stored.
+credential is matched to the host by the host half of its `api:` attenuation, not by its
+audience — `api:<host>` and `api:<host>/spaces/<id>` are both grants at that host, so a
+credential narrowed by `--spaces` to particular spaces is still selected for it and the
+server decides per route. `dfos creds list` shows what is stored.
 
 ### Raw relay access & identity proofs (escape hatch)
 

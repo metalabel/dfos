@@ -501,12 +501,14 @@ ingestion, and `POST /proof/v1/operations` answers 501 as under
 authority.
 
 **The `jti` replay cache is REQUIRED on every write-shaped proof.** An identity
-proof presented to ingestion or to blob upload MUST carry the `jti` member,
-recorded by the relay with an atomic insert-if-absent and expired with the
-freshness window. Policy runs before full verification, so the relay grants
-admission-layer effects (quota spend, reputation attribution) before it knows
-whether the payload is a harmless duplicate. Read-shaped proofs rely on the
-freshness window alone.
+proof presented to ingestion or to blob upload MUST carry the registered
+[`jti` member](https://protocol.dfos.com/integrations#payload), recorded by the
+relay with an atomic insert-if-absent keyed on the presenter and `jti`, and
+expired with the freshness window. An already-seen `jti` answers **409**,
+INTEGRATIONS' `replayed` verdict; a missing or malformed one is 401. Policy runs
+before full verification, so the relay grants admission-layer effects (quota
+spend, reputation attribution) before it knows whether the payload is a
+harmless duplicate. Read-shaped proofs rely on the freshness window alone.
 
 ### Authentication
 

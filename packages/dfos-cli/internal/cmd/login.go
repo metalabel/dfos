@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -106,6 +107,7 @@ func newLoginCmd() *cobra.Command {
 	var scope string
 	var allScopes bool
 	var hostFlag string
+	var spacesFlag string
 	var authorizeURLFlag string
 	var noBrowser bool
 	var timeoutFlag string
@@ -158,6 +160,10 @@ func newLoginCmd() *cobra.Command {
 			}
 			if allScopes && hostFlag == "" {
 				return fmt.Errorf("--all-scopes needs --host <name-or-host>: the catalog it takes is an API document's, and no API is named")
+			}
+			spaces, err := parseSpacesFlag(spacesFlag)
+			if err != nil {
+				return err
 			}
 			timeout, err := time.ParseDuration(timeoutFlag)
 			if err != nil {
@@ -235,7 +241,7 @@ func newLoginCmd() *cobra.Command {
 				// so the signer is checked against it below.
 				DID: &subjectDID,
 			}
-			authRequest, encodedChallenge, err := buildAuthorizeURL(authorizeURL, challenge, redirectURI, scope, lc, clientPriv)
+			authRequest, encodedChallenge, err := buildAuthorizeURL(authorizeURL, challenge, redirectURI, scope, spaces, lc, clientPriv)
 			if err != nil {
 				return err
 			}
@@ -357,6 +363,7 @@ func newLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scope, "scope", "identity", "Scope to request, passed to the authorize host verbatim (space-separated for several)")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "API the credential is for — a registered name or a host — whose advertised actions are offered")
 	cmd.Flags().BoolVar(&allScopes, "all-scopes", false, "With --host, ask for every action the document advertises without prompting")
+	cmd.Flags().StringVar(&spacesFlag, "spaces", "", "Spaces the credential is for — 'all' or a comma-separated list of 31-character space ids; honored by the host only when the scope names a space-level action")
 	cmd.Flags().StringVar(&authorizeURLFlag, "authorize-url", "", "Authorize endpoint to use when the identity's chain names none")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the URL and wait without attempting to open a browser")
 	cmd.Flags().StringVar(&timeoutFlag, "timeout", "5m", "How long to wait for the callback (e.g. 90s, 5m)")
@@ -719,6 +726,52 @@ func encodeClientChain(log []string) (string, error) {
 	return protocol.Base64urlEncode(data), nil
 }
 
+// maxLoginSpaces bounds --spaces. A credential's attenuation holds at most 32
+// entries, and a space-scoped issuance spends one on the bare host, so 31 is
+// every space that could be named and still fit.
+const maxLoginSpaces = 31
+
+// spaceIDPattern is the identifier encoding every DFOS id carries: 31
+// characters of the 19-symbol alphabet, prefix-stripped.
+var spaceIDPattern = regexp.MustCompile(`^[2346789acdefhknrtvz]{31}$`)
+
+// parseSpacesFlag validates --spaces and returns the value to put on the wire,
+// or "" when the flag was not given.
+//
+// SHAPE, NOT MEANING. Which spaces exist, which of them the subject is in, and
+// whether the settled scope names an action a space-scoped entry could carry are
+// all the host's questions — this client holds no registry of any of them and
+// passes the string through verbatim. What it CAN answer is whether the string
+// is a shape the parameter's grammar admits, so a mistyped id is a message here
+// rather than a refusal after a consent screen.
+func parseSpacesFlag(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	if value == "all" {
+		return value, nil
+	}
+	refuse := func(detail string) error {
+		return fmt.Errorf("invalid --spaces %q: %s (pass 'all', or a comma-separated list of distinct 31-character space ids)", raw, detail)
+	}
+	ids := strings.Split(value, ",")
+	if len(ids) > maxLoginSpaces {
+		return "", refuse(fmt.Sprintf("%d spaces named, and a credential can carry at most %d", len(ids), maxLoginSpaces))
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !spaceIDPattern.MatchString(id) {
+			return "", refuse(fmt.Sprintf("%q is not a 31-character space id", id))
+		}
+		if seen[id] {
+			return "", refuse(fmt.Sprintf("%q is named twice", id))
+		}
+		seen[id] = true
+	}
+	return value, nil
+}
+
 // buildAuthorizeURL assembles the loopback authorize request: INTEGRATIONS.md,
 // 1. Redirect to authorize's wire params plus the two the loopback credential
 // tier adds. It returns the URL and the base64url challenge embedded in it —
@@ -728,7 +781,7 @@ func encodeClientChain(log []string) (string, error) {
 // value, which is what keeps them from drifting: they must cover identical
 // bytes, and deriving them from two inputs is exactly how they would silently
 // stop matching.
-func buildAuthorizeURL(authorizeURL string, challenge protocol.SiwdChallenge, redirectURI, scope string,
+func buildAuthorizeURL(authorizeURL string, challenge protocol.SiwdChallenge, redirectURI, scope, spaces string,
 	lc *loginClient, priv ed25519.PrivateKey) (request string, encodedChallenge string, err error) {
 	signingInput, err := protocol.SiwdSigningInput(challenge)
 	if err != nil {
@@ -758,6 +811,12 @@ func buildAuthorizeURL(authorizeURL string, challenge protocol.SiwdChallenge, re
 	query.Set("client_did", lc.DID)
 	query.Set("client_proof", proof)
 	query.Set("client_chain", carriage)
+	// Absent unless asked for: an empty spaces param and no spaces param say
+	// different things to the host, and only the second one means "the user
+	// chooses at consent".
+	if spaces != "" {
+		query.Set("spaces", spaces)
+	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), encodedChallenge, nil
 }
@@ -1266,9 +1325,18 @@ func credentialPath(did, host string) (string, error) {
 	return filepath.Join(credentialStoreDir(), name), nil
 }
 
-// credentialAPIHosts is every `api:<host>` a credential names, sorted and
+// credentialAPIHosts is every host an `api:` resource names, sorted and
 // deduplicated. It is the credential's own account of which hosts it can be
 // spent against, read the same way `api call` reads it.
+//
+// THE SLOT IS THE HOST HALF. `api:<host>` and `api:<host>/spaces/<id>` are the
+// same host, so a credential scoped to two spaces at one host occupies that
+// host's one slot rather than none — and `api call`, which selects by the same
+// host half, finds it there.
+//
+// A resource this grammar cannot read falls through as its raw remainder, which
+// assertFilableHosts then refuses: a credential naming a shape neither side can
+// account for is not filed on the readable half of itself.
 func credentialAPIHosts(token string) []string {
 	_, payload, err := protocol.DecodeJWSUnsafe(strings.TrimSpace(token))
 	if err != nil {
@@ -1277,8 +1345,15 @@ func credentialAPIHosts(token string) []string {
 	seen := map[string]bool{}
 	var hosts []string
 	for _, entry := range protocol.ParseAtt(payload) {
-		host, ok := strings.CutPrefix(entry.Resource, "api:")
-		if !ok || host == "" || seen[host] {
+		host, _, ok := protocol.ParseApiResource(entry.Resource)
+		if !ok {
+			raw, isAPI := strings.CutPrefix(entry.Resource, "api:")
+			if !isAPI {
+				continue
+			}
+			host = raw
+		}
+		if host == "" || seen[host] {
 			continue
 		}
 		seen[host] = true

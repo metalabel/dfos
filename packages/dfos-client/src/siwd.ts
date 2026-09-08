@@ -265,6 +265,37 @@ const bareHostname = (url: URL): string => {
   return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 };
 
+/** A space id: 31 characters of the `did:dfos` identifier alphabet, prefix stripped. */
+const SIWD_SPACE_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
+
+/**
+ * The `spaces` cap: the credential's attenuation cardinality bound (32) less the
+ * one bare-host entry that carries the account-level tokens.
+ */
+const MAX_SIWD_SPACES = 31;
+
+/**
+ * The `spaces` param's wire value — `all`, or the distinct ids joined by commas.
+ * Refused WHOLE on any malformation, the same way an unregistered scope token is:
+ * a request the host silently narrowed would ask for something other than what
+ * the caller wrote.
+ */
+const siwdSpacesParam = (spaces: readonly string[] | 'all'): string => {
+  if (spaces === 'all') return 'all';
+  const malformed =
+    !Array.isArray(spaces) ||
+    spaces.length === 0 ||
+    spaces.length > MAX_SIWD_SPACES ||
+    spaces.some((id) => typeof id !== 'string' || !SIWD_SPACE_ID_RE.test(id)) ||
+    new Set(spaces).size !== spaces.length;
+  if (malformed) {
+    throw new Error(
+      "invalid SIWD login request: spaces must be 'all' or distinct 31-character space ids",
+    );
+  }
+  return spaces.join(',');
+};
+
 const parseUrlOrThrow = (value: string, field: string): URL => {
   try {
     return new URL(value);
@@ -288,6 +319,16 @@ export interface SiwdLoginRequestInput {
    * would describe something other than what was asked for.
    */
   scope: string;
+  /**
+   * Lock consent to a named set of places: `all`, or up to 31 distinct 31-char
+   * space ids. Absent, the user chooses at the consent screen.
+   *
+   * A host honors it only when `scope` names a space-level action, and refuses
+   * the request whole otherwise. The returned credential's `att` is the answer —
+   * consent MAY narrow the set, so read it rather than assuming the ask was
+   * honored whole.
+   */
+  spaces?: readonly string[] | 'all';
   /** Consent-screen prose. A host MAY decline to render it; see specs/INTEGRATIONS.md. */
   statement?: string;
   /**
@@ -369,8 +410,8 @@ export interface SiwdLoginRequest {
  * client identity the tier is open and every scope is available.
  *
  * It also owns the WIRE PARAM NAMES (`challenge`, `redirect_uri`, `scope`,
- * `client_did`, and — via `createSiwdLoopbackLoginRequest` — `client_proof` and
- * `client_chain`) as their single source in this package. They are snake_case
+ * `spaces`, `client_did`, and — via `createSiwdLoopbackLoginRequest` —
+ * `client_proof` and `client_chain`) as their single source in this package. They are snake_case
  * on the wire and camelCase everywhere else, which is exactly the kind of seam
  * every hand-rolled RP re-implements and eventually gets wrong.
  *
@@ -391,6 +432,9 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
         'credential tier (specs/INTEGRATIONS.md §Loopback clients)',
     );
   }
+  // Validated before the challenge is minted: a malformed place set is the RP's
+  // own configuration error, and a nonce burned on it is a nonce wasted.
+  const spaces = input.spaces !== undefined ? siwdSpacesParam(input.spaces) : undefined;
 
   const { challenge, encoded, nonce } = createSiwdChallenge({
     domain: input.domain,
@@ -405,6 +449,9 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
   url.searchParams.set('challenge', encoded);
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('scope', input.scope);
+  if (spaces !== undefined) {
+    url.searchParams.set('spaces', spaces);
+  }
   if (input.clientDid !== undefined) {
     url.searchParams.set('client_did', input.clientDid);
   }
@@ -662,6 +709,13 @@ export interface SiwdLoopbackLoginRequestInput {
    * a credential to.
    */
   scope: string;
+  /**
+   * Lock consent to a named set of places: `all`, or up to 31 distinct 31-char
+   * space ids. Same rule as `SiwdLoginRequestInput.spaces` — the host honors it
+   * only when `scope` names a space-level action, and refuses the request whole
+   * otherwise.
+   */
+  spaces?: readonly string[] | 'all';
   /** Consent-screen prose. A host MAY decline to render it; see specs/INTEGRATIONS.md. */
   statement?: string;
   /** Bind the challenge to ONE subject DID (sign in as this DID or not at all). */
@@ -735,6 +789,7 @@ export const createSiwdLoopbackLoginRequest = async (
     redirectUri: input.redirectUri,
     scope: input.scope,
     clientDid: input.client.did,
+    ...(input.spaces !== undefined ? { spaces: input.spaces } : {}),
     ...(input.statement !== undefined ? { statement: input.statement } : {}),
     ...(input.did !== undefined ? { did: input.did } : {}),
     ...(input.nonce !== undefined ? { nonce: input.nonce } : {}),

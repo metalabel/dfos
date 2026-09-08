@@ -725,3 +725,239 @@ func TestVerifyIdentityProofReportsConfigBeforeTokenSize(t *testing.T) {
 		t.Fatalf("bad config + oversized token: got %v, want the config verdict", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// jti — the registered additive member
+// ---------------------------------------------------------------------------
+
+// THE BYTE CONTRACT DOES NOT CARE WHICH SPELLING ASKED. The typed member and
+// ExtraMembers{"jti": …} are one member with two names in Go, so they MUST emit
+// the same canonical bytes and sign to the same token — otherwise a caller's
+// choice of field would be visible on the wire.
+func TestTypedJTIEmitsTheSameBytesAsAnExtraMember(t *testing.T) {
+	identity := apiAuthIdentityPayload("/v0/profile")
+	identity.JTI = apiAuthIdentityJti
+	got, err := ApiIdentitySigningInput(identity, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != apiAuthIdentityCanonicalJti {
+		t.Fatalf("canonical bytes:\n got %s\nwant %s", got, apiAuthIdentityCanonicalJti)
+	}
+
+	token, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat, JTI: apiAuthIdentityJti})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != apiAuthIdentityJtiJWS {
+		t.Fatalf("signed token:\n got %s\nwant %s", token, apiAuthIdentityJtiJWS)
+	}
+
+	// The request proof's six-member prefix is unchanged too: jti lands after
+	// iat, and the two spellings agree there as well.
+	request := apiAuthVectorPayload("/v0/profile")
+	request.JTI = apiAuthIdentityJti
+	typed, err := ApiRequestSigningInput(request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaExtra, err := ApiRequestSigningInput(apiAuthVectorPayload("/v0/profile"),
+		ProofExtraMembers{"jti": apiAuthIdentityJti})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(typed) != string(viaExtra) {
+		t.Fatalf("request proof spellings diverged:\n typed %s\n extra %s", typed, viaExtra)
+	}
+	if want := strings.TrimSuffix(apiAuthVectorCanonical, "}") +
+		`,"jti":"` + apiAuthIdentityJti + `"}`; string(typed) != want {
+		t.Fatalf("request proof canonical bytes:\n got %s\nwant %s", typed, want)
+	}
+}
+
+// ONE MEMBER, ONE SOURCE. Naming jti twice is a build error rather than a
+// precedence rule nobody would remember.
+func TestJTINamedTwiceIsABuildError(t *testing.T) {
+	identity := apiAuthIdentityPayload("/v0/profile")
+	identity.JTI = apiAuthIdentityJti
+	if _, err := ApiIdentitySigningInput(identity, ProofExtraMembers{"jti": "other"}); err == nil {
+		t.Fatal("expected jti in both the typed member and ExtraMembers to be refused")
+	}
+	if _, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat, JTI: apiAuthIdentityJti,
+			ExtraMembers: ProofExtraMembers{"jti": "other"}}); err == nil {
+		t.Fatal("expected the same refusal from the build path")
+	}
+	if _, err := BuildRequestProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorCID,
+		apiAuthVectorKid, apiAuthVectorKey(), RequestProofOptions{Iat: apiAuthVectorIat,
+			JTI: apiAuthIdentityJti, ExtraMembers: ProofExtraMembers{"jti": "other"}}); err == nil {
+		t.Fatal("expected the same refusal on the request proof")
+	}
+}
+
+// The bound is checked where the caller asked for the registered member by name.
+func TestTypedJTIIsBounded(t *testing.T) {
+	if _, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat,
+			JTI: strings.Repeat("x", MaxJtiBytes+1)}); err == nil {
+		t.Fatal("expected an over-cap typed jti to be refused at build time")
+	}
+	if _, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat,
+			JTI: strings.Repeat("x", MaxJtiBytes)}); err != nil {
+		t.Fatalf("a jti at exactly the cap must build: %v", err)
+	}
+}
+
+// A PRESENT jti IS HELD TO ITS RULE ON EVERY ROUTE, requiring or not — the
+// member has one meaning across the family, and a verifier that only checked it
+// where it mattered would accept bytes another verifier refuses.
+func TestVerifyRefusesAMalformedJTIOnAnyRoute(t *testing.T) {
+	expect := IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}
+	resolver := apiAuthVectorResolver(apiAuthVectorKey())
+	now := time.Unix(apiAuthVectorIat+10, 0)
+
+	for _, bad := range []ProofExtraMembers{
+		{"jti": strings.Repeat("x", MaxJtiBytes+1)},
+	} {
+		token, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+			apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat, ExtraMembers: bad})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := VerifyIdentityProof(token, expect, resolver, now); !errors.Is(err, ErrIdentityProofInvalid) {
+			t.Fatalf("over-cap jti: got %v, want the invalid verdict", err)
+		}
+	}
+
+	// An empty string and a non-string are refused too, and neither can be built
+	// through the emitter — so they are forged by hand-signing the payload.
+	for _, payload := range []string{
+		`{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"` + EmptyBodySHA256 + `","iat":1772841600,"jti":""}`,
+		`{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"` + EmptyBodySHA256 + `","iat":1772841600,"jti":7}`,
+	} {
+		token := signRawIdentityPayload(t, payload)
+		if _, err := VerifyIdentityProof(token, expect, resolver, now); !errors.Is(err, ErrIdentityProofInvalid) {
+			t.Fatalf("payload %s: got %v, want the invalid verdict", payload, err)
+		}
+	}
+}
+
+// A WRITE-SHAPED ROUTE REFUSES A PROOF WITH NOTHING TO RECORD. RequireJTI is
+// the route saying so; the cache that consumes the value is the caller's.
+func TestRequireJTIRefusesAnAbsentOne(t *testing.T) {
+	expect := IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
+		RequireJTI: true}
+	resolver := apiAuthVectorResolver(apiAuthVectorKey())
+	now := time.Unix(apiAuthVectorIat+10, 0)
+
+	if _, err := VerifyIdentityProof(apiAuthIdentityJWS, expect, resolver, now); !errors.Is(err, ErrIdentityProofInvalid) {
+		t.Fatalf("absent jti on a requiring route: got %v, want the invalid verdict", err)
+	}
+	verified, err := VerifyIdentityProof(apiAuthIdentityJtiJWS, expect, resolver, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Payload.JTI != apiAuthIdentityJti {
+		t.Fatalf("Payload.JTI: got %q, want %q", verified.Payload.JTI, apiAuthIdentityJti)
+	}
+	// The same proof still verifies where the route does not require one, and the
+	// member still arrives.
+	relaxed, err := VerifyIdentityProof(apiAuthIdentityJtiJWS,
+		IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}, resolver, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relaxed.Payload.JTI != apiAuthIdentityJti {
+		t.Fatalf("Payload.JTI on a read-shaped route: got %q", relaxed.Payload.JTI)
+	}
+	// An absent jti leaves the member empty rather than inventing one.
+	absent, err := VerifyIdentityProof(apiAuthIdentityJWS,
+		IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}, resolver, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.Payload.JTI != "" {
+		t.Fatalf("absent jti: got %q, want empty", absent.Payload.JTI)
+	}
+}
+
+func TestRequireJTIOnTheRequestProof(t *testing.T) {
+	expect := RequestProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
+		RequireJTI: true}
+	resolver := apiAuthVectorResolver(apiAuthVectorKey())
+	now := time.Unix(apiAuthVectorIat+10, 0)
+
+	if _, err := VerifyRequestProof(apiAuthVectorJWS, expect, resolver, now); !errors.Is(err, ErrRequestProofInvalid) {
+		t.Fatalf("absent jti on a requiring route: got %v, want the invalid verdict", err)
+	}
+	token, err := BuildRequestProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorCID,
+		apiAuthVectorKid, apiAuthVectorKey(), RequestProofOptions{Iat: apiAuthVectorIat,
+			JTI: apiAuthIdentityJti})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := VerifyRequestProof(token, expect, resolver, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Payload.JTI != apiAuthIdentityJti {
+		t.Fatalf("Payload.JTI: got %q, want %q", verified.Payload.JTI, apiAuthIdentityJti)
+	}
+}
+
+// GenerateJTI mints the RECOMMENDED value: 128 bits, unpadded base64url, and a
+// fresh one every call.
+func TestGenerateJTI(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 64; i++ {
+		jti, err := GenerateJTI()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(jti) != 22 {
+			t.Fatalf("GenerateJTI() = %q, want 22 unpadded base64url characters", jti)
+		}
+		if strings.ContainsAny(jti, "=+/") {
+			t.Fatalf("GenerateJTI() = %q, want unpadded base64url", jti)
+		}
+		if seen[jti] {
+			t.Fatalf("GenerateJTI() repeated %q", jti)
+		}
+		seen[jti] = true
+	}
+}
+
+// The replayed verdict is its OWN sentinel, distinct from invalid: a route maps
+// it to 409, and a consumer that could not tell the two apart would answer 401
+// to a proof that authenticated.
+func TestReplayedIsADistinctVerdict(t *testing.T) {
+	replayed := ErrRequestProofReplayed
+	if errors.Is(replayed, ErrRequestProofInvalid) || errors.Is(ErrRequestProofInvalid, replayed) {
+		t.Fatal("replayed and invalid must not classify as each other")
+	}
+	if errors.Is(replayed, ErrRequestProofUnverifiable) {
+		t.Fatal("replayed and unverifiable must not classify as each other")
+	}
+	if ErrIdentityProofReplayed != ErrRequestProofReplayed {
+		t.Fatal("the identity proof reuses the family's verdict set")
+	}
+	// The protocol verifier never produces it — the replay cache is the
+	// consumer's, and the sentinel exists so every consumer says the same thing.
+	_, err := VerifyIdentityProof(apiAuthIdentityJtiJWS,
+		IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"},
+		apiAuthVectorResolver(apiAuthVectorKey()), time.Unix(apiAuthVectorIat+10, 0))
+	if errors.Is(err, ErrIdentityProofReplayed) {
+		t.Fatal("the protocol verifier must not answer replayed")
+	}
+}
+
+// signRawIdentityPayload signs payload bytes the emitter would never produce, so
+// a wire-side rule can be tested against exactly the bytes it governs.
+func signRawIdentityPayload(t *testing.T, payload string) string {
+	t.Helper()
+	header := `{"alg":"EdDSA","typ":"` + IdentityProofJWSTyp + `","kid":"` + apiAuthVectorKid + `"}`
+	signingInput := Base64urlEncode([]byte(header)) + "." + Base64urlEncode([]byte(payload))
+	return signingInput + "." + Base64urlEncode(ed25519.Sign(apiAuthVectorKey(), []byte(signingInput)))
+}

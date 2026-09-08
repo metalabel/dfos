@@ -12,8 +12,9 @@ import (
 // action-set canonicalization, the same convergence enforced in the protocol
 // library (dfos.ParseActions) and the TS stack (dfos-credential.ts parseActions).
 //
-// matchesResource is a pure free function — it operates purely on its arguments
-// (see auth.go) — so it exercises faithfully without any relay setup.
+// The relay holds no copy of the matcher: dfos.MatchesResource is the one
+// implementation every surface calls. It is a pure free function, so it
+// exercises faithfully without any relay setup.
 func TestMatchesResourceActionCanonicalization(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -52,9 +53,9 @@ func TestMatchesResourceActionCanonicalization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matchesResource(tt.att, tt.resource, tt.action)
+			got := dfos.MatchesResource(tt.att, tt.resource, tt.action)
 			if got != tt.wantMatch {
-				t.Errorf("matchesResource(%v, %q, %q) = %v, want %v",
+				t.Errorf("dfos.MatchesResource(%v, %q, %q) = %v, want %v",
 					tt.att, tt.resource, tt.action, got, tt.wantMatch)
 			}
 		})

@@ -439,10 +439,13 @@ describe('ingestion admission', () => {
       const { relay, submitter } = await provenRelay();
       const other = await createIdentity();
       const res = await submit(relay, [other.jwsToken], submitter, { jti: false });
+      // An absent jti is an INVALID proof, which is a different verdict from a
+      // replayed one: 401 here, 409 there.
       expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'authentication required' });
     });
 
-    it('rejects a REPLAYED jti', async () => {
+    it('answers 409 on a REPLAYED jti, distinct from the 401 an invalid one gets', async () => {
       const { relay, submitter } = await provenRelay();
       const other = await createIdentity();
       const body = new TextEncoder().encode(JSON.stringify({ operations: [other.jwsToken] }));
@@ -464,7 +467,13 @@ describe('ingestion admission', () => {
       expect((await send()).status).toBe(200);
       // Idempotent ingestion does NOT make the replay free: policy already ran,
       // and a quota or reputation effect was already granted.
-      expect((await send()).status).toBe(401);
+      //
+      // 409, not 401: the proof was checked and was valid, so re-authenticating
+      // is not the remedy — the status is the machine signal, and this one says
+      // re-read state rather than retry.
+      const replayed = await send();
+      expect(replayed.status).toBe(409);
+      expect(await replayed.json()).toEqual({ error: 'request already seen' });
     });
 
     it('keys the replay cache by (presenter, jti) — two presenters may share one', async () => {
@@ -482,7 +491,10 @@ describe('ingestion admission', () => {
       const { relay, submitter } = await provenRelay();
       const other = await createIdentity();
       const res = await submit(relay, [other.jwsToken], submitter, { jti: 'x'.repeat(257) });
+      // Oversized is malformed, so it takes the invalid-proof verdict, not the
+      // replay one.
       expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'authentication required' });
     });
 
     it('consumes an INJECTED replay cache — the seam a multi-process deployment fills', async () => {
@@ -518,7 +530,7 @@ describe('ingestion admission', () => {
       // on replay, not this process's memory of what it has seen.
       admit = false;
       expect((await submit(relay, [other.jwsToken], submitter, { jti: 'never-seen' })).status).toBe(
-        401,
+        409,
       );
     });
   });

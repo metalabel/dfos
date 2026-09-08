@@ -32,13 +32,12 @@ const (
 	DefaultProofWindowSeconds int64 = 60
 	// DefaultProofSkewSeconds is the clock-skew allowance S.
 	DefaultProofSkewSeconds int64 = 60
-	// MaxJtiBytes caps the jti member.
-	//
-	// A replay cache keyed on a caller-chosen string is a caller-controlled memory
-	// allocation, so the key needs a bound. 256 bytes is generous for any UUID,
-	// ULID, or random token and is enforced IDENTICALLY by the TS twin — a jti one
-	// relay accepts and the other refuses would fork the admission decision.
-	MaxJtiBytes = 256
+	// MaxJtiBytes caps the jti member — the protocol's registered bound, named
+	// here so a relay-side reader finds it where the rest of the relay's limits
+	// are. The envelope verifier enforces it; this relay never carries a second
+	// number, because a jti one verifier accepts and the other refuses would fork
+	// the admission decision.
+	MaxJtiBytes = dfos.MaxJtiBytes
 )
 
 // ---------------------------------------------------------------------------
@@ -242,6 +241,10 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 		WindowSeconds: dfos.Int64Ptr(window),
 		SkewSeconds:   dfos.Int64Ptr(skew),
 		MaxBodyBytes:  dfos.Int64Ptr(maxRequestBodyBytes),
+		// The write-shaped route says jti is required; the envelope verifier holds
+		// the member to its rule (present, non-empty, within MaxJtiBytes) on every
+		// route, requiring or not. The relay carries no second copy of either check.
+		RequireJTI: requireJti,
 	}, CreateCurrentStateProofResolver(r.readStore), time.Now())
 	if err != nil {
 		if errors.Is(err, dfos.ErrIdentityProofInvalid) {
@@ -253,13 +256,9 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 	}
 
 	if requireJti {
-		// jti is an UNKNOWN member to the envelope verifier (MUST-ignore-unknown),
-		// read here, AFTER verification, off the decoded payload the signature
-		// already covers. The canonical member set stays closed.
-		jti, ok := verified.RawPayload["jti"].(string)
-		if !ok || jti == "" || len(jti) > MaxJtiBytes {
-			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
-		}
+		// The envelope verifier already refused an absent or out-of-bound jti above,
+		// so what arrives here is a value there is something to record.
+		jti := verified.Payload.JTI
 		// Dated off the PROOF's iat, not off arrival. Freshness is evaluated in
 		// whole seconds, so this proof is acceptable through the end of second
 		// iat+window+skew; the +1 carries the entry past that last acceptable
@@ -280,8 +279,13 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 		if !proofExpiry.After(now) {
 			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
 		}
+		// A REPLAY IS ITS OWN VERDICT, 409 rather than 401. The proof authenticated;
+		// it was simply already spent, and a client told "unauthenticated" retries
+		// the same envelope forever where a client told "already seen" re-reads
+		// state. Missing and oversized jti stay 401 — those proofs never
+		// authenticated at all.
 		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, now, proofExpiry) {
-			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+			return authOutcome{Status: http.StatusConflict, Error: "request already seen"}
 		}
 	}
 
@@ -467,7 +471,7 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 	att := dfos.ParseAtt(payload)
 
 	// check resource + action match
-	if !matchesResource(att, requestedResource, action) {
+	if !dfos.MatchesResource(att, requestedResource, action) {
 		return fmt.Errorf("credential does not cover requested resource")
 	}
 
@@ -519,50 +523,4 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 	}
 
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// resource matching
-// ---------------------------------------------------------------------------
-
-// matchesResource checks if an att array covers a requested resource+action.
-func matchesResource(att []dfos.AttEntry, resource string, action string) bool {
-	reqType, reqID, ok := dfos.ParseResource(resource)
-	if !ok {
-		return false
-	}
-	reqActions := dfos.ParseActions(action)
-
-	for _, entry := range att {
-		entryType, entryID, ok := dfos.ParseResource(entry.Resource)
-		if !ok {
-			continue
-		}
-		entryActions := dfos.ParseActions(entry.Action)
-
-		// check action coverage — all requested actions must be in entry actions
-		actionsCovered := true
-		for a := range reqActions {
-			if !entryActions[a] {
-				actionsCovered = false
-				break
-			}
-		}
-		if !actionsCovered {
-			continue
-		}
-
-		// chain:* covers any chain: request
-		if entryType == "chain" && entryID == "*" && reqType == "chain" {
-			return true
-		}
-
-		// exact resource match
-		if entryType == reqType && entryID == reqID {
-			return true
-		}
-
-	}
-
-	return false
 }
