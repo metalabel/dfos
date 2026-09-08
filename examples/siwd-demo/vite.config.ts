@@ -21,11 +21,13 @@ import type { VercelRequest, VercelResponse } from './api/_types.js';
 import check from './api/check.js';
 import config from './api/config.js';
 import credential from './api/credential.js';
+import feed from './api/feed.js';
 import groupMemberships from './api/group-memberships.js';
 import login from './api/login.js';
 import logout from './api/logout.js';
 import me from './api/me.js';
 import memberships from './api/memberships.js';
+import posts from './api/posts.js';
 import profile from './api/profile.js';
 import verify from './api/verify.js';
 
@@ -36,11 +38,13 @@ const ROUTES: Record<string, Handler> = {
   '/api/check': check,
   '/api/config': config,
   '/api/credential': credential,
+  '/api/feed': feed,
   '/api/group-memberships': groupMemberships,
   '/api/login': login,
   '/api/logout': logout,
   '/api/me': me,
   '/api/memberships': memberships,
+  '/api/posts': posts,
   '/api/profile': profile,
   '/api/verify': verify,
 };

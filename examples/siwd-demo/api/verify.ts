@@ -8,14 +8,18 @@
   The expectation NEVER comes from the request body. Which prior state it comes
   from is decided by what success is about to grant:
 
-    identity       — the sealed flight cookie. Recovering it IS the flow-bound
-                     check: the artifact redeems only through the channel that
-                     started the flow.
-    credential set — the shared store, spent by an atomic GETDEL. Success hands
-                     back a credential that outlives this browser, so
-                     specs/INTEGRATIONS.md requires the artifact be retired globally, not
-                     merely bound to a channel. `consumeNonce` is that one-field
-                     difference.
+    identity        — the sealed flight cookie. Recovering it IS the flow-bound
+                      check: the artifact redeems only through the channel that
+                      started the flow.
+    credential sets — the shared store, spent by an atomic GETDEL. Success hands
+                      back a credential that outlives this browser, so
+                      specs/INTEGRATIONS.md requires the artifact be retired globally, not
+                      merely bound to a channel. `consumeNonce` is that one-field
+                      difference.
+
+  WHICH credential set is coming back is also prior state, sealed into the same
+  cookie at mint time, because the two sets are checked for different coverage
+  and a presenter who could pick the label could pick the weaker check.
 
   `verifySiwd` checks the nonce LAST (spec step 6), after the signature, the
   current-key resolution, the domain, and the timestamp window — same function,
@@ -35,11 +39,14 @@ import { verifySiwd } from '@metalabel/dfos-client/siwd';
 import {
   CredentialVerificationError,
   matchesResource,
+  parseApiResource,
   verifyDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { KV_ERROR, kvGetDel, kvSet } from './_kv.js';
 import {
-  API_ACTION,
+  actionTokens,
+  API_ACTIONS,
+  API_HOST,
   API_RESOURCE,
   APP_DID,
   APP_KEY_ERROR,
@@ -48,6 +55,7 @@ import {
   FLIGHT_COOKIE,
   FLIGHT_PURPOSE_CONSUMED,
   FLIGHT_PURPOSE_FLOW_BOUND,
+  isCredentialScope,
   json,
   kvCredentialKey,
   kvNonceKey,
@@ -61,12 +69,16 @@ import {
   requestOrigin,
   SCOPE_API,
   SCOPE_IDENTITY,
+  SCOPE_READ_POSTS,
+  SCOPE_READ_PROFILE,
   SECRET_ERROR,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
   setCookie,
   unseal,
   type CredentialFacts,
+  type CredentialScope,
+  type Scope,
 } from './_lib.js';
 import type { VercelRequest, VercelResponse } from './_types.js';
 
@@ -109,7 +121,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     ]);
     return;
   }
-  const scope = consumedMarker !== null ? SCOPE_API : SCOPE_IDENTITY;
+  //    The sealed value on the consumed path IS the scope, so the coverage
+  //    check below is chosen by what this server wrote at mint time. A marker
+  //    that unseals but names something this server does not issue is a seal
+  //    it never wrote under a key it holds alone — refuse rather than guess.
+  let scope: Scope = SCOPE_IDENTITY;
+  if (consumedMarker !== null) {
+    if (!isCredentialScope(consumedMarker)) {
+      json(
+        res,
+        401,
+        { ok: false, reason: 'the sign-in in flight names no scope this server issues' },
+        [clearCookie(FLIGHT_COOKIE)],
+      );
+      return;
+    }
+    scope = consumedMarker;
+  }
 
   const body = readJsonBody(req);
   const jws = readTokenField(body, 'jws');
@@ -123,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // callback's URL fragment and posts it here, where the key that could exercise it
   // actually lives.
   const credential = readTokenField(body, 'credential');
-  if (scope === SCOPE_API && credential === null) {
+  if (isCredentialScope(scope) && credential === null) {
     json(
       res,
       400,
@@ -143,11 +171,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   //    must not burn a user's one-shot challenge only to answer 500. The window
   //    is small (a redeploy between the redirect out and the callback back) but
   //    the cost is a sign-in the user cannot retry with the artifact in hand.
-  if (scope === SCOPE_API && (APP_KEY_ERROR !== null || APP_DID === null)) {
+  if (isCredentialScope(scope) && (APP_KEY_ERROR !== null || APP_DID === null)) {
     json(res, 500, { ok: false, reason: APP_KEY_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
     return;
   }
-  if (scope === SCOPE_API && KV_ERROR !== null) {
+  if (isCredentialScope(scope) && KV_ERROR !== null) {
     json(res, 500, { ok: false, reason: KV_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
     return;
   }
@@ -178,7 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     // kit puts the nonce check last: an atomic GETDEL either returns the value
     // this server minted — retiring it for everyone — or answers null, and a
     // presentation that failed any earlier check never reaches it.
-    ...(scope === SCOPE_API
+    ...(isCredentialScope(scope)
       ? {
           consumeNonce: async (nonce: string): Promise<boolean> => {
             try {
@@ -219,8 +247,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // 4. On the credential path, answer for the second artifact too — before it is
   //    stored, and before any session exists that could exercise it.
   let facts: CredentialFacts | null = null;
-  if (scope === SCOPE_API && APP_DID !== null) {
-    const checked = await checkCredential(client, credential as string, did, APP_DID);
+  if (isCredentialScope(scope) && APP_DID !== null) {
+    const checked = await checkCredential(client, credential as string, did, APP_DID, scope);
     if ('error' in checked) {
       json(res, 400, { ok: false, reason: checked.error }, [clearCookie(FLIGHT_COOKIE)]);
       return;
@@ -279,7 +307,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
  *      delivered somebody else's grant.
  *   3. Is THIS app the audience? A credential audienced elsewhere is one this
  *      app's key can never produce a request proof for.
- *   4. Does it cover the resource and action that were requested?
+ *   4. Does it cover what this option needs? (`coverageError`, which is the one
+ *      question whose answer differs between the two credential options.)
  *
  * Revocation is deliberately NOT checked here, and that is a considered
  * omission rather than a gap. INTEGRATIONS.md, Verification algorithm puts
@@ -293,6 +322,7 @@ const checkCredential = async (
   credential: string,
   signerDID: string,
   appDID: string,
+  scope: CredentialScope,
 ): Promise<{ facts: CredentialFacts } | { error: string }> => {
   const { resolveIdentity } = client.callbacks();
 
@@ -327,19 +357,69 @@ const checkCredential = async (
       error: `the returned credential is audienced to ${verified.aud}, not to this app (${appDID}) — this app’s key could never prove possession of it`,
     };
   }
-  if (!(await matchesResource(verified.att, API_RESOURCE, API_ACTION))) {
-    return { error: `the returned credential does not cover ${API_ACTION} on ${API_RESOURCE}` };
-  }
+  const uncovered = await coverageError(verified.att, scope);
+  if (uncovered !== null) return { error: uncovered };
 
   return {
     facts: {
       issuer: verified.iss,
       audience: verified.aud,
-      resource: API_RESOURCE,
-      action: API_ACTION,
+      // VERBATIM, and not the resource this app asked for. Consent may have
+      // narrowed the places, so the entries the credential carries are the only
+      // record of what was actually granted.
+      att: verified.att,
       issuedAt: verified.iat,
       expiresAt: verified.exp,
       credentialCID: verified.credentialCID,
     },
   };
+};
+
+/**
+ * Does this credential reach what the option needs? One string naming the token
+ * and the host it was wanted on, or `null`.
+ *
+ * The two options ask different questions, and the difference is the whole point
+ * of the space-addressed one:
+ *
+ *   the account set — every token on the bare `api:<host>`. All three actions
+ *                     are account-level, so the grant either reaches the host or
+ *                     it is not the grant that was asked for.
+ *   the spaces set  — `read:profile` on the bare host, because a profile is not
+ *                     a per-space fact; and `read:posts` on SOME resource at
+ *                     this host, bare or space-addressed.
+ *
+ * The PLACES are deliberately not checked against the ask. A user narrowing the
+ * set at consent is the feature, not a failure, so a credential naming one space
+ * where three were requested is honored — and the app reads the entries to learn
+ * which. What would be a failure is a credential naming NO place at this host,
+ * which is a grant this app cannot spend anywhere.
+ */
+const coverageError = async (
+  att: { resource: string; action: string }[],
+  scope: CredentialScope,
+): Promise<string | null> => {
+  if (scope === SCOPE_API) {
+    for (const token of API_ACTIONS) {
+      if (!(await matchesResource(att, API_RESOURCE, token))) {
+        return `the returned credential does not cover ${token} on ${API_RESOURCE}`;
+      }
+    }
+    return null;
+  }
+
+  if (!(await matchesResource(att, API_RESOURCE, SCOPE_READ_PROFILE))) {
+    return `the returned credential does not cover ${SCOPE_READ_PROFILE} on ${API_RESOURCE}`;
+  }
+  // Read off the entries rather than asked of `matchesResource`, which answers
+  // about ONE named resource: the question here is whether ANY resource at this
+  // host carries the token, and the space ids are the credential's to name.
+  const carriesPosts = att.some((entry) => {
+    const parsed = parseApiResource(entry.resource);
+    return parsed?.host === API_HOST && actionTokens(entry.action).includes(SCOPE_READ_POSTS);
+  });
+  if (!carriesPosts) {
+    return `the returned credential carries ${SCOPE_READ_POSTS} on no resource at ${API_HOST}`;
+  }
+  return null;
 };

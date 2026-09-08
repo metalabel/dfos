@@ -2,12 +2,18 @@
 
   What this deployment can actually do, answered before the user clicks anything.
 
-  The demo offers two options, and the second — the credential scope set — has
-  real preconditions: a signing key, a store, and a domain. Rather than let a
-  reader pick it and discover three redirects later that the deployment was never
-  set up for it, the page asks here first and renders each option with its own
+  The demo offers three options, and the two credential sets have real
+  preconditions: a signing key, a store, and a domain. Rather than let a reader
+  pick one and discover three redirects later that the deployment was never set
+  up for it, the page asks here first and renders each option with its own
   verdict — the same posture as the boot-time registration self-check, which says
   what is missing while there is still something to do about it.
+
+  The two credential options share one precondition chain and differ only in
+  their action tokens, so the verdict is computed once and the tokens are
+  reported per option. The page reads that structure rather than a pair of
+  pre-joined strings: what a credential covers is now a list of entries, and a
+  config that flattened it would be describing a shape that no longer exists.
 
   Nothing secret leaves this endpoint. The app's DID is published in a well-known
   file, and the public key is public by definition — it is here precisely so a
@@ -19,19 +25,23 @@
 
 import { KV_ERROR } from './_kv.js';
 import {
-  API_ACTION,
+  API_ACTIONS,
   API_HOST,
-  API_RESOURCE,
   APP_DID,
   APP_KEY_ERROR,
   APP_PUBLIC_KEY_MULTIBASE,
+  DEMO_SPACE_DID,
+  DEMO_SPACE_ID,
+  DEMO_SPACE_NAME,
   isLoopbackDomain,
   json,
   methodNotAllowed,
   requestOrigin,
   SCOPE_API,
   SCOPE_IDENTITY,
+  SCOPE_SPACES,
   SECRET_ERROR,
+  SPACES_ACTIONS,
 } from './_lib.js';
 import type { VercelRequest, VercelResponse } from './_types.js';
 
@@ -51,7 +61,9 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
   // meet it as a 500 on the first click.
   const blocked = SECRET_ERROR;
 
-  // The credential scope's own chain, layered on top. Order matters: the domain
+  // The credential options' own chain, layered on top and shared by both of
+  // them: a signing key and a store are what a returned credential needs, and
+  // neither option needs anything the other does not. Order matters — the domain
   // rule is the one a fork cannot fix with an environment variable, so it is
   // reported first when it applies.
   const unavailable =
@@ -78,14 +90,33 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
           'Proves who you are and grants this app a credential to read your profile, your ' +
           'account email, and the spaces you belong to.',
       },
+      {
+        scope: SCOPE_SPACES,
+        available: unavailable === null,
+        ...(unavailable !== null ? { unavailable } : {}),
+        summary:
+          'Proves who you are and grants this app a credential to read your profile and to ' +
+          'read posts as you in the spaces you choose.',
+      },
     ],
     api: {
       host: API_HOST,
-      // Shown verbatim on the page: these two strings are what the user is
-      // consenting to and what the API verifier byte-matches. If they read
-      // differently in the two places, one of them is wrong.
-      resource: API_RESOURCE,
-      action: API_ACTION,
+      // Per option, because the action tokens are what each one asks for and
+      // the RESOURCE is no longer a fact this endpoint can state: a
+      // space-addressed grant's resources are decided at consent, and printing
+      // one here would be printing the ask as if it were the answer.
+      options: {
+        [SCOPE_API]: { actions: API_ACTIONS },
+        [SCOPE_SPACES]: { actions: SPACES_ACTIONS },
+      },
+    },
+    // The space this demo reads posts from, in both id forms, because they are
+    // used in different places and neither is derivable from the other by a
+    // reader who has only seen one of them.
+    space: {
+      id: DEMO_SPACE_ID,
+      did: DEMO_SPACE_DID,
+      name: DEMO_SPACE_NAME,
     },
     app: {
       ...(APP_DID !== null ? { did: APP_DID } : {}),

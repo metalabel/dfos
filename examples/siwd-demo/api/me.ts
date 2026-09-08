@@ -21,7 +21,9 @@
 
 import { kvGet } from './_kv.js';
 import {
+  API_HOST,
   clearCookie,
+  coverageFor,
   json,
   kvCredentialKey,
   methodNotAllowed,
@@ -60,5 +62,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     held = null;
   }
 
-  json(res, 200, { ...rest, ...(held !== null ? { credential: held.facts } : {}) });
+  // The coverage summary rides alongside the entries rather than replacing
+  // them. WHICH places a grant reaches is one sentence a page wants to lead
+  // with; the entries are the record it leads into, and only one of the two is
+  // the authorization.
+  json(res, 200, {
+    ...rest,
+    ...(held !== null
+      ? { credential: { ...held.facts, coverage: coverageFor(held.facts.att, API_HOST) } }
+      : {}),
+  });
 }
