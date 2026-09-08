@@ -90,10 +90,12 @@ export const SCOPE_READ_PROFILE = 'read:profile';
 export const SCOPE_READ_EMAIL = 'read:email';
 export const SCOPE_READ_MEMBERSHIPS = 'read:memberships';
 export const SCOPE_READ_POSTS = 'read:posts';
+export const SCOPE_WRITE_UPVOTES = 'write:upvotes';
+export const SCOPE_WRITE_COMMENTS = 'write:comments';
 
 /** The wire values of the two credential options: space-separated sets. */
 export const SCOPE_API = `${SCOPE_READ_PROFILE} ${SCOPE_READ_EMAIL} ${SCOPE_READ_MEMBERSHIPS}`;
-export const SCOPE_SPACES = `${SCOPE_READ_PROFILE} ${SCOPE_READ_POSTS}`;
+export const SCOPE_SPACES = `${SCOPE_READ_PROFILE} ${SCOPE_READ_POSTS} ${SCOPE_WRITE_UPVOTES} ${SCOPE_WRITE_COMMENTS}`;
 
 export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_API | typeof SCOPE_SPACES;
 
@@ -113,7 +115,21 @@ export const isCredentialScope = (value: unknown): value is CredentialScope =>
 
 /** The action tokens each option's credential must carry, in the asked order. */
 export const API_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_EMAIL, SCOPE_READ_MEMBERSHIPS];
-export const SPACES_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_POSTS];
+
+/**
+ * The spaces option's tokens, split by WHERE each one has to be carried.
+ *
+ * A profile is not a per-space fact, so `read:profile` is wanted on the bare
+ * host. The other three name things that happen inside a space, so a grant
+ * carries them on whichever resources consent settled on — which may be the bare
+ * host, may be one space, may be several.
+ *
+ * Consent narrows PLACES and never TOKENS: a user who declines to let an app
+ * comment is refusing the whole ask, not handing back a smaller one. So every
+ * token here must be present somewhere, and where is the credential's business.
+ */
+export const SPACES_PLACE_ACTIONS = [SCOPE_READ_POSTS, SCOPE_WRITE_UPVOTES, SCOPE_WRITE_COMMENTS];
+export const SPACES_ACTIONS = [SCOPE_READ_PROFILE, ...SPACES_PLACE_ACTIONS];
 
 /** The account-level resource, as the API verifier byte-matches it. */
 export const API_RESOURCE = `api:${API_HOST}`;
@@ -138,6 +154,8 @@ export const API_REFUSALS: Record<number, string> = {
   401: 'The API refused the request proof. Either the proof did not verify against this app’s key, or the app’s configured key is not a current key of its identity.',
   403: 'The API accepted the proof and refused the credential. Two readings sit behind that one status: the credential itself does not hold — revoked, expired, audienced elsewhere — or it holds and does not reach this route’s resource and action.',
   409: 'The API accepted the proof and refused to run it twice: this request’s jti was already seen inside its freshness window. Re-read state instead of retrying.',
+  415: 'The API refused the body’s media type: a body route pins exactly one, application/json.',
+  429: 'The API accepted the request and is asking for fewer of them. Slow down; nothing about the grant changed.',
   503: 'The API could not complete the check — a resolution or revocation source was unreachable. That is the server’s condition, not a judgment about the grant, and it is reported as unverifiable rather than as a refusal.',
 };
 
@@ -159,6 +177,18 @@ export const DEMO_SPACE_NAME = 'DFOS';
 
 /** A bare space id: 31 characters of the protocol's identifier alphabet. */
 export const SPACE_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
+
+/**
+ * The API's own entity ids, one grammar per kind rather than one shared pattern.
+ *
+ * Each write route names exactly the kind its template takes, so a comment id
+ * offered where a post id belongs is refused HERE rather than percent-encoded
+ * into a path and sent. The prefix is what makes that check worth writing: the
+ * two ids are the same shape past it and a single pattern would accept either
+ * in either slot.
+ */
+export const POST_ID_RE = /^post_[a-z0-9]{1,40}$/;
+export const COMMENT_ID_RE = /^comment_[a-z0-9]{1,40}$/;
 
 /** The route-parameter form of a bare space id. */
 export const spaceDid = (id: string): string => `did:dfos:${id}`;
@@ -207,6 +237,14 @@ export interface Coverage {
   host: boolean;
   /** The space ids named directly, in the order the entries carry them. */
   spaces: string[];
+  /**
+   * Every action token carried on any resource at this host, deduplicated.
+   *
+   * It is the union across entries rather than one entry's list because that is
+   * the question a caller asks: may this grant do X somewhere. WHERE it may is
+   * `spaces`, and a caller that needs both reads both.
+   */
+  tokens: string[];
 }
 
 /**
@@ -224,13 +262,17 @@ export const coverageFor = (
 ): Coverage => {
   let bare = false;
   const spaces: string[] = [];
+  const tokens: string[] = [];
   for (const entry of att) {
     const parsed = parseApiResource(entry.resource);
     if (parsed === null || parsed.host !== host) continue;
     if (parsed.spaceId === undefined) bare = true;
     else if (!spaces.includes(parsed.spaceId)) spaces.push(parsed.spaceId);
+    for (const token of actionTokens(entry.action)) {
+      if (!tokens.includes(token)) tokens.push(token);
+    }
   }
-  return { host: bare, spaces };
+  return { host: bare, spaces, tokens };
 };
 
 /** The sealed nonce, in flight between the redirect out and the callback back. */

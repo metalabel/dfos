@@ -69,12 +69,12 @@ import {
   requestOrigin,
   SCOPE_API,
   SCOPE_IDENTITY,
-  SCOPE_READ_POSTS,
   SCOPE_READ_PROFILE,
   SECRET_ERROR,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
   setCookie,
+  SPACES_PLACE_ACTIONS,
   unseal,
   type CredentialFacts,
   type CredentialScope,
@@ -386,14 +386,19 @@ const checkCredential = async (
  *                     are account-level, so the grant either reaches the host or
  *                     it is not the grant that was asked for.
  *   the spaces set  — `read:profile` on the bare host, because a profile is not
- *                     a per-space fact; and `read:posts` on SOME resource at
- *                     this host, bare or space-addressed.
+ *                     a per-space fact; and each of the place-level tokens on
+ *                     SOME resource at this host, bare or space-addressed.
  *
  * The PLACES are deliberately not checked against the ask. A user narrowing the
  * set at consent is the feature, not a failure, so a credential naming one space
  * where three were requested is honored — and the app reads the entries to learn
  * which. What would be a failure is a credential naming NO place at this host,
  * which is a grant this app cannot spend anywhere.
+ *
+ * The TOKENS are checked, and every one of them. Consent narrows where, not
+ * what: a returned grant missing `write:comments` is not a smaller version of
+ * this ask, it is a different one, and an app that accepted it would hold a
+ * credential whose comment button could only ever produce a 403.
  */
 const coverageError = async (
   att: { resource: string; action: string }[],
@@ -414,12 +419,14 @@ const coverageError = async (
   // Read off the entries rather than asked of `matchesResource`, which answers
   // about ONE named resource: the question here is whether ANY resource at this
   // host carries the token, and the space ids are the credential's to name.
-  const carriesPosts = att.some((entry) => {
-    const parsed = parseApiResource(entry.resource);
-    return parsed?.host === API_HOST && actionTokens(entry.action).includes(SCOPE_READ_POSTS);
-  });
-  if (!carriesPosts) {
-    return `the returned credential carries ${SCOPE_READ_POSTS} on no resource at ${API_HOST}`;
+  for (const token of SPACES_PLACE_ACTIONS) {
+    const carried = att.some((entry) => {
+      const parsed = parseApiResource(entry.resource);
+      return parsed?.host === API_HOST && actionTokens(entry.action).includes(token);
+    });
+    if (!carried) {
+      return `the returned credential carries ${token} on no resource at ${API_HOST}`;
+    }
   }
   return null;
 };

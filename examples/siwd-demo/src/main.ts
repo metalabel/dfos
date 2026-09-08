@@ -128,7 +128,11 @@ const SIGNING_DOMAIN = bareHostname(location.hostname);
  */
 const SCOPE_IDENTITY = 'identity';
 const SCOPE_API = 'read:profile read:email read:memberships';
-const SCOPE_SPACES = 'read:profile read:posts';
+const SCOPE_SPACES = 'read:profile read:posts write:upvotes write:comments';
+
+/** The two tokens that gate the write affordances, named where the page reads them. */
+const WRITE_UPVOTES = 'write:upvotes';
+const WRITE_COMMENTS = 'write:comments';
 
 /**
  * Where the spaces option asks its places from. Pre-named locks the consent
@@ -158,7 +162,7 @@ interface CredentialFacts {
   expiresAt: number;
   credentialCID: string;
   /** Which places the entries reach on the API host, summarized by the server. */
-  coverage?: { host: boolean; spaces: string[] };
+  coverage?: { host: boolean; spaces: string[]; tokens: string[] };
 }
 
 /** One entry's action list as separate tokens, for display. */
@@ -1221,6 +1225,13 @@ const docsReceipt = (): Node[] =>
       [`${REPO}/examples/siwd-demo/api/check.ts`, 'api/check.ts', 'a parameterized request'],
       [`${REPO}/examples/siwd-demo/api/posts.ts`, 'api/posts.ts', 'the same read, both ways'],
       [`${REPO}/examples/siwd-demo/api/feed.ts`, 'api/feed.ts', 'a read with no anonymous form'],
+      [`${REPO}/examples/siwd-demo/api/upvote.ts`, 'api/upvote.ts', 'a write, jti minted for it'],
+      [`${REPO}/examples/siwd-demo/api/comment.ts`, 'api/comment.ts', 'the deliberate replay'],
+      [
+        `${REPO}/examples/siwd-demo/api/comment-delete.ts`,
+        'api/comment-delete.ts',
+        'undo, on the same grant',
+      ],
       [`${REPO}/examples/siwd-demo/src/main.ts`, 'src/main.ts', 'this page'],
       [DOCS.demo, 'The demo README', 'routes, variables, forking'],
     ),
@@ -2121,8 +2132,29 @@ const viewerChip = (item: Record<string, unknown>): HTMLElement | null => {
   return chip(upvoted ? 'upvoted' : 'not upvoted', upvoted ? 'ok' : undefined);
 };
 
-/** One post, as much of it as arrived. */
-const postRow = (item: Record<string, unknown>): HTMLElement => {
+/** Whether this reader has upvoted a post, when the item says. */
+const upvotedFlag = (item: Record<string, unknown>): boolean | undefined => {
+  const viewer = objectField(item, 'viewer');
+  if (viewer === null) return undefined;
+  const upvoted = viewer['upvoted'];
+  return typeof upvoted === 'boolean' ? upvoted : undefined;
+};
+
+/** What the last upvote on one post did. Keyed by post id in `upvoteStates`. */
+type UpvoteState = { kind: 'pending' } | { kind: 'done'; note: string } | ReadFailure;
+
+/**
+ * One entry per post the reader has voted on this session. Module-level for the
+ * same reason `check` is: the whole view re-renders on every state move, so an
+ * answer has to outlive the nodes that showed it.
+ */
+let upvoteStates: Record<string, UpvoteState> = {};
+
+/** One post, as much of it as arrived. `onUpvote` is present only where a write is. */
+const postRow = (
+  item: Record<string, unknown>,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
   const row = el('li');
   row.append(
     el(
@@ -2154,6 +2186,23 @@ const postRow = (item: Record<string, unknown>): HTMLElement => {
     row.append(line);
   }
 
+  // The write affordance, and the three things it needs: somewhere to send it,
+  // an id to send, and a current value to toggle away from. A post missing any
+  // of them gets no button rather than a button that would guess.
+  const id = textField(item, 'id');
+  const upvoted = upvotedFlag(item);
+  if (onUpvote !== undefined && id !== undefined && upvoted !== undefined) {
+    const button = el('button', 'quiet', upvoted ? 'Remove upvote' : 'Upvote');
+    const state = upvoteStates[id];
+    button.disabled = state?.kind === 'pending';
+    button.addEventListener('click', () => onUpvote(id, !upvoted));
+    row.append(button);
+
+    if (state?.kind === 'pending') row.append(el('p', 'dim', 'Signing…'));
+    else if (state?.kind === 'done') row.append(el('p', 'dim', state.note));
+    else if (state !== undefined) row.append(...failureLines(state));
+  }
+
   return row;
 };
 
@@ -2162,7 +2211,11 @@ const postRow = (item: Record<string, unknown>): HTMLElement => {
  * because it is that side's answer — the other column is unaffected and stays a
  * complete answer to its own question.
  */
-const postsColumn = (heading: string, projection: PostsProjection): HTMLElement => {
+const postsColumn = (
+  heading: string,
+  projection: PostsProjection,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
   const column = el('div', 'column');
   column.append(el('h3', undefined, heading));
 
@@ -2194,7 +2247,7 @@ const postsColumn = (heading: string, projection: PostsProjection): HTMLElement 
     return column;
   }
   const list = el('ul', 'postlist');
-  for (const item of items) list.append(postRow(item));
+  for (const item of items) list.append(postRow(item, onUpvote));
   column.append(list);
   return column;
 };
@@ -2233,7 +2286,11 @@ const fieldDiff = (anonymous: PostsProjection, member: PostsProjection): string 
  * side by side. Every other panel shows what a grant lets this app fetch; this
  * one shows what the grant CHANGES about an answer anyone can already get.
  */
-const postsSection = (state: PostsState, onReload: () => void): HTMLElement => {
+const postsSection = (
+  state: PostsState,
+  onReload: () => void,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
   const section = el('div', 'card posts');
   const named = config?.space?.name;
   const heading = el('h2', undefined, named === undefined ? 'Posts' : `Posts in ${named}`);
@@ -2255,8 +2312,14 @@ const postsSection = (state: PostsState, onReload: () => void): HTMLElement => {
     el('p', 'dim', 'One route, read twice: with no credential, and with this app’s.'),
   ];
 
+  // The upvote button rides in the member column only, and that is not a layout
+  // choice: an anonymous read has no viewer to toggle and no credential to sign
+  // the toggle with. The affordance sits where the authorization is.
   const columns = el('div', 'columns');
-  columns.append(postsColumn('Anonymous', state.anonymous), postsColumn('As you', state.member));
+  columns.append(
+    postsColumn('Anonymous', state.anonymous),
+    postsColumn('As you', state.member, onUpvote),
+  );
   body.push(columns, el('p', 'dim', fieldDiff(state.anonymous, state.member)));
 
   const rawPanel = el('details', 'rawjson');
@@ -2280,6 +2343,194 @@ const postsSection = (state: PostsState, onReload: () => void): HTMLElement => {
   const again = el('button', 'quiet', 'Read them again');
   again.addEventListener('click', onReload);
   body.push(again);
+
+  section.replaceChildren(...body);
+  return section;
+};
+
+// -----------------------------------------------------------------------------
+// the write with a body, and the replay
+// -----------------------------------------------------------------------------
+
+/** One send of the comment, as `api/comment.ts` reported it. */
+interface Attempt {
+  status: number;
+  comment?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+}
+
+/** What the comment block last did. */
+type CommentState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'created'; comment: Record<string, unknown> }
+  | { kind: 'resent'; first: Attempt; resend: Attempt }
+  | { kind: 'deleted' }
+  | ReadFailure;
+
+/** Sticky across re-renders, like every other affordance the reader types into. */
+let commentPost = '';
+let commentBody = '';
+let commentState: CommentState = { kind: 'idle' };
+
+/** An attempt off the wire, read as defensively as everything else. */
+const readAttempt = (value: unknown): Attempt | null => {
+  if (!isRecord(value)) return null;
+  const status = numberField(value, 'status');
+  if (status === undefined) return null;
+  const comment = objectField(value, 'comment');
+  const error = objectField(value, 'error');
+  return {
+    status,
+    ...(comment !== null ? { comment } : {}),
+    ...(error !== null ? { error } : {}),
+  };
+};
+
+/**
+ * What the API said about one send, in its own words. The status is the machine
+ * signal and the envelope carries the prose; neither is written here, because a
+ * hardcoded "already seen" would keep reading correctly long after the API
+ * stopped saying it.
+ */
+const attemptLine = (label: string, outcome: Attempt): string => {
+  const detail = [
+    outcome.error === undefined ? undefined : textField(outcome.error, 'message'),
+    outcome.error === undefined ? undefined : textField(outcome.error, 'code'),
+  ].find((part) => part !== undefined);
+  return `${label}: ${outcome.status}${detail === undefined ? '' : ` ${detail}`}`;
+};
+
+/** The comment the demo just wrote, rendered from what came back. */
+const commentCard = (comment: Record<string, unknown>): Node[] => {
+  const author = objectField(comment, 'author') ?? {};
+  const who =
+    textField(author, 'displayName') ??
+    (textField(author, 'username') === undefined ? undefined : `@${textField(author, 'username')}`);
+  const when = dateText(comment, 'publishedAt');
+
+  const lines: Node[] = [];
+  const meta = [who, when].filter((part): part is string => part !== undefined).join(' · ');
+  if (meta !== '') lines.push(el('p', 'dim', meta));
+  const written = textField(comment, 'body');
+  if (written !== undefined) lines.push(el('p', 'excerpt', written));
+  return lines;
+};
+
+/**
+ * COMMENT AS YOU, and the replay demonstration beside it.
+ *
+ * Two buttons send the same comment two different ways. The first is how an app
+ * writes: the kit mints a fresh unique id per request, so two clicks are two
+ * comments. The second signs once and sends that one proof twice, which is what
+ * a replay actually is — and the API's refusal of the second is the thing worth
+ * seeing, so it is rendered as an outcome rather than as an error.
+ */
+const commentSection = (
+  posts: PostsState,
+  state: CommentState,
+  onSend: (post: string, body: string, resend: boolean) => void,
+  onDelete: (comment: string) => void,
+): HTMLElement => {
+  const section = el('div', 'card comment');
+  const body: Node[] = [el('h2', undefined, 'Comment as you')];
+
+  // The picker offers the posts the member read returned, because those are the
+  // ones this credential is known to reach. No list, no affordance: a text box
+  // for a post id would be a coordinate the browser supplies.
+  const items =
+    posts.kind === 'ok' && posts.member.page !== undefined
+      ? arrayField(posts.member.page, 'items').filter(isRecord)
+      : [];
+  const choices = items
+    .map((item) => ({
+      id: textField(item, 'id'),
+      title: textField(item, 'displayTitle') ?? textField(item, 'title') ?? 'An untitled post',
+    }))
+    .filter((choice): choice is { id: string; title: string } => choice.id !== undefined);
+
+  if (choices.length === 0) {
+    body.push(el('p', 'dim', 'No post to comment on until the posts above load.'));
+    section.replaceChildren(...body);
+    return section;
+  }
+
+  if (choices.find((choice) => choice.id === commentPost) === undefined) {
+    commentPost = choices[0]?.id ?? '';
+  }
+
+  const picker = document.createElement('select');
+  for (const choice of choices) {
+    const option = document.createElement('option');
+    option.value = choice.id;
+    option.textContent = choice.title;
+    option.selected = choice.id === commentPost;
+    picker.append(option);
+  }
+  picker.addEventListener('change', () => {
+    commentPost = picker.value;
+  });
+  body.push(picker);
+
+  const input = document.createElement('textarea');
+  input.rows = 3;
+  input.placeholder = 'What you want to say';
+  input.value = commentBody;
+  input.addEventListener('input', () => {
+    commentBody = input.value;
+  });
+  body.push(input);
+
+  const buttons = el('div', 'checkrow');
+  for (const [label, resend] of [
+    ['Post comment', false],
+    ['Post it, then resend the same proof', true],
+  ] as [string, boolean][]) {
+    const button = el('button', 'quiet', label);
+    button.disabled = state.kind === 'pending';
+    button.addEventListener('click', () => {
+      const text = commentBody.trim();
+      if (text !== '' && commentPost !== '') onSend(commentPost, text, resend);
+    });
+    buttons.append(button);
+  }
+  body.push(buttons);
+
+  const deleteButton = (comment: Record<string, unknown>): Node[] => {
+    const id = textField(comment, 'id');
+    if (id === undefined) return [];
+    const button = el('button', 'quiet', 'Delete it');
+    button.addEventListener('click', () => onDelete(id));
+    return [button];
+  };
+
+  if (state.kind === 'pending') {
+    body.push(el('p', 'dim', 'Signing and sending…'));
+  } else if (state.kind === 'created') {
+    body.push(
+      el('p', 'dim', 'Posted.'),
+      ...commentCard(state.comment),
+      ...deleteButton(state.comment),
+    );
+  } else if (state.kind === 'deleted') {
+    body.push(el('p', 'dim', 'Deleted.'));
+  } else if (state.kind === 'resent') {
+    body.push(
+      el('p', undefined, attemptLine('First send', state.first)),
+      el('p', undefined, attemptLine('Resend of the identical proof', state.resend)),
+      el(
+        'p',
+        'dim',
+        'The second request carried the same jti, so the API refused to run it twice. ' +
+          'A client whose request times out re-reads the state instead of retrying blind.',
+      ),
+    );
+    if (state.first.comment !== undefined) {
+      body.push(...commentCard(state.first.comment), ...deleteButton(state.first.comment));
+    }
+  } else if (state.kind === 'refused' || state.kind === 'unreachable') {
+    body.push(...failureLines(state));
+  }
 
   section.replaceChildren(...body);
   return section;
@@ -2506,6 +2757,15 @@ const renderSignedIn = (session: Session, jws?: string, state: Reads = NOTHING_R
   const found = registration;
   const spacesScope = session.scope === SCOPE_SPACES;
 
+  // The write affordances are gated on the CREDENTIAL, not on the scope that
+  // asked for it. The two are usually the same and the difference is the whole
+  // discipline: a grant that came back without a write token would put a button
+  // on the page that could only ever earn a 403, and the page would be
+  // advertising an authorization it does not hold.
+  const granted = facts?.coverage?.tokens ?? [];
+  const mayUpvote = spacesScope && granted.includes(WRITE_UPVOTES);
+  const mayComment = spacesScope && granted.includes(WRITE_COMMENTS);
+
   render(
     ...notices(),
     facts !== undefined
@@ -2513,7 +2773,21 @@ const renderSignedIn = (session: Session, jws?: string, state: Reads = NOTHING_R
       : identityHero(session),
     ...(facts !== undefined && spacesScope
       ? [
-          postsSection(state.posts, () => void callPosts(session, jws)),
+          postsSection(
+            state.posts,
+            () => void callPosts(session, jws),
+            mayUpvote ? (post, on) => void callUpvote(session, jws, post, on) : undefined,
+          ),
+          ...(mayComment
+            ? [
+                commentSection(
+                  state.posts,
+                  commentState,
+                  (post, written, resend) => void callComment(session, jws, post, written, resend),
+                  (id) => void callCommentDelete(session, jws, id),
+                ),
+              ]
+            : []),
           feedSection(state.feed, () => void callFeed(session, jws)),
           credentialCard(state.credential, () => void callCredential(session, jws)),
         ]
@@ -2561,6 +2835,13 @@ const enterSignedIn = (session: Session, jws?: string): void => {
   reads = NOTHING_READ;
   checkTarget = '';
   check = { kind: 'idle' };
+  // The write affordances reset with the session too: an upvote note or a
+  // comment receipt belongs to the grant that produced it, and rendering one
+  // over a fresh sign-in would claim a write this session never made.
+  upvoteStates = {};
+  commentPost = '';
+  commentBody = '';
+  commentState = { kind: 'idle' };
   // Advancing the ticket orphans any check still in flight from the session
   // this one replaces, so its answer cannot land on the fresh view.
   checkSeq += 1;
@@ -2731,6 +3012,167 @@ const callPosts = async (session: Session, jws?: string): Promise<void> => {
     ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
     ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
   });
+};
+
+/** A refusal or a dead request, in the one shape every caller here files. */
+const writeFailure = (result: ApiResult | null, body?: Record<string, unknown>): ReadFailure => {
+  if (result === null) {
+    return { kind: 'unreachable', reason: 'The request to this site’s backend did not complete.' };
+  }
+  if (result.status !== 200) {
+    return {
+      kind: 'unreachable',
+      reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+    };
+  }
+  const envelope = body ?? result.body;
+  return {
+    kind: 'refused',
+    status: typeof envelope['status'] === 'number' ? envelope['status'] : 0,
+    reason: reasonFrom(result, 'the API refused the request'),
+    ...(typeof envelope['code'] === 'string' ? { code: envelope['code'] } : {}),
+    ...(typeof envelope['message'] === 'string' ? { message: envelope['message'] } : {}),
+  };
+};
+
+/**
+ * Replace one post's viewer flag and count in the member projection, from what
+ * the API answered rather than from what this page assumed. The count comes back
+ * with the toggle for exactly that reason: a client that increments its own copy
+ * is right until two people vote at once.
+ */
+const withUpvote = (
+  state: PostsState,
+  post: string,
+  upvoted: unknown,
+  count: unknown,
+): PostsState => {
+  if (state.kind !== 'ok') return state;
+  const page = state.member.page;
+  if (page === undefined) return state;
+
+  const items = arrayField(page, 'items').map((item) => {
+    if (!isRecord(item) || textField(item, 'id') !== post) return item;
+    return {
+      ...item,
+      ...(typeof upvoted === 'boolean'
+        ? { viewer: { ...(objectField(item, 'viewer') ?? {}), upvoted } }
+        : {}),
+      ...(typeof count === 'number' && Number.isFinite(count) ? { upvoteCount: count } : {}),
+    };
+  });
+
+  return { ...state, member: { ...state.member, page: { ...page, items } } };
+};
+
+/**
+ * THE FIRST WRITE. The page sends a post id and a direction; which method, which
+ * host, and which path are the backend's, as they are for every other call here.
+ */
+const callUpvote = async (
+  session: Session,
+  jws: string | undefined,
+  post: string,
+  on: boolean,
+): Promise<void> => {
+  const file = (state: UpvoteState): void => {
+    upvoteStates = { ...upvoteStates, [post]: state };
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/upvote', {
+    method: 'POST',
+    body: { post, on },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+
+  // The item moves first, then the note — the chip and the count are the answer
+  // and the note is only how it was carried.
+  reads = { ...reads, posts: withUpvote(reads.posts, post, body['upvoted'], body['upvoteCount']) };
+  file({ kind: 'done', note: 'Signed with a fresh jti, so a second click is a second write.' });
+};
+
+/**
+ * THE WRITE WITH A BODY, both ways. `resend` asks the backend to sign once and
+ * send that one proof twice; the page does not send anything twice itself, and
+ * could not — the proof it would have to repeat lives on the server.
+ */
+const callComment = async (
+  session: Session,
+  jws: string | undefined,
+  post: string,
+  written: string,
+  resend: boolean,
+): Promise<void> => {
+  const file = (state: CommentState): void => {
+    commentState = state;
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/comment', {
+    method: 'POST',
+    body: { post, body: written, ...(resend ? { resend: true } : {}) },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+
+  if (resend) {
+    const first = readAttempt(body['first']);
+    const second = readAttempt(body['resend']);
+    file(
+      first === null || second === null
+        ? { kind: 'unreachable', reason: 'The backend answered in a shape this page cannot read.' }
+        : { kind: 'resent', first, resend: second },
+    );
+    return;
+  }
+
+  const comment = objectField(body, 'comment');
+  file(
+    comment === null
+      ? { kind: 'unreachable', reason: 'The backend answered without the comment it wrote.' }
+      : { kind: 'created', comment },
+  );
+  commentBody = '';
+};
+
+/** Undo, so a reader can leave the space as they found it. */
+const callCommentDelete = async (
+  session: Session,
+  jws: string | undefined,
+  comment: string,
+): Promise<void> => {
+  const file = (state: CommentState): void => {
+    commentState = state;
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/comment-delete', {
+    method: 'POST',
+    body: { comment },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+  file({ kind: 'deleted' });
 };
 
 /**

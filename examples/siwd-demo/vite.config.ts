@@ -19,6 +19,8 @@ import type { IncomingMessage } from 'node:http';
 import { defineConfig, type Plugin } from 'vite';
 import type { VercelRequest, VercelResponse } from './api/_types.js';
 import check from './api/check.js';
+import commentDelete from './api/comment-delete.js';
+import comment from './api/comment.js';
 import config from './api/config.js';
 import credential from './api/credential.js';
 import feed from './api/feed.js';
@@ -29,6 +31,7 @@ import me from './api/me.js';
 import memberships from './api/memberships.js';
 import posts from './api/posts.js';
 import profile from './api/profile.js';
+import upvote from './api/upvote.js';
 import verify from './api/verify.js';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => void | Promise<void>;
@@ -36,6 +39,8 @@ type Handler = (req: VercelRequest, res: VercelResponse) => void | Promise<void>
 /** Vercel routes by filename; in dev the same map is written out by hand. */
 const ROUTES: Record<string, Handler> = {
   '/api/check': check,
+  '/api/comment': comment,
+  '/api/comment-delete': commentDelete,
   '/api/config': config,
   '/api/credential': credential,
   '/api/feed': feed,
@@ -46,6 +51,7 @@ const ROUTES: Record<string, Handler> = {
   '/api/memberships': memberships,
   '/api/posts': posts,
   '/api/profile': profile,
+  '/api/upvote': upvote,
   '/api/verify': verify,
 };
 

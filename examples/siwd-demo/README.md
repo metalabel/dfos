@@ -2,7 +2,7 @@
 
 A complete Sign In With DFOS login — challenge minted server-side, JWS verified
 server-side, session cookie granted server-side — plus live credential-gated
-API calls that run the moment you are signed in. One static page, twelve
+API calls that run the moment you are signed in. One static page, fifteen
 serverless functions, no database beyond a small key-value store, and no SDK
 beyond the DFOS packages installed from npm like any third party would.
 Deployed at <https://dfos-siwd-demo.vercel.app>.
@@ -20,11 +20,11 @@ durable, audience-bound authorization the app keeps and presents to the DFOS
 API. All three run side by side so the difference is something you can watch
 rather than read about.
 
-| Option                                     | Returns                                               | `client_did` | Needs                        |
-| ------------------------------------------ | ----------------------------------------------------- | ------------ | ---------------------------- |
-| `identity`                                 | a signed challenge                                    | not sent     | `SESSION_SECRET`             |
-| `read:profile read:email read:memberships` | …plus an account **credential**                       | **required** | …plus an app key and a store |
-| `read:profile read:posts`                  | …plus a space-addressed **credential**, with `spaces` | **required** | …plus an app key and a store |
+| Option                                                 | Returns                                               | `client_did` | Needs                        |
+| ------------------------------------------------------ | ----------------------------------------------------- | ------------ | ---------------------------- |
+| `identity`                                             | a signed challenge                                    | not sent     | `SESSION_SECRET`             |
+| `read:profile read:email read:memberships`             | …plus an account **credential**                       | **required** | …plus an app key and a store |
+| `read:profile read:posts write:upvotes write:comments` | …plus a space-addressed **credential**, with `spaces` | **required** | …plus an app key and a store |
 
 ## Endpoints
 
@@ -41,6 +41,9 @@ rather than read about.
 | `POST /check`             | Fills one path segment of `GET /v1/membership/{space}` or `GET /v1/group-membership/{group}`. On demand |
 | `POST /posts`             | Reads `GET /v1/spaces/{space}/posts` twice — anonymously and with the credential — and returns both     |
 | `POST /feed`              | Signs one request proof and calls `GET /v1/feed`, which has no anonymous form                           |
+| `POST /upvote`            | Toggles an upvote — `PUT` or `DELETE` on one post, with a `jti` the kit mints                           |
+| `POST /comment`           | Writes a comment; with `resend` it signs once and sends that one proof twice                            |
+| `POST /comment-delete`    | Deletes a comment this grant wrote, so a reader can undo what the demo did                              |
 | `POST /logout`            | Expires the session and drops the stored credential                                                     |
 
 Verification lives in `api/verify.ts`, because that is where the session is
@@ -81,6 +84,34 @@ once with no credential and once with this app's, and returns both projections
 side by side with a generic key diff between them. The member projection is the
 anonymous one plus a `viewer` block saying whether you upvoted each post, and on
 the feed each item also carries the space it came from.
+
+## Writes
+
+`write:upvotes` and `write:comments` are place-level tokens like `read:posts`,
+so the same credential carries them and the same consent decides where. What
+changes on the write path is the replay guard.
+
+**The `jti` is automatic.** `createApiAuthFetch` mints a fresh unique id on
+every request whose method is not GET, HEAD, or OPTIONS, so each write carries
+one without a route arranging it. The API records the id and refuses a second
+presentation of the same proof inside its freshness window.
+
+**The resend is deliberate.** That adapter cannot demonstrate a replay, because
+a replay is the same proof presented again and the adapter mints a new one per
+call. So `POST /comment` with `resend: true` signs once by hand with an explicit
+`jti`, then sends the byte-identical request twice. The first is created; the
+second is a 409, and the demo renders the API's own words for it rather than a
+friendlier translation. That is the guarantee worth seeing: a client whose
+request times out does not know whether the write landed, and the `jti` is what
+makes retrying safe to refuse and the state safe to re-read.
+
+**The body is exactly `application/json`.** The bytes are composed once and both
+the proof's hash and the wire read that one array — no compression, no method
+override, no second serialization. A body under any other media type is a 415.
+
+**Own content only.** A delete is refused by the API when the comment is not
+this grant's to remove, on the authority that holds the facts rather than
+guessed at by the app.
 
 ## Configuration
 

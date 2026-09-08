@@ -96,7 +96,7 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
         ...(unavailable !== null ? { unavailable } : {}),
         summary:
           'Proves who you are and grants this app a credential to read your profile and to ' +
-          'read posts as you in the spaces you choose.',
+          'read posts as you, upvote, and comment in the spaces you choose.',
       },
     ],
     api: {

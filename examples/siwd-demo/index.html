@@ -261,6 +261,48 @@
       .feed button {
         margin-top: 1rem;
       }
+      /* The upvote toggle sits inside its own post rather than under the column,
+         so it stays next to the count it changes. */
+      ul.postlist button {
+        font-size: 0.75rem;
+        margin-top: 0.4rem;
+        padding: 0.25rem 0.6rem;
+      }
+
+      /* The write with a body, and the replay beside it. */
+      .comment h2 {
+        font-size: 1.125rem;
+      }
+      .comment p {
+        margin: 0.5rem 0 0;
+      }
+      .comment select,
+      .comment textarea {
+        border: 1px solid #ccc;
+        border-radius: 0.5rem;
+        display: block;
+        font: inherit;
+        font-size: 0.875rem;
+        margin-top: 0.6rem;
+        padding: 0.4rem 0.6rem;
+        width: 100%;
+      }
+      .comment .checkrow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.6rem;
+      }
+      .comment button {
+        margin-top: 0.6rem;
+      }
+      .comment .checkrow button {
+        margin-top: 0;
+      }
+      .comment .excerpt {
+        color: #444;
+        font-size: 0.875rem;
+      }
 
       /* Tier 2 — the session strip. Compact, and visibly a status line. */
       .session {
