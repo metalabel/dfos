@@ -160,6 +160,7 @@ https://app.dfos.com/authorize?
 | `redirect_uri` | Yes                                           | URL the host redirects to after signing                                                                                                                                      |
 | `scope`        | Yes                                           | A space-separated set of requested scope tokens (the OAuth `scope` convention); each token MUST be a registered scope, see [Scopes and credentials](#scopes-and-credentials) |
 | `client_did`   | When any requested scope returns a credential | The third party's own DFOS DID, the `aud` any returned credential is issued to                                                                                               |
+| `spaces`       | Optional, with a space-level scope            | Where the space-level tokens apply: `all`, or a comma-separated list of distinct 31-character space ids; see [Scopes and credentials](#scopes-and-credentials)               |
 | `client_proof` | Loopback credential tier                      | The client's [ask proof](#the-ask-proof), a JWS over this request's own canonical challenge bytes under `typ: "did:dfos:siwd-ask"`                                           |
 | `client_chain` | Loopback credential tier, unless resident     | The client identity's [carried chain](#chain-residence), base64url of the JSON array of its verbatim operation JWS strings, genesis first                                    |
 
@@ -177,7 +178,10 @@ describing what the third party requests: identity verification alone, or
 identity plus a scoped credential. The `statement`, if present, MAY be rendered;
 a host that renders it MUST do so under the
 [rendering rule](#rendering-the-statement). Declining to render
-requester-controlled prose is a legitimate host posture.
+requester-controlled prose is a legitimate host posture. When the request names
+a space-level scope without `spaces`, the consent screen is where the user
+chooses the places, and consent MAY narrow that set; the token set is never
+narrowed.
 
 #### 3. Signing
 
@@ -428,30 +432,33 @@ alone asks for the proof and nothing more, and every other requested token
 additionally returns a [DFOS credential](https://protocol.dfos.com/credentials).
 Each token MUST match a registered scope from the table below; a request carrying
 an unregistered token MUST be refused whole, never partially honored, because a
-consent screen that silently drops tokens misstates what was asked. Tokens that
-map to the same `api:<host>` resource coalesce into **one** credential carrying
-the combined action list; tokens naming distinct resources return one credential
-each. Consent is to the set: the consent screen describes every requested token.
+consent screen that silently drops tokens misstates what was asked. API tokens
+return **one** credential whose entries the coalescing rule below decides;
+tokens naming distinct resource types return one credential each. Consent is to
+the set: the consent screen describes every requested token.
 
-| Scope              | Returned credential                                                                      |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| `identity`         | None, the signed challenge alone                                                         |
-| `read:<contentId>` | `{ "resource": "chain:<contentId>", "action": "read" }`, issued to `client_did`          |
-| `deposit`          | `{ "resource": "mailbox:<subject id>", "action": "deposit" }`, issued to `client_did`    |
-| `read:profile`     | `{ "resource": "api:<api host>", "action": "read:profile" }`, issued to `client_did`     |
-| `read:email`       | `{ "resource": "api:<api host>", "action": "read:email" }`, issued to `client_did`       |
-| `read:memberships` | `{ "resource": "api:<api host>", "action": "read:memberships" }`, issued to `client_did` |
+| Scope              | Level   | Returned credential                                                                                  |
+| ------------------ | ------- | ---------------------------------------------------------------------------------------------------- |
+| `identity`         |         | None, the signed challenge alone                                                                     |
+| `read:<contentId>` |         | `{ "resource": "chain:<contentId>", "action": "read" }`, issued to `client_did`                      |
+| `deposit`          |         | `{ "resource": "mailbox:<subject id>", "action": "deposit" }`, issued to `client_did`                |
+| `read:profile`     | account | `{ "resource": "api:<api host>", "action": "read:profile" }`, issued to `client_did`                 |
+| `read:email`       | account | `{ "resource": "api:<api host>", "action": "read:email" }`, issued to `client_did`                   |
+| `read:memberships` | account | `{ "resource": "api:<api host>", "action": "read:memberships" }`, issued to `client_did`             |
+| `read:posts`       | space   | `{ "resource": "api:<api host>[/spaces/<id>]", "action": "read:posts" }`, issued to `client_did`     |
+| `write:upvotes`    | space   | `{ "resource": "api:<api host>[/spaces/<id>]", "action": "write:upvotes" }`, issued to `client_did`  |
+| `write:comments`   | space   | `{ "resource": "api:<api host>[/spaces/<id>]", "action": "write:comments" }`, issued to `client_did` |
+| `write:posts`      | space   | `{ "resource": "api:<api host>[/spaces/<id>]", "action": "write:posts" }`, issued to `client_did`    |
 
 SIWD defines no resource grammar of its own. Resource forms, action vocabulary,
 and matching rules are the
 [credential spec's](https://protocol.dfos.com/credentials): `chain:<contentId>`
-exact-match; `mailbox:<id>` / `deposit` exact-match; `api:<host>` exact-match
-with the enumerated action registry
+exact-match; `mailbox:<id>` / `deposit` exact-match; `api:<host>` and
+`api:<host>/spaces/<id>` equal-or-ancestor, with the enumerated action registry
 [below](#the-apihost-resource-and-its-actions). Each token is matched against
 this table's registered tokens first, and the parameterized `read:<contentId>`
 form matches only when `<contentId>` is a 31-character content id, so the literal
-tokens `read:profile`, `read:email`, and `read:memberships` are never ambiguous
-with it.
+API tokens are never ambiguous with it.
 
 **`read:<contentId>`.** For content owned by the user's DID, the credential is
 issued by that DID: `iss` = the user's DID, `aud` = `client_did`, one attenuation
@@ -471,20 +478,45 @@ deposit, and from then on the third party never redirects again. Revoking the
 deposit credential severs the relationship, because the relay's deposit gate
 re-checks revocation on every deposit.
 
-**`read:profile`, `read:email`, `read:memberships`.** An API scope returns an
-[`api:<host>`](#the-apihost-resource-and-its-actions) credential for the hosting
-platform's own API host: `iss` = the user's DID, `aud` = `client_did`, one
-attenuation entry whose action list is the requested API tokens. Several API
-tokens in one authorization coalesce into that single entry
-(`read:profile,read:email`), one credential per resource and never one per token,
-so revoking it severs the whole API grant at once. Each wire scope token maps 1:1
-to an API action token, and every API action token registered
-[below](#the-apihost-resource-and-its-actions) becomes a SIWD scope the same way.
-For these scopes `client_did` is **required**, and the verifier MUST apply the
-**consumed** [replay discipline](#replay-prevention), because success yields an
-artifact redeemable outside the presenting channel. The credential alone opens
-nothing: exercising it requires a per-request
+**API scopes.** An API scope returns an
+[`api:`](#the-apihost-resource-and-its-actions) credential for the hosting
+platform's own API host: `iss` = the user's DID, `aud` = `client_did`, `att`
+decided by the two dimensions of the ask. `scope` names the actions, and
+`spaces` names the places the space-level actions apply to. Each wire scope
+token maps 1:1 to an API action token, and every API action token registered
+[below](#the-apihost-resource-and-its-actions) is a SIWD scope the same way, at
+the same level. For these scopes `client_did` is **required**, and the verifier
+MUST apply the **consumed** [replay discipline](#replay-prevention), because
+success yields an artifact redeemable outside the presenting channel. The
+credential alone opens nothing: exercising it requires a per-request
 [request proof](#the-request-proof) signed by the `client_did`'s key.
+
+**`spaces`.** `all`, a comma-separated list of distinct 31-character space ids
+(at most 31), or absent. It is well-posed only when `scope` carries a
+space-level token: a request carrying `spaces` without one, or carrying a
+malformed value, is refused whole. Present, the requester has named the places
+and the consent screen is locked to them. Absent, the user chooses the places at
+consent, and consent MAY narrow the ask to a subset of the spaces the user is
+in, or widen it to all of them; the token set is never narrowed. A named space
+the user is not in is issued anyway: the entry is inert against live standing,
+and a host renders such an id raw, never with a name. `all` is a standing
+choice, since the host form covers every space the subject is in, spaces joined
+later included, and the consent screen says so.
+
+**Coalescing.** Account-level tokens, and space-level tokens granted for all
+spaces, coalesce into **one** `api:<host>` entry carrying the combined action
+list. Each chosen space is one `api:<host>/spaces/<id>` entry carrying the
+space-level token set. One credential per authorization, never one per token,
+so revoking it severs the whole grant at once, and the entry count never
+exceeds the chosen spaces plus one.
+
+**The artifact is the answer.** The returned credential's `att` states what was
+granted. A requester reads it and never assumes the ask was honored whole,
+because consent may have narrowed the places.
+
+**One app, one standing grant.** Re-consent for the same subject and
+`client_did` revokes the prior credential and issues the new one in its place.
+Narrowing a standing grant is a re-consent.
 
 ### Replay prevention
 
@@ -828,12 +860,19 @@ role (auth, assert, controller) may sign.
 | `credentialCID` | string  | yes      | CID of the leaf credential presented alongside this proof                                                |
 | `iat`           | integer | yes      | Issued-at, unix seconds (positive integer)                                                               |
 
-All six members are required and there are no optionals, so the canonical form
-below carries no absent-member ambiguity. Unknown top-level members are ignored
-by verifiers, per the protocol's MUST-ignore-unknown rule; additional members
-register additively, appended to the canonical order. The example above is
-illustrative, with `credentialCID` elided; the normative bytes are the reference
-vectors, not this snippet.
+All six canonical members are required and none is optional, so the canonical
+form below carries no absent-member ambiguity. Additive members follow them,
+appended after the canonical order in lexicographic member-name order, and a
+verifier ignores an unregistered one per the protocol's MUST-ignore-unknown
+rule. One additive member is registered:
+
+| Member | Type   | Required | Description                                                                                                                                                                                                                                 |
+| ------ | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jti`  | string | no       | Per-request uniqueness: a non-empty string of at most 256 UTF-8 bytes, RECOMMENDED at least 128 random bits, unique per presenter inside the freshness window. A write-shaped route requires it ([API security notes](#api-security-notes)) |
+
+A present `jti` that violates its schema invalidates the proof whether or not
+the route requires one. The example above is illustrative, with `credentialCID`
+elided; the normative bytes are the reference vectors, not this snippet.
 
 **`host` is an authority, port included when non-default.** `api:` surfaces are
 HTTPS surfaces, and the scheme is never in the value. A deployment on the default
@@ -894,7 +933,8 @@ insignificant whitespace) with its members in this fixed order:
 method, host, path, bodyHash, credentialCID, iat
 ```
 
-These bytes are the JWS payload segment.
+Additive members follow, `jti` among them, in lexicographic order of member
+name. These bytes are the JWS payload segment.
 
 **Minimal JSON, HTML escaping OFF.** `path` routinely carries `&` and admits `<`
 and `>`. The canonical serialization emits these three octets **literally**
@@ -979,7 +1019,8 @@ a way to resolve identities, a revocation source, and the current time:
    `/`, `bodyHash` a string that is the **canonical** unpadded base64url of
    exactly 32 bytes (a spelling that does not re-encode to itself, padded or with
    non-zero trailing bits, rejects here), `credentialCID` a non-empty string,
-   `iat` a positive integer. Unknown members are ignored.
+   `iat` a positive integer. A present `jti` MUST be a non-empty string of at
+   most 256 UTF-8 bytes. Unknown members are ignored.
 4. **Freshness.** Compute `now` as **integer Unix seconds** (floor), the same
    basis as `iat`, so the boundary does not turn on sub-second precision. Two
    bounds, both verifier policy: the proof's **age** `now − iat` MUST NOT exceed
@@ -1036,11 +1077,16 @@ a way to resolve identities, a revocation source, and the current time:
     there is none: `read:profile` serves the profile of exactly the DID that
     rooted the credential, and the credential is what selects that subject. A
     route parameter never does.
-11. **Attenuation coverage.** Some `att` entry on the leaf MUST cover the
-    request: its `resource` MUST byte-equal `api:<host>` where `<host>` is **the
-    verifier's own configured authority** (the same value step 5 binds, never a
-    request-supplied one; exact match, since no wildcard form exists for `api:`),
-    and its canonical action set MUST contain the route's required action token.
+11. **Attenuation coverage.** The route's **required resource** is
+    `api:<host>` for an account-level route and `api:<host>/spaces/<id>` for a
+    space-addressed route, where `<host>` is **the verifier's own configured
+    authority** (the same value step 5 binds, never a request-supplied one) and
+    `<id>` is resolved by the deployment's own routing, never read from a
+    request-supplied resource string. Some `att` entry on the leaf MUST cover
+    the required resource under the
+    [`api:` coverage rule](#the-apihost-resource-and-its-actions) (the host form
+    covers every space at the host; a space form covers only itself), and its
+    canonical action set MUST contain the route's required action token.
 
 Every step MUST pass. Two ordering rules are load-bearing; the rest is free.
 **(a)** The proof signature (step 7) MUST verify before any credential-chain work
@@ -1060,7 +1106,13 @@ resolution failure is the server's condition and MUST NOT be reported as a
 credential judgment. An **invalid** verdict then maps by phase: **401** for a
 proof-layer failure (steps 1 to 7), carrying the `WWW-Authenticate: DFOS`
 challenge where the deployment's response path preserves it, **403** for a
-credential-layer failure (steps 8 to 11).
+credential-layer failure (steps 8 to 11). A verifier reports a step 11 miss,
+a valid credential that does not reach this route's resource or action,
+distinctly from a failed chain, so a route offering
+[optional authentication](#requirement-combinations) serves its anonymous
+projection on the former and still refuses the latter; on the wire both are 403. A **replayed** verdict, raised only by a route that requires `jti`
+([API security notes](#api-security-notes)), maps to **409**: the proof was
+checked and is valid, and its uniqueness is already spent.
 
 Revocation in the verify path, the freshness window, and at-basis credential
 expiry are the difference between this design and a bearer token with extra
@@ -1082,7 +1134,7 @@ binding obligations, no credential anywhere.
   identity proof at the header gate, and the reverse.
 - **Payload** is the request proof's minus `credentialCID`: five members, all
   required, canonical order `method, host, path, bodyHash, iat`, under the same
-  member rules and the same
+  member rules, the same registered additive member `jti`, and the same
   [canonical signing input](#proof-canonical-signing-input) discipline (minimal
   JSON, HTML escaping off, `iat` a bare integer).
 - **Carriage** is the same `Authorization: DFOS <jws>` header. On this family's
@@ -1106,12 +1158,16 @@ binding obligations, no credential anywhere.
   Steps 8 to 11 do not exist for this artifact. **The signer is the principal.**
   The `kid`'s DID is who the request is from; what that DID may do is the
   resource's local policy, and this document says nothing about it.
-- **Verdicts** map as the proof phase always has: **401** invalid, **503**
-  unverifiable. There is no 403 tier, because nothing credential-shaped can fail.
+- **Verdicts** map as the proof phase always has: **401** invalid, **409**
+  replayed, **503** unverifiable. There is no 403 tier, because nothing
+  credential-shaped can fail.
 - **Replay** is bounded exactly as for the request proof: within-window
   byte-identical replay is the accepted bound for read-shaped uses, and a
   deployment gating **write-shaped** uses of an identity proof MUST apply the
-  same [`jti` discipline](#api-security-notes).
+  same [`jti` discipline](#api-security-notes). The signer is the principal, so
+  what a proven identity may write is the resource's local policy; a deployment
+  SHOULD refuse a presenter key whose only effective role is `controller`, since
+  that key is a continuity instrument.
 
 An identity proof is not a session, not a login artifact
 ([sign in](#sign-in) is the challenge-response seam for establishing a
@@ -1121,9 +1177,9 @@ attenuable, revocable grants uses
 
 ### The `api:<host>` resource and its actions
 
-The credential side of this capability is one resource form, registered in
-[CREDENTIALS, Resource Types](https://protocol.dfos.com/credentials) with its
-consuming rules here.
+The credential side of this capability is one resource family, registered in
+[CREDENTIALS, Resource Types](https://protocol.dfos.com/credentials#apihost-credential-gated-api-access)
+with its consuming rules here.
 
 **`<host>` is the API's lowercase authority**: the bare hostname on the default
 HTTPS port, `host:port` on any other; never a scheme, never a path. Host-as-id
@@ -1133,13 +1189,33 @@ deployments anywhere. It MUST byte-equal the proof's `host` (a non-default port
 appears in both or neither), so the resource id and the request binding name the
 same origin.
 
-**Actions are enumerated registry tokens.** The registry defines exactly three:
+**Two forms, one level deep.** `api:<host>` names the whole API at that
+authority; `api:<host>/spaces/<id>` names one space there, `<id>` the space's
+protocol DID with the prefix stripped. Coverage is equal-or-ancestor: the host
+form covers every space form at that host, a space form covers only itself, and
+nothing crosses hosts
+([CREDENTIALS](https://protocol.dfos.com/credentials#apihost-credential-gated-api-access)).
 
-| Action             | Grants                                                                                                                                                               |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read:profile`     | Read access to the granting user's own profile: display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
-| `read:email`       | Read access to the granting user's account email address                                                                                                             |
-| `read:memberships` | Read access to the granting user's own memberships: the spaces and groups the account belongs to, and its roles in them                                              |
+**Actions are enumerated registry tokens.** The registry defines seven, each at
+one level:
+
+| Action             | Level   | Grants                                                                                                                                                               |
+| ------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read:profile`     | account | Read access to the granting user's own profile: display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
+| `read:email`       | account | Read access to the granting user's account email address                                                                                                             |
+| `read:memberships` | account | Read access to the granting user's own memberships: the spaces and groups the account belongs to, and its roles in them                                              |
+| `read:posts`       | space   | Read posts and their comments in covered spaces as the granting user: the user's own member projection, including content the user is entitled to by payment         |
+| `write:upvotes`    | space   | Upvote, and remove upvotes from, posts and comments in covered spaces                                                                                                |
+| `write:comments`   | space   | Create, edit, and delete the granting user's own comments in covered spaces                                                                                          |
+| `write:posts`      | space   | Create, edit, and delete the granting user's own posts in covered spaces. Never announce, broadcast, pin, backdate, or moderate                                      |
+
+**Level is where a token is demanded.** An account-level token is demanded
+against the host form only. A space-level token is demanded against the space
+form for the space a route addresses, and the host form satisfies that demand
+by ancestor coverage: it means every space the subject is in, spaces joined
+later included. An account-level token on a space entry is inert, never
+demanded there and not an error. A write token grants the subject's own content
+only; moderating another member's content is not in this registry.
 
 **Every token is a real grant, not a public-data ceremony.** A profile document
 may be non-public, so `read:profile` gates access an anonymous fetch does not
@@ -1149,8 +1225,8 @@ while each field class beyond it requires its own token.
 
 A `/v1/...` segment in a route path, as in the [payload example](#payload) above,
 is the serving API's own path versioning; the registry names actions, never
-paths. New tokens register here additively as API surface grows. A grant carrying
-several tokens is an ordinary comma-separated action list
+paths. New tokens and new child forms register here additively, each a row. A
+grant carrying several tokens is an ordinary comma-separated action list
 (`read:profile,read:email`), and narrowing is dropping tokens.
 
 **There is no action wildcard, and `read:*` is a trap, not a shorthand.** Per the
@@ -1162,10 +1238,10 @@ nothing at verification. This is a matching fact, not an attenuation fact:
 survives a delegation hop only when the parent's set also contains `read:*`.
 Growth is enumeration, always.
 
-**Attenuation is exact.** `api:` follows the credential spec's default for every
-non-`chain:` form: coverage is exact byte equality of the full resource string,
-no wildcard form is defined, and coverage never crosses resource types. `api:*`
-is an ordinary id covering only itself, which is never a served host.
+**Attenuation follows coverage.** `api:` is the one non-`chain:` form with a
+registered hierarchy: a host entry narrows to a space entry, a space entry
+narrows only to itself, and coverage never crosses hosts or resource types.
+`api:*` is an ordinary id covering only itself, which is never a served host.
 
 #### Issuance
 
@@ -1174,8 +1250,9 @@ concern; the proof binds to whatever valid credential is presented. The canonica
 issuance moment is a [credential-returning scope](#scopes-and-credentials): the
 user consents at the hosting platform's front door, and the credential comes back
 through the callback, with `iss` the user's DID, `aud` the third party's
-`client_did`, one `att` entry on the platform's API host, and `exp` at the
-issuer's discretion with revocation as the timely lever. Delegation onward is
+`client_did`, `att` entries on the platform's API host as the
+[coalescing rule](#scopes-and-credentials) decides, and `exp` at the issuer's
+discretion with revocation as the timely lever. Delegation onward is
 ordinary credential machinery: the third party MAY sub-delegate its grant through
 `prf` chains, and the verification walk holds every hop to monotonic attenuation.
 
@@ -1195,9 +1272,9 @@ relationship, never a per-request token.
 | ----------------- | ----------------------------------------------- | ---------------------------------------------------------------- |
 | Question answered | "Is this DID making exactly this request, now?" | "Is the credential's audience making exactly this request, now?" |
 | JWS `typ`         | `did:dfos:identity-proof`                       | `did:dfos:request-proof`                                         |
-| Payload           | `method, host, path, bodyHash, iat`             | the same, plus `credentialCID`                                   |
+| Payload           | `method, host, path, bodyHash, iat`, `jti?`     | the same, plus `credentialCID`                                   |
 | Grants            | Nothing, the resource's local policy decides    | Whatever the presented credential's attenuation covers           |
-| Failure tiers     | 401 / 503                                       | 401 / 403 / 503                                                  |
+| Failure tiers     | 401 / 409 / 503                                 | 401 / 403 / 409 / 503                                            |
 | Stands alone      | Yes, it is the whole AuthN statement            | No, meaningless without its credential                           |
 
 Any DFOS-gated HTTP surface (the canonical API, a fork, a relay surface) consumes
@@ -1270,16 +1347,30 @@ security-requirement object the named schemes are ANDed, and across the
 `security` array requirement objects are alternatives, so a client satisfies any
 one. Under this convention an operation's requirements mean:
 
-| Combination                                 | Claim the route needs                                                                                                                                                                                                       |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No requirement, or empty `security: []`     | Anonymous, no artifact of this family                                                                                                                                                                                       |
-| Identity-proof scheme alone                 | An [identity proof](#the-identity-proof): authentication only; the resource's local policy decides the rest                                                                                                                 |
-| Request-proof scheme AND credential scheme  | A [request proof](#the-request-proof) with the credential it binds, the delegated-grant profile. Two schemes because the wire is two headers; a request-proof scheme alone advertises a route no conforming client can call |
-| Identity-proof scheme AND credential scheme | An identity proof plus a credential in the route's own declared role, the authn/authz split the [carriage rule](#the-identity-proof) names, as on the relay content plane's non-creator blob reads                          |
+| Combination                                     | Claim the route needs                                                                                                                                                                                                       |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No requirement, or empty `security: []`         | Anonymous, no artifact of this family                                                                                                                                                                                       |
+| Identity-proof scheme alone                     | An [identity proof](#the-identity-proof): authentication only; the resource's local policy decides the rest                                                                                                                 |
+| Request-proof scheme AND credential scheme      | A [request proof](#the-request-proof) with the credential it binds, the delegated-grant profile. Two schemes because the wire is two headers; a request-proof scheme alone advertises a route no conforming client can call |
+| Identity-proof scheme AND credential scheme     | An identity proof plus a credential in the route's own declared role, the authn/authz split the [carriage rule](#the-identity-proof) names, as on the relay content plane's non-creator blob reads                          |
+| The empty requirement object `{}` beside others | Optional authentication: the route serves an anonymous projection to a request carrying no artifact, and the subject's projection under one of its other alternatives                                                       |
 
 The combination **is** the profile declaration. A client selects the alternative
 it can satisfy and signs the artifact that combination names; a host offering a
 route under either claim lists two requirement objects.
+
+**Optional authentication.** A route MAY list the empty requirement object
+beside its proof alternatives
+(`security: [{}, {dfosIdentityProof: []}, {dfosRequestProof: [], dfosCredential: []}]`).
+Such a route serves an anonymous projection to a request carrying no artifact,
+and the subject's projection to a valid proof whose grant covers the route. A
+valid proof whose leaf does not cover the required resource or action serves
+exactly the anonymous projection: a credential only ever adds. Coverage is a
+ceiling, not a standing: the projection served is the subject's live standing,
+so a covered space the subject is not in serves the anonymous projection too. A
+present but invalid proof is refused by the verdict mapping, never degraded to
+anonymous, because an app that learns to ignore authentication failures has no
+authentication.
 
 #### Required actions
 
@@ -1335,18 +1426,19 @@ well-known response. There is no registry of deployments.
   names the grant: who authorized whom, over what, until when. Without the
   audience key, a captured credential authorizes nothing anywhere. The artifact
   that must never leak is the audience key, which never crosses a channel.
-- **Within-window replay of an identical request is the accepted bound.** A
-  captured proof replays only as the byte-identical request, inside the freshness
-  window, against the same host. For the read-only registry that is a re-read
-  returning the same response, and it is why the registry is read-only.
-  **Write-bearing actions change the calculus**, because a replayed write
-  re-executes, so a deployment gating writes MUST add per-request uniqueness: a
-  `jti`-style member, registered additively on this envelope and appended to the
-  canonical order, recorded at the verifier by an **atomic insert-if-absent**
-  into a replay cache that expires entries after the freshness window. The
-  verifier never held the client-chosen `jti` beforehand, so the primitive is
-  insert-if-absent (accept iff newly inserted), not the check-and-delete a
-  server-minted nonce would use.
+- **Within-window replay of an identical request is the accepted bound on a
+  read-shaped route.** A captured proof replays only as the byte-identical
+  request, inside the freshness window, against the same host, and a re-read
+  returns the same response. **A write-shaped route closes it with `jti`.** A
+  deployment gating writes MUST require the registered [`jti` member](#payload)
+  on every write-shaped route and record it by an **atomic insert-if-absent**
+  into a replay cache keyed on the presenter DID and `jti`, whose entry lives
+  until the proof's own expiry (`iat + W + S`). The verifier never held the
+  client-chosen value beforehand, so the primitive is insert-if-absent (accept
+  iff newly inserted), not the check-and-delete a server-minted nonce would use.
+  An already-seen `jti` is the **`replayed`** verdict, **409**, distinct from an
+  invalid proof so that a client whose request timed out re-reads state rather
+  than retrying blind. A read-shaped route MAY ignore the member.
 - **`aud: "*"` is refused at every level because it un-asks the question.** A
   public credential has no audience, so there is no audience key, so there is
   nothing whose possession a proof could prove. A public credential anywhere in

@@ -134,7 +134,7 @@ func mailboxDepositCovered(att []dfos.AttEntry, subject string) bool {
 			exact = append(exact, entry)
 		}
 	}
-	return matchesResource(exact, resource, "deposit")
+	return dfos.MatchesResource(exact, resource, "deposit")
 }
 
 func (r *Relay) verifySigningCredential(token string, request *dfos.VerifiedSignRequest, resolveKey dfos.KeyResolver, bundle map[string]bundledSigningIdentity) error {

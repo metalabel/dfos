@@ -158,7 +158,11 @@ await verifyApiRequest(client, {
 });
 ```
 
-It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
+It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `replayed` / `uncovered` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
+
+The two 403s say different things. `invalid` means the credential does not hold: a broken chain, a revocation, a public audience, an audience that is not the signer. `uncovered` means it holds and does not reach this route's resource and action. A route offering optional authentication serves its anonymous projection on `uncovered`, because a credential only ever adds, and refuses `invalid` outright.
+
+**Space-scoped grants, and per-request uniqueness.** A route that serves one space passes `resource: 'api:<host>/spaces/<id>'`, resolving the id by its own routing; a grant naming the bare host covers it by ancestor coverage, and a grant naming one space covers only that space. The host half must match `host`, so a mismatch is a deployment error (500) rather than a verdict about the caller. A route that gates writes passes `requireJti: true` and records the returned `jti` under the presenter DID until the proof expires; the second presentation of the same value is a replay, which `replayedProof` classifies as a 409. On the signing side `createApiAuthFetch` attaches a fresh `jti` to every write by default — pass `jti: 'always'` or `jti: 'never'` to change that.
 
 `verifyApiIdentityRequest` is the same verifier for the envelope's credential-less sibling, the [identity proof](https://protocol.dfos.com/integrations#the-identity-proof) — it establishes only which DID is asking, leaving what that DID may do to the resource's own policy.
 
@@ -178,6 +182,8 @@ import {
 ```
 
 Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
+
+`spaces` on the login request locks consent to a named set of places — `'all'`, or up to 31 distinct 31-character space ids. A host honors it only when `scope` names a space-level action, and refuses the request whole otherwise. Absent, the user chooses the places at the consent screen. Either way the returned credential's `att` is the answer: consent may narrow the set, so read it rather than assuming the ask was honored whole.
 
 The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) maps one field each to the spec's two replay disciplines — which discipline a given scope obliges, and why, is [INTEGRATIONS § Replay prevention](https://protocol.dfos.com/integrations#replay-prevention)'s argument to make:
 

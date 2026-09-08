@@ -107,6 +107,9 @@ dfos login
 # sign in as a named identity, asking for a scope that returns a credential
 dfos login alice --scope read:profile
 
+# narrow the credential to particular spaces, or to all of them
+dfos login alice --host dfos --spaces all
+
 # print the URL instead of opening a browser
 dfos login --no-browser
 ```

@@ -2412,10 +2412,12 @@ describe('web relay', () => {
         body: docBytes,
         jti: false,
       });
+      // An absent jti is an INVALID proof — 401, not the 409 a replay gets.
       expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'authentication required' });
     });
 
-    it('rejects a REPLAYED jti on blob upload, and accepts a fresh one', async () => {
+    it('answers 409 on a REPLAYED jti on blob upload, and accepts a fresh one', async () => {
       const { identity, content, contentId, docBytes } = await seedChain();
       const path = `/content/${contentId}/blob/${content.operationCID}`;
       const proof = await identityProof(identity, {
@@ -2435,8 +2437,11 @@ describe('web relay', () => {
       // relay recorded (presenter, jti) with insert-if-absent, and the second
       // insert fails. Ingestion being idempotent does not make this free — the
       // admission layer already spent on it.
+      // 409, its own verdict: the proof was checked and was valid, so the client
+      // re-reads state instead of re-authenticating.
       const replay = await req(path, { method: 'PUT', headers, body: docBytes });
-      expect(replay.status).toBe(401);
+      expect(replay.status).toBe(409);
+      expect(await replay.json()).toEqual({ error: 'request already seen' });
 
       // A fresh jti over the same bytes is a new request, not a replay.
       const fresh = await reqAs(path, identity, {
@@ -2455,7 +2460,9 @@ describe('web relay', () => {
         body: docBytes,
         jti: 'x'.repeat(257),
       });
+      // Oversized is malformed, so it is invalid (401), never replayed (409).
       expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'authentication required' });
     });
 
     it('expires cache entries with the freshness window, so a stale jti is reusable', async () => {

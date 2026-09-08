@@ -524,6 +524,24 @@ func TestWarnCredentialHostMismatch(t *testing.T) {
 	if none.Len() != 0 {
 		t.Fatalf("a login with no --host warned: %q", none.String())
 	}
+
+	// A credential narrowed to spaces AT THE HOST THAT WAS ASKED FOR is not a
+	// mismatch: it is the ask, honored narrowly, and `api call` selects it by the
+	// same host half.
+	var narrowed bytes.Buffer
+	warnCredentialHostMismatch(credentialWithResources(t,
+		"api:api.example.test/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k"), target, &narrowed)
+	if narrowed.Len() != 0 {
+		t.Fatalf("a space-scoped credential for the asked host warned: %q", narrowed.String())
+	}
+
+	// A space at ANOTHER host is another host.
+	var elsewhere bytes.Buffer
+	warnCredentialHostMismatch(credentialWithResources(t,
+		"api:other.example.test/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k"), target, &elsewhere)
+	if elsewhere.Len() == 0 {
+		t.Fatal("a space at another host must still warn")
+	}
 }
 
 // ---------------------------------------------------------------------------

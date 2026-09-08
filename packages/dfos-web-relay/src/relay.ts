@@ -885,7 +885,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       // route already accepted (the Go twin pins the same equality).
       maxBodyBytes: MAX_BODY_BYTES,
     });
-    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 409 | 503);
     const principal = auth.principal?.did ?? null;
 
     // 3. Admission policy over (principal | anonymous). A refusal is
@@ -1575,7 +1575,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       // route buffered is a blob the verifier will hash.
       maxBodyBytes: MAX_BODY_BYTES,
     });
-    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 409 | 503);
     if (!auth.principal) return c.json({ error: 'authentication required' }, 401);
     const uploaderDID = auth.principal.did;
 

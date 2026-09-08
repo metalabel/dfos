@@ -445,7 +445,7 @@ func TestBuildAuthorizeURLCarriesTheWireParams(t *testing.T) {
 	// A query the endpoint already carries must survive rather than be clobbered.
 	request, encoded, err := buildAuthorizeURL(
 		"https://app.example.com/authorize?ui=compact", challenge,
-		"http://127.0.0.1:51234/callback", "identity read:profile", lc, priv,
+		"http://127.0.0.1:51234/callback", "identity read:profile", "", lc, priv,
 	)
 	if err != nil {
 		t.Fatalf("buildAuthorizeURL: %v", err)
@@ -519,7 +519,7 @@ func TestBuildAuthorizeURLRejectsANonCanonicalChallenge(t *testing.T) {
 	challenge := testChallenge(testLoginSubject)
 	challenge.Timestamp = "2026-08-10T12:34:56.123Z"
 	if request, _, err := buildAuthorizeURL("https://app.example.com/authorize", challenge,
-		"http://127.0.0.1:1/callback", "identity", lc, priv); err == nil {
+		"http://127.0.0.1:1/callback", "identity", "", lc, priv); err == nil {
 		t.Fatalf("built a request over a non-canonical challenge: %s", request)
 	}
 }
@@ -1362,5 +1362,155 @@ func TestSummarizeCredentialDecodesLocally(t *testing.T) {
 	}
 	if summary.expiryText() == "unknown" {
 		t.Fatalf("expiry did not decode: %+v", summary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// --spaces
+// ---------------------------------------------------------------------------
+
+// SHAPE, NOT MEANING. Which spaces exist and whether the settled scope names an
+// action a space-scoped entry could carry are the host's questions; this client
+// checks only that the string is a shape the parameter's grammar admits.
+func TestParseSpacesFlag(t *testing.T) {
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+	const spaceB = "cv7n8vkvr64cctf3294h9k4eanhff8z"
+
+	for _, ok := range []struct{ in, want string }{
+		{"", ""},
+		{"  ", ""},
+		{"all", "all"},
+		{"  all  ", "all"},
+		{spaceA, spaceA},
+		{spaceA + "," + spaceB, spaceA + "," + spaceB},
+	} {
+		got, err := parseSpacesFlag(ok.in)
+		if err != nil {
+			t.Fatalf("parseSpacesFlag(%q): %v", ok.in, err)
+		}
+		if got != ok.want {
+			t.Fatalf("parseSpacesFlag(%q) = %q, want %q", ok.in, got, ok.want)
+		}
+	}
+
+	tooMany := make([]string, 0, maxLoginSpaces+1)
+	for i := 0; i <= maxLoginSpaces; i++ {
+		tooMany = append(tooMany, spaceA)
+	}
+	for _, bad := range []string{
+		"ALL",
+		"all,all",
+		spaceA + "," + spaceA,
+		spaceA[:30],
+		spaceA + "2",
+		"9ctvrdn9vedda7efetrhcdakfh4cr2K",
+		"did:dfos:" + spaceA,
+		spaceA + ",",
+		spaceA + ", " + spaceB,
+		strings.Join(tooMany, ","),
+	} {
+		if got, err := parseSpacesFlag(bad); err == nil {
+			t.Fatalf("parseSpacesFlag(%q) = %q, want a refusal", bad, got)
+		}
+	}
+}
+
+// ABSENT AND EMPTY SAY DIFFERENT THINGS. No spaces param means the user chooses
+// at consent; the param present means the ask is locked to what it names.
+func TestBuildAuthorizeURLCarriesSpacesOnlyWhenAsked(t *testing.T) {
+	lc, priv := newTestLoginClient(t)
+	challenge := testChallenge(testLoginSubject)
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+
+	for _, tc := range []struct {
+		spaces string
+		want   string
+		set    bool
+	}{
+		{spaces: "", set: false},
+		{spaces: "all", want: "all", set: true},
+		{spaces: spaceA, want: spaceA, set: true},
+	} {
+		request, _, err := buildAuthorizeURL("https://app.example.com/authorize", challenge,
+			"http://127.0.0.1:51234/callback", "read:posts", tc.spaces, lc, priv)
+		if err != nil {
+			t.Fatalf("buildAuthorizeURL: %v", err)
+		}
+		parsed, err := url.Parse(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := parsed.Query().Has("spaces"); got != tc.set {
+			t.Fatalf("spaces present = %v for %q, want %v", got, tc.spaces, tc.set)
+		}
+		if got := parsed.Query().Get("spaces"); got != tc.want {
+			t.Fatalf("spaces = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the slot is the host half
+// ---------------------------------------------------------------------------
+
+// THE SLOT IS THE HOST HALF of each `api:` resource. A credential narrowed to
+// spaces at one host is a credential for that host, and it must file where
+// `api call` will look for it.
+func TestCredentialAPIHostsReadTheHostHalf(t *testing.T) {
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+	const spaceB = "cv7n8vkvr64cctf3294h9k4eanhff8z"
+
+	for _, tc := range []struct {
+		name      string
+		resources []string
+		want      []string
+	}{
+		{"bare host", []string{"api:a.example.test"}, []string{"a.example.test"}},
+		{"space-scoped only", []string{"api:a.example.test/spaces/" + spaceA}, []string{"a.example.test"}},
+		{
+			"bare and space-scoped are one host",
+			[]string{"api:a.example.test", "api:a.example.test/spaces/" + spaceA,
+				"api:a.example.test/spaces/" + spaceB},
+			[]string{"a.example.test"},
+		},
+		{
+			"two hosts, one space-scoped",
+			[]string{"api:b.example.test/spaces/" + spaceA, "api:a.example.test"},
+			[]string{"a.example.test", "b.example.test"},
+		},
+		{"a non-api resource names no host", []string{"content:abc"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := credentialAPIHosts(credentialWithResources(t, tc.resources...))
+			if len(got) != len(tc.want) {
+				t.Fatalf("hosts = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("hosts = %v, want %v", got, tc.want)
+				}
+			}
+			if err := assertFilableHosts(got); err != nil {
+				t.Fatalf("a readable resource must yield a filable host: %v", err)
+			}
+		})
+	}
+}
+
+// A MALFORMED api: RESOURCE REFUSES THE WHOLE CREDENTIAL. Its host half is
+// unreadable, so it falls through as its raw remainder and is refused as a slot
+// rather than filed on the readable half of a credential nobody can account for.
+func TestMalformedAPIResourceStillRefusesTheWholeCredential(t *testing.T) {
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+	for _, resource := range []string{
+		"api:a.example.test/topics/" + spaceA,
+		"api:a.example.test/spaces/" + spaceA + "/extra",
+		"api:a.example.test/spaces/short",
+		"api:../../../.ssh/authorized",
+	} {
+		hosts := credentialAPIHosts(credentialWithResources(t, "api:a.example.test", resource))
+		if err := assertFilableHosts(hosts); err == nil {
+			t.Fatalf("%q was accepted as a slot (hosts %v)", resource, hosts)
+		}
 	}
 }

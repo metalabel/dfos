@@ -174,6 +174,19 @@ describe('siwd byte contract', () => {
   });
 });
 
+/** The two space ids of packages/dfos-protocol/examples/api-resource-coverage.json. */
+const SPACE_A = '9ctvrdn9vedda7efetrhcdakfh4cr2k';
+const SPACE_B = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
+
+/** `count` distinct well-formed ids, for the cardinality bound. */
+const distinctSpaceIds = (count: number): string[] => {
+  const alphabet = '2346789acdefhknrtvz';
+  return Array.from({ length: count }, (_, index) => {
+    const tail = `${alphabet[index % 19]}${alphabet[Math.floor(index / 19)]}`;
+    return `${SPACE_A.slice(0, 29)}${tail}`;
+  });
+};
+
 describe('siwd login kit', () => {
   const AUTHORIZE = 'https://app.example.com/authorize';
 
@@ -201,6 +214,66 @@ describe('siwd login kit', () => {
     expect(params.get('redirect_uri')).toBe('https://3p.com/callback');
     expect(params.get('scope')).toBe('identity');
     expect(params.get('client_did')).toBe('did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae');
+  });
+
+  /*
+    `spaces` locks consent to a named set of places. The kit validates the SHAPE
+    and nothing else: whether the scope carries a space-level action is the
+    host's vocabulary, and a kit that guessed at it would refuse a scope the host
+    accepts.
+  */
+  it('emits spaces as a comma-joined list, and as the literal all', () => {
+    const listed = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity read:posts',
+      spaces: [SPACE_A, SPACE_B],
+    });
+    expect(paramsOf(listed.url).get('spaces')).toBe(`${SPACE_A},${SPACE_B}`);
+
+    const all = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity read:posts',
+      spaces: 'all',
+    });
+    expect(paramsOf(all.url).get('spaces')).toBe('all');
+  });
+
+  it('omits the param entirely when no place set is named', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+    });
+    expect(paramsOf(request.url).has('spaces')).toBe(false);
+  });
+
+  it('refuses a malformed place set WHOLE, rather than narrowing it', () => {
+    const ask = (spaces: readonly string[] | 'all') =>
+      createSiwdLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        domain: '3p.com',
+        redirectUri: 'https://3p.com/callback',
+        scope: 'read:posts',
+        spaces,
+      });
+    const malformed = /spaces must be 'all' or distinct 31-character space ids/;
+
+    expect(() => ask([])).toThrow(malformed);
+    expect(() => ask([SPACE_A.slice(1)])).toThrow(malformed);
+    expect(() => ask([`${SPACE_A}k`])).toThrow(malformed);
+    // 1, b, and uppercase are outside the identifier alphabet
+    expect(() => ask([`${SPACE_A.slice(0, 30)}1`])).toThrow(malformed);
+    expect(() => ask([SPACE_A.toUpperCase()])).toThrow(malformed);
+    expect(() => ask([`did:dfos:${SPACE_A}`])).toThrow(malformed);
+    expect(() => ask([SPACE_A, SPACE_A])).toThrow(malformed);
+    // the cap is the attenuation cardinality bound less the bare-host entry
+    expect(() => ask(distinctSpaceIds(31))).not.toThrow();
+    expect(() => ask(distinctSpaceIds(32))).toThrow(malformed);
   });
 
   it('preserves a query the authorize endpoint already carries', () => {
@@ -782,6 +855,28 @@ describe('siwd loopback credential tier', () => {
 
     expect(decodeSiwdChallenge(request.challenge).domain).toBe(domain);
     expect(request.expect.domain).toBe(domain);
+  });
+
+  it('carries the place set through the loopback tier', async () => {
+    const client = await mintSiwdClientIdentity();
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri: 'http://127.0.0.1:8976/cb',
+      scope: 'read:posts',
+      spaces: [SPACE_A],
+      client,
+    });
+    expect(paramsOf(request.url).get('spaces')).toBe(SPACE_A);
+
+    await expect(
+      createSiwdLoopbackLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        redirectUri: 'http://127.0.0.1:8976/cb',
+        scope: 'read:posts',
+        spaces: ['not-a-space-id'],
+        client,
+      }),
+    ).rejects.toThrow(/spaces must be 'all' or distinct 31-character space ids/);
   });
 
   it('omits client_chain for a DID already resident on the host', async () => {

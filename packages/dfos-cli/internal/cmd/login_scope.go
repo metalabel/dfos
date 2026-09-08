@@ -492,25 +492,34 @@ func bundleForLetter(bundles []apispec.ActionBundle, field string) (apispec.Acti
 // what came back
 // ---------------------------------------------------------------------------
 
-// credentialNamesResource reports whether a credential's attenuation names the
-// resource — the check `api call` will make when it looks for something
-// spendable against this host.
+// credentialNamesResource reports whether a credential's attenuation reaches the
+// resource's host — the check `api call` will make when it looks for something
+// spendable against this host — and lists every resource the credential does
+// name.
 //
-// The RESOURCE, never `aud`. A login credential's audience is this
+// THE HOST HALF, never `aud`. A login credential's audience is this
 // installation's client DID in every case, so an audience check says nothing
-// about which host the grant is for; the host lives in `att[].resource` as
-// `api:<host>`, and that is the only place it lives.
+// about which host the grant is for; the host lives in `att[].resource`, and
+// `api:<host>` and `api:<host>/spaces/<id>` are both grants at that host. A
+// credential whose entries name only spaces is found for the host, which is
+// exactly what `api call` will do with it.
 func credentialNamesResource(token, resource string) (bool, []string) {
 	_, payload, err := protocol.DecodeJWSUnsafe(strings.TrimSpace(token))
 	if err != nil {
 		return false, nil
 	}
+	wantHost, _, wantOK := protocol.ParseApiResource(resource)
 	var resources []string
 	seen := map[string]bool{}
 	found := false
 	for _, entry := range protocol.ParseAtt(payload) {
 		if entry.Resource == resource {
 			found = true
+		}
+		if wantOK {
+			if host, _, ok := protocol.ParseApiResource(entry.Resource); ok && host == wantHost {
+				found = true
+			}
 		}
 		if entry.Resource != "" && !seen[entry.Resource] {
 			seen[entry.Resource] = true
@@ -525,9 +534,11 @@ func credentialNamesResource(token, resource string) (bool, []string) {
 //
 // A WARNING, not a refusal. The artifact verified, it was issued to this
 // installation, and it may well be spendable somewhere — but `api call` selects
-// on the `api:<host>` resource, so one that names another host will not be found
-// for this one, and discovering that as "no stored credential covers api:x"
-// three commands later is the papercut this line exists to prevent.
+// on the host half of each `api:` resource, so one that names another host will
+// not be found for this one, and discovering that as "no stored credential
+// covers api:x" three commands later is the papercut this line exists to
+// prevent. A credential narrowed to spaces at the host that was asked for is
+// not a mismatch: it is the ask, honored narrowly.
 func warnCredentialHostMismatch(token string, target *loginTarget, out io.Writer) {
 	if target == nil || token == "" {
 		return

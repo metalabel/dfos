@@ -10,6 +10,8 @@
   Resource types:
   - chain:*            — wildcard covering all content chains
   - chain:<contentId>  — exact match for a specific content chain
+  - api:<host>         — an API surface, and the ancestor of every space on it
+  - api:<host>/spaces/<id> — one space on that surface
 
   Two audience modes:
   - aud: "*"          — public credential, ingested into relays as standing auth
@@ -497,6 +499,48 @@ const parseResource = (resource: string): { type: string; id: string } | null =>
 };
 
 /**
+ * A space id: 31 characters of the `did:dfos` identifier alphabet, prefix
+ * stripped. The one child the `api:` hierarchy registers.
+ */
+const SPACE_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
+
+/**
+ * Parse an `api:` resource into its host and, when present, its space id.
+ * Returns `null` for any other resource type and for a malformed `api:` id —
+ * `null` IS the malformed verdict, and a malformed resource covers nothing.
+ *
+ * Two forms are well-formed and no others: `api:<host>` with a non-empty host
+ * carrying no `/`, and `api:<host>/spaces/<id>`. The id half splits on the FIRST
+ * `/`, so a host keeps its port and anything past `spaces/<id>` is malformed.
+ */
+export const parseApiResource = (resource: string): { host: string; spaceId?: string } | null => {
+  const parsed = parseResource(resource);
+  if (!parsed || parsed.type !== 'api') return null;
+  const slash = parsed.id.indexOf('/');
+  if (slash < 0) return parsed.id === '' ? null : { host: parsed.id };
+  const host = parsed.id.substring(0, slash);
+  if (host === '') return null;
+  const child = parsed.id.substring(slash + 1);
+  if (!child.startsWith('spaces/')) return null;
+  const spaceId = child.substring('spaces/'.length);
+  if (!SPACE_ID_RE.test(spaceId)) return null;
+  return { host, spaceId };
+};
+
+/**
+ * Whether one `api:` resource covers another: same host, and either the entry is
+ * the bare host (the registered ancestor of every space on it) or the two name
+ * the same space. False when either side is malformed or is not `api:` —
+ * coverage never crosses hosts and never crosses resource types.
+ */
+export const apiResourceCovers = (entryResource: string, requiredResource: string): boolean => {
+  const entry = parseApiResource(entryResource);
+  const required = parseApiResource(requiredResource);
+  if (!entry || !required || entry.host !== required.host) return false;
+  return entry.spaceId === undefined || entry.spaceId === required.spaceId;
+};
+
+/**
  * The ASCII whitespace CREDENTIALS.md "Action coverage" rule 2 trims — tab,
  * newline, vertical tab, form feed, carriage return, space, and nothing else.
  * Neither language's stock trim is this set: JS `String.trim()` strips the whole
@@ -534,11 +578,14 @@ const parseActions = (action: string): Set<string> =>
  * - `chain:X` covered by `chain:*` (narrowing from wildcard — valid)
  * - `chain:*` covered by `chain:*` (exact match)
  * - `chain:*` NOT covered by `chain:X` (widening — invalid)
- * - Non-`chain` types (`mailbox:<id>`, and any form a future capability
- *   registers): exact byte equality of the full resource string, nothing else.
- *   The wildcard is a `chain:`-only concept — a literal `*` id in any other
- *   type is an ordinary id covering only itself — and coverage never crosses
- *   resource types. See CREDENTIALS.md "Resource Types".
+ * - `api:<host>/spaces/<id>` covered by `api:<host>` (narrowing onto one space)
+ *   or by the same child. A MALFORMED `api:` id narrows only from a
+ *   byte-identical parent, under the rule below — a bare host does not carry it.
+ * - Other types (`mailbox:<id>`, and any form a future capability registers):
+ *   exact byte equality of the full resource string, nothing else. The wildcard
+ *   is a `chain:`-only concept — a literal `*` id in any other type is an
+ *   ordinary id covering only itself — and coverage never crosses resource
+ *   types. See CREDENTIALS.md "Resource Types".
  * - Actions: child action set must be a subset of parent action set
  */
 export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]): boolean => {
@@ -570,8 +617,18 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
         // chain:X covered by chain:X (exact match)
         return childRes.id === parentRes.id;
       }
+      if (childRes.type === 'api' && parentRes.type === 'api') {
+        // `api:` is the one hierarchical family: a bare host is the ancestor of
+        // every space on it. Byte identity is the fallback so a malformed id is
+        // still carried by a parent that names it exactly, which is the general
+        // rule for an id neither side can parse.
+        return (
+          apiResourceCovers(parentEntry.resource, childEntry.resource) ||
+          childEntry.resource === parentEntry.resource
+        );
+      }
       if (childRes.type !== 'chain' && parentRes.type !== 'chain') {
-        // non-chain forms narrow by exact byte equality only — no wildcard
+        // every other form narrows by exact byte equality only — no wildcard
         return childEntry.resource === parentEntry.resource;
       }
       // coverage never crosses resource types
@@ -588,7 +645,14 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
  * Check if an `att` array covers a requested resource
  *
  * Used at the relay to determine if a credential authorizes access to a
- * specific content chain.
+ * specific content chain, and by an API verifier to decide whether a grant
+ * reaches the route's resource.
+ *
+ * `chain:*` covers any `chain:` request; an `api:` entry covers an `api:`
+ * request under the host/space hierarchy; every other form is exact byte
+ * equality. A malformed `api:` resource covers nothing and is covered by
+ * nothing, itself included — a resource a verifier cannot parse must not
+ * authorize a request. Every entry is scanned, so any one of them may cover.
  */
 export const matchesResource = async (
   att: Attenuation[],
@@ -617,6 +681,14 @@ export const matchesResource = async (
     // chain:* covers any chain: request
     if (entryRes.type === 'chain' && entryRes.id === '*' && requestedRes.type === 'chain') {
       return true;
+    }
+
+    // `api:` on either side is decided by the hierarchy and nothing else, so a
+    // malformed id cannot fall through to the byte-equality branch below and
+    // authorize a request neither side can parse.
+    if (entryRes.type === 'api' || requestedRes.type === 'api') {
+      if (apiResourceCovers(entry.resource, resource)) return true;
+      continue;
     }
 
     // exact resource match (chain:X == chain:X)

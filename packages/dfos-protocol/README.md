@@ -36,6 +36,12 @@ import { signKeyProof, verifyKeyProof } from '@metalabel/dfos-protocol/key-proof
 | `@metalabel/dfos-protocol/key-proof`   | KEY-PROOF envelopes — compose/sign and verify a challenge-bound proof that a candidate key is held      |
 | `@metalabel/dfos-protocol/fold`        | Canonical linearization and LWW-map folds for index documents                                           |
 
+## `api:` resources and the `jti` member
+
+An `api:` resource takes one of two forms: `api:<host>`, the whole API surface, and `api:<host>/spaces/<id>`, one space on it. A bare host is the ancestor of every space at that host, so a grant naming the host covers a space-addressed request while a space-scoped grant covers only its own space. `parseApiResource` and `apiResourceCovers` are that rule on its own; `isAttenuated` and `matchesResource` apply it. Every other resource type is exact byte equality, and a malformed `api:` id covers nothing — itself included.
+
+`jti` is the envelope's one registered additive member: a per-request unique string of at most `MAX_JTI_BYTES` UTF-8 bytes, emitted after the canonical members. Pass it typed to `signApiRequest` or `signApiIdentityRequest` (`generateJti()` mints one), set `requireJti` on a verifier to refuse a proof without it, and read the verified value back off the envelope to key a replay cache. A proof carrying none has the bytes it always had.
+
 ## Specifications
 
 | Document                                         | Description                                                                     |
@@ -62,6 +68,7 @@ The `examples/` directory contains deterministic reference fixtures that can be 
 - `credential-write.json` — DFOS write credential (broad + content-narrowed)
 - `credential-read.json` — DFOS read credential
 - `identity-services.json` — genesis publishing a services set (relay locator + content/artifact anchors)
+- `api-resource-coverage.json` — the `api:` hierarchy's parse, coverage, attenuation, and matching rows, read by the TypeScript and Go suites alike
 
 ## License
 

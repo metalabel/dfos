@@ -14,8 +14,6 @@ package cmd
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -383,17 +381,55 @@ type spendableCredential struct {
 	token    string
 	cid      string
 	audience string
+	// resource is the bare `api:<host>` the credential was selected for. It names
+	// the host, not the entry that covered it: a credential may carry the bare
+	// host, a set of spaces under it, or both.
 	resource string
+	// spaces are the space ids this credential's own entries name at that host,
+	// sorted. bareHost is true when it also carries the `api:<host>` entry.
+	spaces   []string
+	bareHost bool
 	granted  map[string]bool
 	expiry   int64
+}
+
+// coverage describes what the credential's entries NAME, and nothing beyond it.
+//
+// IT NEVER SAYS "ALL SPACES". A bare-host entry is the ancestor of every space
+// at that host, but what it actually reaches depends on which of its tokens are
+// space-level — and this client is registry-free, so it cannot tell an
+// account-level token from a space-level one. A coalesced credential carrying
+// account-level tokens on the bare host and space-level tokens on two children
+// reaches exactly two spaces, and announcing "all spaces" for it would be a
+// claim this client has no way to make good on. The entries are the fact; what
+// they cover per route is the server's answer.
+func (c *spendableCredential) coverage() string {
+	switch {
+	case len(c.spaces) == 0:
+		return c.resource
+	case c.bareHost:
+		return fmt.Sprintf("%s and %s under it", c.resource, countSpaces(len(c.spaces)))
+	default:
+		return fmt.Sprintf("%s under %s", countSpaces(len(c.spaces)), c.resource)
+	}
+}
+
+func countSpaces(n int) string {
+	if n == 1 {
+		return "1 space"
+	}
+	return fmt.Sprintf("%d spaces", n)
 }
 
 // selectCredentialForHost picks the stored credential spendable against host.
 //
 // The host is NOT the credential's audience — the audience is this
 // installation's client DID, the party the grant was issued to. The host lives
-// in the attenuation, as the `api:<host>` resource string, so that is what is
-// matched. When the resolved identity names a subject, its credential wins;
+// in the attenuation, in the HOST HALF of each `api:` resource, so that is what
+// is matched: `api:<host>` and `api:<host>/spaces/<id>` are both grants at that
+// host, and a credential whose entries name only spaces is selected for it. Which
+// route a space-scoped grant actually covers is the server's decision, per
+// request. When the resolved identity names a subject, its credential wins;
 // otherwise exactly one candidate is required, because guessing which grant to
 // spend is the one thing a credential client must never do.
 func selectCredentialForHost(host string) (*spendableCredential, error) {
@@ -413,7 +449,7 @@ func selectCredentialForHost(host string) (*spendableCredential, error) {
 		if err != nil {
 			continue
 		}
-		candidate := readSpendable(record, resource)
+		candidate := readSpendable(record, host)
 		if candidate == nil {
 			continue
 		}
@@ -455,14 +491,18 @@ func selectCredentialForHost(host string) (*spendableCredential, error) {
 	return candidates[0], nil
 }
 
-// readSpendable decodes one stored credential and reports what it grants on
-// resource, or nil when it grants nothing there.
+// readSpendable decodes one stored credential and reports what it grants at
+// host, or nil when it grants nothing there.
+//
+// GRANTED IS THE UNION ACROSS EVERY ENTRY AT THAT HOST. A credential scoped to
+// two spaces holds its tokens on two entries, and a client that read only one of
+// them would report a shortfall the credential does not have.
 //
 // Action tokens are copied out VERBATIM. This client never enumerates a
 // registry, never validates a token against one, and never interprets what a
 // token means — it compares strings the document wrote against strings the
 // credential wrote, and prints both back unchanged.
-func readSpendable(record storedLoginCredential, resource string) *spendableCredential {
+func readSpendable(record storedLoginCredential, host string) *spendableCredential {
 	header, payload, err := protocol.DecodeJWSUnsafe(strings.TrimSpace(record.Credential))
 	if err != nil {
 		return nil
@@ -478,11 +518,22 @@ func readSpendable(record storedLoginCredential, resource string) *spendableCred
 	}
 	granted := map[string]bool{}
 	covers := false
+	bareHost := false
+	seenSpace := map[string]bool{}
+	var spaces []string
 	for _, entry := range protocol.ParseAtt(payload) {
-		if entry.Resource != resource {
+		entryHost, spaceID, ok := protocol.ParseApiResource(entry.Resource)
+		if !ok || entryHost != host {
 			continue
 		}
 		covers = true
+		switch {
+		case spaceID == "":
+			bareHost = true
+		case !seenSpace[spaceID]:
+			seenSpace[spaceID] = true
+			spaces = append(spaces, spaceID)
+		}
 		for token := range protocol.ParseActions(entry.Action) {
 			granted[token] = true
 		}
@@ -490,12 +541,15 @@ func readSpendable(record storedLoginCredential, resource string) *spendableCred
 	if !covers {
 		return nil
 	}
+	sort.Strings(spaces)
 	spendable := &spendableCredential{
 		record:   record,
 		token:    strings.TrimSpace(record.Credential),
 		cid:      header.CID,
 		audience: audience,
-		resource: resource,
+		resource: "api:" + host,
+		spaces:   spaces,
+		bareHost: bareHost,
 		granted:  granted,
 	}
 	if exp, ok := payload["exp"].(int64); ok {
@@ -511,8 +565,8 @@ func announceCredential(c *spendableCredential) {
 	if quietFlag {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Presenting the credential issued for %s to %s — signing the request proof with its audience key\n",
-		c.record.SubjectDID, c.audience)
+	fmt.Fprintf(os.Stderr, "Presenting the credential issued for %s to %s — it covers %s, and the request proof is signed with its audience key\n",
+		c.record.SubjectDID, c.audience, c.coverage())
 }
 
 // signAPIRequest attaches the artifact the chosen profile names.
@@ -533,15 +587,15 @@ func signAPIRequest(profile *callProfile, request *apispec.Request, headers map[
 	}
 
 	opts := protocol.RequestProofOptions{Body: request.Body}
-	// A jti rides on every write-shaped request. Read-shaped routes ignore an
-	// unknown member, so attaching one is never wrong — and a deployment gating
-	// writes MUST have it (INTEGRATIONS.md, API security notes).
+	// A jti rides on every write-shaped request. Read-shaped routes ignore the
+	// member, so attaching one is never wrong — and a deployment gating writes
+	// MUST have it (INTEGRATIONS.md, API security notes).
 	if !isSafeMethod(request.Method) {
-		id, err := newRequestJTI()
+		id, err := protocol.GenerateJTI()
 		if err != nil {
 			return err
 		}
-		opts.ExtraMembers = protocol.ProofExtraMembers{"jti": id}
+		opts.JTI = id
 	}
 
 	var proof string
@@ -568,16 +622,6 @@ func isSafeMethod(method string) bool {
 		return true
 	}
 	return false
-}
-
-// newRequestJTI returns a fresh per-request uniqueness member: 128 bits from
-// crypto/rand.
-func newRequestJTI() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("generate jti: %w", err)
-	}
-	return hex.EncodeToString(b[:]), nil
 }
 
 // sendAPIRequest performs the call. Redirects are NOT followed: a redirect

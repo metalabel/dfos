@@ -611,7 +611,7 @@
             "$ref": "#/components/responses/BadRequest"
           },
           "401": {
-            "description": "An identity proof was presented and is invalid (bad signature, stale, wrong binding, missing or replayed jti)",
+            "description": "An identity proof was presented and is invalid (bad signature, stale, wrong binding, missing or oversized jti)",
             "content": {
               "application/json": {
                 "schema": {
@@ -622,6 +622,16 @@
           },
           "403": {
             "description": "Refused by the relay-local admission policy — request-level, no per-item results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Replayed request — the proof's jti was already seen inside its freshness window",
             "content": {
               "application/json": {
                 "schema": {
@@ -2336,6 +2346,16 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Replayed request — the proof's jti was already seen inside its freshness window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "413": {
             "description": "Blob body exceeds the configured maximum",

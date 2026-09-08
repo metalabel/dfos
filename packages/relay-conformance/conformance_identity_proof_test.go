@@ -112,6 +112,9 @@ func TestBlobUploadRequiresAnIdentityProof(t *testing.T) {
 // SAME proof a second time on a write-shaped route is refused, even though the
 // identical upload under a FRESH proof is accepted (blob upload is idempotent).
 // The refusal is about the proof having been spent, not about the payload.
+//
+// A replay answers 409, its own verdict, not the 401 an invalid proof gets: the
+// proof was checked and was valid, so retrying it can never succeed.
 func TestIdentityProofReplayRefused(t *testing.T) {
 	base := relayURL(t)
 	creator := createIdentity(t, base)
@@ -129,8 +132,8 @@ func TestIdentityProofReplayRefused(t *testing.T) {
 	first.Body.Close()
 
 	replay := putBlobWithProof(t, base, cc.contentID, cc.genCID, proof, blob)
-	if replay.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("replayed proof: status %d, want 401", replay.StatusCode)
+	if replay.StatusCode != http.StatusConflict {
+		t.Fatalf("replayed proof: status %d, want 409", replay.StatusCode)
 	}
 	replay.Body.Close()
 

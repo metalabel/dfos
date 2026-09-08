@@ -354,8 +354,14 @@ func TestAdmissionJtiDiscipline(t *testing.T) {
 	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "replay-me-once"); got.Code != 200 {
 		t.Fatalf("first jti use: %d %s", got.Code, got.Body.String())
 	}
-	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "replay-me-once"); got.Code != http.StatusUnauthorized {
+	// A replay is 409, not 401: the proof authenticated and was already spent, so
+	// the answer sends the client back to read state rather than to retry.
+	// Missing and oversized jti above stay 401 — those never authenticated.
+	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "replay-me-once"); got.Code != http.StatusConflict {
 		t.Fatalf("replayed jti: %d %s", got.Code, got.Body.String())
+	}
+	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, jtiNone); got.Code != http.StatusUnauthorized {
+		t.Fatalf("missing jti is still 401: %d %s", got.Code, got.Body.String())
 	}
 }
 
@@ -493,7 +499,7 @@ func TestAdmissionConsumesAnInjectedJtiCache(t *testing.T) {
 	// Its refusal is the relay's refusal — the fleet-wide cache is the authority
 	// on replay, not this process's memory of what it has seen.
 	cache.admit = false
-	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "never-seen"); got.Code != http.StatusUnauthorized {
+	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "never-seen"); got.Code != http.StatusConflict {
 		t.Fatalf("cache refusal: %d %s", got.Code, got.Body.String())
 	}
 }

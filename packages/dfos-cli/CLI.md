@@ -1233,6 +1233,10 @@ dfos login alice --host api.dfos.com
 # take the whole catalog without being asked
 dfos login alice --host dfos --all-scopes
 
+# narrow the credential to particular spaces, or to all of them
+dfos login alice --host dfos --spaces all
+dfos login alice --host dfos --spaces 9ctvrdn9vedda7efetrhcdakfh4cr2k,cv7n8vkvr64cctf3294h9k4eanhff8z
+
 # no browser (containers, SSH): print the URL and wait
 dfos login --no-browser --timeout 10m
 
@@ -1245,6 +1249,8 @@ dfos login alice --authorize-url https://app.example.com
 **Choosing what to ask for.** Without `--host`, the scope is whatever you typed — an opaque string handed to the authorize host verbatim. `--host` names the API the credential is for, by registered name or by host, and reads that API's OpenAPI document for the actions it advertises: the catalog on its request-proof scheme (action token → description, per [INTEGRATIONS](https://protocol.dfos.com/integrations#api-authentication)) unioned with every token an operation requires. A registered name resolves against the local registry and reads the cached document; a bare host runs the same discovery `api add` runs — the well-known probe, then `/openapi.json` — and offers to keep what it found under a local name.
 
 The listed actions are then yours to pick from, by number or by token, with enter taking all of them. Three rules bound that ask: an explicit `--scope` is an instruction and is used exactly as typed, `--all-scopes` takes the whole catalog without prompting, and a run with no terminal and no explicit scope **errors and prints the choices** rather than choosing for you — a scope picked on your behalf is a grant you never made. Tokens stay opaque throughout: they are copied from document to prompt to scope string to credential unchanged, and the descriptions are display text nothing decides from.
+
+**Which spaces the credential is for.** `--spaces` narrows the ask: `all`, or a comma-separated list of up to 31 distinct 31-character space ids. The shape is checked here and the value goes to the host verbatim — which spaces exist, and whether the settled scope names an action a space-scoped grant could carry, are the host's questions, and a host whose scope carries no space-level action refuses the request whole. Without the flag, the spaces are chosen on the consent screen. Either way the returned credential's attenuation is the answer: it says which spaces the grant covers, `dfos creds show` decodes it, and the ask is never assumed to have been honored whole.
 
 **Combinations are shown as combinations.** A route requiring `[["read:profile", "read:email"]]` needs both tokens or refuses, and a flat list of tokens cannot say so — it presents the pair as two independent choices, so a subset looks complete and the shortfall arrives later as a 403 against a grant already minted. Every AND-alternative the document's operations require is listed under its own heading with the routes that need it, and selectable whole by a group letter:
 
@@ -1265,9 +1271,9 @@ Taking part of one is still allowed — the host decides what a grant covers, ne
 
 Credentials land in the config directory's `credentials/` (mode `600`, directory `700`) — `~/.dfos/credentials/` by default, and beside `DFOS_CONFIG` wherever that points — alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
 
-**One file per subject and host.** A credential is spent by host — `api call` selects on the `api:<host>` attenuation — so the host is part of the file's name, and signing one identity in to a second host stores beside the first rather than over it. The name is only a slot: every command matches the record's own fields, so a file written under the older subject-only name is read exactly the same way, and moves into its slot the next time that subject stores a credential.
+**One file per subject and host.** A credential is spent by host — `api call` selects on the host half of each `api:` resource — so the host is part of the file's name, and signing one identity in to a second host stores beside the first rather than over it. The name is only a slot: every command matches the record's own fields, so a file written under the older subject-only name is read exactly the same way, and moves into its slot the next time that subject stores a credential.
 
-The slot names are the credential's own `api:<host>` strings, which the issuer wrote, so each is required to be a bare `host[:port]` before it becomes a filename — a resource naming a path refuses the whole credential, and nothing is written outside `credentials/`. A credential covering several hosts occupies the slot of the first of them, so the next login for that host would land on top of it: the record already there is moved into a slot named by one of the hosts the incoming credential does _not_ cover, rather than replaced. A host a credential still covers never loses its only record to a re-login.
+The slot is the host half of each `api:` resource the credential names: `api:<host>` and `api:<host>/spaces/<id>` are both grants at that host, so a credential narrowed to spaces at one host files under that host rather than under none. The issuer wrote those strings, so each host half is required to be a bare `host[:port]` before it becomes a filename — a resource naming a path, and any `api:` shape outside those two forms, refuses the whole credential, and nothing is written outside `credentials/`. A credential covering several hosts occupies the slot of the first of them, so the next login for that host would land on top of it: the record already there is moved into a slot named by one of the hosts the incoming credential does _not_ cover, rather than replaced. A host a credential still covers never loses its only record to a re-login.
 
 The separate `creds` group manages these local login records (not protocol grants and revocations):
 
@@ -1289,14 +1295,15 @@ dfos creds rm alice
 
 `creds list` prints `-` when an expiry claim is absent or cannot be decoded; an empty store prints a friendly message (`[]` with `--json`). `creds show` resolves configured identity names and also accepts a bare DID. `show` and `rm` take one record: with a single credential stored for that subject they take it, and with several they name the hosts and wait for `--host <host>` rather than picking — the same refusal to guess `api call` makes. `identity forget` drops every credential the identity holds, since forgetting some of them and reporting a whole forget would be a lie — and a file in the store that will not open or parse is left in place and named in the output (`unreadableCredentialFiles` with `--json`), because nothing can say whether it is one of that identity's grants. Decoding here is intentionally unsafe inspection: signature verification happens when a credential is presented, not while listing the local cache.
 
-| Flag              | Default    | Meaning                                                                                         |
-| ----------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here.                         |
-| `--host`          | —          | API the credential is for — a registered name or a host — whose advertised actions are offered. |
-| `--all-scopes`    | `false`    | With `--host`, ask for every advertised action without prompting.                               |
-| `--authorize-url` | —          | Authorize endpoint (or bare origin) to use when the chain names none.                           |
-| `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.                                    |
-| `--timeout`       | `5m`       | How long to wait for the callback.                                                              |
+| Flag              | Default    | Meaning                                                                                                |
+| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here.                                |
+| `--host`          | —          | API the credential is for — a registered name or a host — whose advertised actions are offered.        |
+| `--all-scopes`    | `false`    | With `--host`, ask for every advertised action without prompting.                                      |
+| `--spaces`        | —          | `all`, or up to 31 distinct 31-character space ids. Honored when the scope names a space-level action. |
+| `--authorize-url` | —          | Authorize endpoint (or bare origin) to use when the chain names none.                                  |
+| `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.                                           |
+| `--timeout`       | `5m`       | How long to wait for the callback.                                                                     |
 
 `--scope` and `--all-scopes` are mutually exclusive, and `--all-scopes` needs a `--host` to have a catalog to take.
 
@@ -1417,7 +1424,7 @@ The shape split is strict at both positions, and it runs the other way too: a se
 
 ### Credentials, and what a refusal means
 
-The delegated profile presents a stored login credential and signs the request proof with the key that credential was issued to — this installation's login client key. The credential is selected by what it grants: some `att` entry naming `api:<host>` for the host being called. It is the **attenuation** that is matched, never `aud` — the audience is this installation's client DID on every stored credential, so it says nothing about which host a grant is for. `--as` picks between several; without it, exactly one candidate is required, because guessing which grant to spend is the one thing a credential client must never do. `dfos login --host <name-or-host>` obtains a credential for a specific host and lists that host's advertised actions to choose from; `dfos creds list` shows what is stored. When nothing covers the host, or when the presented grant does not carry what a route requires, the error names that spelling.
+The delegated profile presents a stored login credential and signs the request proof with the key that credential was issued to — this installation's login client key. The credential is selected by what it grants: some `att` entry whose `api:` resource names the host being called, bare or narrowed to a space under it. A credential whose entries name only spaces is selected for that host, and the server decides per route whether the space a grant names covers the one the route addresses. What the credential grants on that host is the union of every entry there, so a grant split across two spaces is reported whole. It is the **attenuation** that is matched, never `aud` — the audience is this installation's client DID on every stored credential, so it says nothing about which host a grant is for. `--as` picks between several; without it, exactly one candidate is required, because guessing which grant to spend is the one thing a credential client must never do. `dfos login --host <name-or-host>` obtains a credential for a specific host and lists that host's advertised actions to choose from; `dfos creds list` shows what is stored. When nothing covers the host, or when the presented grant does not carry what a route requires, the error names that spelling.
 
 A non-2xx renders by tier, because the tiers mean different things:
 

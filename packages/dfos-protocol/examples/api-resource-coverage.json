@@ -1,0 +1,413 @@
+{
+  "description": "Reference vectors for the api: resource family — parse, coverage, attenuation, and request matching. Consumed by the TS credentials tests and the Go delegation tests (both twins read this file; neither inlines a row). Space ids are 31 characters of the did:dfos identifier alphabet [2346789acdefhknrtvz]; hosts are lowercase authorities, port included when non-default.",
+  "ids": {
+    "spaceA": "9ctvrdn9vedda7efetrhcdakfh4cr2k",
+    "spaceB": "cv7n8vkvr64cctf3294h9k4eanhff8z"
+  },
+  "parse": [
+    { "resource": "api:api.dfos.com", "valid": true, "host": "api.dfos.com", "spaceId": null },
+    {
+      "resource": "api:api.example.org:8443",
+      "valid": true,
+      "host": "api.example.org:8443",
+      "spaceId": null
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": true,
+      "host": "api.dfos.com",
+      "spaceId": "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+    },
+    {
+      "resource": "api:api.example.org:8443/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": true,
+      "host": "api.example.org:8443",
+      "spaceId": "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+    },
+    {
+      "resource": "api:*",
+      "valid": true,
+      "host": "*",
+      "spaceId": null,
+      "note": "an ordinary id covering only itself; never a served host"
+    },
+    { "resource": "api:", "valid": false, "note": "empty host" },
+    {
+      "resource": "api:/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": false,
+      "note": "empty host"
+    },
+    { "resource": "api:api.dfos.com/", "valid": false, "note": "trailing separator, no child" },
+    {
+      "resource": "api:api.dfos.com/spaces",
+      "valid": false,
+      "note": "child segment without an id"
+    },
+    { "resource": "api:api.dfos.com/spaces/", "valid": false, "note": "empty id" },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2",
+      "valid": false,
+      "note": "30-character id"
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k2",
+      "valid": false,
+      "note": "32-character id"
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2K",
+      "valid": false,
+      "note": "uppercase is outside the identifier alphabet"
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr1b",
+      "valid": false,
+      "note": "1 and b are outside the identifier alphabet"
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k/extra",
+      "valid": false,
+      "note": "the hierarchy is one level deep"
+    },
+    {
+      "resource": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": false,
+      "note": "topics is not a registered child"
+    },
+    {
+      "resource": "api:api.dfos.com/SPACES/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": false,
+      "note": "the child segment is lowercase"
+    },
+    {
+      "resource": "api:api.dfos.com/spaces/did:dfos:9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "valid": false,
+      "note": "the id is prefix-stripped, never a full DID"
+    }
+  ],
+  "covers": [
+    {
+      "entry": "api:api.dfos.com",
+      "required": "api:api.dfos.com",
+      "covers": true,
+      "note": "bare covers bare"
+    },
+    {
+      "entry": "api:api.dfos.com",
+      "required": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": true,
+      "note": "bare host is the registered ancestor of every space at that host"
+    },
+    {
+      "entry": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "required": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": true,
+      "note": "child covers itself"
+    },
+    {
+      "entry": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "required": "api:api.dfos.com",
+      "covers": false,
+      "note": "child never covers the bare host"
+    },
+    {
+      "entry": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "required": "api:api.dfos.com/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+      "covers": false,
+      "note": "sibling space"
+    },
+    {
+      "entry": "api:api.dfos.com",
+      "required": "api:api.example.org/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": false,
+      "note": "coverage never crosses hosts"
+    },
+    {
+      "entry": "api:api.dfos.com",
+      "required": "api:api.dfos.com:8443",
+      "covers": false,
+      "note": "a non-default port is part of the host"
+    },
+    {
+      "entry": "api:api.dfos.com:8443",
+      "required": "api:api.dfos.com:8443/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": true,
+      "note": "the port travels with the host into the child"
+    },
+    {
+      "entry": "api:*",
+      "required": "api:api.dfos.com",
+      "covers": false,
+      "note": "api:* is an ordinary id, not a wildcard"
+    },
+    {
+      "entry": "api:*",
+      "required": "api:*",
+      "covers": true,
+      "note": "an ordinary id covers itself"
+    },
+    {
+      "entry": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "required": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": false,
+      "note": "a malformed api: resource never covers a request, even itself"
+    },
+    {
+      "entry": "api:api.dfos.com",
+      "required": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": false,
+      "note": "a malformed required resource is never covered"
+    },
+    {
+      "entry": "chain:*",
+      "required": "api:api.dfos.com",
+      "covers": false,
+      "note": "coverage never crosses resource types"
+    },
+    {
+      "entry": "api:api.dfos.com",
+      "required": "chain:9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "covers": false,
+      "note": "coverage never crosses resource types"
+    }
+  ],
+  "attenuation": [
+    {
+      "note": "bare host narrows to one space",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:posts,write:comments" }],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "note": "bare host narrows to two spaces",
+      "parent": [
+        { "resource": "api:api.dfos.com", "action": "read:posts,write:upvotes,write:comments" }
+      ],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts,write:upvotes"
+        },
+        {
+          "resource": "api:api.dfos.com/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+          "action": "read:posts"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "note": "bare host to bare host, fewer actions",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:profile,read:email" }],
+      "child": [{ "resource": "api:api.dfos.com", "action": "read:profile" }],
+      "valid": true
+    },
+    {
+      "note": "child widening to the bare host is refused",
+      "parent": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "child": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "valid": false
+    },
+    {
+      "note": "sibling space is refused",
+      "parent": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+          "action": "read:posts"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "note": "child to the same child is exact",
+      "parent": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts,write:comments"
+        }
+      ],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "write:comments"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "note": "resource narrows but the action widens",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts,write:posts"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "note": "another host is refused",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "child": [
+        {
+          "resource": "api:api.example.org/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "note": "an account-level token narrows onto a child; the entry is inert, not refused",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:profile,read:posts" }],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:profile"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "note": "a malformed api: id is carried only by byte-identical parent",
+      "parent": [
+        {
+          "resource": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "valid": true
+    },
+    {
+      "note": "a bare host does not carry a malformed api: id",
+      "parent": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "child": [
+        {
+          "resource": "api:api.dfos.com/topics/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "note": "mailbox: stays exact — the hierarchy is api:-only",
+      "parent": [{ "resource": "mailbox:9ctvrdn9vedda7efetrhcdakfh4cr2k", "action": "deposit" }],
+      "child": [
+        {
+          "resource": "mailbox:9ctvrdn9vedda7efetrhcdakfh4cr2k/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+          "action": "deposit"
+        }
+      ],
+      "valid": false
+    }
+  ],
+  "matches": [
+    {
+      "note": "bare host entry satisfies a space-addressed demand",
+      "att": [{ "resource": "api:api.dfos.com", "action": "read:posts,write:comments" }],
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "write:comments",
+      "covers": true
+    },
+    {
+      "note": "child entry satisfies its own space",
+      "att": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "read:posts",
+      "covers": true
+    },
+    {
+      "note": "child entry does not satisfy the bare host",
+      "att": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:profile"
+        }
+      ],
+      "resource": "api:api.dfos.com",
+      "action": "read:profile",
+      "covers": false
+    },
+    {
+      "note": "child entry does not satisfy a sibling space",
+      "att": [
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts"
+        }
+      ],
+      "resource": "api:api.dfos.com/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+      "action": "read:posts",
+      "covers": false
+    },
+    {
+      "note": "the action must be in the covering entry's set",
+      "att": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "write:comments",
+      "covers": false
+    },
+    {
+      "note": "any one entry may cover; the scan does not stop at the first api: entry",
+      "att": [
+        {
+          "resource": "api:api.dfos.com/spaces/cv7n8vkvr64cctf3294h9k4eanhff8z",
+          "action": "read:posts"
+        },
+        {
+          "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+          "action": "read:posts,write:upvotes"
+        }
+      ],
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "write:upvotes",
+      "covers": true
+    },
+    {
+      "note": "host mismatch",
+      "att": [{ "resource": "api:api.dfos.com", "action": "read:posts" }],
+      "resource": "api:api.example.org/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "read:posts",
+      "covers": false
+    },
+    {
+      "note": "existing bare-host behavior is unchanged: exact host, exact action",
+      "att": [{ "resource": "api:api.dfos.com", "action": "read:profile,read:email" }],
+      "resource": "api:api.dfos.com",
+      "action": "read:email",
+      "covers": true
+    },
+    {
+      "note": "read:* is a literal token and matches no real route",
+      "att": [{ "resource": "api:api.dfos.com", "action": "read:*" }],
+      "resource": "api:api.dfos.com/spaces/9ctvrdn9vedda7efetrhcdakfh4cr2k",
+      "action": "read:posts",
+      "covers": false
+    }
+  ]
+}

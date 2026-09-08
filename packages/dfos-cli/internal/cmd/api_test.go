@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -986,5 +987,180 @@ func apispecRegistrationForTest() apispec.Registration {
 	return apispec.Registration{
 		Name: "test", Source: "s", Document: "d",
 		Kind: apispec.KindDirect, FetchedAt: time.Now(),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// space-scoped credentials
+// ---------------------------------------------------------------------------
+
+// plantCredentialWithAtt stores a credential whose attenuation is written out
+// entry by entry — the shape an authorize host returns when consent narrowed the
+// grant to particular spaces, which CreateCredential's one-resource form cannot
+// express.
+func plantCredentialWithAtt(t *testing.T, store *keystore.MemoryStore, subject, authority string,
+	entries map[string]string) string {
+	t.Helper()
+	keys = store
+	client, clientPriv, err := ensureLoginClient()
+	if err != nil {
+		t.Fatalf("mint login client: %v", err)
+	}
+	resources := make([]string, 0, len(entries))
+	for resource := range entries {
+		resources = append(resources, resource)
+	}
+	sort.Strings(resources)
+	att := make([]any, 0, len(resources))
+	for _, resource := range resources {
+		att = append(att, map[string]any{"resource": resource, "action": entries[resource]})
+	}
+	credential, err := protocol.CreateJWS(protocol.JWSHeader{
+		Alg: "EdDSA", Typ: credentialJWSTyp, Kid: subject + "#key_issuer",
+	}, map[string]any{"iss": subject, "aud": client.DID, "att": att}, clientPriv)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if _, err := storeLoginCredential(subject, client, credential, authority); err != nil {
+		t.Fatalf("store credential: %v", err)
+	}
+	return credential
+}
+
+// A CREDENTIAL WHOSE ENTRIES NAME ONLY SPACES IS A CREDENTIAL FOR ITS HOST.
+// Selection is by the host half, and granted is the UNION across every entry at
+// that host — reading one entry would report a shortfall the credential does not
+// have.
+func TestSpaceScopedCredentialIsSpendableForItsHost(t *testing.T) {
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+	const spaceB = "cv7n8vkvr64cctf3294h9k4eanhff8z"
+	storeA, _, _ := setupDevices(t)
+	subject := createIdentity(t, "alice", storeA)
+
+	plantCredentialWithAtt(t, storeA, subject, "a.example.test", map[string]string{
+		"api:a.example.test/spaces/" + spaceA: "read:posts,write:comments",
+		"api:a.example.test/spaces/" + spaceB: "read:posts",
+	})
+
+	chosen, err := selectCredentialForHost("a.example.test")
+	if err != nil {
+		t.Fatalf("a space-scoped credential must be spendable for its host: %v", err)
+	}
+	if chosen.resource != "api:a.example.test" {
+		t.Fatalf("resource = %q, want the bare host", chosen.resource)
+	}
+	for _, token := range []string{"read:posts", "write:comments"} {
+		if !chosen.granted[token] {
+			t.Fatalf("granted = %v, want the union across both entries", chosen.granted)
+		}
+	}
+	if chosen.bareHost {
+		t.Fatal("this credential names no bare-host entry")
+	}
+	if len(chosen.spaces) != 2 || chosen.spaces[0] != spaceA || chosen.spaces[1] != spaceB {
+		t.Fatalf("spaces = %v, want both ids sorted", chosen.spaces)
+	}
+	if got := chosen.coverage(); got != "2 spaces under api:a.example.test" {
+		t.Fatalf("coverage = %q", got)
+	}
+	// A space at another host is another host, and nothing is spendable there.
+	if _, err := selectCredentialForHost("b.example.test"); err == nil {
+		t.Fatal("a credential for one host was selected for another")
+	}
+}
+
+// THE ANNOUNCE LINE NEVER SAYS "ALL SPACES". This is the coalesced shape a
+// consent screen returns — account-level tokens on the bare host, space-level
+// tokens on the children it was narrowed to — and it reaches exactly the spaces
+// its children name. Reading the bare-host entry as "all spaces" would be a
+// claim this client cannot make good on: it holds no registry, so it cannot tell
+// an account-level token from a space-level one, and only the server knows which
+// entry answers a given route.
+func TestCoverageDescribesTheEntriesAndNeverClaimsAllSpaces(t *testing.T) {
+	const spaceA = "9ctvrdn9vedda7efetrhcdakfh4cr2k"
+	storeA, _, _ := setupDevices(t)
+	subject := createIdentity(t, "alice", storeA)
+
+	plantCredentialWithAtt(t, storeA, subject, "a.example.test", map[string]string{
+		"api:a.example.test":                  "read:profile",
+		"api:a.example.test/spaces/" + spaceA: "read:posts",
+	})
+
+	chosen, err := selectCredentialForHost("a.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !chosen.bareHost {
+		t.Fatal("the credential names the bare host")
+	}
+	if got := chosen.coverage(); got != "api:a.example.test and 1 space under it" {
+		t.Fatalf("coverage = %q", got)
+	}
+	if !chosen.granted["read:profile"] || !chosen.granted["read:posts"] {
+		t.Fatalf("granted = %v, want the union across both entries", chosen.granted)
+	}
+}
+
+// A credential naming only the bare host has no space count to report, so the
+// line is the resource and nothing else.
+func TestCoverageOfABareHostCredentialIsJustTheHost(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	subject := createIdentity(t, "alice", storeA)
+	plantCredential(t, storeA, subject, "a.example.test", "read:profile")
+
+	chosen, err := selectCredentialForHost("a.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chosen.coverage(); got != "api:a.example.test" {
+		t.Fatalf("coverage = %q", got)
+	}
+}
+
+// A jti rides on every write-shaped request and on no read-shaped one. A
+// deployment gating writes REQUIRES it; a read-shaped route ignores the member,
+// so attaching one is never wrong — but attaching one to a GET would spend cache
+// space for nothing.
+func TestSignedProofCarriesAJtiOnWritesOnly(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := &callProfile{
+		profile: apispec.ProfileIdentity,
+		kid:     "did:dfos:" + strings.Repeat("2", 31) + "#key_auth",
+		priv:    priv,
+	}
+	for _, tc := range []struct {
+		method  string
+		wantJti bool
+	}{
+		{"GET", false}, {"HEAD", false}, {"OPTIONS", false},
+		{"POST", true}, {"PUT", true}, {"PATCH", true}, {"DELETE", true},
+	} {
+		headers := map[string]string{}
+		request := &apispec.Request{
+			Method: tc.method, Authority: "api.example.test", Target: "/v1/thing",
+			URL: "https://api.example.test/v1/thing",
+		}
+		if err := signAPIRequest(profile, request, headers); err != nil {
+			t.Fatalf("%s: %v", tc.method, err)
+		}
+		token := protocol.ParseDFOSAuthorization(headers["Authorization"])
+		if token == "" {
+			t.Fatalf("%s: Authorization = %q", tc.method, headers["Authorization"])
+		}
+		_, payload, err := protocol.DecodeJWSUnsafe(token)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.method, err)
+		}
+		jti, present := payload["jti"].(string)
+		if present != tc.wantJti {
+			t.Fatalf("%s: jti present = %v, want %v", tc.method, present, tc.wantJti)
+		}
+		// The recommended value: 128 bits, unpadded base64url.
+		if tc.wantJti && len(jti) != 22 {
+			t.Fatalf("%s: jti = %q, want 22 unpadded base64url characters", tc.method, jti)
+		}
 	}
 }

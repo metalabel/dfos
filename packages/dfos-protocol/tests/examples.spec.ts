@@ -32,6 +32,7 @@ const fixtures = readdirSync(examplesDir)
 describe('example fixtures', () => {
   it('has all expected fixture files', () => {
     expect(fixtures).toEqual([
+      'api-resource-coverage.json',
       'content-delegated.json',
       'content-delete.json',
       'content-lifecycle.json',

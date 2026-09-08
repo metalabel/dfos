@@ -33,6 +33,7 @@ import {
   apiIdentitySigningInput,
   apiRequestSigningInput,
   ApiRequestVerifyError,
+  apiResourceCovers,
   assertProofVerifierConfig,
   buildApiAuthHeaders,
   buildApiIdentityHeaders,
@@ -42,17 +43,22 @@ import {
   DEFAULT_PROOF_WINDOW_SECONDS,
   DFOS_AUTH_SCHEME,
   EMPTY_BODY_SHA256,
+  generateJti,
   IDENTITY_PROOF_JWS_TYP,
   matchesResource,
   MAX_BODY_BYTES,
   MAX_CREDENTIAL_SIZE,
+  MAX_JTI_BYTES,
   MAX_PROOF_FRESHNESS_SPAN_SECONDS,
   MAX_REQUEST_PROOF_SIZE,
+  parseApiResource,
   parseDfosAuthorization,
+  replayedProof,
   REQUEST_PROOF_JWS_TYP,
   sha256BodyHash,
   signApiIdentityRequest,
   signApiRequest,
+  uncoveredProof,
   verifyDelegationChain,
   verifyDFOSCredential,
   verifyIdentityProofEnvelope,
@@ -80,6 +86,7 @@ export {
   apiIdentitySigningInput,
   apiRequestSigningInput,
   ApiRequestVerifyError,
+  apiResourceCovers,
   assertProofVerifierConfig,
   buildApiAuthHeaders,
   buildApiIdentityHeaders,
@@ -87,15 +94,20 @@ export {
   DEFAULT_PROOF_WINDOW_SECONDS,
   DFOS_AUTH_SCHEME,
   EMPTY_BODY_SHA256,
+  generateJti,
   IDENTITY_PROOF_JWS_TYP,
   MAX_BODY_BYTES,
+  MAX_JTI_BYTES,
   MAX_PROOF_FRESHNESS_SPAN_SECONDS,
   MAX_REQUEST_PROOF_SIZE,
+  parseApiResource,
   parseDfosAuthorization,
+  replayedProof,
   REQUEST_PROOF_JWS_TYP,
   sha256BodyHash,
   signApiIdentityRequest,
   signApiRequest,
+  uncoveredProof,
   type IdentityProofPayload,
   type ProofExtraMembers,
   type RequestProofFailurePhase,
@@ -105,8 +117,15 @@ export {
   type SignApiRequestInput,
 };
 
-/** The v0 action registry's only token. */
+/** The registry's account-level default action. */
 export const DEFAULT_API_ACTION = 'read:profile';
+
+/**
+ * The methods that carry no `jti` under the fetch adapter's default. RFC 9110
+ * safe methods: nothing they ask for changes state, so replaying one buys an
+ * attacker the read they could have made anyway.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** Linear delegation depth ceiling — the protocol's own chain-walk bound. */
 const MAX_DELEGATION_DEPTH = 16;
@@ -130,6 +149,13 @@ export interface CreateApiAuthFetchOptions {
   sign: (message: Uint8Array) => Promise<Uint8Array>;
   /** The underlying transport. Default `globalThis.fetch`. */
   fetch?: typeof fetch;
+  /**
+   * When to attach a freshly minted `jti`. Default `'writes'` — every method
+   * except GET, HEAD, and OPTIONS — which is what a write-gating host requires.
+   * `'always'` covers a host that requires it on reads too; `'never'` is for a
+   * host that has no replay cache and would only be paying for the bytes.
+   */
+  jti?: 'writes' | 'always' | 'never';
 }
 
 /**
@@ -207,6 +233,7 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
   // on some later request.
   const credentialCID = credentialCIDFromHeader(options.credential);
   const send: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const jtiMode = options.jti ?? 'writes';
 
   return async (input, init) => {
     const request =
@@ -221,6 +248,12 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
           '(plaintext is allowed only to localhost, 127.0.0.1, and [::1])',
       );
     }
+
+    // A fresh `jti` per request, minted here rather than by the caller: it is
+    // per-request by definition, and a value reused across two requests is the
+    // one thing that makes the member useless.
+    const attachJti =
+      jtiMode === 'always' || (jtiMode === 'writes' && !SAFE_METHODS.has(request.method));
 
     const { proof } = await signApiRequest({
       method: request.method,
@@ -239,6 +272,7 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
       credentialCID,
       kid: options.kid,
       sign: options.sign,
+      ...(attachJti ? { jti: generateJti() } : {}),
     });
 
     const headers = new Headers(request.headers);
@@ -298,10 +332,31 @@ const clientPresenterResolver =
     // Any CURRENT key role may sign a proof (INTEGRATIONS.md, JWS header: "Key
     // resolution is at the basis, which is now") — auth, assert, or controller.
     // This is wider than SIWD, which is authKeys-only by its own spec.
-    return {
-      isDeleted: state.isDeleted,
-      keys: [...state.authKeys, ...state.assertKeys, ...state.controllerKeys],
-    };
+    //
+    // ONE ENTRY PER KEY, carrying every role it holds. A key listed under two
+    // roles is one key, and a deployment applying a role rule needs the union,
+    // not whichever role happened to be listed first.
+    const byId = new Map<
+      string,
+      { id: string; publicKeyMultibase: string; roles: ('auth' | 'assert' | 'controller')[] }
+    >();
+    for (const [role, keys] of [
+      ['auth', state.authKeys],
+      ['assert', state.assertKeys],
+      ['controller', state.controllerKeys],
+    ] as const) {
+      for (const key of keys) {
+        const seen = byId.get(key.id);
+        if (seen) seen.roles.push(role);
+        else
+          byId.set(key.id, {
+            id: key.id,
+            publicKeyMultibase: key.publicKeyMultibase,
+            roles: [role],
+          });
+      }
+    }
+    return { isDeleted: state.isDeleted, keys: [...byId.values()] };
   };
 
 export interface VerifyApiRequestInput {
@@ -317,8 +372,8 @@ export interface VerifyApiRequestInput {
    * a verifier that compared the proof's `host` against a request header would
    * have no host binding at all. Include the port when it is not 443.
    *
-   * It is also the id half of the `api:<host>` resource string this verifier
-   * requires, so the request binding and the grant name the same origin.
+   * It is also the host half of the `api:` resource this verifier requires, so
+   * the request binding and the grant name the same origin.
    */
   host: string;
   /** The received request's method. */
@@ -340,11 +395,27 @@ export interface VerifyApiRequestInput {
 
   /** The action token this route requires. Default `read:profile`. */
   action?: string;
+  /**
+   * The `api:` resource this route demands, which the leaf's attenuation must
+   * cover. Default `api:<host>` — the account-level form. A SPACE-ADDRESSED
+   * route passes `api:<host>/spaces/<id>`, resolving the id by its own routing;
+   * a bare-host grant satisfies it by ancestor coverage.
+   *
+   * Its host half MUST byte-equal `host`, so the binding and the grant name the
+   * same origin. Anything else is a deployment error (500), never a verdict.
+   */
+  resource?: string;
 
   /** Acceptance window `W`, seconds. Default 60. `W + S` MUST NOT exceed 300. */
   windowSeconds?: number;
   /** Clock-skew allowance `S`, seconds. Default 60. `W + S` MUST NOT exceed 300. */
   skewSeconds?: number;
+  /**
+   * Require the registered `jti` member (401 when absent). A deployment gating
+   * WRITES sets it on every write-shaped route and records the returned value in
+   * its own replay cache, keyed with the presenter DID.
+   */
+  requireJti?: boolean;
 
   /**
    * Accept a presenter resolution whose tip could not be verified (cache-only or
@@ -361,12 +432,18 @@ export interface VerifiedRequestProof {
   subjectDID: string;
   /** The authority the grant and the binding both name. */
   host: string;
+  /** The `api:` resource the route demanded and the leaf was found to cover. */
+  resource: string;
   /** The action token the leaf's attenuation was found to cover. */
   action: string;
   /** The proof's issued-at, unix seconds. */
   iat: number;
   /** The leaf credential's CID, re-derived and equal to the proof's member. */
   credentialCID: string;
+  /** The registered `jti`, when the proof carried one — the replay cache's value. */
+  jti?: string;
+  /** The signing key's roles, when the presenter's state named them. */
+  keyRoles?: readonly ('auth' | 'assert' | 'controller')[];
 }
 
 /**
@@ -413,7 +490,13 @@ const discoverChainRoot = (leafToken: string): string => {
  *
  * Throws `ApiRequestVerifyError`; branch on `reason`/`phase`/`status`, never on
  * message text. `status` is the recommended HTTP code (401 proof-invalid, 403
- * credential-invalid, 503 unverifiable, 500 config).
+ * credential-invalid or uncovered, 503 unverifiable, 500 config).
+ *
+ * The two 403s are different answers. `invalid` means the credential itself does
+ * not hold — a broken chain, a revocation, a public audience, an audience that
+ * is not the signer. `uncovered` means it holds and does not reach this route's
+ * resource and action; a route offering optional authentication serves its
+ * anonymous projection on that verdict rather than refusing.
  *
  * Missing issuer dependencies and an unavailable revocation source are
  * unverifiable (503). The default checker throws when no relay answers; an
@@ -440,6 +523,23 @@ export const verifyApiRequest = async (
   if (action.split(',').every((token) => token.trim() === '')) {
     throw misconfigured('required action must name a non-empty token');
   }
+  // The route's required resource is deployment config too, and it must name the
+  // same origin the request binding does. A malformed one covers nothing, so a
+  // route configured with it would refuse every caller with a 403 that reads as
+  // the caller's fault.
+  const resource = input.resource ?? `api:${input.host}`;
+  const parsedResource = parseApiResource(resource);
+  if (!parsedResource) {
+    throw misconfigured(
+      `required resource ${resource} is not a well-formed api: resource ` +
+        '(api:<host> or api:<host>/spaces/<id>)',
+    );
+  }
+  if (parsedResource.host !== input.host) {
+    throw misconfigured(
+      `required resource ${resource} names a different authority than the verifier's host ${input.host}`,
+    );
+  }
 
   // 1. Size — the CREDENTIAL half, before any decode. (The proof half is the
   // envelope's, immediately below.)
@@ -453,7 +553,7 @@ export const verifyApiRequest = async (
   // proof signature is THE GATE to every step below: the credential work is
   // unbounded and network-touching, and a well-formed proof with a bad signature
   // must not buy it.
-  const { payload, presenterDID, now } = await verifyRequestProofEnvelope(
+  const { payload, presenterDID, now, keyRoles } = await verifyRequestProofEnvelope(
     input as ProofEnvelopeInput,
     clientPresenterResolver(client, input.allowStale === true),
   );
@@ -528,21 +628,30 @@ export const verifyApiRequest = async (
   // There is nothing external to compare it against: `read:profile` serves the
   // profile of exactly the DID that rooted the credential.
   //
-  // 11. Attenuation coverage — exact byte equality of `api:<host>` against the
-  // verifier's OWN configured authority, and the leaf's canonical action set
-  // must contain the route's required token. No wildcard form exists for `api:`,
-  // and `read:*` is a literal token that matches no real route.
-  // `action` was validated as non-empty in the config block above.
-  if (!(await matchesResource(leaf.att, `api:${input.host}`, action))) {
-    throw invalidCredential(`credential does not cover ${action} on api:${input.host}`);
+  // 11. Attenuation coverage — some leaf entry must cover the route's required
+  // resource under the `api:` hierarchy (a bare-host grant reaches every space
+  // on that host; a space-scoped grant reaches only its own), and that entry's
+  // canonical action set must contain the route's required token. No wildcard
+  // form exists for `api:`, and `read:*` is a literal token that matches no real
+  // route. Both `resource` and `action` were validated in the config block above.
+  //
+  // ITS OWN VERDICT, not `invalid`. Nothing is wrong with the credential — it
+  // simply does not reach this route. A route offering optional authentication
+  // answers `uncovered` with the anonymous projection (a credential only ADDS),
+  // and there is no such answer for an `invalid` one.
+  if (!(await matchesResource(leaf.att, resource, action))) {
+    throw uncoveredProof(`credential does not cover ${action} on ${resource}`);
   }
 
   return {
     subjectDID: rootDID,
     host: input.host,
+    resource,
     action,
     iat: payload.iat,
     credentialCID: leaf.credentialCID,
+    ...(payload.jti !== undefined ? { jti: payload.jti } : {}),
+    ...(keyRoles !== undefined ? { keyRoles } : {}),
   };
 };
 
@@ -577,6 +686,12 @@ export interface VerifyApiIdentityRequestInput {
   windowSeconds?: number;
   /** Clock-skew allowance `S`, seconds. Default 60. `W + S` MUST NOT exceed 300. */
   skewSeconds?: number;
+  /**
+   * Require the registered `jti` member (401 when absent). A deployment gating
+   * WRITES with a bare identity sets it on every write-shaped route — the signer
+   * is the principal, and the replay discipline is the same one.
+   */
+  requireJti?: boolean;
 
   /**
    * Accept a presenter resolution whose tip could not be verified (cache-only or
@@ -604,10 +719,18 @@ export interface VerifiedIdentityProof {
   iat: number;
   /**
    * The DECODED payload, unknown members included — where a caller reads an
-   * ADDITIVE member (`jti`) the envelope verifier ignored. The signature already
-   * covers it; the canonical member set stays closed.
+   * unregistered additive member the envelope verifier ignored. The signature
+   * already covers it; the canonical member set stays closed.
    */
   rawPayload: Record<string, unknown>;
+  /** The registered `jti`, when the proof carried one — the replay cache's value. */
+  jti?: string;
+  /**
+   * The signing key's roles, when the presenter's state named them. A deployment
+   * gating writes with this artifact should refuse a key whose only effective
+   * role is `controller`.
+   */
+  keyRoles?: readonly ('auth' | 'assert' | 'controller')[];
 }
 
 /**
@@ -641,9 +764,17 @@ export const verifyApiIdentityRequest = async (
   client: Client,
   input: VerifyApiIdentityRequestInput,
 ): Promise<VerifiedIdentityProof> => {
-  const { payload, rawPayload, presenterDID, kid } = await verifyIdentityProofEnvelope(
+  const { payload, rawPayload, presenterDID, kid, keyRoles } = await verifyIdentityProofEnvelope(
     input as ProofEnvelopeInput,
     clientPresenterResolver(client, input.allowStale === true),
   );
-  return { presenterDID, kid, host: input.host, iat: payload.iat, rawPayload };
+  return {
+    presenterDID,
+    kid,
+    host: input.host,
+    iat: payload.iat,
+    rawPayload,
+    ...(payload.jti !== undefined ? { jti: payload.jti } : {}),
+    ...(keyRoles !== undefined ? { keyRoles } : {}),
+  };
 };

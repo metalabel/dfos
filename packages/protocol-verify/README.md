@@ -47,6 +47,10 @@ Standalone-ness is unchanged. Reading a JSON fixture is not a library import: a 
 
 **Countersignatures** (`typ: did:dfos:countersign`, see PROTOCOL.md → Countersignatures) are a stateless single-JWS primitive but are intentionally **not** covered by these five suites. Countersignature signing/verification is exercised only by the TypeScript and Go unit tests, not as a shared cross-language reference vector — adopting a new language does not require implementing it.
 
+**The `api:` resource hierarchy** (CREDENTIALS.md → Resource types) is TypeScript and Go only. Its parse, coverage, attenuation, and request-matching rows live in [`../dfos-protocol/examples/api-resource-coverage.json`](../dfos-protocol/examples/api-resource-coverage.json), which the TypeScript credentials tests and the Go delegation tests both read. The Python, Rust, and Swift suites implement no attenuation logic at all, so the hierarchy has no third verifier to disagree with.
+
+**The `jti` proof member** (INTEGRATIONS.md → API security notes) is likewise TypeScript and Go only, pinned by the byte-identical fixture the two api-auth suites share. It is an additive member of the API-AUTH envelope rather than a chain artifact, and no suite here verifies that envelope.
+
 ## Adding a New Language
 
 1. Create a new directory (e.g., `kotlin/`)
