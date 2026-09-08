@@ -78,7 +78,9 @@ table, one row per entry.
 
 `POST /posts` is where the difference shows. It reads one space's posts twice,
 once with no credential and once with this app's, and returns both projections
-side by side with a generic key diff between them.
+side by side with a generic key diff between them. The member projection is the
+anonymous one plus a `viewer` block saying whether you upvoted each post, and on
+the feed each item also carries the space it came from.
 
 ## Configuration
 

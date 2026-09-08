@@ -100,9 +100,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  // TRIGGER-A: on the API this demo is built against, this route is
-  // anonymous-only, so both sides return the same projection and the diff below
-  // is empty. A covered credential is what makes the two differ.
+  // The member projection is the anonymous one plus a `viewer` block carrying
+  // this reader's own relationship to each post — whether they upvoted it.
   json(res, 200, {
     ok: true,
     host: API_HOST,

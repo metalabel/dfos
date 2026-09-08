@@ -2106,6 +2106,21 @@ const readProjection = (value: unknown): PostsProjection | null => {
   };
 };
 
+/**
+ * The one member of a post that only a covered credential produces: this
+ * reader's own relationship to it. The anonymous projection has no viewer to
+ * describe, so the block is simply absent there — which is why this is rendered
+ * off the item rather than off which column it landed in. The page shows the
+ * field when the field arrives.
+ */
+const viewerChip = (item: Record<string, unknown>): HTMLElement | null => {
+  const viewer = objectField(item, 'viewer');
+  if (viewer === null) return null;
+  const upvoted = viewer['upvoted'];
+  if (typeof upvoted !== 'boolean') return null;
+  return chip(upvoted ? 'upvoted' : 'not upvoted', upvoted ? 'ok' : undefined);
+};
+
 /** One post, as much of it as arrived. */
 const postRow = (item: Record<string, unknown>): HTMLElement => {
   const row = el('li');
@@ -2131,6 +2146,13 @@ const postRow = (item: Record<string, unknown>): HTMLElement => {
     .filter((part): part is string => part !== undefined)
     .join(' · ');
   if (aside !== '') row.append(el('p', 'dim', aside));
+
+  const viewer = viewerChip(item);
+  if (viewer !== null) {
+    const line = el('p', 'viewer');
+    line.append(viewer);
+    row.append(line);
+  }
 
   return row;
 };
@@ -2263,9 +2285,41 @@ const postsSection = (state: PostsState, onReload: () => void): HTMLElement => {
   return section;
 };
 
-/** One feed entry: what it is called, and where or who it came from. */
+/**
+ * One feed entry: where it came from, what it is called, and who wrote it.
+ *
+ * The space leads. A feed is the one list here whose items come from several
+ * places at once, so which place each one came from is the first thing a reader
+ * needs — and it is a member the space-addressed grant is what produced.
+ *
+ * A feed item is a post item plus its space and its viewer block, so the same
+ * chip renders here as in the posts columns. There is no anonymous feed to
+ * compare against — the whole list is a member projection.
+ */
 const feedRow = (item: Record<string, unknown>): HTMLElement => {
   const row = el('li');
+
+  // The feed nests its provenance, and which member carries it varies by item
+  // type. Every name this page can find is shown; none is invented.
+  const space = objectField(item, 'space') ?? {};
+  const author = objectField(item, 'author') ?? {};
+  const spaceName =
+    textField(space, 'name') ?? textField(space, 'displayName') ?? textField(space, 'domain');
+
+  if (spaceName !== undefined) {
+    const line = el('p', 'provenance');
+    // Linked only when the URL is one a browser should follow. A `url` off the
+    // wire is untrusted text like everything else here, and an href is the one
+    // place where untrusted text can still execute.
+    const url = textField(space, 'url');
+    line.append(
+      url !== undefined && url.startsWith('https://')
+        ? link(url, spaceName)
+        : el('span', undefined, spaceName),
+    );
+    row.append(line);
+  }
+
   row.append(
     el(
       'p',
@@ -2274,12 +2328,7 @@ const feedRow = (item: Record<string, unknown>): HTMLElement => {
     ),
   );
 
-  // The feed nests its provenance, and which member carries it varies by item
-  // type. Every name this page can find is shown; none is invented.
-  const space = objectField(item, 'space') ?? {};
-  const author = objectField(item, 'author') ?? {};
   const aside = [
-    textField(space, 'displayName') ?? textField(space, 'domain'),
     textField(author, 'displayName') ??
       (textField(author, 'username') === undefined
         ? undefined
@@ -2289,6 +2338,13 @@ const feedRow = (item: Record<string, unknown>): HTMLElement => {
     .filter((part): part is string => part !== undefined)
     .join(' · ');
   if (aside !== '') row.append(el('p', 'dim', aside));
+
+  const viewer = viewerChip(item);
+  if (viewer !== null) {
+    const line = el('p', 'viewer');
+    line.append(viewer);
+    row.append(line);
+  }
   return row;
 };
 
