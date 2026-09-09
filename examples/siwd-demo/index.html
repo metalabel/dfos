@@ -195,6 +195,115 @@
         margin-top: 1rem;
       }
 
+      /* Tier 1, the space-addressed reads — the posts comparison and the feed.
+         Same weight as the spaces list: more of what the credential bought. */
+      .posts h2,
+      .feed h2 {
+        font-size: 1.125rem;
+      }
+      .posts p,
+      .feed p {
+        margin: 0.5rem 0 0;
+      }
+      /* Two answers to one question, so they sit beside each other rather than
+         one under the other — the comparison is the point. `auto-fit` drops back
+         to a single column when the page is narrower than two readable ones. */
+      .posts .columns {
+        display: grid;
+        gap: 0.75rem 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+        margin-top: 1rem;
+      }
+      .posts .column h3 {
+        font-size: 0.9375rem;
+        margin: 0;
+      }
+      .posts .column p {
+        margin: 0.15rem 0 0;
+      }
+      ul.postlist {
+        list-style: none;
+        margin: 0.5rem 0 0;
+        padding: 0;
+      }
+      ul.postlist > li {
+        border-top: 1px solid #eee;
+        padding: 0.5rem 0;
+      }
+      ul.postlist > li:first-child {
+        border-top: 0;
+      }
+      ul.postlist .name {
+        font-size: 0.875rem;
+        margin: 0;
+      }
+      ul.postlist .excerpt {
+        color: #444;
+        font-size: 0.8125rem;
+        margin: 0.15rem 0 0;
+      }
+      ul.postlist .dim {
+        font-size: 0.75rem;
+      }
+      /* Which space a feed item came from, above its title. */
+      ul.postlist .provenance {
+        color: #666;
+        font-size: 0.75rem;
+        margin: 0 0 0.1rem;
+      }
+      /* The member projection's own member: whether this reader upvoted. */
+      ul.postlist .viewer {
+        margin: 0.3rem 0 0;
+      }
+      .posts details.rawjson,
+      .posts button,
+      .feed details.rawjson,
+      .feed button {
+        margin-top: 1rem;
+      }
+      /* The upvote toggle sits inside its own post rather than under the column,
+         so it stays next to the count it changes. */
+      ul.postlist button {
+        font-size: 0.75rem;
+        margin-top: 0.4rem;
+        padding: 0.25rem 0.6rem;
+      }
+
+      /* The write with a body, and the replay beside it. */
+      .comment h2 {
+        font-size: 1.125rem;
+      }
+      .comment p {
+        margin: 0.5rem 0 0;
+      }
+      .comment select,
+      .comment textarea {
+        border: 1px solid #ccc;
+        border-radius: 0.5rem;
+        display: block;
+        font: inherit;
+        font-size: 0.875rem;
+        margin-top: 0.6rem;
+        padding: 0.4rem 0.6rem;
+        width: 100%;
+      }
+      .comment .checkrow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.6rem;
+      }
+      .comment button {
+        margin-top: 0.6rem;
+      }
+      .comment .checkrow button {
+        margin-top: 0;
+      }
+      .comment .excerpt {
+        color: #444;
+        font-size: 0.875rem;
+      }
+
       /* Tier 2 — the session strip. Compact, and visibly a status line. */
       .session {
         background: #fafafa;
@@ -318,6 +427,43 @@
       label.scope.disabled {
         cursor: default;
         opacity: 0.7;
+      }
+      /* The second question the spaces option raises — where. Indented under the
+         option it belongs to, so it reads as part of that choice rather than as a
+         fourth scope. */
+      .submodes {
+        border-left: 2px solid #eee;
+        margin: 0 0 0.75rem 1.4rem;
+        padding-left: 0.9rem;
+      }
+      .submodes > p {
+        color: #666;
+        font-size: 0.875rem;
+        margin: 0;
+      }
+      .submodes label.scope {
+        margin: 0.4rem 0;
+      }
+
+      /* One row per attenuation entry, under the receipts: what the grant
+         reaches, and what it may do there. */
+      ul.grants {
+        list-style: none;
+        margin: 0.5rem 0 0;
+        padding: 0;
+      }
+      ul.grants > li {
+        border-top: 1px solid #eee;
+        padding: 0.4rem 0;
+      }
+      ul.grants > li:first-child {
+        border-top: 0;
+      }
+      ul.grants .name {
+        margin: 0;
+      }
+      ul.grants .dim {
+        margin: 0.1rem 0 0;
       }
       .dim {
         color: #666;

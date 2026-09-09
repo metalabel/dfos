@@ -18,7 +18,11 @@
 */
 
 import { createDfosApi } from '@metalabel/dfos-api';
-import { buildApiAuthHeaders, signApiRequest } from '@metalabel/dfos-client/api-auth';
+import {
+  buildApiAuthHeaders,
+  createApiAuthFetch,
+  signApiRequest,
+} from '@metalabel/dfos-client/api-auth';
 import { kvGet } from './_kv.js';
 import {
   API_HOST,
@@ -157,6 +161,29 @@ export const signedApi = (held: HeldCredential, kid: string) =>
       return fetch(new Request(request, { headers }));
     },
   });
+
+/**
+ * THE SAME SEAM, as one call. `createApiAuthFetch` is the kit's own adapter for
+ * the wrapper above: it signs exactly the `Request` it receives — the method,
+ * the origin-form target, the body octets already composed — and attaches the
+ * proof and the credential.
+ *
+ * It is here because two routes call the API on a path `@metalabel/dfos-api`
+ * does not model, so they compose a plain `Request` and hand it to a `fetch`
+ * rather than to the typed client. `signedApi` stays for the typed routes.
+ *
+ * THE CONFUSED-DEPUTY DISCIPLINE IS UNCHANGED by this. What the adapter signs
+ * is whatever URL it is handed, so the rule lives where it always did: every
+ * route writes its own coordinates in its own file, and a caller reaches at most
+ * a validated slot in a fixed template. An adapter that signs a browser-supplied
+ * URL would be an oracle no matter which function composed the proof.
+ *
+ * `jti` is left at the kit's default of `'writes'` — a fresh unique id on every
+ * method except GET, HEAD, and OPTIONS. The reads here are GETs and carry none;
+ * the API's 409 is what a repeat of a write-shaped request earns.
+ */
+export const signedFetch = (held: HeldCredential, kid: string): typeof fetch =>
+  createApiAuthFetch({ credential: held.jws, kid, sign: signAsApp });
 
 /** What the typed client answers with, read structurally rather than imported. */
 interface ApiOutcome {

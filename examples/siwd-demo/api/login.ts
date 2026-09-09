@@ -10,15 +10,21 @@
   WHERE it is remembered depends on the scope, and that is the whole point of
   the toggle:
 
-    identity       — sealed into an httpOnly cookie. Success grants a session
-                     with this browser, so the flow-bound discipline is
-                     admissible, and the seal is what binds the redemption to
-                     this channel.
-    credential set — written to the shared store. Success also hands back a
-                     CREDENTIAL, which is portable and outlives this browser, so
-                     specs/INTEGRATIONS.md requires the consumed discipline: the nonce
-                     must be spendable exactly once, globally, by an atomic
-                     delete that no second presentation can win.
+    identity        — sealed into an httpOnly cookie. Success grants a session
+                      with this browser, so the flow-bound discipline is
+                      admissible, and the seal is what binds the redemption to
+                      this channel.
+    credential sets — written to the shared store. Success also hands back a
+                      CREDENTIAL, which is portable and outlives this browser, so
+                      specs/INTEGRATIONS.md requires the consumed discipline: the nonce
+                      must be spendable exactly once, globally, by an atomic
+                      delete that no second presentation can win.
+
+  THE `spaces` PARAMETER rides out with the space-addressed option and narrows
+  the ask, not the answer. Pre-named, the consent screen is locked to the set;
+  absent, the user picks there. Either way the host MAY hand back less than was
+  asked for, so nothing downstream reads this value again — `api/verify.ts`
+  reads the credential.
 
   Minting here also means the server's clock authors the timestamp. A browser
   whose clock is minutes off produced challenges that were born stale or born in
@@ -38,6 +44,7 @@ import {
   FLIGHT_PURPOSE_CONSUMED,
   FLIGHT_PURPOSE_FLOW_BOUND,
   FLIGHT_TTL_SECONDS,
+  isCredentialScope,
   isLoopbackDomain,
   isScope,
   json,
@@ -45,9 +52,12 @@ import {
   methodNotAllowed,
   originAllowed,
   readJsonBody,
+  readSpacesField,
   requestOrigin,
   SCOPE_API,
   SCOPE_IDENTITY,
+  SCOPE_READ_POSTS,
+  SCOPE_SPACES,
   seal,
   SECRET_ERROR,
   setCookie,
@@ -79,21 +89,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  const requested = readJsonBody(req)?.['scope'] ?? SCOPE_IDENTITY;
+  const body = readJsonBody(req);
+  const requested = body?.['scope'] ?? SCOPE_IDENTITY;
   if (!isScope(requested)) {
     json(res, 400, {
       ok: false,
-      reason: `unknown scope: this demo asks for '${SCOPE_IDENTITY}' or '${SCOPE_API}'`,
+      reason: `unknown scope: this demo asks for '${SCOPE_IDENTITY}', '${SCOPE_API}', or '${SCOPE_SPACES}'`,
     });
     return;
   }
 
-  // The credential scope's preconditions, checked BEFORE the redirect — each
+  const spaces = readSpacesField(body);
+  if (spaces !== undefined && spaces !== 'all' && !Array.isArray(spaces)) {
+    json(res, 400, { ok: false, reason: spaces.error });
+    return;
+  }
+  // A host honors `spaces` only when the scope names a space-level action, and
+  // refuses the request whole otherwise. Refusing here says which of the two
+  // members is the mistake, which a refusal at the host cannot.
+  if (spaces !== undefined && requested !== SCOPE_SPACES) {
+    json(res, 400, {
+      ok: false,
+      reason: `spaces belongs to the ${SCOPE_READ_POSTS} option — '${requested}' names no space-level action to narrow`,
+    });
+    return;
+  }
+
+  // The credential scopes' preconditions, checked BEFORE the redirect — each
   // would otherwise surface as a refusal at the host or a dead end on the way
   // back. Ordered the same way `/api/config` reports them, so a direct caller
   // and the page are told the same thing first: the domain rule leads, because
   // it is the one no environment variable can fix.
-  if (requested === SCOPE_API) {
+  if (isCredentialScope(requested)) {
     if (isLoopbackDomain(self.domain)) {
       json(res, 400, {
         ok: false,
@@ -132,7 +159,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       redirectUri: self.redirectUri,
       scope: requested,
       statement: STATEMENT,
-      ...(requested === SCOPE_API && APP_DID !== null ? { clientDid: APP_DID } : {}),
+      // Omitted rather than sent empty when the reader chose to pick at
+      // consent: absent means "you choose", and there is no value that says it.
+      ...(spaces !== undefined ? { spaces } : {}),
+      ...(isCredentialScope(requested) && APP_DID !== null ? { clientDid: APP_DID } : {}),
     });
   } catch (err) {
     // The kit refuses a credential scope over a loopback redirect, because a
@@ -146,7 +176,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  if (requested === SCOPE_API) {
+  if (isCredentialScope(requested)) {
     // Written BEFORE the redirect, and a failure here refuses the sign-in: the
     // consumed discipline fails closed, since a nonce this server did not record
     // is one it could never retire.
@@ -161,12 +191,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     // The cookie carries no expectation on this path — the store holds that.
-    // It records only WHICH discipline the callback owes, sealed so the
-    // presenter cannot relabel a credential flight as the weaker kind.
+    // It records WHICH discipline the callback owes and which of the two sets
+    // is coming back, sealed so the presenter can neither relabel a credential
+    // flight as the weaker kind nor swap one set's coverage check for the
+    // other's.
     json(res, 200, { url: request.url, scope: requested }, [
       setCookie(
         FLIGHT_COOKIE,
-        seal(FLIGHT_PURPOSE_CONSUMED, SCOPE_API, FLIGHT_TTL_SECONDS),
+        seal(FLIGHT_PURPOSE_CONSUMED, requested, FLIGHT_TTL_SECONDS),
         FLIGHT_TTL_SECONDS,
       ),
     ]);

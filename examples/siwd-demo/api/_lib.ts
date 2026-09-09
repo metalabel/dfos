@@ -22,8 +22,8 @@
   window, which is the accepted trade, since they already hold the session they
   would gain. The moment success grants anything portable — a credential scope,
   a token redeemable elsewhere, profile B — use `verifySiwd`'s `consumeNonce`
-  instead. `api/_kv.ts` is where this demo does exactly that, for the one scope
-  that earns it.
+  instead. `api/_kv.ts` is where this demo does exactly that, for the scopes
+  that earn it.
 
   This file also holds THE APP'S OWN SIGNING KEY. That is a second key of a
   different kind: the seal above is a secret this server keeps from everyone,
@@ -35,6 +35,7 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
+import { parseApiResource } from '@metalabel/dfos-protocol/credentials';
 import {
   base64urlDecode,
   importEd25519Keypair,
@@ -62,45 +63,87 @@ export const STATEMENT = 'Sign in to the SIWD demo';
 // -----------------------------------------------------------------------------
 
 /**
- * The two things this demo can ask for.
+ * The three things this demo can ask for.
  *
- *   identity                                        — proves who you are, and
- *                                                     returns nothing else.
- *   read:profile read:email read:memberships        — additionally returns a
- *                                                     DFOS credential.
+ *   identity                                  — proves who you are, and returns
+ *                                               nothing else.
+ *   read:profile read:email read:memberships  — additionally returns a DFOS
+ *                                               credential over the account.
+ *   read:profile read:posts                   — additionally returns a
+ *                                               credential whose posts half is
+ *                                               addressed to SPACES.
  *
- * The second is a SCOPE SET: `scope` is space-separated, the OAuth convention,
- * and each token is validated against SIWD's registry independently. All three
- * of these tokens name the same `api:<host>` resource, so they coalesce into ONE
- * credential carrying the combined action list — never one credential per token,
- * which is what makes revoking it sever the whole API grant at once.
+ * The last two are SCOPE SETS: `scope` is space-separated, the OAuth
+ * convention, and each token is validated against SIWD's registry
+ * independently. Tokens naming the same resource coalesce into ONE credential
+ * carrying the combined action list — never one credential per token, which is
+ * what makes revoking it sever the whole grant at once.
+ *
+ * The third option is the one that can come back NARROWER than it was asked.
+ * `read:posts` is a space-level action, so the credential's entry for it may
+ * name `api:<host>/spaces/<id>` rather than the bare host, and the user decides
+ * which spaces at consent. What the credential says is the answer; `spaces` on
+ * the way out is only the ask.
  */
 export const SCOPE_IDENTITY = 'identity';
 export const SCOPE_READ_PROFILE = 'read:profile';
 export const SCOPE_READ_EMAIL = 'read:email';
 export const SCOPE_READ_MEMBERSHIPS = 'read:memberships';
+export const SCOPE_READ_POSTS = 'read:posts';
+export const SCOPE_WRITE_UPVOTES = 'write:upvotes';
+export const SCOPE_WRITE_COMMENTS = 'write:comments';
 
-/** The wire value of the credential option: a space-separated set. */
+/** The wire values of the two credential options: space-separated sets. */
 export const SCOPE_API = `${SCOPE_READ_PROFILE} ${SCOPE_READ_EMAIL} ${SCOPE_READ_MEMBERSHIPS}`;
+export const SCOPE_SPACES = `${SCOPE_READ_PROFILE} ${SCOPE_READ_POSTS} ${SCOPE_WRITE_UPVOTES} ${SCOPE_WRITE_COMMENTS}`;
 
-export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_API;
+export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_API | typeof SCOPE_SPACES;
 
 export const isScope = (value: unknown): value is Scope =>
-  value === SCOPE_IDENTITY || value === SCOPE_API;
+  value === SCOPE_IDENTITY || value === SCOPE_API || value === SCOPE_SPACES;
 
-/** The action tokens the credential must carry, in the order they were asked for. */
+/**
+ * The options that return a credential, named as one type because that is the
+ * property every branch here actually turns on: a returned credential is
+ * portable, so it is what decides the replay discipline, the `client_did`
+ * requirement, and the store precondition.
+ */
+export type CredentialScope = typeof SCOPE_API | typeof SCOPE_SPACES;
+
+export const isCredentialScope = (value: unknown): value is CredentialScope =>
+  value === SCOPE_API || value === SCOPE_SPACES;
+
+/** The action tokens each option's credential must carry, in the asked order. */
 export const API_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_EMAIL, SCOPE_READ_MEMBERSHIPS];
 
 /**
- * The same tokens as the credential's action list: comma-joined, which is the
- * form the credential spec's action-set machinery matches. Each wire scope token
- * maps 1:1 to an API-AUTH action token, so what the user consented to and what
- * the API verifier requires are the same tokens in both places.
+ * The spaces option's tokens, split by WHERE each one has to be carried.
+ *
+ * A profile is not a per-space fact, so `read:profile` is wanted on the bare
+ * host. The other three name things that happen inside a space, so a grant
+ * carries them on whichever resources consent settled on — which may be the bare
+ * host, may be one space, may be several.
+ *
+ * Consent narrows PLACES and never TOKENS: a user who declines to let an app
+ * comment is refusing the whole ask, not handing back a smaller one. So every
+ * token here must be present somewhere, and where is the credential's business.
  */
-export const API_ACTION = API_ACTIONS.join(',');
+export const SPACES_PLACE_ACTIONS = [SCOPE_READ_POSTS, SCOPE_WRITE_UPVOTES, SCOPE_WRITE_COMMENTS];
+export const SPACES_ACTIONS = [SCOPE_READ_PROFILE, ...SPACES_PLACE_ACTIONS];
 
-/** The credential's attenuation, as the API verifier byte-matches it. */
+/** The account-level resource, as the API verifier byte-matches it. */
 export const API_RESOURCE = `api:${API_HOST}`;
+
+/**
+ * One attenuation entry's action set, split into tokens. The wire form is a
+ * comma-joined string, and the trims are the credential spec's own: an entry
+ * written with spaces after its commas names the same actions.
+ */
+export const actionTokens = (action: string): string[] =>
+  action
+    .split(',')
+    .map((token) => token.trim())
+    .filter((token) => token !== '');
 
 /**
  * The API refusals worth explaining, mapped from what the wire actually says.
@@ -109,8 +152,127 @@ export const API_RESOURCE = `api:${API_HOST}`;
  */
 export const API_REFUSALS: Record<number, string> = {
   401: 'The API refused the request proof. Either the proof did not verify against this app’s key, or the app’s configured key is not a current key of its identity.',
-  403: 'The API accepted the proof and refused the credential. The usual cause is revocation — the user revoked this grant, and the API re-checks that on every request.',
+  403: 'The API accepted the proof and refused the credential. Two readings sit behind that one status: the credential itself does not hold — revoked, expired, audienced elsewhere — or it holds and does not reach this route’s resource and action.',
+  409: 'The API accepted the proof and refused to run it twice: this request’s jti was already seen inside its freshness window. Re-read state instead of retrying.',
+  415: 'The API refused the body’s media type: a body route pins exactly one, application/json.',
+  429: 'The API accepted the request and is asking for fewer of them. Slow down; nothing about the grant changed.',
   503: 'The API could not complete the check — a resolution or revocation source was unreachable. That is the server’s condition, not a judgment about the grant, and it is reported as unverifiable rather than as a refusal.',
+};
+
+// -----------------------------------------------------------------------------
+// spaces
+// -----------------------------------------------------------------------------
+
+/**
+ * The space this demo reads posts from.
+ *
+ * TWO ID FORMS, and they are not interchangeable. The `{space}` path parameter
+ * takes a subdomain, an entity id, or the DID — never the bare 31-character id.
+ * The SIWD `spaces` parameter and the `api:<host>/spaces/<id>` resource take the
+ * BARE id. Both forms are written out here so no route derives one from the
+ * other by guessing which one it is holding.
+ */
+export const DEMO_SPACE_ID = '9ctvrdn9vedda7efetrhcdakfh4cr2k';
+export const DEMO_SPACE_NAME = 'DFOS';
+
+/** A bare space id: 31 characters of the protocol's identifier alphabet. */
+export const SPACE_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
+
+/**
+ * The API's own entity ids, one grammar per kind rather than one shared pattern.
+ *
+ * Each write route names exactly the kind its template takes, so a comment id
+ * offered where a post id belongs is refused HERE rather than percent-encoded
+ * into a path and sent. The prefix is what makes that check worth writing: the
+ * two ids are the same shape past it and a single pattern would accept either
+ * in either slot.
+ */
+export const POST_ID_RE = /^post_[a-z0-9]{1,40}$/;
+export const COMMENT_ID_RE = /^comment_[a-z0-9]{1,40}$/;
+
+/** The route-parameter form of a bare space id. */
+export const spaceDid = (id: string): string => `did:dfos:${id}`;
+
+export const DEMO_SPACE_DID = spaceDid(DEMO_SPACE_ID);
+
+/** SIWD's cap on a pre-named set. The kit re-validates; this refuses earlier. */
+const MAX_SPACES = 31;
+
+/**
+ * The `spaces` member of a sign-in request body: `all`, a list of distinct bare
+ * ids, or absent — which means the user picks at the consent screen.
+ *
+ * An `{ error }` answer is the caller's mistake worded for a reader, because
+ * every failure here is a malformed request rather than a runtime condition.
+ * The kit validates the same field again on the way out; this refuses first so
+ * the message names the field rather than the redirect it would have built.
+ */
+export const readSpacesField = (
+  body: Record<string, unknown> | null,
+): 'all' | string[] | undefined | { error: string } => {
+  if (body === null) return undefined;
+  const value = body['spaces'];
+  if (value === undefined) return undefined;
+  if (value === 'all') return 'all';
+  if (!Array.isArray(value)) {
+    return { error: 'spaces must be "all" or an array of bare 31-character space ids' };
+  }
+  if (value.length === 0) return { error: 'spaces must name at least one space, or be "all"' };
+  if (value.length > MAX_SPACES) return { error: `spaces names at most ${MAX_SPACES} spaces` };
+
+  const distinct: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !SPACE_ID_RE.test(entry)) {
+      return { error: 'every entry in spaces must be a bare 31-character space id' };
+    }
+    if (distinct.includes(entry)) return { error: `spaces names ${entry} twice` };
+    distinct.push(entry);
+  }
+  return distinct;
+};
+
+/** Which places on one host an attenuation reaches. */
+export interface Coverage {
+  /** True when a bare `api:<host>` entry is present — the ancestor of every space. */
+  host: boolean;
+  /** The space ids named directly, in the order the entries carry them. */
+  spaces: string[];
+  /**
+   * Every action token carried on any resource at this host, deduplicated.
+   *
+   * It is the union across entries rather than one entry's list because that is
+   * the question a caller asks: may this grant do X somewhere. WHERE it may is
+   * `spaces`, and a caller that needs both reads both.
+   */
+  tokens: string[];
+}
+
+/**
+ * What an attenuation reaches on one host, read structurally rather than by
+ * string-matching the resources. A malformed `api:` resource parses to `null`
+ * and is skipped, which is the same verdict the coverage machinery reaches:
+ * a resource a verifier cannot parse authorizes nothing.
+ *
+ * Pure, and about the artifact alone — it says what the credential covers, never
+ * whether that is what was asked for.
+ */
+export const coverageFor = (
+  att: readonly { resource: string; action: string }[],
+  host: string,
+): Coverage => {
+  let bare = false;
+  const spaces: string[] = [];
+  const tokens: string[] = [];
+  for (const entry of att) {
+    const parsed = parseApiResource(entry.resource);
+    if (parsed === null || parsed.host !== host) continue;
+    if (parsed.spaceId === undefined) bare = true;
+    else if (!spaces.includes(parsed.spaceId)) spaces.push(parsed.spaceId);
+    for (const token of actionTokens(entry.action)) {
+      if (!tokens.includes(token)) tokens.push(token);
+    }
+  }
+  return { host: bare, spaces, tokens };
 };
 
 /** The sealed nonce, in flight between the redirect out and the callback back. */
@@ -123,12 +285,14 @@ export const FLIGHT_COOKIE = 'siwd_flight';
  *   'flight'            — identity scope. The sealed value is the NONCE, and the
  *                         cookie IS the expectation: recovering it is the whole
  *                         flow-bound check.
- *   'flight-credential' — the credential set. The sealed value is the SCOPE, a
- *                         marker and nothing more. The expectation lives in the KV
- *                         store and is spent there by an atomic GETDEL, because
- *                         under the consumed discipline the expectation must be
- *                         state the verifier can RETIRE — which a cookie handed
- *                         back by the presenter can never be.
+ *   'flight-credential' — either credential set. The sealed value is the SCOPE,
+ *                         which is a marker AND the record of which of the two
+ *                         sets is coming back, since the coverage check differs
+ *                         between them. The expectation lives in the KV store and
+ *                         is spent there by an atomic GETDEL, because under the
+ *                         consumed discipline the expectation must be state the
+ *                         verifier can RETIRE — which a cookie handed back by the
+ *                         presenter can never be.
  *
  * The tags are domain-separated (see `mac`), so a flight of one class cannot be
  * presented as the other: an attacker cannot downgrade a credential callback
@@ -594,9 +758,17 @@ export interface CredentialFacts {
   issuer: string;
   /** Who may exercise it: this app's DID, and nobody else's. */
   audience: string;
-  /** The attenuation, exactly as the API verifier byte-matches it. */
-  resource: string;
-  action: string;
+  /**
+   * THE ATTENUATION, VERBATIM — every resource/action pair the credential
+   * carries, in its own order, and not a summary of them.
+   *
+   * It is a list rather than one pair because consent decides the places. A
+   * grant can come back as one bare-host entry, as several space-addressed
+   * ones, or as a mix, and every one of those is a different authorization. A
+   * server that stored the resource it ASKED for would be filing away its own
+   * request and calling it the answer.
+   */
+  att: { resource: string; action: string }[];
   /** Issued-at and expiry, unix seconds. */
   issuedAt: number;
   expiresAt: number;
@@ -634,18 +806,31 @@ export const parseHeldCredential = (stored: string | null): HeldCredential | nul
   const facts = raw['facts'];
   if (typeof facts !== 'object' || facts === null || Array.isArray(facts)) return null;
   const f = facts as Record<string, unknown>;
-  for (const field of ['issuer', 'audience', 'resource', 'action', 'credentialCID'] as const) {
+  for (const field of ['issuer', 'audience', 'credentialCID'] as const) {
     if (typeof f[field] !== 'string' || f[field] === '') return null;
   }
   if (!Number.isSafeInteger(f['issuedAt']) || !Number.isSafeInteger(f['expiresAt'])) return null;
+
+  // The attenuation is re-checked entry by entry, and an empty list is refused:
+  // a credential covering nothing is not a record this server ever wrote, and
+  // an every-entry check that runs over zero entries passes vacuously.
+  const rawAtt = f['att'];
+  if (!Array.isArray(rawAtt) || rawAtt.length === 0) return null;
+  const att: { resource: string; action: string }[] = [];
+  for (const entry of rawAtt) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+    const pair = entry as Record<string, unknown>;
+    if (typeof pair['resource'] !== 'string' || pair['resource'] === '') return null;
+    if (typeof pair['action'] !== 'string' || pair['action'] === '') return null;
+    att.push({ resource: pair['resource'], action: pair['action'] });
+  }
 
   return {
     jws: raw['jws'],
     facts: {
       issuer: f['issuer'] as string,
       audience: f['audience'] as string,
-      resource: f['resource'] as string,
-      action: f['action'] as string,
+      att,
       issuedAt: f['issuedAt'] as number,
       expiresAt: f['expiresAt'] as number,
       credentialCID: f['credentialCID'] as string,

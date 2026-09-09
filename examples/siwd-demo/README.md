@@ -1,10 +1,10 @@
 # Sign In With DFOS — demo relying party
 
 A complete Sign In With DFOS login — challenge minted server-side, JWS verified
-server-side, session cookie granted server-side — plus four live
-credential-gated API calls that run the moment you are signed in. One static
-page, ten serverless functions, no database beyond a small key-value store, and
-no SDK beyond the DFOS packages installed from npm like any third party would.
+server-side, session cookie granted server-side — plus live credential-gated
+API calls that run the moment you are signed in. One static page, fifteen
+serverless functions, no database beyond a small key-value store, and no SDK
+beyond the DFOS packages installed from npm like any third party would.
 Deployed at <https://dfos-siwd-demo.vercel.app>.
 
 Integrating sign-in into your own app? The step-by-step guide is at
@@ -15,15 +15,16 @@ backend — is covered in
 [Why signed requests](https://docs.dfos.com/docs/developers/sign-in-with-dfos/why-signed-requests).
 
 **You pick what to ask for before you sign in.** `identity` proves who you are
-and returns nothing else. `read:profile read:email read:memberships` also
-returns a **credential** — a durable, audience-bound authorization the app
-keeps and presents to the DFOS API. Both run side by side so the difference is
-something you can watch rather than read about.
+and returns nothing else. The two scope sets also return a **credential** — a
+durable, audience-bound authorization the app keeps and presents to the DFOS
+API. All three run side by side so the difference is something you can watch
+rather than read about.
 
-| Option                                     | Returns                | `client_did` | Needs                        |
-| ------------------------------------------ | ---------------------- | ------------ | ---------------------------- |
-| `identity`                                 | a signed challenge     | not sent     | `SESSION_SECRET`             |
-| `read:profile read:email read:memberships` | …plus a **credential** | **required** | …plus an app key and a store |
+| Option                                                 | Returns                                               | `client_did` | Needs                        |
+| ------------------------------------------------------ | ----------------------------------------------------- | ------------ | ---------------------------- |
+| `identity`                                             | a signed challenge                                    | not sent     | `SESSION_SECRET`             |
+| `read:profile read:email read:memberships`             | …plus an account **credential**                       | **required** | …plus an app key and a store |
+| `read:profile read:posts write:upvotes write:comments` | …plus a space-addressed **credential**, with `spaces` | **required** | …plus an app key and a store |
 
 ## Endpoints
 
@@ -38,6 +39,11 @@ something you can watch rather than read about.
 | `POST /group-memberships` | The same, for `GET /v1/group-memberships` — the second walk the page correlates against the first       |
 | `POST /credential`        | The same, for `GET /v1/credential` — the credential describing itself, under no scope                   |
 | `POST /check`             | Fills one path segment of `GET /v1/membership/{space}` or `GET /v1/group-membership/{group}`. On demand |
+| `POST /posts`             | Reads `GET /v1/spaces/{space}/posts` twice — anonymously and with the credential — and returns both     |
+| `POST /feed`              | Signs one request proof and calls `GET /v1/feed`, which has no anonymous form                           |
+| `POST /upvote`            | Toggles an upvote — `PUT` or `DELETE` on one post, with a `jti` the kit mints                           |
+| `POST /comment`           | Writes a comment; with `resend` it signs once and sends that one proof twice                            |
+| `POST /comment-delete`    | Deletes a comment this grant wrote, so a reader can undo what the demo did                              |
 | `POST /logout`            | Expires the session and drops the stored credential                                                     |
 
 Verification lives in `api/verify.ts`, because that is where the session is
@@ -48,6 +54,64 @@ Replay prevention follows
 each gated route signs one fixed request via the seam in `api/_gated.ts`
 (`api/profile.ts` is the same seam written out long-form), per
 [INTEGRATIONS § API authentication](https://protocol.dfos.com/integrations#api-authentication).
+
+## Spaces
+
+`read:posts` is a space-level action, so the credential it produces names
+places. Where those places come from is the `spaces` parameter on the sign-in
+request, and it takes three forms:
+
+| `spaces`           | What the consent screen does                   |
+| ------------------ | ---------------------------------------------- |
+| `all`              | asks for every space you are in, now and later |
+| a list of bare ids | is locked to that set, up to 31 of them        |
+| absent             | lets you pick, `all` included                  |
+
+**Two id forms, and they are not interchangeable.** The `{space}` path
+parameter takes a subdomain, an entity id, or the DID — never the bare
+31-character id. The `spaces` parameter and the `api:<host>/spaces/<id>`
+resource take the bare id. `api/_lib.ts` holds both forms of the demo's space so
+no route derives one from the other.
+
+**The credential's `att` is the answer.** `spaces` is the ask, and consent may
+narrow it: a request naming three spaces can come back granting one. So the
+backend stores the entries the credential carries, verbatim, and the page
+renders those — never the resource it asked for. The receipts panel is that
+table, one row per entry.
+
+`POST /posts` is where the difference shows. It reads one space's posts twice,
+once with no credential and once with this app's, and returns both projections
+side by side with a generic key diff between them. The member projection is the
+anonymous one plus a `viewer` block saying whether you upvoted each post, and on
+the feed each item also carries the space it came from.
+
+## Writes
+
+`write:upvotes` and `write:comments` are place-level tokens like `read:posts`,
+so the same credential carries them and the same consent decides where. What
+changes on the write path is the replay guard.
+
+**The `jti` is automatic.** `createApiAuthFetch` mints a fresh unique id on
+every request whose method is not GET, HEAD, or OPTIONS, so each write carries
+one without a route arranging it. The API records the id and refuses a second
+presentation of the same proof inside its freshness window.
+
+**The resend is deliberate.** That adapter cannot demonstrate a replay, because
+a replay is the same proof presented again and the adapter mints a new one per
+call. So `POST /comment` with `resend: true` signs once by hand with an explicit
+`jti`, then sends the byte-identical request twice. The first is created; the
+second is a 409, and the demo renders the API's own words for it rather than a
+friendlier translation. That is the guarantee worth seeing: a client whose
+request times out does not know whether the write landed, and the `jti` is what
+makes retrying safe to refuse and the state safe to re-read.
+
+**The body is exactly `application/json`.** The bytes are composed once and both
+the proof's hash and the wire read that one array — no compression, no method
+override, no second serialization. A body under any other media type is a 415.
+
+**Own content only.** A delete is refused by the API when the comment is not
+this grant's to remove, on the authority that holds the facts rather than
+guessed at by the app.
 
 ## Configuration
 
@@ -60,8 +124,8 @@ each gated route signs one fixed request via the seam in `api/_gated.ts`
 | `KV_REST_API_TOKEN`    | the credential | Its bearer token.                                                         |
 
 Only `SESSION_SECRET` is required. Without the other four the identity scope
-works as normal and the credential scope renders disabled, with the reason next
-to it — the page asks `/api/config` at boot.
+works as normal and both credential scopes render disabled, with the reason next
+to them — the page asks `/api/config` at boot.
 
 Generate a `SESSION_SECRET`:
 
@@ -111,7 +175,7 @@ and deploys it. Then make one edit — put your deployment's origin in
 forget, the boot self-check renders the exact string it needs to see. Update
 `name` too; it is what your users read at consent.
 
-That gets you the identity scope. For the credential set, three more steps:
+That gets you the identity scope. For either credential set, three more steps:
 
 1. **Give the app an identity and a delegate key.** The server gets its own
    auth key beside the controller key, so a compromised deployment is a
@@ -166,10 +230,10 @@ npm run dev
 
 The identity flow works locally with no well-known file at all:
 `http://localhost:5173/` is accepted for `scope=identity` under SIWD's
-loopback tier. The credential scope cannot run on a loopback host in this demo
+loopback tier. Neither credential scope can run on a loopback host in this demo
 — it is a hosted web relying party and does not implement the
 [loopback credential tier](https://protocol.dfos.com/integrations#loopback-clients) —
-so exercising the credential scope means deploying to a domain.
+so exercising a credential scope means deploying to a domain.
 
 There is no `vercel` CLI in the loop: `vite.config.ts` mounts the same handler
 files as dev-server middleware, so nothing is reimplemented and nothing can

@@ -26,11 +26,17 @@
   rather than restating them here. A demo that teaches the spec inline goes stale
   the moment the spec moves, and it buries the thing it was built to show.
 
-  TWO OPTIONS. `identity` proves who you are and returns nothing else. The other
-  is a SCOPE SET — `read:profile read:email read:memberships`, space-separated
-  per the OAuth convention SIWD adopts — which additionally returns one
-  credential carrying all three action tokens. The consent screen names every
-  token in the set.
+  THREE OPTIONS. `identity` proves who you are and returns nothing else. The
+  other two are SCOPE SETS — space-separated per the OAuth convention SIWD
+  adopts — which additionally return a credential.
+  `read:profile read:email read:memberships` grants over the whole account.
+  `read:profile read:posts` grants over PLACES: `read:posts` is a space-level
+  action, so the credential names spaces, and either this page pre-names them on
+  the way out or the user picks them at consent.
+
+  WHAT WAS ASKED IS NOT WHAT WAS GRANTED. Consent may narrow the set, so the
+  page reads the credential's own entries and renders those. The ask is a
+  request; the entries are the answer.
 
   The authorize request is built server-side in `api/login.ts`. At identity scope
   it carries no `client_did`: the platform learns who this app is by fetching
@@ -54,6 +60,7 @@
 */
 
 import { readSiwdCallback } from '@metalabel/dfos-client/siwd';
+import { parseApiResource } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 
 // deployment coordinates — the backend's live in api/_lib.ts
@@ -116,11 +123,30 @@ const bareHostname = (hostname: string): string =>
 const SIGNING_DOMAIN = bareHostname(location.hostname);
 
 /**
- * The two options, matching `api/_lib.ts`. The second is a space-separated
- * scope SET, and all three of its tokens land in one credential.
+ * The three options, matching `api/_lib.ts`. The last two are space-separated
+ * scope SETS whose tokens land in one credential.
  */
 const SCOPE_IDENTITY = 'identity';
 const SCOPE_API = 'read:profile read:email read:memberships';
+const SCOPE_SPACES = 'read:profile read:posts write:upvotes write:comments';
+
+/** The two tokens that gate the write affordances, named where the page reads them. */
+const WRITE_UPVOTES = 'write:upvotes';
+const WRITE_COMMENTS = 'write:comments';
+
+/**
+ * Where the spaces option asks its places from. Pre-named locks the consent
+ * screen to a set this page chose; at-consent sends no `spaces` at all and the
+ * user picks there. Both come back as a credential whose entries are the answer.
+ */
+type SpacesMode = 'named' | 'consent';
+
+/** One resource/action pair from a credential's attenuation, as served. */
+interface AttEntry {
+  resource: string;
+  /** The action list, comma-joined — the form the credential's own machinery matches. */
+  action: string;
+}
 
 /**
  * A credential this app holds, as the server read it out AFTER verifying it.
@@ -130,17 +156,18 @@ const SCOPE_API = 'read:profile read:email read:memberships';
 interface CredentialFacts {
   issuer: string;
   audience: string;
-  resource: string;
-  /** The action list, comma-joined — the form the credential's own machinery matches. */
-  action: string;
+  /** Every entry the credential carries, verbatim and in its own order. */
+  att: AttEntry[];
   issuedAt: number;
   expiresAt: number;
   credentialCID: string;
+  /** Which places the entries reach on the API host, summarized by the server. */
+  coverage?: { host: boolean; spaces: string[]; tokens: string[] };
 }
 
-/** The action list as separate tokens, for display. */
-const actionTokens = (facts: CredentialFacts): string[] =>
-  facts.action
+/** One entry's action list as separate tokens, for display. */
+const actionTokens = (action: string): string[] =>
+  action
     .split(',')
     .map((token) => token.trim())
     .filter((token) => token !== '');
@@ -168,10 +195,21 @@ interface ScopeOption {
   unavailable?: string;
 }
 
+/** The space this deployment reads posts from, in both id forms. */
+interface DemoSpace {
+  /** The bare 31-character id — what `spaces` and an `api:` resource take. */
+  id: string;
+  /** The DID form — what the `{space}` route parameter takes. */
+  did: string;
+  name: string;
+}
+
 /** What this deployment can do, asked once at boot. */
 interface Config {
   scopes: ScopeOption[];
-  api: { host: string; resource: string; action: string };
+  /** Per option, because each asks for its own action tokens. */
+  api: { host: string; options: Record<string, { actions: string[] }> };
+  space?: DemoSpace;
   app: { did?: string; publicKeyMultibase?: string };
 }
 
@@ -251,13 +289,19 @@ const sessionFrom = (result: ApiResult | null): Session | null => {
   };
 };
 
+/** One attenuation entry off the wire, or not. */
+const isAttEntry = (value: unknown): value is AttEntry =>
+  isRecord(value) && typeof value['resource'] === 'string' && typeof value['action'] === 'string';
+
 /** Shape-checked like everything else off the wire, even from our own backend. */
 const isCredentialFacts = (value: unknown): value is CredentialFacts => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const raw = value as Record<string, unknown>;
-  const strings = ['issuer', 'audience', 'resource', 'action', 'credentialCID'];
+  const strings = ['issuer', 'audience', 'credentialCID'];
   return (
     strings.every((field) => typeof raw[field] === 'string') &&
+    Array.isArray(raw['att']) &&
+    raw['att'].every(isAttEntry) &&
     typeof raw['issuedAt'] === 'number' &&
     typeof raw['expiresAt'] === 'number'
   );
@@ -274,19 +318,28 @@ const fetchConfig = async (): Promise<Config | null> => {
   const result = await call('/api/config');
   if (result === null || result.status !== 200) return null;
 
-  const { scopes, api, app } = result.body;
+  const { scopes, api, app, space } = result.body;
   if (!Array.isArray(scopes)) return null;
   if (typeof api !== 'object' || api === null) return null;
   const apiRaw = api as Record<string, unknown>;
-  if (
-    typeof apiRaw['host'] !== 'string' ||
-    typeof apiRaw['resource'] !== 'string' ||
-    typeof apiRaw['action'] !== 'string'
-  ) {
-    return null;
+  if (typeof apiRaw['host'] !== 'string') return null;
+
+  // Read structurally: the per-option action lists are what the page names in
+  // its copy, and an option this page has never heard of is carried through
+  // rather than dropped — the backend owns the option list, not this file.
+  const options: Record<string, { actions: string[] }> = {};
+  const optionsRaw = apiRaw['options'];
+  if (isRecord(optionsRaw)) {
+    for (const [scope, value] of Object.entries(optionsRaw)) {
+      if (!isRecord(value)) continue;
+      const actions = Array.isArray(value['actions'])
+        ? value['actions'].filter((token): token is string => typeof token === 'string')
+        : [];
+      options[scope] = { actions };
+    }
   }
 
-  const options: ScopeOption[] = [];
+  const choices: ScopeOption[] = [];
   for (const entry of scopes) {
     if (typeof entry !== 'object' || entry === null) continue;
     const raw = entry as Record<string, unknown>;
@@ -297,19 +350,30 @@ const fetchConfig = async (): Promise<Config | null> => {
     ) {
       continue;
     }
-    options.push({
+    choices.push({
       scope: raw['scope'],
       available: raw['available'],
       summary: raw['summary'],
       ...(typeof raw['unavailable'] === 'string' ? { unavailable: raw['unavailable'] } : {}),
     });
   }
-  if (options.length === 0) return null;
+  if (choices.length === 0) return null;
+
+  // The demo space is optional: a deployment that serves no space member still
+  // serves every other option, and the spaces panels simply have nothing to name.
+  const spaceRaw = isRecord(space) ? space : {};
+  const demoSpace: DemoSpace | undefined =
+    typeof spaceRaw['id'] === 'string' &&
+    typeof spaceRaw['did'] === 'string' &&
+    typeof spaceRaw['name'] === 'string'
+      ? { id: spaceRaw['id'], did: spaceRaw['did'], name: spaceRaw['name'] }
+      : undefined;
 
   const appRaw = typeof app === 'object' && app !== null ? (app as Record<string, unknown>) : {};
   return {
-    scopes: options,
-    api: { host: apiRaw['host'], resource: apiRaw['resource'], action: apiRaw['action'] },
+    scopes: choices,
+    api: { host: apiRaw['host'], options },
+    ...(demoSpace !== undefined ? { space: demoSpace } : {}),
     app: {
       ...(typeof appRaw['did'] === 'string' ? { did: appRaw['did'] } : {}),
       ...(typeof appRaw['publicKeyMultibase'] === 'string'
@@ -320,10 +384,47 @@ const fetchConfig = async (): Promise<Config | null> => {
 };
 
 /**
- * Which scope the next sign-in will ask for. Sticky across re-renders of the
- * signed-out view so a refused sign-in comes back with the choice still made.
+ * Which scope the next sign-in will ask for, and — for the spaces option —
+ * where it will ask for. Sticky across re-renders of the signed-out view so a
+ * refused sign-in comes back with the choice still made.
  */
 let selectedScope: string = SCOPE_IDENTITY;
+let selectedSpacesMode: SpacesMode = 'named';
+
+/**
+ * The chooser's selection, carried across the redirect so a sign-in that comes
+ * back refused offers a retry of the same thing rather than dropping to the
+ * first option.
+ *
+ * It is UI STATE AND NOTHING ELSE. It is never an input to verification: the
+ * expectation lives in the sealed cookie and the store, on the server, where
+ * `api/verify.ts` reads it. Rewriting this value changes which option the radio
+ * lands on and nothing about what any server will accept.
+ */
+const CHOICE_KEY = 'siwd-demo-choice';
+
+const rememberChoice = (): void => {
+  try {
+    sessionStorage.setItem(CHOICE_KEY, `${selectedScope}\n${selectedSpacesMode}`);
+  } catch {
+    // Storage can be disabled or full. The chooser simply starts fresh.
+  }
+};
+
+const restoreChoice = (): void => {
+  let stored: string | null = null;
+  try {
+    stored = sessionStorage.getItem(CHOICE_KEY);
+  } catch {
+    return;
+  }
+  if (stored === null) return;
+  const [scope, mode] = stored.split('\n');
+  if (scope === SCOPE_IDENTITY || scope === SCOPE_API || scope === SCOPE_SPACES) {
+    selectedScope = scope;
+  }
+  if (mode === 'named' || mode === 'consent') selectedSpacesMode = mode;
+};
 
 /** The server's own words for a refusal, or a fallback. */
 const reasonFrom = (result: ApiResult, fallback: string): string =>
@@ -746,21 +847,38 @@ const renderStatus = (text: string, ...extra: Node[]): void => {
 };
 
 /** The steps this page runs, in order. Short on purpose: the specs explain. */
-const whatHappensNext = (scope: string): HTMLElement => {
-  const credentialScope = scope === SCOPE_API;
+const whatHappensNext = (scope: string, space?: DemoSpace): HTMLElement => {
+  const spacesScope = scope === SCOPE_SPACES;
+  const credentialScope = scope === SCOPE_API || spacesScope;
+  const named = space?.name ?? 'the space';
+
   const list = el('ol', 'steps');
   for (const step of [
     'This page asks its backend to start a sign-in. The server mints the challenge and answers with a URL.',
     credentialScope
       ? 'You approve at your DFOS host. The consent screen names each scope you are being asked for, one line per token, and your key signs the challenge.'
       : 'You approve at your DFOS host, and your key signs the challenge.',
+    // The `spaces` parameter is the one step that reads differently between the
+    // two modes, and the difference is who chooses the places.
+    ...(spacesScope
+      ? [
+          selectedSpacesMode === 'named'
+            ? `The sign-in names ${named} in its spaces parameter, so the consent screen is locked to that one space.`
+            : 'The sign-in sends no spaces parameter, so you pick the spaces on the consent screen — “all” included — and the credential’s entries are the answer.',
+        ]
+      : []),
     credentialScope
       ? 'The browser comes back with the signed challenge and the credential, and hands both to this site’s backend.'
       : 'The browser comes back with the signed challenge and hands it to this site’s backend.',
     credentialScope
       ? 'The backend verifies the signature against your identity chain on a public relay, verifies the credential, and grants a session.'
       : 'The backend verifies the signature against your identity chain on a public relay and grants a session.',
-    ...(credentialScope
+    ...(spacesScope
+      ? [
+          `The backend reads your profile, the credential’s own description, ${named}’s posts twice — once with no credential and once with yours — and your feed, signing each request with its own key.`,
+        ]
+      : []),
+    ...(scope === SCOPE_API
       ? [
           'The backend reads your profile, your spaces and groups, and the credential’s own description from the DFOS API, signing each request with its own key and presenting the same credential alongside it.',
         ]
@@ -801,6 +919,57 @@ const scopeChooser = (found: Config, onChange: () => void): HTMLElement => {
 
     row.append(input, text);
     wrap.append(row);
+
+    // The second question the spaces option raises, asked where it is raised:
+    // WHERE. It sits outside the option's own label so clicking a mode does not
+    // also re-select the scope, and it is rendered only under the chosen option
+    // because it is meaningless under the other two.
+    if (option.scope === SCOPE_SPACES && option.scope === selectedScope && option.available) {
+      wrap.append(spacesModeChooser(found.space, onChange));
+    }
+  }
+
+  return wrap;
+};
+
+/**
+ * Pre-name the places, or leave them to the consent screen. The two are a real
+ * choice rather than a setting: pre-naming produces a consent screen locked to
+ * one set, and sending nothing produces one the user fills in. Neither decides
+ * what comes back.
+ */
+const spacesModeChooser = (space: DemoSpace | undefined, onChange: () => void): HTMLElement => {
+  const wrap = el('div', 'submodes');
+  wrap.append(el('p', 'dim', 'Where:'));
+
+  const modes: [SpacesMode, string, string][] = [
+    [
+      'named',
+      space === undefined
+        ? 'One space, pre-named'
+        : `${space.name}, pre-named (spaces=${space.id.slice(0, 4)}…)`,
+      'the consent screen is locked to that space',
+    ],
+    ['consent', 'Choose at consent', 'no spaces parameter — you pick there, “all” included'],
+  ];
+
+  for (const [mode, label, note] of modes) {
+    const row = el('label', 'scope');
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'spaces-mode';
+    input.value = mode;
+    input.checked = mode === selectedSpacesMode;
+    input.addEventListener('change', () => {
+      selectedSpacesMode = mode;
+      onChange();
+    });
+
+    const text = el('span');
+    text.append(el('span', undefined, label), el('br'), el('span', 'dim', note));
+    row.append(input, text);
+    wrap.append(row);
   }
 
   return wrap;
@@ -839,7 +1008,7 @@ const registrationNote = (found: Registration, scope: string): Node[] => {
       el(
         'p',
         'dim',
-        scope === SCOPE_API
+        scope === SCOPE_API || scope === SCOPE_SPACES
           ? 'client_did is required here: the credential is issued to that DID, and only its key can exercise the grant.'
           : 'client_did is optional at identity scope and this flow does not send it. (A file carrying identity_chain must name it either way.)',
       ),
@@ -857,7 +1026,7 @@ const walkthrough = (found: Registration | null, scope: string): HTMLElement => 
   const details = el('details');
   details.append(
     el('summary', undefined, 'How it works'),
-    whatHappensNext(scope),
+    whatHappensNext(scope, config?.space),
     ...(found !== null ? registrationNote(found, scope) : []),
     linkList(
       [DOCS.siwd, 'SIWD', 'the sign-in protocol'],
@@ -996,22 +1165,23 @@ await api.GET('/profile');`,
     el(
       'p',
       'dim',
-      'Every gated call on this page rides that seam, one credential under three ' +
-        'tokens: the profile, both membership walks, the credential’s own ' +
-        'description, and the single membership checks — each backend route signing ' +
-        'its own fixed request. The check route is the one place a value from the ' +
-        'browser reaches the coordinates, and it is confined to a single validated ' +
-        'path segment of a fixed template.',
+      'Every gated call on this page rides that seam, one credential under all its ' +
+        'tokens: the profile, the membership walks, the credential’s own ' +
+        'description, the posts comparison, and the feed — each backend route ' +
+        'signing its own fixed request. Two routes take a value from the browser ' +
+        'and both confine it to a single validated path segment of a fixed ' +
+        'template: the membership check, and the space the posts are read from.',
     ),
     el(
       'p',
       'dim',
       'Two packages meet at that seam. @metalabel/dfos-api composes the request; ' +
         '@metalabel/dfos-client signs the bytes that are about to go on the wire. ' +
-        'The kit also ships createApiAuthFetch, which is this wrapper in one call — ' +
-        'the long form is here because a backend fronting a browser must authorize ' +
-        'the coordinates it signs against its own session, so it never signs a ' +
-        'request a browser composed.',
+        'The kit also ships createApiAuthFetch, which is this wrapper in one call, ' +
+        'and the two routes calling paths the typed client does not model use it. ' +
+        'The long form is written out because a backend fronting a browser must ' +
+        'authorize the coordinates it signs against its own session, so it never ' +
+        'signs a request a browser composed — which is true of both forms.',
     ),
   );
 
@@ -1052,7 +1222,16 @@ const docsReceipt = (): Node[] =>
         'api/memberships.ts',
         'the membership walks',
       ],
-      [`${REPO}/examples/siwd-demo/api/check.ts`, 'api/check.ts', 'the one parameterized request'],
+      [`${REPO}/examples/siwd-demo/api/check.ts`, 'api/check.ts', 'a parameterized request'],
+      [`${REPO}/examples/siwd-demo/api/posts.ts`, 'api/posts.ts', 'the same read, both ways'],
+      [`${REPO}/examples/siwd-demo/api/feed.ts`, 'api/feed.ts', 'a read with no anonymous form'],
+      [`${REPO}/examples/siwd-demo/api/upvote.ts`, 'api/upvote.ts', 'a write, jti minted for it'],
+      [`${REPO}/examples/siwd-demo/api/comment.ts`, 'api/comment.ts', 'the deliberate replay'],
+      [
+        `${REPO}/examples/siwd-demo/api/comment-delete.ts`,
+        'api/comment-delete.ts',
+        'undo, on the same grant',
+      ],
       [`${REPO}/examples/siwd-demo/src/main.ts`, 'src/main.ts', 'this page'],
       [DOCS.demo, 'The demo README', 'routes, variables, forking'],
     ),
@@ -1088,16 +1267,23 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
  * load-bearing one, not this panel's place on the page.
  */
 const credentialReceipt = (facts: CredentialFacts): Node[] => {
-  const tokens = actionTokens(facts);
   const expired = facts.expiresAt * 1000 <= Date.now();
+  const multipleTokens = facts.att.some((entry) => actionTokens(entry.action).length > 1);
 
   return receiptSection(
     'The credential you granted',
+    el('p', 'dim', coverageLine(facts)),
+    attTable(facts.att),
+    el(
+      'p',
+      'dim',
+      'This table is the answer to what you granted. Consent may have narrowed the ' +
+        'places, so the app reads the credential and never assumes the ask was ' +
+        'honored whole.',
+    ),
     factList(
       ['Issuer', facts.issuer, '(you — and the subject the API serves)'],
       ['Audience', facts.audience, '(this app, and only this app)'],
-      ['Resource', facts.resource],
-      [tokens.length === 1 ? 'Action' : 'Actions', tokens.join(', ')],
       ['Issued', new Date(facts.issuedAt * 1000).toLocaleString()],
       [
         'Expires',
@@ -1109,10 +1295,10 @@ const credentialReceipt = (facts: CredentialFacts): Node[] => {
     el(
       'p',
       'dim',
-      tokens.length > 1
-        ? 'Every action token rides in one credential, not one credential each — so ' +
-            'revoking it severs the whole API grant at once. Using it does not use it ' +
-            'up; what is single-use is each request proof.'
+      multipleTokens || facts.att.length > 1
+        ? 'Every entry rides in one credential, not one credential each — so revoking ' +
+            'it severs the whole API grant at once. Using it does not use it up; what ' +
+            'is single-use is each request proof.'
         : 'Using it does not use it up: the credential is a standing grant. What is ' +
             'single-use is each request proof, minted fresh per call.',
     ),
@@ -1123,6 +1309,72 @@ const credentialReceipt = (facts: CredentialFacts): Node[] => {
         'not use it if it did.',
     ),
   );
+};
+
+/**
+ * One line naming the PLACES, from the summary the server computed off the same
+ * entries the table below renders. It leads because "where does this reach" is
+ * the question the space-addressed option raises, and a table answers it only
+ * after the reader has parsed every row.
+ */
+const coverageLine = (facts: CredentialFacts): string => {
+  const coverage = facts.coverage;
+  if (coverage === undefined) return `${facts.att.length} entry, as the credential carries it.`;
+  if (coverage.host && coverage.spaces.length > 0) {
+    return 'This grant reaches the account and names spaces of its own.';
+  }
+  if (coverage.host)
+    return 'This grant reaches the account: every space you are in, now and later.';
+  if (coverage.spaces.length === 1) return 'This grant reaches one space and nothing else.';
+  if (coverage.spaces.length > 1) {
+    return `This grant reaches ${coverage.spaces.length} spaces and nothing else.`;
+  }
+  return 'This grant names no resource on the API host.';
+};
+
+/**
+ * One row per attenuation entry: what it reaches, and what it may do there.
+ *
+ * The resource is rendered through the kit's own parser rather than
+ * string-matched, and an entry it cannot parse is shown VERBATIM with no gloss —
+ * a resource this page cannot read is one it must not describe.
+ */
+const attTable = (att: AttEntry[]): HTMLElement => {
+  const list = el('ul', 'grants');
+
+  for (const entry of att) {
+    const row = el('li');
+    const parsed = parseApiResource(entry.resource);
+
+    const name = el('p', 'name');
+    if (parsed === null) {
+      name.append(el('code', undefined, entry.resource));
+    } else if (parsed.spaceId === undefined) {
+      name.append(
+        el('code', undefined, parsed.host),
+        el('span', 'dim', ' — every space you are in, now and later'),
+      );
+    } else {
+      const known = config?.space;
+      name.append(
+        el('code', undefined, `${parsed.host}/spaces/${parsed.spaceId}`),
+        el(
+          'span',
+          'dim',
+          known !== undefined && known.id === parsed.spaceId
+            ? ` — one space, ${known.name}`
+            : ' — one space',
+        ),
+      );
+    }
+    row.append(name);
+
+    const tokens = actionTokens(entry.action);
+    row.append(el('p', 'dim', tokens.length === 0 ? entry.action : tokens.join(', ')));
+    list.append(row);
+  }
+
+  return list;
 };
 
 /** What the last call to the gated endpoint did, if anything. */
@@ -1816,6 +2068,583 @@ const credentialCard = (state: CredentialState, onReload: () => void): HTMLEleme
   return section;
 };
 
+// -----------------------------------------------------------------------------
+// the space-addressed reads
+// -----------------------------------------------------------------------------
+
+/** One side of the posts comparison, exactly as `api/posts.ts` projected it. */
+interface PostsProjection {
+  status: number;
+  /** The 2xx body, when there was one. */
+  page?: Record<string, unknown>;
+  /** The non-2xx body, when there was one. */
+  error?: Record<string, unknown>;
+}
+
+/** What the last call to the posts endpoint did, if anything. */
+type PostsState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | {
+      kind: 'ok';
+      space: { id: string; did: string };
+      anonymous: PostsProjection;
+      member: PostsProjection;
+      host: string;
+    }
+  | { kind: 'refused'; status: number; reason: string; code?: string; message?: string }
+  | { kind: 'unreachable'; reason: string };
+
+/** And for the feed, which has no anonymous form to compare against. */
+type FeedState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'ok'; feed: Record<string, unknown>; host: string }
+  | { kind: 'refused'; status: number; reason: string; code?: string; message?: string }
+  | { kind: 'unreachable'; reason: string };
+
+/** A projection off the wire, read as defensively as everything else. */
+const readProjection = (value: unknown): PostsProjection | null => {
+  if (!isRecord(value)) return null;
+  const status = numberField(value, 'status');
+  if (status === undefined) return null;
+  const page = objectField(value, 'page');
+  const error = objectField(value, 'error');
+  return {
+    status,
+    ...(page !== null ? { page } : {}),
+    ...(error !== null ? { error } : {}),
+  };
+};
+
+/**
+ * The one member of a post that only a covered credential produces: this
+ * reader's own relationship to it. The anonymous projection has no viewer to
+ * describe, so the block is simply absent there — which is why this is rendered
+ * off the item rather than off which column it landed in. The page shows the
+ * field when the field arrives.
+ */
+const viewerChip = (item: Record<string, unknown>): HTMLElement | null => {
+  const viewer = objectField(item, 'viewer');
+  if (viewer === null) return null;
+  const upvoted = viewer['upvoted'];
+  if (typeof upvoted !== 'boolean') return null;
+  return chip(upvoted ? 'upvoted' : 'not upvoted', upvoted ? 'ok' : undefined);
+};
+
+/** Whether this reader has upvoted a post, when the item says. */
+const upvotedFlag = (item: Record<string, unknown>): boolean | undefined => {
+  const viewer = objectField(item, 'viewer');
+  if (viewer === null) return undefined;
+  const upvoted = viewer['upvoted'];
+  return typeof upvoted === 'boolean' ? upvoted : undefined;
+};
+
+/** What the last upvote on one post did. Keyed by post id in `upvoteStates`. */
+type UpvoteState = { kind: 'pending' } | { kind: 'done'; note: string } | ReadFailure;
+
+/**
+ * One entry per post the reader has voted on this session. Module-level for the
+ * same reason `check` is: the whole view re-renders on every state move, so an
+ * answer has to outlive the nodes that showed it.
+ */
+let upvoteStates: Record<string, UpvoteState> = {};
+
+/** One post, as much of it as arrived. `onUpvote` is present only where a write is. */
+const postRow = (
+  item: Record<string, unknown>,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
+  const row = el('li');
+  row.append(
+    el(
+      'p',
+      'name',
+      textField(item, 'displayTitle') ?? textField(item, 'title') ?? 'An untitled post',
+    ),
+  );
+
+  const excerpt = textField(item, 'excerpt');
+  if (excerpt !== undefined) row.append(el('p', 'excerpt', excerpt));
+
+  const upvotes = numberField(item, 'upvoteCount');
+  const comments = numberField(item, 'commentCount');
+  const published = dateText(item, 'publishedAt');
+  const aside = [
+    upvotes === undefined ? undefined : `${upvotes} up`,
+    comments === undefined ? undefined : `${comments} comment${comments === 1 ? '' : 's'}`,
+    published,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(' · ');
+  if (aside !== '') row.append(el('p', 'dim', aside));
+
+  const viewer = viewerChip(item);
+  if (viewer !== null) {
+    const line = el('p', 'viewer');
+    line.append(viewer);
+    row.append(line);
+  }
+
+  // The write affordance, and the three things it needs: somewhere to send it,
+  // an id to send, and a current value to toggle away from. A post missing any
+  // of them gets no button rather than a button that would guess.
+  const id = textField(item, 'id');
+  const upvoted = upvotedFlag(item);
+  if (onUpvote !== undefined && id !== undefined && upvoted !== undefined) {
+    const button = el('button', 'quiet', upvoted ? 'Remove upvote' : 'Upvote');
+    const state = upvoteStates[id];
+    button.disabled = state?.kind === 'pending';
+    button.addEventListener('click', () => onUpvote(id, !upvoted));
+    row.append(button);
+
+    if (state?.kind === 'pending') row.append(el('p', 'dim', 'Signing…'));
+    else if (state?.kind === 'done') row.append(el('p', 'dim', state.note));
+    else if (state !== undefined) row.append(...failureLines(state));
+  }
+
+  return row;
+};
+
+/**
+ * One side of the comparison. A non-2xx is rendered HERE, inside its own column,
+ * because it is that side's answer — the other column is unaffected and stays a
+ * complete answer to its own question.
+ */
+const postsColumn = (
+  heading: string,
+  projection: PostsProjection,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
+  const column = el('div', 'column');
+  column.append(el('h3', undefined, heading));
+
+  const page = projection.page;
+  if (page === undefined) {
+    column.append(el('p', 'notice', `HTTP ${projection.status}`));
+    const envelope = projection.error;
+    if (envelope !== undefined) {
+      const detail = [textField(envelope, 'code'), textField(envelope, 'message')]
+        .filter((part): part is string => part !== undefined)
+        .join(' — ');
+      if (detail !== '') column.append(el('p', 'dim', detail));
+    }
+    return column;
+  }
+
+  const items = arrayField(page, 'items').filter(isRecord);
+  const total = numberField(page, 'totalCount');
+  column.append(
+    el(
+      'p',
+      'dim',
+      total === undefined ? `${items.length} shown` : `${items.length} of ${total} posts`,
+    ),
+  );
+
+  if (items.length === 0) {
+    column.append(el('p', 'dim', 'No posts.'));
+    return column;
+  }
+  const list = el('ul', 'postlist');
+  for (const item of items) list.append(postRow(item, onUpvote));
+  column.append(list);
+  return column;
+};
+
+/** Every field name that appeared on any item of a projection. */
+const projectionFields = (projection: PostsProjection): Set<string> => {
+  const fields = new Set<string>();
+  const page = projection.page;
+  if (page === undefined) return fields;
+  for (const item of arrayField(page, 'items').filter(isRecord)) {
+    for (const field of Object.keys(item)) fields.add(field);
+  }
+  return fields;
+};
+
+/**
+ * What the credential added, computed rather than described. A generic key diff
+ * over the two sides' items: whatever the member projection carries that the
+ * anonymous one does not IS the difference the grant makes, whether or not this
+ * page knows what those fields mean.
+ */
+const fieldDiff = (anonymous: PostsProjection, member: PostsProjection): string => {
+  const anonymousFields = projectionFields(anonymous);
+  const memberFields = projectionFields(member);
+  if (anonymousFields.size === 0 || memberFields.size === 0) {
+    return 'One side returned no items, so there are no fields to compare.';
+  }
+  const extra = [...memberFields].filter((field) => !anonymousFields.has(field)).sort();
+  return extra.length === 0
+    ? 'Both sides carry the same fields.'
+    : `Only the credentialed read carries: ${extra.join(', ')}.`;
+};
+
+/**
+ * THE COMPARISON — one route, read with nothing and read with the credential,
+ * side by side. Every other panel shows what a grant lets this app fetch; this
+ * one shows what the grant CHANGES about an answer anyone can already get.
+ */
+const postsSection = (
+  state: PostsState,
+  onReload: () => void,
+  onUpvote?: (post: string, on: boolean) => void,
+): HTMLElement => {
+  const section = el('div', 'card posts');
+  const named = config?.space?.name;
+  const heading = el('h2', undefined, named === undefined ? 'Posts' : `Posts in ${named}`);
+
+  if (state.kind === 'idle' || state.kind === 'pending') {
+    section.replaceChildren(heading, el('p', 'dim', 'Reading the posts both ways…'));
+    return section;
+  }
+
+  if (state.kind !== 'ok') {
+    const retry = el('button', 'quiet', 'Try again');
+    retry.addEventListener('click', onReload);
+    section.replaceChildren(heading, ...failureLines(state), retry);
+    return section;
+  }
+
+  const body: Node[] = [
+    heading,
+    el('p', 'dim', 'One route, read twice: with no credential, and with this app’s.'),
+  ];
+
+  // The upvote button rides in the member column only, and that is not a layout
+  // choice: an anonymous read has no viewer to toggle and no credential to sign
+  // the toggle with. The affordance sits where the authorization is.
+  const columns = el('div', 'columns');
+  columns.append(
+    postsColumn('Anonymous', state.anonymous),
+    postsColumn('As you', state.member, onUpvote),
+  );
+  body.push(columns, el('p', 'dim', fieldDiff(state.anonymous, state.member)));
+
+  const rawPanel = el('details', 'rawjson');
+  rawPanel.append(
+    el('summary', undefined, 'Raw response'),
+    // The space is dumped alongside the two projections because it is what the
+    // BACKEND read, in the DID form the route parameter takes. The heading names
+    // it in the human form; this is the coordinate.
+    el(
+      'pre',
+      'wrap',
+      JSON.stringify(
+        { space: state.space, anonymous: state.anonymous, member: state.member },
+        null,
+        2,
+      ),
+    ),
+  );
+  body.push(rawPanel);
+
+  const again = el('button', 'quiet', 'Read them again');
+  again.addEventListener('click', onReload);
+  body.push(again);
+
+  section.replaceChildren(...body);
+  return section;
+};
+
+// -----------------------------------------------------------------------------
+// the write with a body, and the replay
+// -----------------------------------------------------------------------------
+
+/** One send of the comment, as `api/comment.ts` reported it. */
+interface Attempt {
+  status: number;
+  comment?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+}
+
+/** What the comment block last did. */
+type CommentState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'created'; comment: Record<string, unknown> }
+  | { kind: 'resent'; first: Attempt; resend: Attempt }
+  | { kind: 'deleted' }
+  | ReadFailure;
+
+/** Sticky across re-renders, like every other affordance the reader types into. */
+let commentPost = '';
+let commentBody = '';
+let commentState: CommentState = { kind: 'idle' };
+
+/** An attempt off the wire, read as defensively as everything else. */
+const readAttempt = (value: unknown): Attempt | null => {
+  if (!isRecord(value)) return null;
+  const status = numberField(value, 'status');
+  if (status === undefined) return null;
+  const comment = objectField(value, 'comment');
+  const error = objectField(value, 'error');
+  return {
+    status,
+    ...(comment !== null ? { comment } : {}),
+    ...(error !== null ? { error } : {}),
+  };
+};
+
+/**
+ * What the API said about one send, in its own words. The status is the machine
+ * signal and the envelope carries the prose; neither is written here, because a
+ * hardcoded "already seen" would keep reading correctly long after the API
+ * stopped saying it.
+ */
+const attemptLine = (label: string, outcome: Attempt): string => {
+  const detail = [
+    outcome.error === undefined ? undefined : textField(outcome.error, 'message'),
+    outcome.error === undefined ? undefined : textField(outcome.error, 'code'),
+  ].find((part) => part !== undefined);
+  return `${label}: ${outcome.status}${detail === undefined ? '' : ` ${detail}`}`;
+};
+
+/** The comment the demo just wrote, rendered from what came back. */
+const commentCard = (comment: Record<string, unknown>): Node[] => {
+  const author = objectField(comment, 'author') ?? {};
+  const who =
+    textField(author, 'displayName') ??
+    (textField(author, 'username') === undefined ? undefined : `@${textField(author, 'username')}`);
+  const when = dateText(comment, 'publishedAt');
+
+  const lines: Node[] = [];
+  const meta = [who, when].filter((part): part is string => part !== undefined).join(' · ');
+  if (meta !== '') lines.push(el('p', 'dim', meta));
+  const written = textField(comment, 'body');
+  if (written !== undefined) lines.push(el('p', 'excerpt', written));
+  return lines;
+};
+
+/**
+ * COMMENT AS YOU, and the replay demonstration beside it.
+ *
+ * Two buttons send the same comment two different ways. The first is how an app
+ * writes: the kit mints a fresh unique id per request, so two clicks are two
+ * comments. The second signs once and sends that one proof twice, which is what
+ * a replay actually is — and the API's refusal of the second is the thing worth
+ * seeing, so it is rendered as an outcome rather than as an error.
+ */
+const commentSection = (
+  posts: PostsState,
+  state: CommentState,
+  onSend: (post: string, body: string, resend: boolean) => void,
+  onDelete: (comment: string) => void,
+): HTMLElement => {
+  const section = el('div', 'card comment');
+  const body: Node[] = [el('h2', undefined, 'Comment as you')];
+
+  // The picker offers the posts the member read returned, because those are the
+  // ones this credential is known to reach. No list, no affordance: a text box
+  // for a post id would be a coordinate the browser supplies.
+  const items =
+    posts.kind === 'ok' && posts.member.page !== undefined
+      ? arrayField(posts.member.page, 'items').filter(isRecord)
+      : [];
+  const choices = items
+    .map((item) => ({
+      id: textField(item, 'id'),
+      title: textField(item, 'displayTitle') ?? textField(item, 'title') ?? 'An untitled post',
+    }))
+    .filter((choice): choice is { id: string; title: string } => choice.id !== undefined);
+
+  if (choices.length === 0) {
+    body.push(el('p', 'dim', 'No post to comment on until the posts above load.'));
+    section.replaceChildren(...body);
+    return section;
+  }
+
+  if (choices.find((choice) => choice.id === commentPost) === undefined) {
+    commentPost = choices[0]?.id ?? '';
+  }
+
+  const picker = document.createElement('select');
+  for (const choice of choices) {
+    const option = document.createElement('option');
+    option.value = choice.id;
+    option.textContent = choice.title;
+    option.selected = choice.id === commentPost;
+    picker.append(option);
+  }
+  picker.addEventListener('change', () => {
+    commentPost = picker.value;
+  });
+  body.push(picker);
+
+  const input = document.createElement('textarea');
+  input.rows = 3;
+  input.placeholder = 'What you want to say';
+  input.value = commentBody;
+  input.addEventListener('input', () => {
+    commentBody = input.value;
+  });
+  body.push(input);
+
+  const buttons = el('div', 'checkrow');
+  for (const [label, resend] of [
+    ['Post comment', false],
+    ['Post it, then resend the same proof', true],
+  ] as [string, boolean][]) {
+    const button = el('button', 'quiet', label);
+    button.disabled = state.kind === 'pending';
+    button.addEventListener('click', () => {
+      const text = commentBody.trim();
+      if (text !== '' && commentPost !== '') onSend(commentPost, text, resend);
+    });
+    buttons.append(button);
+  }
+  body.push(buttons);
+
+  const deleteButton = (comment: Record<string, unknown>): Node[] => {
+    const id = textField(comment, 'id');
+    if (id === undefined) return [];
+    const button = el('button', 'quiet', 'Delete it');
+    button.addEventListener('click', () => onDelete(id));
+    return [button];
+  };
+
+  if (state.kind === 'pending') {
+    body.push(el('p', 'dim', 'Signing and sending…'));
+  } else if (state.kind === 'created') {
+    body.push(
+      el('p', 'dim', 'Posted.'),
+      ...commentCard(state.comment),
+      ...deleteButton(state.comment),
+    );
+  } else if (state.kind === 'deleted') {
+    body.push(el('p', 'dim', 'Deleted.'));
+  } else if (state.kind === 'resent') {
+    body.push(
+      el('p', undefined, attemptLine('First send', state.first)),
+      el('p', undefined, attemptLine('Resend of the identical proof', state.resend)),
+      el(
+        'p',
+        'dim',
+        'The second request carried the same jti, so the API refused to run it twice. ' +
+          'A client whose request times out re-reads the state instead of retrying blind.',
+      ),
+    );
+    if (state.first.comment !== undefined) {
+      body.push(...commentCard(state.first.comment), ...deleteButton(state.first.comment));
+    }
+  } else if (state.kind === 'refused' || state.kind === 'unreachable') {
+    body.push(...failureLines(state));
+  }
+
+  section.replaceChildren(...body);
+  return section;
+};
+
+/**
+ * One feed entry: where it came from, what it is called, and who wrote it.
+ *
+ * The space leads. A feed is the one list here whose items come from several
+ * places at once, so which place each one came from is the first thing a reader
+ * needs — and it is a member the space-addressed grant is what produced.
+ *
+ * A feed item is a post item plus its space and its viewer block, so the same
+ * chip renders here as in the posts columns. There is no anonymous feed to
+ * compare against — the whole list is a member projection.
+ */
+const feedRow = (item: Record<string, unknown>): HTMLElement => {
+  const row = el('li');
+
+  // The feed nests its provenance, and which member carries it varies by item
+  // type. Every name this page can find is shown; none is invented.
+  const space = objectField(item, 'space') ?? {};
+  const author = objectField(item, 'author') ?? {};
+  const spaceName =
+    textField(space, 'name') ?? textField(space, 'displayName') ?? textField(space, 'domain');
+
+  if (spaceName !== undefined) {
+    const line = el('p', 'provenance');
+    // Linked only when the URL is one a browser should follow. A `url` off the
+    // wire is untrusted text like everything else here, and an href is the one
+    // place where untrusted text can still execute.
+    const url = textField(space, 'url');
+    line.append(
+      url !== undefined && url.startsWith('https://')
+        ? link(url, spaceName)
+        : el('span', undefined, spaceName),
+    );
+    row.append(line);
+  }
+
+  row.append(
+    el(
+      'p',
+      'name',
+      textField(item, 'displayTitle') ?? textField(item, 'title') ?? 'An untitled item',
+    ),
+  );
+
+  const aside = [
+    textField(author, 'displayName') ??
+      (textField(author, 'username') === undefined
+        ? undefined
+        : `@${textField(author, 'username')}`),
+    dateText(item, 'publishedAt'),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(' · ');
+  if (aside !== '') row.append(el('p', 'dim', aside));
+
+  const viewer = viewerChip(item);
+  if (viewer !== null) {
+    const line = el('p', 'viewer');
+    line.append(viewer);
+    row.append(line);
+  }
+  return row;
+};
+
+/**
+ * The read with no anonymous form at all. A feed is assembled from who you
+ * follow and where you are a member, so there is nothing to compare it against —
+ * without the credential there is no one to assemble it for.
+ */
+const feedSection = (state: FeedState, onReload: () => void): HTMLElement => {
+  const section = el('div', 'card feed');
+  const heading = el('h2', undefined, 'Your feed');
+
+  if (state.kind === 'idle' || state.kind === 'pending') {
+    section.replaceChildren(heading, el('p', 'dim', 'Reading your feed…'));
+    return section;
+  }
+
+  if (state.kind !== 'ok') {
+    const retry = el('button', 'quiet', 'Try again');
+    retry.addEventListener('click', onReload);
+    section.replaceChildren(heading, ...failureLines(state), retry);
+    return section;
+  }
+
+  const items = arrayField(state.feed, 'items').filter(isRecord);
+  const body: Node[] = [heading];
+  if (items.length === 0) {
+    body.push(el('p', 'dim', 'Nothing in the feed.'));
+  } else {
+    const list = el('ul', 'postlist');
+    for (const item of items) list.append(feedRow(item));
+    body.push(list);
+  }
+
+  const rawPanel = el('details', 'rawjson');
+  rawPanel.append(
+    el('summary', undefined, 'Raw response'),
+    el('pre', 'wrap', JSON.stringify(state.feed, null, 2)),
+  );
+  body.push(rawPanel);
+
+  const again = el('button', 'quiet', 'Read it again');
+  again.addEventListener('click', onReload);
+  body.push(again);
+
+  section.replaceChildren(...body);
+  return section;
+};
+
 /** The hero when the sign-in granted no credential: what was proved, and what was not. */
 const identityHero = (session: Session): HTMLElement => {
   const hero = el('div', 'card hero');
@@ -1900,6 +2729,8 @@ interface Reads {
   memberships: MembershipsState;
   groupMemberships: GroupMembershipsState;
   credential: CredentialState;
+  posts: PostsState;
+  feed: FeedState;
 }
 
 const NOTHING_READ: Reads = {
@@ -1907,21 +2738,61 @@ const NOTHING_READ: Reads = {
   memberships: { kind: 'idle' },
   groupMemberships: { kind: 'idle' },
   credential: { kind: 'idle' },
+  posts: { kind: 'idle' },
+  feed: { kind: 'idle' },
 };
 
 /** The latest pair, so whichever call renders next renders the other's result too. */
 let reads: Reads = NOTHING_READ;
 
+/**
+ * Which panels a session's own scope supports. Not a style choice: a credential
+ * from the spaces option carries no `read:memberships`, so the membership walks
+ * would be refused, and one from the account option carries no `read:posts`. A
+ * page that ran every read under every scope would fill itself with refusals
+ * that say nothing about the grant except that it was never asked for them.
+ */
 const renderSignedIn = (session: Session, jws?: string, state: Reads = NOTHING_READ): void => {
   const facts = session.credential;
   const found = registration;
+  const spacesScope = session.scope === SCOPE_SPACES;
+
+  // The write affordances are gated on the CREDENTIAL, not on the scope that
+  // asked for it. The two are usually the same and the difference is the whole
+  // discipline: a grant that came back without a write token would put a button
+  // on the page that could only ever earn a 403, and the page would be
+  // advertising an authorization it does not hold.
+  const granted = facts?.coverage?.tokens ?? [];
+  const mayUpvote = spacesScope && granted.includes(WRITE_UPVOTES);
+  const mayComment = spacesScope && granted.includes(WRITE_COMMENTS);
 
   render(
     ...notices(),
     facts !== undefined
       ? profileHero(state.profile, () => void callProfile(session, jws))
       : identityHero(session),
-    ...(facts !== undefined
+    ...(facts !== undefined && spacesScope
+      ? [
+          postsSection(
+            state.posts,
+            () => void callPosts(session, jws),
+            mayUpvote ? (post, on) => void callUpvote(session, jws, post, on) : undefined,
+          ),
+          ...(mayComment
+            ? [
+                commentSection(
+                  state.posts,
+                  commentState,
+                  (post, written, resend) => void callComment(session, jws, post, written, resend),
+                  (id) => void callCommentDelete(session, jws, id),
+                ),
+              ]
+            : []),
+          feedSection(state.feed, () => void callFeed(session, jws)),
+          credentialCard(state.credential, () => void callCredential(session, jws)),
+        ]
+      : []),
+    ...(facts !== undefined && !spacesScope
       ? [
           membershipsSection(
             state.memberships,
@@ -1956,14 +2827,21 @@ const showCheck = (session: Session, jws: string | undefined, moved: CheckState)
 };
 
 /**
- * Enter the signed-in view. On the credential path all four calls start
- * immediately — no click — so the payoff is on screen as soon as there is a
- * session to render it from.
+ * Enter the signed-in view. On a credential path every call the scope supports
+ * starts immediately — no click — so the payoff is on screen as soon as there is
+ * a session to render it from.
  */
 const enterSignedIn = (session: Session, jws?: string): void => {
   reads = NOTHING_READ;
   checkTarget = '';
   check = { kind: 'idle' };
+  // The write affordances reset with the session too: an upvote note or a
+  // comment receipt belongs to the grant that produced it, and rendering one
+  // over a fresh sign-in would claim a write this session never made.
+  upvoteStates = {};
+  commentPost = '';
+  commentBody = '';
+  commentState = { kind: 'idle' };
   // Advancing the ticket orphans any check still in flight from the session
   // this one replaces, so its answer cannot land on the fresh view.
   checkSeq += 1;
@@ -1971,10 +2849,20 @@ const enterSignedIn = (session: Session, jws?: string): void => {
     renderSignedIn(session, jws, reads);
     return;
   }
+
+  // The profile and the credential's own description are common to both
+  // credential options: `read:profile` is in each set, and a credential may
+  // always describe itself under no scope at all.
   void callProfile(session, jws);
+  void callCredential(session, jws);
+
+  if (session.scope === SCOPE_SPACES) {
+    void callPosts(session, jws);
+    void callFeed(session, jws);
+    return;
+  }
   void callMemberships(session, jws);
   void callGroupMemberships(session, jws);
-  void callCredential(session, jws);
 };
 
 /** What one gated read came back with, before it is filed under a state name. */
@@ -2069,6 +2957,224 @@ const callCredential = async (session: Session, jws?: string): Promise<void> => 
   });
 };
 
+const callFeed = async (session: Session, jws?: string): Promise<void> => {
+  showRead(session, jws, { feed: { kind: 'pending' } });
+  const outcome = await gatedRead('/api/feed', 'feed');
+  showRead(session, jws, {
+    feed: outcome.kind === 'ok' ? { kind: 'ok', feed: outcome.data, host: outcome.host } : outcome,
+  });
+};
+
+/**
+ * The one gated read whose success body is not a single member. `/api/posts`
+ * answers with two projections and the space they were read from, so it gets its
+ * own reader rather than being squeezed into `gatedRead`'s shape — and the
+ * failure branches are worded exactly as that helper words them, because the
+ * three ways a call can fail do not change with the route.
+ */
+const callPosts = async (session: Session, jws?: string): Promise<void> => {
+  showRead(session, jws, { posts: { kind: 'pending' } });
+
+  const file = (state: PostsState): void => showRead(session, jws, { posts: state });
+
+  const result = await call('/api/posts', { method: 'POST', timeoutMs: VERIFY_TIMEOUT_MS });
+  if (result === null) {
+    file({ kind: 'unreachable', reason: 'The request to this site’s backend did not complete.' });
+    return;
+  }
+  if (result.status !== 200) {
+    file({
+      kind: 'unreachable',
+      reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+    });
+    return;
+  }
+
+  const body = result.body;
+  const anonymous = readProjection(body['anonymous']);
+  const member = readProjection(body['member']);
+  const space = objectField(body, 'space');
+  if (body['ok'] === true && anonymous !== null && member !== null && space !== null) {
+    file({
+      kind: 'ok',
+      space: { id: textField(space, 'id') ?? '', did: textField(space, 'did') ?? '' },
+      anonymous,
+      member,
+      host: typeof body['host'] === 'string' ? body['host'] : 'the DFOS API',
+    });
+    return;
+  }
+
+  file({
+    kind: 'refused',
+    status: typeof body['status'] === 'number' ? body['status'] : 0,
+    reason: reasonFrom(result, 'the API refused the request'),
+    ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
+    ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
+  });
+};
+
+/** A refusal or a dead request, in the one shape every caller here files. */
+const writeFailure = (result: ApiResult | null, body?: Record<string, unknown>): ReadFailure => {
+  if (result === null) {
+    return { kind: 'unreachable', reason: 'The request to this site’s backend did not complete.' };
+  }
+  if (result.status !== 200) {
+    return {
+      kind: 'unreachable',
+      reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+    };
+  }
+  const envelope = body ?? result.body;
+  return {
+    kind: 'refused',
+    status: typeof envelope['status'] === 'number' ? envelope['status'] : 0,
+    reason: reasonFrom(result, 'the API refused the request'),
+    ...(typeof envelope['code'] === 'string' ? { code: envelope['code'] } : {}),
+    ...(typeof envelope['message'] === 'string' ? { message: envelope['message'] } : {}),
+  };
+};
+
+/**
+ * Replace one post's viewer flag and count in the member projection, from what
+ * the API answered rather than from what this page assumed. The count comes back
+ * with the toggle for exactly that reason: a client that increments its own copy
+ * is right until two people vote at once.
+ */
+const withUpvote = (
+  state: PostsState,
+  post: string,
+  upvoted: unknown,
+  count: unknown,
+): PostsState => {
+  if (state.kind !== 'ok') return state;
+  const page = state.member.page;
+  if (page === undefined) return state;
+
+  const items = arrayField(page, 'items').map((item) => {
+    if (!isRecord(item) || textField(item, 'id') !== post) return item;
+    return {
+      ...item,
+      ...(typeof upvoted === 'boolean'
+        ? { viewer: { ...(objectField(item, 'viewer') ?? {}), upvoted } }
+        : {}),
+      ...(typeof count === 'number' && Number.isFinite(count) ? { upvoteCount: count } : {}),
+    };
+  });
+
+  return { ...state, member: { ...state.member, page: { ...page, items } } };
+};
+
+/**
+ * THE FIRST WRITE. The page sends a post id and a direction; which method, which
+ * host, and which path are the backend's, as they are for every other call here.
+ */
+const callUpvote = async (
+  session: Session,
+  jws: string | undefined,
+  post: string,
+  on: boolean,
+): Promise<void> => {
+  const file = (state: UpvoteState): void => {
+    upvoteStates = { ...upvoteStates, [post]: state };
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/upvote', {
+    method: 'POST',
+    body: { post, on },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+
+  // The item moves first, then the note — the chip and the count are the answer
+  // and the note is only how it was carried.
+  reads = { ...reads, posts: withUpvote(reads.posts, post, body['upvoted'], body['upvoteCount']) };
+  file({ kind: 'done', note: 'Signed with a fresh jti, so a second click is a second write.' });
+};
+
+/**
+ * THE WRITE WITH A BODY, both ways. `resend` asks the backend to sign once and
+ * send that one proof twice; the page does not send anything twice itself, and
+ * could not — the proof it would have to repeat lives on the server.
+ */
+const callComment = async (
+  session: Session,
+  jws: string | undefined,
+  post: string,
+  written: string,
+  resend: boolean,
+): Promise<void> => {
+  const file = (state: CommentState): void => {
+    commentState = state;
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/comment', {
+    method: 'POST',
+    body: { post, body: written, ...(resend ? { resend: true } : {}) },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+
+  if (resend) {
+    const first = readAttempt(body['first']);
+    const second = readAttempt(body['resend']);
+    file(
+      first === null || second === null
+        ? { kind: 'unreachable', reason: 'The backend answered in a shape this page cannot read.' }
+        : { kind: 'resent', first, resend: second },
+    );
+    return;
+  }
+
+  const comment = objectField(body, 'comment');
+  file(
+    comment === null
+      ? { kind: 'unreachable', reason: 'The backend answered without the comment it wrote.' }
+      : { kind: 'created', comment },
+  );
+  commentBody = '';
+};
+
+/** Undo, so a reader can leave the space as they found it. */
+const callCommentDelete = async (
+  session: Session,
+  jws: string | undefined,
+  comment: string,
+): Promise<void> => {
+  const file = (state: CommentState): void => {
+    commentState = state;
+    renderSignedIn(session, jws, reads);
+  };
+  file({ kind: 'pending' });
+
+  const result = await call('/api/comment-delete', {
+    method: 'POST',
+    body: { comment },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+
+  const body = result?.body ?? {};
+  if (result === null || result.status !== 200 || body['ok'] !== true) {
+    file(writeFailure(result));
+    return;
+  }
+  file({ kind: 'deleted' });
+};
+
 /**
  * The one call that carries a value the reader typed. It goes to the backend as
  * a kind and an identifier, never as a path — `api/check.ts` owns the two
@@ -2158,12 +3264,27 @@ const isExpiredReason = (reason: string): boolean =>
 
 const startSignIn = async (scope: string): Promise<void> => {
   renderStatus('Starting sign-in…');
+  rememberChoice();
+
+  // `spaces` rides along only on the option that names a space-level action,
+  // and only when the reader chose to pre-name: absent means "you pick at
+  // consent", and there is no value that says that. One space here rather than
+  // a list, because the demo has one to name — a real app names the spaces it
+  // needs, and `all` is the third form.
+  const named = config?.space;
+  const spaces =
+    scope === SCOPE_SPACES && selectedSpacesMode === 'named' && named !== undefined
+      ? [named.id]
+      : undefined;
 
   // The server mints the challenge, so the server's clock authors the
   // timestamp — a browser with a skewed clock no longer produces sign-ins that
   // are born stale and refused on the way back. The scope goes with it, because
   // the server is the one that has to owe the matching replay discipline.
-  const result = await call('/api/login', { method: 'POST', body: { scope } });
+  const result = await call('/api/login', {
+    method: 'POST',
+    body: { scope, ...(spaces !== undefined ? { spaces } : {}) },
+  });
   if (result === null) {
     renderSignedOut('Could not reach this site’s backend to start the sign-in.');
     return;
@@ -2242,6 +3363,11 @@ const credentialFromFragment = (hash: string): string | undefined => {
 };
 
 const boot = async (): Promise<void> => {
+  // The chooser's own selection, from before the redirect. UI state only — what
+  // the server will accept was sealed into a cookie at mint time and is not
+  // reachable from here.
+  restoreChoice();
+
   const callback = readSiwdCallback(location.search);
   const credential = credentialFromFragment(location.hash);
 
@@ -2268,8 +3394,11 @@ const boot = async (): Promise<void> => {
   if (callback.kind === 'success') {
     // Keep the chooser on the scope this callback belongs to, so a refused
     // credential sign-in offers a retry of the same thing rather than silently
-    // dropping back to identity.
-    if (credential !== undefined) selectedScope = SCOPE_API;
+    // dropping back to identity. The restored choice already says which of the
+    // two credential options it was; a credential arriving under a choice that
+    // named neither is the account set, which is the only one a page with no
+    // stored choice could have asked for.
+    if (credential !== undefined && selectedScope === SCOPE_IDENTITY) selectedScope = SCOPE_API;
     await handleCallback(callback.jws, credential);
     return;
   }
