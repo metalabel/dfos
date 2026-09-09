@@ -14,7 +14,14 @@
 
   Same discipline as every other write: `signedFetch`, so the `jti` is minted
   automatically on this non-safe method; one fixed template with two validated
-  slots, a space id and a comment id, each against its own grammar.
+  slots, a space id and a comment id.
+
+  The comment id is validated against the POST id grammar, because that is the
+  namespace comments are minted in — `_lib.ts` says so where the pattern lives.
+  The check is a shape check and nothing more: it keeps path grammar out of a
+  path this file wrote, and it cannot tell a comment from a post. Whether the id
+  names a comment, and whether that comment is this grant's to remove, are both
+  the API's to answer, and it answers them on the route it was asked.
 
 */
 
@@ -53,7 +60,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   if (typeof comment !== 'string' || !COMMENT_ID_RE.test(comment)) {
     json(res, 400, {
       ok: false,
-      reason: 'name one comment by its id — comment_ followed by its digits',
+      reason:
+        'name one comment by its id — post_ followed by its digits; a comment shares the post ' +
+        'id namespace',
     });
     return;
   }

@@ -179,16 +179,23 @@ export const DEMO_SPACE_NAME = 'DFOS';
 export const SPACE_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
 
 /**
- * The API's own entity ids, one grammar per kind rather than one shared pattern.
+ * The API's own entity ids, as the API actually mints them.
  *
- * Each write route names exactly the kind its template takes, so a comment id
- * offered where a post id belongs is refused HERE rather than percent-encoded
- * into a path and sent. The prefix is what makes that check worth writing: the
- * two ids are the same shape past it and a single pattern would accept either
- * in either slot.
+ * COMMENTS LIVE IN THE POST ID NAMESPACE. A comment comes back carrying a
+ * `post_` id, not a `comment_` one, so there is ONE grammar here and the second
+ * name is an alias for it rather than a second pattern. A `comment_` prefix was
+ * a reasonable guess and it was wrong: it refused every real comment id, and the
+ * route that validated against it never reached the API at all.
+ *
+ * The alias stays because the call sites are worth reading. `comment-delete.ts`
+ * validating a COMMENT_ID_RE says which kind of thing it is about to put in its
+ * path; the same file checking POST_ID_RE would read as a bug. What the alias
+ * must not do is imply the two are separately checkable — they are the same
+ * bytes, and no validation here can tell a post from a comment. Only the API
+ * can, and it does, on the route that was asked.
  */
 export const POST_ID_RE = /^post_[a-z0-9]{1,40}$/;
-export const COMMENT_ID_RE = /^comment_[a-z0-9]{1,40}$/;
+export const COMMENT_ID_RE = POST_ID_RE;
 
 /** The route-parameter form of a bare space id. */
 export const spaceDid = (id: string): string => `did:dfos:${id}`;
