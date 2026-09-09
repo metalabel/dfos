@@ -16,7 +16,7 @@
   "dependencies": {
     "@astrojs/sitemap": "^3.7.4",
     "@metalabel/dfos-protocol": "workspace:*",
-    "astro": "^5.7.0",
+    "astro": "^7.2.10",
     "github-slugger": "^2.0.0",
     "marked": "^18.0.11",
     "shiki": "^4.4.3"

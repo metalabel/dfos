@@ -1,7 +1,8 @@
 import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
 
-// no @preact/preset-vite: esbuild's automatic JSX transform targets preact
-// directly, which keeps babel (and its supply chain) out of the tree entirely.
+// no @preact/preset-vite: Oxc's automatic JSX transform (Vite 8's built-in
+// transformer, formerly esbuild's) targets preact directly, which keeps babel
+// (and its supply chain) out of the tree entirely.
 // Costs prefresh HMR; plain live-reload is plenty for this app.
 
 // -----------------------------------------------------------------------------
@@ -93,9 +94,11 @@ const devApi = (): Plugin => ({
 
 export default defineConfig({
   plugins: [devApi()],
-  esbuild: {
-    jsx: 'automatic',
-    jsxImportSource: 'preact',
+  oxc: {
+    jsx: {
+      runtime: 'automatic',
+      importSource: 'preact',
+    },
   },
   build: {
     target: 'es2022',
