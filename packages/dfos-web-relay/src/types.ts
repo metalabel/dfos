@@ -500,12 +500,7 @@ export interface RelayStats {
 
 /** All operation kinds in the protocol */
 export type OperationKind =
-  | 'identity-op'
-  | 'content-op'
-  | 'artifact'
-  | 'countersign'
-  | 'revocation'
-  | 'credential';
+  'identity-op' | 'content-op' | 'artifact' | 'countersign' | 'revocation' | 'credential';
 
 // -----------------------------------------------------------------------------
 // revocations + public credentials

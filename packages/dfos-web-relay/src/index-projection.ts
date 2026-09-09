@@ -419,8 +419,7 @@ const projectLogEntry = async (
       // a revocation for a credential this relay never held, and a revocation
       // signed by anyone other than that credential's issuer.
       const payload = decodeJwsUnsafe(entry.jwsToken)?.payload as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const credentialCID = payload?.['credentialCID'];
       if (typeof credentialCID !== 'string') return null;
       const credentialOp = await store.getOperation(credentialCID);

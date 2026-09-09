@@ -145,9 +145,7 @@ export const DOH_PROVIDERS: readonly { name: string; url: string }[] = [
  * and the explorer's route could not stand in. Nothing was observed.
  */
 export type ChannelVantage =
-  | { kind: 'browser' }
-  | { kind: 'route' }
-  | { kind: 'not-checkable'; reason: string };
+  { kind: 'browser' } | { kind: 'route' } | { kind: 'not-checkable'; reason: string };
 
 /** One channel, as finally established: the reading, and who did the reading. */
 export interface ChannelObservation {
@@ -171,8 +169,7 @@ export interface DualChannelProbe {
  *  at this layer is narrower than the final state: it means THIS vantage could not
  *  look, which is what licenses asking the other one. */
 export type ChannelAttempt =
-  | { kind: 'observed'; result: BindingMethodResult }
-  | { kind: 'not-checkable'; reason: string };
+  { kind: 'observed'; result: BindingMethodResult } | { kind: 'not-checkable'; reason: string };
 
 // -----------------------------------------------------------------------------
 // DNS over HTTPS

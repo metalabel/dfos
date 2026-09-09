@@ -85,8 +85,7 @@ const keyResolver =
   };
 
 export type RelayProfileVerdict =
-  | { ok: true; profile: ProfileContent }
-  | { ok: false; error: string };
+  { ok: true; profile: ProfileContent } | { ok: false; error: string };
 
 /**
  * Fully verify a relay's inline profile artifact against its OWN verified

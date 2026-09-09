@@ -108,13 +108,7 @@ export const readOriginClaim = (services: ServiceEntry[]): OriginClaim => {
 
 /** The per-method statuses `/api/binding` answers with (api/binding.ts). */
 export type BindingMethodStatus =
-  | 'ok'
-  | 'none'
-  | 'redirected'
-  | 'malformed'
-  | 'contradiction'
-  | 'error'
-  | 'refused';
+  'ok' | 'none' | 'redirected' | 'malformed' | 'contradiction' | 'error' | 'refused';
 
 export type BindingMethodResult =
   | { status: 'ok'; did: string }

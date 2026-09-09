@@ -749,11 +749,7 @@ export const buildApiIdentityHeaders = (input: { proof: string }): { Authorizati
  *   ceiling, or an empty required action). Not a judgment about the artifact.
  */
 export type RequestProofFailureReason =
-  | 'invalid'
-  | 'replayed'
-  | 'uncovered'
-  | 'unverifiable'
-  | 'config';
+  'invalid' | 'replayed' | 'uncovered' | 'unverifiable' | 'config';
 
 /**
  * The verification phase a failure arose in. Load-bearing for HTTP mapping: an

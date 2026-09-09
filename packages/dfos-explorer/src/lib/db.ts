@@ -17,12 +17,7 @@
 
 /** Every operation kind the relay log can carry. */
 export type OpKind =
-  | 'identity-op'
-  | 'content-op'
-  | 'artifact'
-  | 'countersign'
-  | 'revocation'
-  | 'credential';
+  'identity-op' | 'content-op' | 'artifact' | 'countersign' | 'revocation' | 'credential';
 
 export const OP_KINDS: readonly OpKind[] = [
   'identity-op',
@@ -460,8 +455,7 @@ export const openExplorerDb = async (
 
   const getChain = async (chainId: string): Promise<ChainRollup | undefined> =>
     (await req(db.transaction('chains').objectStore('chains').get(chainId))) as
-      | ChainRollup
-      | undefined;
+      ChainRollup | undefined;
 
   const allChains = async (): Promise<ChainRollup[]> =>
     (await req(db.transaction('chains').objectStore('chains').getAll())) as ChainRollup[];
