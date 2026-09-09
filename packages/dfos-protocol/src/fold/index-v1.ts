@@ -45,8 +45,7 @@ export interface IndexEntry {
 
 /** A single index/v1 delta. */
 export type IndexDelta =
-  | { op: 'set'; key: string; value?: IndexEntry }
-  | { op: 'remove'; key: string };
+  { op: 'set'; key: string; value?: IndexEntry } | { op: 'remove'; key: string };
 
 /** An index/v1 document — the content committed by one operation. */
 export interface IndexDocument {

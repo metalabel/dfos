@@ -27,14 +27,12 @@ export interface NavLink {
 export const navLinks: NavLink[] = [
   { href: '/', label: 'Home', tier: 'secondary' },
   { href: '/overview', label: 'Why', tier: 'primary' },
-  ...specs.map(
-    ({ slug, title, nav }): NavLink => ({
-      href: slug,
-      label: nav.label ?? title,
-      shortLabel: nav.shortLabel,
-      tier: nav.tier,
-    }),
-  ),
+  ...specs.map(({ slug, title, nav }): NavLink => ({
+    href: slug,
+    label: nav.label ?? title,
+    shortLabel: nav.shortLabel,
+    tier: nav.tier,
+  })),
   { href: '/faq', label: 'FAQ', tier: 'primary' },
   { href: 'https://github.com/metalabel/dfos', label: 'GitHub', tier: 'primary', external: true },
   { href: 'https://dfos.com', label: 'dfos.com', tier: 'secondary', external: true },

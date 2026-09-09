@@ -53,12 +53,7 @@ export type VerifyKind = 'identity' | 'content';
  * the chain and is the one failure a re-enqueue retries.
  */
 export type VerifyStatus =
-  | 'attributed'
-  | 'verifying'
-  | 'verified'
-  | 'diverged'
-  | 'unverified'
-  | 'error';
+  'attributed' | 'verifying' | 'verified' | 'diverged' | 'unverified' | 'error';
 
 /** What the fold learned that a row should reconcile to — the fold wins over the
  *  index hint. Both fields are order-independent (branch-inclusive log length,
