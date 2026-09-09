@@ -7,3 +7,16 @@ allowBuilds:
   workerd: true
 
 strictDepBuilds: true
+
+# Trust-policy waivers. This key REPLACES `.npmrc` trust-policy-exclude[], so
+# every waiver lives here and nowhere else. Each entry is pinned to an exact
+# name@version: any other version of the same package is still trust-checked.
+#
+# chokidar@4.0.3 (waived 2026-09-08). Provenance attestations are present on
+# 3.6.0, 4.0.0 and 4.0.1, absent on 4.0.2 and 4.0.3 (both Dec 2024), and
+# restored at 5.0.0 via GitHub Actions OIDC. The publishing account and the
+# maintainer set are unchanged across all of them, so this is a release-pipeline
+# regression across two patches on a terminal 4.x line, not a takeover. It is
+# already in the tree via tsup and @astrojs/check.
+trustPolicyExclude:
+  - chokidar@4.0.3

@@ -76,10 +76,10 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "@ipld/dag-cbor": "^10.0.1",
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
-    "multiformats": "^14.0.0"
+    "@ipld/dag-cbor": "^10.0.2",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "multiformats": "^14.0.5"
   },
   "peerDependencies": {
     "zod": "^4.4.3"
@@ -89,9 +89,9 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "tsup": "^8.5.1",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.8",
-    "zod": "^4.4.3"
+    "vitest": "^4.1.11",
+    "zod": "^4.5.4"
   }
 }

@@ -27,14 +27,14 @@
     "@metalabel/dfos-client": "workspace:*",
     "@metalabel/dfos-protocol": "workspace:*",
     "@metalabel/dfos-web-relay": "workspace:*",
-    "multiformats": "^14.0.0",
-    "preact": "^10.28.2"
+    "multiformats": "^14.0.5",
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "fake-indexeddb": "^6.2.2",
     "vite": "^7.2.7",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.11"
   }
 }

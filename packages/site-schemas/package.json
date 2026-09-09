@@ -11,11 +11,11 @@
   },
   "dependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
-    "hono": "^4.12.23"
+    "hono": "^4.13.5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260607.1",
+    "@cloudflare/workers-types": "^5.20260901.1",
     "typescript": "^5.9.3",
-    "wrangler": "^4.98.0"
+    "wrangler": "^4.128.0"
   }
 }
