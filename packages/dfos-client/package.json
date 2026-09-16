@@ -68,9 +68,9 @@
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
     "@metalabel/dfos-web-relay": "workspace:*",
-    "@types/node": "^24.10.4",
+    "@types/node": "^24.13.4",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   }
 }

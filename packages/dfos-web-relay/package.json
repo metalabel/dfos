@@ -63,7 +63,7 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.6.0"
   },
   "peerDependencies": {
     "@metalabel/dfos-protocol": "^0.54.0",
@@ -71,12 +71,12 @@
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
-    "@types/node": "^24.10.4",
-    "hono": "^4.13.5",
+    "@types/node": "^24.13.4",
+    "hono": "^4.13.7",
     "tsup": "^8.5.1",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
+    "vitest": "^5.0.0",
     "yaml": "^2.9.0"
   }
 }

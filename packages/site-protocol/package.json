@@ -16,14 +16,14 @@
   "dependencies": {
     "@astrojs/sitemap": "^3.7.4",
     "@metalabel/dfos-protocol": "workspace:*",
-    "astro": "^7.2.10",
+    "astro": "^7.3.2",
     "github-slugger": "^2.0.0",
-    "marked": "^18.0.11",
+    "marked": "^18.0.12",
     "shiki": "^4.4.3"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "typescript": "^5.9.3",
-    "wrangler": "^4.128.0"
+    "wrangler": "^4.130.0"
   }
 }
