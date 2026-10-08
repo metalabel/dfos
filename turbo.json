@@ -1,5 +1,8 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  // turbo >=2.11 writes a managed block into AGENTS.md whenever it detects an
+  // agent. AGENTS.md is hand-authored canon, so opt out.
+  "agentGuidance": false,
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
