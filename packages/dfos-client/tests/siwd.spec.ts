@@ -1024,15 +1024,14 @@ describe('siwd loopback credential tier', () => {
       outstanding = undefined;
       return true;
     };
-    // a fresh client per verification: a reused one answers the second call
-    // from its own warm cache, which auth refuses before it reaches the nonce
-    const subjectClient = () =>
-      createClient({
-        relays: [RELAY],
-        peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
-      });
+    // one shared client for both verifications: auth accepts an online answer
+    // from a warm cache, so the replay reaches the nonce gate
+    const subjectClient = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
+    });
 
-    const session = await verifySiwd(subjectClient(), callback.jws, {
+    const session = await verifySiwd(subjectClient, callback.jws, {
       domain: request.expect.domain,
       consumeNonce,
     });
@@ -1040,7 +1039,7 @@ describe('siwd loopback credential tier', () => {
     expect(session.value?.did).toBe(subject.did);
 
     // and the store of size one is spent — the replay finds nothing
-    const replay = await verifySiwd(subjectClient(), callback.jws, {
+    const replay = await verifySiwd(subjectClient, callback.jws, {
       domain: request.expect.domain,
       consumeNonce,
     });
@@ -1445,6 +1444,66 @@ describe('verifySiwd', () => {
     });
     expect(opted.ok).toBe(true);
     expect(opted.unverifiable).toContain('tip');
+  });
+
+  it('verifies the same DID twice on one shared, warm client', async () => {
+    const id = await buildIdentity();
+    const client = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [id.did]: id.log } } }),
+    });
+
+    for (const nonce of ['n1', 'n2']) {
+      const challenge: SiwdChallenge = { domain: '3p.com', nonce, timestamp: siwdTs(0) };
+      const jws = await signChallenge(id.kid, id.k.signer, challenge);
+      const res = await verifySiwd(client, jws, { domain: '3p.com', nonce });
+      expect(res.ok).toBe(true);
+    }
+    // the second read is warm and online, never the cache-only fallback
+    expect((await client.identity(id.did)).provenance.fromCache).toBe(false);
+  });
+
+  it('refuses a relay that rolls a cached identity back to a shorter log', async () => {
+    const id = await buildIdentity();
+    const del = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: id.headCID,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+      signer: id.k.signer,
+      keyId: id.k.keyId,
+      identityDID: id.did,
+    });
+    const deletedLog = [...id.log, del.jwsToken];
+    const relay = { identities: { [id.did]: deletedLog } };
+    const store = memoryStore();
+    const client = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient({ [RELAY]: relay }),
+    });
+
+    const verifyOnce = async (nonce: string) => {
+      const challenge: SiwdChallenge = { domain: '3p.com', nonce, timestamp: siwdTs(0) };
+      const jws = await signChallenge(id.kid, id.k.signer, challenge);
+      return verifySiwd(client, jws, { domain: '3p.com', nonce });
+    };
+
+    const first = await verifyOnce('n1');
+    expect(first.ok).toBe(false);
+    expect(first.error).toMatch(/deleted/);
+
+    // the relay now serves the pre-delete genesis-only log
+    relay.identities[id.did] = id.genesisLog;
+    const second = await verifyOnce('n2');
+    expect(second.ok).toBe(false);
+    expect(second.error).toMatch(/no relay answered/);
+
+    // and the verified longer log is still the cached prefix
+    const cached = (await store.get(`identity:${id.did}`)) as { log: string[] };
+    expect(cached.log).toEqual(deletedLog);
   });
 
   /*

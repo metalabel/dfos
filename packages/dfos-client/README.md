@@ -101,7 +101,7 @@ const { resolveKey } = resolvers(['https://relay.example']); // zero object grap
 import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 ```
 
-`memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and the cache is never stale-wrong. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
+`memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and a cached read never contradicts the relay log it extends. `verifySiwd`, `verifyApiRequest`, and `verifyApiIdentityRequest` accept an online answer and refuse one served from the cache alone, so one long-lived client is safe to share across verifications. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
 
 ### `@metalabel/dfos-client/api-auth`
 
@@ -157,6 +157,8 @@ await verifyApiRequest(client, {
   path: '/profile',
 });
 ```
+
+It accepts an online answer for the presenter and refuses one served from the cache alone unless `allowStale: true`, so a shared client verifies repeat requests from the same presenter.
 
 It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `replayed` / `uncovered` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
 
@@ -253,7 +255,7 @@ if (result.kind === 'success') {
 }
 ```
 
-`siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [INTEGRATIONS.md](../../specs/INTEGRATIONS.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
+`siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [INTEGRATIONS.md](../../specs/INTEGRATIONS.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity. It accepts an online answer for the signer and refuses one served from the cache alone unless `allowStale: true`, so a shared client verifies repeat sign-ins for the same DID.
 
 ## License
 

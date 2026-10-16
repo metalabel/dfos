@@ -1080,9 +1080,10 @@ export interface SiwdExpectations {
   /** Reject challenges older than this many seconds. Default 300 (5 min). */
   maxAgeSeconds?: number;
   /**
-   * Accept an identity resolution whose tip could not be verified (cache-only
-   * or empty-delta-against-cache). Default FALSE: authentication never silently
-   * degrades — a rotated-out key must not verify against a stale cached state.
+   * Accept an identity resolution served from the cache alone, when no relay
+   * answered. Default FALSE: authentication never silently degrades — a
+   * rotated-out key must not verify against a stale cached state. An online
+   * answer is accepted either way.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
@@ -1147,15 +1148,21 @@ export const verifySiwd = async (
       return fail('signer did does not match expected did');
     }
 
-    // resolve the identity to its CURRENT state — and fail CLOSED when the tip
-    // could not be verified. Auth is the one place trust never silently
-    // degrades: "current authKeys" from a stale cache would let a rotated-out
-    // key keep verifying. `allowStale: true` is the explicit opt-out.
+    // resolve the identity to its CURRENT state — and fail CLOSED when no relay
+    // answered. Auth is the one place trust never silently degrades: "current
+    // authKeys" read from the cache alone would let a rotated-out key keep
+    // verifying. `allowStale: true` is the explicit opt-in to that fallback.
+    // The gate is `fromCache`, not the `tip` axis. An online, quorum-agreed
+    // answer whose log equals the verified cached prefix carries the same
+    // evidence about the tip as a cold read from genesis, because tip freshness
+    // is never proven in v1. Refusing it would only penalize a warm client. The
+    // warm path is the stronger one: the overlap checks still reject a forked or
+    // shorter answer, and the cache write never shortens the verified log.
     const resolved = await client.identity(did);
     const unverifiable = resolved.trust.unverifiable ?? [];
-    if (!expect.allowStale && (unverifiable.includes('tip') || resolved.provenance.fromCache)) {
+    if (!expect.allowStale && resolved.provenance.fromCache) {
       return fail(
-        'identity resolution is stale (tip unverified) — refusing to authenticate against ' +
+        'identity resolution is stale (no relay answered) — refusing to authenticate against ' +
           'a cached identity state; pass allowStale: true to accept the risk',
       );
     }
@@ -1217,8 +1224,8 @@ export const verifySiwd = async (
     return {
       ok: true,
       value: session,
-      // surface the resolution's honest gaps either way (populated only on the
-      // allowStale path — the default path fails closed above)
+      // surface the resolution's honest gaps either way (`tip` rides along on
+      // every result whose freshness rests on the cache)
       ...(unverifiable.length > 0 ? { unverifiable } : {}),
     };
   } catch (err) {

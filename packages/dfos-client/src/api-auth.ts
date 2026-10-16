@@ -311,20 +311,25 @@ const misconfigured = (message: string) =>
  * supply itself, because "current identity state" is a network judgment here and
  * a local store lookup on a relay.
  *
- * It FAILS CLOSED on a stale tip. Key resolution is CURRENT-STATE: rotation is
- * how a presenter whose key is compromised stops that key minting proofs in its
- * name, and "current keys" read from a cache whose tip could not be verified
- * would take that lever away. `allowStale` is the deployment's explicit
- * acceptance of that risk.
+ * It FAILS CLOSED when no relay answered. Key resolution is CURRENT-STATE:
+ * rotation is how a presenter whose key is compromised stops that key minting
+ * proofs in its name, and "current keys" read from the cache alone would take
+ * that lever away. `allowStale` is the deployment's explicit acceptance of that
+ * risk.
  */
 const clientPresenterResolver =
   (client: Client, allowStale: boolean): ResolveProofPresenter =>
   async (did: string): Promise<ProofPresenterState> => {
+    // The gate is `fromCache`, not the `tip` axis. An online, quorum-agreed
+    // answer whose log equals the verified cached prefix carries the same
+    // evidence about the tip as a cold read from genesis, because tip freshness
+    // is never proven in v1. Refusing it would only penalize a warm client. The
+    // warm path is the stronger one: the overlap checks still reject a forked or
+    // shorter answer, and the cache write never shortens the verified log.
     const resolved = await client.identity(did);
-    const axes = resolved.trust.unverifiable ?? [];
-    if (!allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
+    if (!allowStale && resolved.provenance.fromCache) {
       throw unverifiableProof(
-        'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
+        'presenter identity resolution is stale (no relay answered) — refusing to authenticate ' +
           'against a cached identity state; pass allowStale: true to accept the risk',
       );
     }
@@ -418,9 +423,10 @@ export interface VerifyApiRequestInput {
   requireJti?: boolean;
 
   /**
-   * Accept a presenter resolution whose tip could not be verified (cache-only or
-   * empty-delta-against-cache). Default FALSE: key resolution is CURRENT-STATE,
-   * and a rotated-out key must not keep minting proofs against a stale cache.
+   * Accept a presenter resolution served from the cache alone, when no relay
+   * answered. Default FALSE: key resolution is CURRENT-STATE, and a rotated-out
+   * key must not keep minting proofs against a stale cache. An online answer is
+   * accepted either way.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
@@ -694,9 +700,10 @@ export interface VerifyApiIdentityRequestInput {
   requireJti?: boolean;
 
   /**
-   * Accept a presenter resolution whose tip could not be verified (cache-only or
-   * empty-delta-against-cache). Default FALSE: key resolution is CURRENT-STATE,
-   * and a rotated-out key must not keep minting proofs against a stale cache.
+   * Accept a presenter resolution served from the cache alone, when no relay
+   * answered. Default FALSE: key resolution is CURRENT-STATE, and a rotated-out
+   * key must not keep minting proofs against a stale cache. An online answer is
+   * accepted either way.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
