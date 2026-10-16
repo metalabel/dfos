@@ -1028,25 +1028,9 @@ describe('verifyApiRequest', () => {
     ).toBe('unverifiable');
   });
 
-  it('verifies the same presenter twice on one shared client, resolving fresh each time', async () => {
+  it('verifies the same presenter twice on one shared, warm client', async () => {
     const grant = await buildGrant();
-    const inner = memoryStore();
-    const gets: string[] = [];
-    const store = {
-      get: async (key: string) => {
-        gets.push(key);
-        return inner.get(key);
-      },
-      set: (key: string, value: unknown) => inner.set(key, value),
-    };
-    const client = createClient({
-      relays: [RELAY],
-      store,
-      peerClient: fakePeerClient({
-        [RELAY]: { identities: { [grant.user.did]: grant.user.log, [grant.rp.did]: grant.rp.log } },
-      }),
-      fetch: async () => Response.json({ revoked: false }),
-    });
+    const client = clientFor([grant.user, grant.rp]);
 
     for (let i = 0; i < 2; i++) {
       const result = await verifyApiRequest(client, {
@@ -1056,16 +1040,11 @@ describe('verifyApiRequest', () => {
       });
       expect(result.subjectDID).toBe(grant.user.did);
     }
-    // the first verify warmed the presenter's cache entry, and neither read it
-    // back; the only reads are the credential issuer's key lookups, which carry
-    // no freshness gate
-    const presenterKey = `identity:${grant.rp.did}`;
-    expect(await inner.get(presenterKey)).toBeDefined();
-    expect(gets).not.toContain(presenterKey);
-    expect(new Set(gets)).toEqual(new Set([`identity:${grant.user.did}`]));
+    // the second read is warm and online, never the cache-only fallback
+    expect((await client.identity(grant.rp.did)).provenance.fromCache).toBe(false);
   });
 
-  it('fails CLOSED on an unreachable relay, unless allowStale reads through the cache', async () => {
+  it('fails CLOSED on the cache-only fallback, unless allowStale', async () => {
     const grant = await buildGrant();
     const store = memoryStore();
     const warm = createClient({
@@ -1088,16 +1067,15 @@ describe('verifyApiRequest', () => {
       fetch: async () => Response.json({ revoked: false }),
     });
 
-    // the default path resolves fresh, so it never consults the warm cache
-    expect(
-      await reasonOf(
-        verifyApiRequest(offline, {
-          ...baseInput(),
-          proof: grant.proof,
-          credential: grant.credential,
-        }),
-      ),
-    ).toBe('unverifiable');
+    const closed = await errorOf(
+      verifyApiRequest(offline, {
+        ...baseInput(),
+        proof: grant.proof,
+        credential: grant.credential,
+      }),
+    );
+    expect(closed?.reason).toBe('unverifiable');
+    expect(closed?.message).toMatch(/stale/);
 
     const opted = await verifyApiRequest(offline, {
       ...baseInput(),
@@ -1106,6 +1084,44 @@ describe('verifyApiRequest', () => {
       allowStale: true,
     });
     expect(opted.subjectDID).toBe(grant.user.did);
+  });
+
+  it('refuses a relay that rolls a cached presenter back to a shorter log', async () => {
+    const grant = await buildGrant();
+    const del = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: grant.rp.headCID,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+      signer: grant.rp.k.signer,
+      keyId: grant.rp.k.keyId,
+      identityDID: grant.rp.did,
+    });
+    const deletedLog = [...grant.rp.log, del.jwsToken];
+    const relay = {
+      identities: { [grant.user.did]: grant.user.log, [grant.rp.did]: deletedLog },
+    };
+    const store = memoryStore();
+    const client = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient({ [RELAY]: relay }),
+      fetch: async () => Response.json({ revoked: false }),
+    });
+    const input = { ...baseInput(), proof: grant.proof, credential: grant.credential };
+
+    // a deleted presenter does not verify, and its longer log is now cached
+    expect(await reasonOf(verifyApiRequest(client, input))).toBe('invalid');
+
+    // the relay now serves the pre-delete genesis-only log
+    relay.identities[grant.rp.did] = grant.rp.genesisLog;
+    expect(await reasonOf(verifyApiRequest(client, input))).toBe('unverifiable');
+
+    // and the verified longer log is still the cached prefix
+    const cached = (await store.get(`identity:${grant.rp.did}`)) as { log: string[] };
+    expect(cached.log).toEqual(deletedLog);
   });
 
   // ---------------------------------------------------------------------------

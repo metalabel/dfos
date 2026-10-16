@@ -1024,8 +1024,8 @@ describe('siwd loopback credential tier', () => {
       outstanding = undefined;
       return true;
     };
-    // one shared client for both verifications: auth resolves fresh, so the
-    // replay reaches the nonce gate rather than a warm cache
+    // one shared client for both verifications: auth accepts an online answer
+    // from a warm cache, so the replay reaches the nonce gate
     const subjectClient = createClient({
       relays: [RELAY],
       peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
@@ -1432,11 +1432,9 @@ describe('verifySiwd', () => {
     const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: siwdTs(0) };
     const jws = await signChallenge(id.kid, id.k.signer, challenge);
 
-    // the default path resolves fresh, so it never consults the warm cache and
-    // fails on the unreachable relay instead
     const closed = await verifySiwd(offline, jws, { domain: '3p.com', nonce: 'n' });
     expect(closed.ok).toBe(false);
-    expect(closed.error).toMatch(/not found on any relay/);
+    expect(closed.error).toMatch(/stale/);
 
     // explicit opt-in accepts, and the honest gap rides along on the result
     const opted = await verifySiwd(offline, jws, {
@@ -1448,20 +1446,10 @@ describe('verifySiwd', () => {
     expect(opted.unverifiable).toContain('tip');
   });
 
-  it('verifies the same DID twice on one shared client, resolving fresh each time', async () => {
+  it('verifies the same DID twice on one shared, warm client', async () => {
     const id = await buildIdentity();
-    const inner = memoryStore();
-    const gets: string[] = [];
-    const store = {
-      get: async (key: string) => {
-        gets.push(key);
-        return inner.get(key);
-      },
-      set: (key: string, value: unknown) => inner.set(key, value),
-    };
     const client = createClient({
       relays: [RELAY],
-      store,
       peerClient: fakePeerClient({ [RELAY]: { identities: { [id.did]: id.log } } }),
     });
 
@@ -1470,11 +1458,51 @@ describe('verifySiwd', () => {
       const jws = await signChallenge(id.kid, id.k.signer, challenge);
       const res = await verifySiwd(client, jws, { domain: '3p.com', nonce });
       expect(res.ok).toBe(true);
-      expect(res.unverifiable).toBeUndefined();
     }
-    // the first verify warmed the cache, and neither verify read it back
-    expect(await inner.get(`identity:${id.did}`)).toBeDefined();
-    expect(gets).toEqual([]);
+    // the second read is warm and online, never the cache-only fallback
+    expect((await client.identity(id.did)).provenance.fromCache).toBe(false);
+  });
+
+  it('refuses a relay that rolls a cached identity back to a shorter log', async () => {
+    const id = await buildIdentity();
+    const del = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: id.headCID,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+      signer: id.k.signer,
+      keyId: id.k.keyId,
+      identityDID: id.did,
+    });
+    const deletedLog = [...id.log, del.jwsToken];
+    const relay = { identities: { [id.did]: deletedLog } };
+    const store = memoryStore();
+    const client = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient({ [RELAY]: relay }),
+    });
+
+    const verifyOnce = async (nonce: string) => {
+      const challenge: SiwdChallenge = { domain: '3p.com', nonce, timestamp: siwdTs(0) };
+      const jws = await signChallenge(id.kid, id.k.signer, challenge);
+      return verifySiwd(client, jws, { domain: '3p.com', nonce });
+    };
+
+    const first = await verifyOnce('n1');
+    expect(first.ok).toBe(false);
+    expect(first.error).toMatch(/deleted/);
+
+    // the relay now serves the pre-delete genesis-only log
+    relay.identities[id.did] = id.genesisLog;
+    const second = await verifyOnce('n2');
+    expect(second.ok).toBe(false);
+
+    // and the verified longer log is still the cached prefix
+    const cached = (await store.get(`identity:${id.did}`)) as { log: string[] };
+    expect(cached.log).toEqual(deletedLog);
   });
 
   /*
