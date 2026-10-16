@@ -1024,15 +1024,14 @@ describe('siwd loopback credential tier', () => {
       outstanding = undefined;
       return true;
     };
-    // a fresh client per verification: a reused one answers the second call
-    // from its own warm cache, which auth refuses before it reaches the nonce
-    const subjectClient = () =>
-      createClient({
-        relays: [RELAY],
-        peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
-      });
+    // one shared client for both verifications: auth resolves fresh, so the
+    // replay reaches the nonce gate rather than a warm cache
+    const subjectClient = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
+    });
 
-    const session = await verifySiwd(subjectClient(), callback.jws, {
+    const session = await verifySiwd(subjectClient, callback.jws, {
       domain: request.expect.domain,
       consumeNonce,
     });
@@ -1040,7 +1039,7 @@ describe('siwd loopback credential tier', () => {
     expect(session.value?.did).toBe(subject.did);
 
     // and the store of size one is spent — the replay finds nothing
-    const replay = await verifySiwd(subjectClient(), callback.jws, {
+    const replay = await verifySiwd(subjectClient, callback.jws, {
       domain: request.expect.domain,
       consumeNonce,
     });
@@ -1433,9 +1432,11 @@ describe('verifySiwd', () => {
     const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: siwdTs(0) };
     const jws = await signChallenge(id.kid, id.k.signer, challenge);
 
+    // the default path resolves fresh, so it never consults the warm cache and
+    // fails on the unreachable relay instead
     const closed = await verifySiwd(offline, jws, { domain: '3p.com', nonce: 'n' });
     expect(closed.ok).toBe(false);
-    expect(closed.error).toMatch(/stale/);
+    expect(closed.error).toMatch(/not found on any relay/);
 
     // explicit opt-in accepts, and the honest gap rides along on the result
     const opted = await verifySiwd(offline, jws, {
@@ -1445,6 +1446,35 @@ describe('verifySiwd', () => {
     });
     expect(opted.ok).toBe(true);
     expect(opted.unverifiable).toContain('tip');
+  });
+
+  it('verifies the same DID twice on one shared client, resolving fresh each time', async () => {
+    const id = await buildIdentity();
+    const inner = memoryStore();
+    const gets: string[] = [];
+    const store = {
+      get: async (key: string) => {
+        gets.push(key);
+        return inner.get(key);
+      },
+      set: (key: string, value: unknown) => inner.set(key, value),
+    };
+    const client = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [id.did]: id.log } } }),
+    });
+
+    for (const nonce of ['n1', 'n2']) {
+      const challenge: SiwdChallenge = { domain: '3p.com', nonce, timestamp: siwdTs(0) };
+      const jws = await signChallenge(id.kid, id.k.signer, challenge);
+      const res = await verifySiwd(client, jws, { domain: '3p.com', nonce });
+      expect(res.ok).toBe(true);
+      expect(res.unverifiable).toBeUndefined();
+    }
+    // the first verify warmed the cache, and neither verify read it back
+    expect(await inner.get(`identity:${id.did}`)).toBeDefined();
+    expect(gets).toEqual([]);
   });
 
   /*

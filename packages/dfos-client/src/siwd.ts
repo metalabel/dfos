@@ -1081,8 +1081,10 @@ export interface SiwdExpectations {
   maxAgeSeconds?: number;
   /**
    * Accept an identity resolution whose tip could not be verified (cache-only
-   * or empty-delta-against-cache). Default FALSE: authentication never silently
-   * degrades — a rotated-out key must not verify against a stale cached state.
+   * or empty-delta-against-cache). Default FALSE: the signer resolves fresh from
+   * the relays on every call, and authentication never silently degrades — a
+   * rotated-out key must not verify against a stale cached state. TRUE reads
+   * through the client cache and accepts its offline fallback.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
@@ -1151,7 +1153,13 @@ export const verifySiwd = async (
     // could not be verified. Auth is the one place trust never silently
     // degrades: "current authKeys" from a stale cache would let a rotated-out
     // key keep verifying. `allowStale: true` is the explicit opt-out.
-    const resolved = await client.identity(did);
+    // The default path resolves `fresh`: it bypasses the cache and verifies the
+    // chain from genesis on every call. A warm-cache read of an unchanged chain
+    // carries `tip` as unverifiable, so a shared client would otherwise refuse
+    // every repeat sign-in for the same DID. A fresh read has no cache fallback,
+    // so an unreachable relay fails the verification outright. `allowStale`
+    // reads through the cache and accepts its fallback.
+    const resolved = await client.identity(did, { fresh: !expect.allowStale });
     const unverifiable = resolved.trust.unverifiable ?? [];
     if (!expect.allowStale && (unverifiable.includes('tip') || resolved.provenance.fromCache)) {
       return fail(

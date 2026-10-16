@@ -320,7 +320,13 @@ const misconfigured = (message: string) =>
 const clientPresenterResolver =
   (client: Client, allowStale: boolean): ResolveProofPresenter =>
   async (did: string): Promise<ProofPresenterState> => {
-    const resolved = await client.identity(did);
+    // The default path resolves `fresh`: it bypasses the cache and verifies the
+    // chain from genesis on every call. A warm-cache read of an unchanged chain
+    // carries `tip` as unverifiable, so a shared client would otherwise refuse
+    // every request after the first for the same presenter. A fresh read has no
+    // cache fallback, so an unreachable relay fails the verification outright.
+    // `allowStale` reads through the cache and accepts its fallback.
+    const resolved = await client.identity(did, { fresh: !allowStale });
     const axes = resolved.trust.unverifiable ?? [];
     if (!allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
       throw unverifiableProof(
@@ -419,8 +425,10 @@ export interface VerifyApiRequestInput {
 
   /**
    * Accept a presenter resolution whose tip could not be verified (cache-only or
-   * empty-delta-against-cache). Default FALSE: key resolution is CURRENT-STATE,
-   * and a rotated-out key must not keep minting proofs against a stale cache.
+   * empty-delta-against-cache). Default FALSE: the presenter resolves fresh from
+   * the relays on every call, key resolution is CURRENT-STATE, and a rotated-out
+   * key must not keep minting proofs against a stale cache. TRUE reads through
+   * the client cache and accepts its offline fallback.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
@@ -695,8 +703,10 @@ export interface VerifyApiIdentityRequestInput {
 
   /**
    * Accept a presenter resolution whose tip could not be verified (cache-only or
-   * empty-delta-against-cache). Default FALSE: key resolution is CURRENT-STATE,
-   * and a rotated-out key must not keep minting proofs against a stale cache.
+   * empty-delta-against-cache). Default FALSE: the presenter resolves fresh from
+   * the relays on every call, key resolution is CURRENT-STATE, and a rotated-out
+   * key must not keep minting proofs against a stale cache. TRUE reads through
+   * the client cache and accepts its offline fallback.
    */
   allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
