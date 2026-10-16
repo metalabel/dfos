@@ -1499,6 +1499,7 @@ describe('verifySiwd', () => {
     relay.identities[id.did] = id.genesisLog;
     const second = await verifyOnce('n2');
     expect(second.ok).toBe(false);
+    expect(second.error).toMatch(/no relay answered/);
 
     // and the verified longer log is still the cached prefix
     const cached = (await store.get(`identity:${id.did}`)) as { log: string[] };
