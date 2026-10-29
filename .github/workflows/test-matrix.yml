@@ -453,7 +453,8 @@ jobs:
         run: cargo test --verbose
 
   verify-swift:
-    runs-on: ubuntu-latest
+    # setup-swift@v2 rejects Ubuntu 26.04, which ubuntu-latest now resolves to.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
