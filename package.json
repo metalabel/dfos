@@ -29,7 +29,7 @@
     "github-slugger": "^2.0.0",
     "marked": "^18.1.1",
     "prettier": "^3.9.10",
-    "turbo": "^2.11.8",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.3",
     "typescript7": "npm:typescript@7.0.2"
   }
