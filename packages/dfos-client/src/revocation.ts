@@ -73,7 +73,9 @@ const isResolverVerdict = (err: unknown): boolean =>
  * payload binds exactly the queried (issuerDID, credentialCID). Anything less —
  * unreachable relay, negative answer, forged or mismatched proof — moves on to
  * the next relay; false only after the full set has been consulted and at least
- * one relay answered with a parseable status body. Zero answers throws, and so
+ * one relay answered with a parseable status body. A relay that serves another
+ * issuer's verified revocation of this credential ignored the `issuer` scope and
+ * does not count as an answer. Zero answers throws, and so
  * does a positive answer whose signing key this client could not resolve: a
  * dependency failure is never a negative status.
  *
@@ -104,7 +106,9 @@ export const createRevocationChecker = (
     }
   };
   return async (issuerDID: string, credentialCID: string, asOfUnix?: number): Promise<boolean> => {
-    let answered = false;
+    // relays that answered the scoped question; a relay that ignored the scope
+    // is taken back out below
+    let answers = 0;
     // a positive answer was served and this client could not check it. It is
     // neither believed nor discarded: the status is simply unobtainable.
     let unresolvable: KeyUnresolvableError | undefined;
@@ -126,7 +130,7 @@ export const createRevocationChecker = (
         if (body === null || typeof body !== 'object' || typeof body.revoked !== 'boolean') {
           continue;
         }
-        answered = true;
+        answers++;
       } catch {
         continue;
       }
@@ -157,12 +161,17 @@ export const createRevocationChecker = (
           // credential would answer with an earlier boundary that does bite.
           continue;
         }
-        // verified JWS but for a different (issuer, credential) — a replay;
+        // A genuine revocation of THIS credential by another DID: the relay
+        // ignored `issuer` (it predates the scoped route) and served the
+        // unscoped answer, which may be a stranger's masking the issuer's own.
+        // That is no answer to the question asked, so it cannot license false.
+        if (verified.credentialCID === credentialCID) answers--;
+        // otherwise a verified JWS for a different credential — a replay;
         // keep consulting the remaining relays
       } catch (err) {
         // A KEY WE COULD NOT RESOLVE IS NOT A FORGERY. Relay A can serve an older
         // identity state than the one the genuine revocation was signed under, so
-        // the proof is discarded here and `answered` (set by the other relays'
+        // the proof is discarded here and `answers` (counted from the other relays'
         // negative-shaped bodies) would then license `false` — a revoked
         // credential authorized because a lookup failed. Remember it and keep
         // consulting: a later relay may still prove the revocation outright.
@@ -171,7 +180,7 @@ export const createRevocationChecker = (
         // the state the proof names never existed — ignore this relay's claim
       }
     }
-    if (!answered) throw unavailable('no relay answered');
+    if (answers === 0) throw unavailable('no relay answered');
     // no relay proved a revocation, but one served a proof this client could not
     // check — the same unobtainable status the zero-answer path reports
     if (unresolvable) throw unavailable(unresolvable.message);

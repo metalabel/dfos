@@ -131,7 +131,7 @@ describe('createRevocationChecker', () => {
     expect(await isRevoked(issuer.did, otherCID)).toBe(false);
   });
 
-  it("rejects a revocation whose issuer is not the credential's issuer", async () => {
+  it("never reads another issuer's revocation as the queried issuer's — that relay ignored the scope", async () => {
     const { credentialCID } = await setup();
     // a different identity signs a (self-consistent) revocation for the same CID —
     // it verifies as ITS OWN, but does not bind the queried issuer
@@ -150,7 +150,42 @@ describe('createRevocationChecker', () => {
       }),
       resolveKeyFor(impostor, queriedIssuer),
     );
-    expect(await isRevoked(queriedIssuer.did, credentialCID)).toBe(false);
+    // not true (it binds the impostor), and not false either: a relay honoring
+    // `issuer` never serves another issuer's row, so this one answered a
+    // different question and the status is unobtainable
+    await expect(isRevoked(queriedIssuer.did, credentialCID)).rejects.toThrow(/no relay answered/);
+  });
+
+  it("an old relay's unscoped stranger revocation is no answer; an honest negative elsewhere still is", async () => {
+    const { issuer, credentialCID } = await setup();
+    // relay A predates `issuer` and serves the stranger's collision answer;
+    // relay B honors the scope and has not seen the issuer's revocation
+    const stranger = await buildIdentity();
+    const strangerRevocation = await signRevocation({
+      issuerDID: stranger.did,
+      credentialCID,
+      signer: stranger.k.signer,
+      keyId: stranger.k.keyId,
+    });
+    const onlyStranger = createRevocationChecker(
+      [A],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: strangerRevocation.jwsToken } },
+      }),
+      resolveKeyFor(issuer, stranger),
+    );
+    await expect(onlyStranger(issuer.did, credentialCID)).rejects.toThrow(/no relay answered/);
+
+    const withNegative = createRevocationChecker(
+      [A, B],
+      revocationFetch({
+        [A]: { [credentialCID]: { revoked: true, revocation: strangerRevocation.jwsToken } },
+        [B]: { [credentialCID]: { revoked: false } },
+      }),
+      resolveKeyFor(issuer, stranger),
+    );
+    // B's honest negative is still an answer
+    expect(await withNegative(issuer.did, credentialCID)).toBe(false);
   });
 
   it("asks for the issuer's own revocation — a stranger's unscoped one cannot mask it", async () => {

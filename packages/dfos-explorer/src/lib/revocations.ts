@@ -256,6 +256,11 @@ const credentialStatusFrom = async (
     if (typeof body.revoked !== 'boolean') continue;
     if (body.revoked === true) {
       if (typeof body.revocation === 'string') {
+        // Another issuer's revocation under a scoped query: the relay ignored
+        // `issuer` (it predates it). That says nothing about this issuer, so
+        // the relay is silent, not a positive.
+        const did = decodeJwsUnsafe(body.revocation)?.payload['did'];
+        if (issuer && did !== issuer) continue;
         return { revokedByOp: revocationOpCid(body.revocation) };
       }
       // A POSITIVE WITH NO PROOF IS ITS OWN UNKNOWN. The relay claims a
