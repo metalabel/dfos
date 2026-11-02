@@ -963,6 +963,15 @@
               "type": "string"
             },
             "description": "Credential CID (CIDv1 dag-cbor + sha256, bafyrei…)"
+          },
+          {
+            "name": "issuer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Canonical 31-char did:dfos of the credential's issuer. When present,\nthe answer is that issuer's revocation for the CID. When absent, the\nanswer is one revocation this relay holds for the CID, which any DID\ncan sign, so it is not necessarily the issuer's. A verifier that\nknows the issuer MUST pass it.\n"
           }
         ],
         "responses": {
@@ -993,7 +1002,7 @@
             }
           },
           "400": {
-            "description": "Malformed credential CID",
+            "description": "Malformed credential CID (`invalid credential CID`) or a present `issuer` that is not a canonical did:dfos (`invalid DID`)",
             "content": {
               "application/json": {
                 "schema": {

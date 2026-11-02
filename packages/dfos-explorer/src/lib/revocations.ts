@@ -234,15 +234,21 @@ export const fetchIssuerRevocations = async (
  * and calling that `unrevoked` would paint a revoked credential green. A relay
  * asserting `revoked: true` with no proof to check is silent in exactly this
  * sense — it has made a claim, not given an answer.
+ *
+ * `issuer`, when known, scopes each query to that issuer's revocation. Any DID
+ * can sign a revocation naming any CID, so the unscoped answer may be a
+ * stranger's and hide the issuer's own.
  */
 const credentialStatusFrom = async (
   credentialCID: string,
   relays: string[],
+  issuer: string | undefined,
 ): Promise<{ revokedByOp: string } | 'unrevoked' | null> => {
+  const scope = issuer ? `?issuer=${encodeURIComponent(issuer)}` : '';
   let answered = 0;
   for (const relay of relays) {
     const body = (await getJson(
-      `${relay}${REVOCATIONS}/credential/${encodeURIComponent(credentialCID)}`,
+      `${relay}${REVOCATIONS}/credential/${encodeURIComponent(credentialCID)}${scope}`,
     )) as { revoked?: unknown; revocation?: unknown } | null;
     if (!body) continue; // unreachable / route absent — this relay is silent, ask the next
     // SHAPE FIRST, exactly as dfos-client's checker does: a body without a
@@ -250,6 +256,11 @@ const credentialStatusFrom = async (
     if (typeof body.revoked !== 'boolean') continue;
     if (body.revoked === true) {
       if (typeof body.revocation === 'string') {
+        // Another issuer's revocation under a scoped query: the relay ignored
+        // `issuer` (it predates it). That says nothing about this issuer, so
+        // the relay is silent, not a positive.
+        const did = decodeJwsUnsafe(body.revocation)?.payload['did'];
+        if (issuer && did !== issuer) continue;
         return { revokedByOp: revocationOpCid(body.revocation) };
       }
       // A POSITIVE WITH NO PROOF IS ITS OWN UNKNOWN. The relay claims a
@@ -269,11 +280,13 @@ const credentialStatusFrom = async (
  * fully cover — no relay answered, or one relay in the set stayed silent — and
  * every credential past {@link MAX_STATUS_QUERIES} comes back UNKNOWN, so an
  * unreachable network, a partially-answered set, or a capped query can never
- * paint a revoked credential green.
+ * paint a revoked credential green. `issuers` maps a credential CID to its
+ * issuer where known; those queries are issuer-scoped, the rest unscoped.
  */
 export const fetchCredentialRevocations = async (
   credentialCIDs: string[],
   relays: string[],
+  issuers: ReadonlyMap<string, string> = new Map(),
 ): Promise<RevocationView> => {
   const distinct = [...new Set(credentialCIDs)];
   const wanted = distinct.slice(0, MAX_STATUS_QUERIES);
@@ -282,7 +295,7 @@ export const fetchCredentialRevocations = async (
   const unknown = new Set<string>(distinct.slice(MAX_STATUS_QUERIES));
   await Promise.all(
     wanted.map(async (cid) => {
-      const verdict = await credentialStatusFrom(cid, relays);
+      const verdict = await credentialStatusFrom(cid, relays, issuers.get(cid));
       if (verdict === null) unknown.add(cid);
       else if (verdict !== 'unrevoked') revoked.set(cid, verdict.revokedByOp);
     }),

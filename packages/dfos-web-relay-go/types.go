@@ -634,11 +634,20 @@ type RelayReadStore interface {
 	// the whole non-positive range is timeless in the TS twin too, so an operation
 	// dated at or before 1970 gets the stricter answer in both languages.
 	IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error)
-	// GetRevocationForCredential returns the stored revocation for a credential
-	// CID, any issuer (nil when unknown). Serves the revocation-status route. If
-	// more than one issuer has revoked the same CID, implementations MUST return
-	// the one with the lexicographically smallest issuerDID (deterministic
-	// across stores and twins).
+	// GetRevocation returns the stored revocation for exactly (issuerDID,
+	// credentialCID) — the same pair IsCredentialRevoked answers, returning the
+	// revocation itself. Serves /revocations/v1/credential/{credentialCID}?issuer=.
+	// Nil when that issuer has not revoked that CID, whatever other issuers have
+	// revoked.
+	GetRevocation(issuerDID string, credentialCID string) (*StoredRevocation, error)
+	// GetRevocationForCredential returns one stored revocation for a credential
+	// CID, any issuer (nil when unknown). Serves the unscoped revocation-status
+	// route. If more than one issuer has revoked the same CID, implementations
+	// MUST return the one with the lexicographically smallest issuerDID
+	// (deterministic across stores and twins). That answer is not authoritative:
+	// any DID can sign a revocation naming any CID, so the returned one may not
+	// be the credential issuer's. A verifier that knows the issuer uses
+	// GetRevocation.
 	GetRevocationForCredential(credentialCID string) (*StoredRevocation, error)
 	// GetRevocationsByIssuer returns all stored revocations issued by a DID,
 	// sorted by credentialCID ascending (the issuer route's transparent keyset

@@ -145,6 +145,7 @@ const readOnlyStore = (backing: MemoryRelayStore): RelayReadStore => ({
   readLog: (params) => backing.readLog(params),
   getStats: () => backing.getStats(),
   isCredentialRevoked: (issuer, cid, asOf) => backing.isCredentialRevoked(issuer, cid, asOf),
+  getRevocation: (issuer, cid) => backing.getRevocation(issuer, cid),
   getRevocationForCredential: (cid) => backing.getRevocationForCredential(cid),
   getRevocationsByIssuer: (did) => backing.getRevocationsByIssuer(did),
   getPublicCredentials: (resource) => backing.getPublicCredentials(resource),

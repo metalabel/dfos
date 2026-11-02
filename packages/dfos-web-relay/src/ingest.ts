@@ -186,6 +186,8 @@ const failClosedStore = (store: RelayWriteStore): RelayWriteStore => ({
     guard('isCredentialRevoked', () =>
       store.isCredentialRevoked(issuerDID, credentialCID, asOfUnix),
     ),
+  getRevocation: (issuerDID, credentialCID) =>
+    guard('getRevocation', () => store.getRevocation(issuerDID, credentialCID)),
   getRevocationForCredential: (cid) =>
     guard('getRevocationForCredential', () => store.getRevocationForCredential(cid)),
   getRevocationsByIssuer: (did) =>

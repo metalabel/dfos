@@ -196,17 +196,20 @@ export interface RevocationFeedProbe {
  * The trust decision lives in dfos-client's checker (which re-verifies any
  * positive proof); this exists so the UI can distinguish "no feed available
  * anywhere — a revocation would be invisible here" from "feeds consulted,
- * no revocation seen".
+ * no revocation seen". `issuer` scopes each probe to that issuer's revocation,
+ * so a stranger's revocation naming the same CID cannot stand in for it.
  */
 export const probeRevocationFeeds = async (
   credentialCID: string,
   relays: string[],
+  issuer?: string,
 ): Promise<RevocationFeedProbe[]> => {
+  const scope = issuer ? `?issuer=${encodeURIComponent(issuer)}` : '';
   return Promise.all(
     relays.map(async (relay): Promise<RevocationFeedProbe> => {
       try {
         const res = await tryJson(
-          `${relay}/revocations/v1/credential/${encodeURIComponent(credentialCID)}`,
+          `${relay}/revocations/v1/credential/${encodeURIComponent(credentialCID)}${scope}`,
         );
         if (!res.ok) return { relay, feed: 'absent', revoked: false };
         const body = (await res.json()) as { revoked?: boolean; revocation?: string };

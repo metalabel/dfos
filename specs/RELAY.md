@@ -346,7 +346,7 @@ identically.
 
 ### Revocation status
 
-**Credential** (`GET /revocations/v1/credential/:credentialCID`):
+**Credential** (`GET /revocations/v1/credential/:credentialCID?issuer={did}`):
 
 ```json
 { "credentialCID": "bafyrei…", "revoked": true, "revocation": "eyJ…" }
@@ -354,9 +354,16 @@ identically.
 
 `200` revoked includes `revocation`, the full revocation JWS. `200` not revoked is
 `{ "credentialCID": "…", "revoked": false }` with no `revocation` key. `400` when
-the param is not a well-formed credential CID (`bafyrei` + 52 base32 chars). If
-more than one issuer has revoked the same CID, the relay answers deterministically
-with the lexicographically smallest `issuerDID`'s revocation.
+the param is not a well-formed credential CID (`bafyrei` + 52 base32 chars), or
+when `issuer` is present and is not a canonical 31-char `did:dfos` identifier.
+
+The revocation set is keyed by `(issuerDID, credentialCID)`
+([CREDENTIALS](https://protocol.dfos.com/credentials#relay-enforcement)), and a relay cannot tell
+which issuer a bare CID belongs to: it never holds the credential. With `issuer`,
+the answer is exactly that issuer's revocation of the CID. Without it, the answer
+is one revocation this relay holds for the CID, and any DID can publish a
+revocation naming any CID. A verifier that knows the credential's issuer MUST
+pass `issuer` and MUST NOT read an unscoped answer as that issuer's status.
 
 **Issuer** (`GET /revocations/v1/issuer/:did?after={cid}&limit=N`):
 

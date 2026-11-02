@@ -759,11 +759,20 @@ export interface RelayReadStore {
     asOfUnix?: number,
   ): Promise<boolean>;
   /**
-   * The stored revocation for a credential CID, any issuer. Serves
+   * The stored revocation for exactly `(issuerDID, credentialCID)` — the same
+   * pair `isCredentialRevoked` answers, returning the revocation itself. Serves
+   * `/revocations/v1/credential/:credentialCID?issuer=`. Undefined when that
+   * issuer has not revoked that CID, whatever other issuers have revoked.
+   */
+  getRevocation(issuerDID: string, credentialCID: string): Promise<StoredRevocation | undefined>;
+  /**
+   * One stored revocation for a credential CID, any issuer. Serves the unscoped
    * `/revocations/v1/credential/:credentialCID`. If more than one issuer has
    * revoked the same CID, implementations MUST return the one with the
    * lexicographically smallest issuerDID so the answer is deterministic across
-   * stores and twins.
+   * stores and twins. That answer is not authoritative: any DID can sign a
+   * revocation naming any CID, so the returned one may not be the credential
+   * issuer's. A verifier that knows the issuer uses `getRevocation`.
    */
   getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined>;
   /**

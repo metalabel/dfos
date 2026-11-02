@@ -214,6 +214,42 @@ describe('fetchCredentialRevocations — one silent relay is not a clean sweep',
   });
 });
 
+describe('fetchCredentialRevocations — issuer-scoped where the issuer is known', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('appends ?issuer= for a credential with a known issuer, and only for it', async () => {
+    const seen: string[] = [];
+    stubRelays((url) => {
+      seen.push(url);
+      return { revoked: false };
+    });
+    await fetchCredentialRevocations(
+      ['cred-A', 'cred-B'],
+      [RELAY_A],
+      new Map([['cred-A', 'did:dfos:iss']]),
+    );
+    expect(seen.sort()).toEqual([
+      `${RELAY_A}/revocations/v1/credential/cred-A?issuer=${encodeURIComponent('did:dfos:iss')}`,
+      `${RELAY_A}/revocations/v1/credential/cred-B`,
+    ]);
+  });
+
+  it("reads another issuer's revocation under a scoped query as silence, not revoked", async () => {
+    const byIssuer = (did: string) =>
+      mockJws({ typ: 'did:dfos:revocation', cid: 'rev-op' }, { did, credentialCID: 'cred-A' });
+    const issuers = new Map([['cred-A', 'did:dfos:iss']]);
+
+    stubRelays(() => ({ revoked: true, revocation: byIssuer('did:dfos:stranger') }));
+    const masked = await fetchCredentialRevocations(['cred-A'], [RELAY_A], issuers);
+    expect(masked.revoked.has('cred-A')).toBe(false);
+    expect(masked.unknown.has('cred-A')).toBe(true);
+
+    stubRelays(() => ({ revoked: true, revocation: byIssuer('did:dfos:iss') }));
+    const own = await fetchCredentialRevocations(['cred-A'], [RELAY_A], issuers);
+    expect(own.revoked.has('cred-A')).toBe(true);
+  });
+});
+
 describe('fetchIssuerRevocations — a capped walk cannot establish absence', () => {
   afterEach(() => vi.unstubAllGlobals());
 

@@ -4,7 +4,7 @@
 // does, it advertises `capabilities.revocations: true` in the well-known and
 // serves:
 //
-//	GET /revocations/v1/credential/{credentialCID} → { credentialCID, revoked, revocation? }
+//	GET /revocations/v1/credential/{credentialCID}?issuer={did} → { credentialCID, revoked, revocation? }
 //	GET /revocations/v1/issuer/{did}               → { did, revocations: [...], next }
 //
 // The revocation JWS itself rides every positive answer, so these tests
@@ -19,6 +19,7 @@ package conformance
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -291,15 +292,16 @@ func TestRevocationStatusMalformedDID(t *testing.T) {
 	}
 }
 
-func TestRevocationStatusMultiIssuerTiebreak(t *testing.T) {
+// TestRevocationStatusMultiIssuerUnscoped: two issuers revoke one CID, in both
+// ingest orders. The unscoped answer is one revocation the relay holds for the
+// CID; the spec does not say which, so either issuer's token conforms. Which
+// issuer's revocation a verifier gets is TestRevocationStatusIssuerScoped.
+func TestRevocationStatusMultiIssuerUnscoped(t *testing.T) {
 	base := relayURL(t)
 	requireRevocationsCapability(t, base)
 	for _, reverse := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reverse=%t", reverse), func(t *testing.T) {
 			issuers := []identity{createIdentity(t, base), createIdentity(t, base)}
-			if issuers[0].did > issuers[1].did {
-				issuers[0], issuers[1] = issuers[1], issuers[0]
-			}
 			cid, _, err := dfos.DocumentCID(map[string]any{"multiIssuer": issuers[0].did})
 			if err != nil {
 				t.Fatal(err)
@@ -321,9 +323,80 @@ func TestRevocationStatusMultiIssuerTiebreak(t *testing.T) {
 				Revocation    string `json:"revocation"`
 			}
 			resp := getJSON(t, base+"/revocations/v1/credential/"+cid, &body)
-			if resp.StatusCode != 200 || body.CredentialCID != cid || !body.Revoked || body.Revocation != tokens[0] {
-				t.Fatalf("multi-issuer projection: status %d body %+v, want smallest issuer %s", resp.StatusCode, body, issuers[0].did)
+			if resp.StatusCode != 200 || body.CredentialCID != cid || !body.Revoked ||
+				(body.Revocation != tokens[0] && body.Revocation != tokens[1]) {
+				t.Fatalf("multi-issuer unscoped: status %d body %+v, want either issuer's revocation", resp.StatusCode, body)
 			}
 		})
+	}
+}
+
+// TestRevocationStatusIssuerScoped pins the `issuer` query: the revocation set
+// is keyed by (issuerDID, credentialCID), and any DID can sign a revocation
+// naming any CID, so a verifier that knows the issuer asks for exactly that
+// issuer's row. Two issuers revoke the same CID; each scoped query answers that
+// issuer's own revocation, a scoped query for an issuer that revoked nothing is
+// revoked:false, and a present issuer that is not a canonical did:dfos is a 400.
+func TestRevocationStatusIssuerScoped(t *testing.T) {
+	base := relayURL(t)
+	requireRevocationsCapability(t, base)
+
+	issuers := []identity{createIdentity(t, base), createIdentity(t, base)}
+	bystander := createIdentity(t, base)
+	cid, _, err := dfos.DocumentCID(map[string]any{"issuerScoped": issuers[0].did})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := make([]string, len(issuers))
+	for i, issuer := range issuers {
+		tokens[i], _ = createRevocation(t, issuer.did, cid, issuer.auth)
+		postOperationsAccepted(t, base, []string{tokens[i]})
+	}
+
+	type status struct {
+		CredentialCID string  `json:"credentialCID"`
+		Revoked       bool    `json:"revoked"`
+		Revocation    *string `json:"revocation"`
+	}
+	scoped := func(issuer string) string {
+		return base + "/revocations/v1/credential/" + cid + "?issuer=" + url.QueryEscape(issuer)
+	}
+
+	for i, issuer := range issuers {
+		var body status
+		resp := getJSON(t, scoped(issuer.did), &body)
+		if resp.StatusCode != 200 {
+			t.Fatalf("scoped %s: status %d, want 200", issuer.did, resp.StatusCode)
+		}
+		if body.CredentialCID != cid || !body.Revoked || body.Revocation == nil || *body.Revocation != tokens[i] {
+			t.Fatalf("scoped %s: body %+v, want that issuer's own revocation", issuer.did, body)
+		}
+		// zero-trust: the returned proof names the issuer that was asked for
+		_, payload, err := dfos.DecodeJWSUnsafe(*body.Revocation)
+		if err != nil {
+			t.Fatalf("scoped %s: revocation decode: %v", issuer.did, err)
+		}
+		if payload["did"] != issuer.did || payload["credentialCID"] != cid {
+			t.Fatalf("scoped %s: revocation payload %v", issuer.did, payload)
+		}
+	}
+
+	var none status
+	resp := getJSON(t, scoped(bystander.did), &none)
+	if resp.StatusCode != 200 {
+		t.Fatalf("scoped bystander: status %d, want 200", resp.StatusCode)
+	}
+	if none.CredentialCID != cid || none.Revoked || none.Revocation != nil {
+		t.Fatalf("scoped bystander: body %+v, want revoked:false with no revocation", none)
+	}
+
+	for _, issuer := range []string{"", "not-a-did", "did:dfos:tooshort", issuers[0].did + "x"} {
+		var body struct {
+			Error string `json:"error"`
+		}
+		resp := getJSON(t, scoped(issuer), &body)
+		if resp.StatusCode != 400 {
+			t.Fatalf("scoped issuer %q: status %d, want 400", issuer, resp.StatusCode)
+		}
 	}
 }

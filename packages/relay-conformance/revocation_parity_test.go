@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,7 @@ import (
 // Proves the Go revocation-status routes (/revocations/v1) are byte/semantic
 // twins of the TS routes (relay.ts / revocations.ts). Boots the SAME two relays
 // as TestDualRelayParity (started by run-parity.sh from the pinned fixture) and
-// compares canonicalized bodies across the six cases the projection cares about:
+// compares canonicalized bodies across the cases the projection cares about:
 //
 //   1. revoked        — 200 { credentialCID, revoked:true, revocation:<JWS> }
 //                        for the fixture's B-issued, B-revoked credential.
@@ -22,6 +23,11 @@ import (
 //   5. issuerEmpty    — 200 empty `[]` (never null) for issuer A (revoked nothing).
 //   6. unknownAfter   — keyset-resumes strictly after an absent credential CID.
 //   7. malformedDID   — 400 invalid-DID envelope.
+//   8. scoped         — the credential route with `?issuer=`: 200 revoked for
+//                        issuer B (the revoker), 200 revoked:false for issuer A
+//                        (revoked nothing), and the 400 invalid-DID envelope for
+//                        a present issuer that is empty or not a canonical
+//                        did:dfos.
 //
 // compareResolver (resolver_parity_test.go) already handles ANY status, so it
 // catches divergence in the 400 envelopes too. The test name contains the
@@ -64,5 +70,12 @@ func TestDualRelayParity_RevocationStatus(t *testing.T) {
 	})
 	t.Run("malformedDID", func(t *testing.T) {
 		compareResolver(t, tsURL, goURL, "/revocations/v1/issuer/did:dfos:short", 400)
+	})
+	t.Run("scoped", func(t *testing.T) {
+		path := "/revocations/v1/credential/" + fix.QueryRevokedCredentialCID + "?issuer="
+		compareResolver(t, tsURL, goURL, path+url.QueryEscape(fix.QueryRevocationIssuerDID), 200)
+		compareResolver(t, tsURL, goURL, path+url.QueryEscape(fix.QueryDID), 200)
+		compareResolver(t, tsURL, goURL, path, 400)
+		compareResolver(t, tsURL, goURL, path+"did:dfos:short", 400)
 	})
 }

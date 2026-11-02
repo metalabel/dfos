@@ -22,6 +22,8 @@ import type { ExplorerOp } from './db';
 export interface GrantSummary {
   /** credential op CID — links to the credential detail view for full verify */
   cid: string;
+  /** issuer DID read from the token payload (unverified); '' when absent */
+  iss: string;
   /** audience: '*' for a public standing grant, else a specific DID */
   aud: string;
   /** actions this grant confers over the chain (e.g. ['read']) */
@@ -60,6 +62,7 @@ export const grantsForChain = (ops: ExplorerOp[], contentId: string): GrantSumma
     const aud = typeof payload['aud'] === 'string' ? payload['aud'] : '';
     byCid.set(op.cid, {
       cid: op.cid,
+      iss: typeof payload['iss'] === 'string' ? payload['iss'] : '',
       aud,
       actions,
       exp: typeof payload['exp'] === 'number' ? payload['exp'] : undefined,
@@ -138,6 +141,7 @@ export const grantsFromIndex = (rows: IndexCredentialRow[], contentId: string): 
     const aud = typeof payload['aud'] === 'string' ? payload['aud'] : '*';
     byCid.set(row.cid, {
       cid: row.cid,
+      iss: typeof payload['iss'] === 'string' ? payload['iss'] : '',
       aud,
       actions,
       exp: typeof row.exp === 'number' ? row.exp : undefined,
