@@ -282,7 +282,9 @@ func assertJWSProfile(_ header: [String: Any]) throws {
     }
     if header["crit"] != nil { throw JWSRejected(reason: "crit header is not supported") }
     if header["jwk"] != nil { throw JWSRejected(reason: "jwk header is not allowed") }
+    if header["jku"] != nil { throw JWSRejected(reason: "jku header is not allowed") }
     if header["x5c"] != nil { throw JWSRejected(reason: "x5c header is not allowed") }
+    if header["x5u"] != nil { throw JWSRejected(reason: "x5u header is not allowed") }
 }
 
 /// Profile-aware JWS verification — applies alg pin, crit, no header-key-trust,

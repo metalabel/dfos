@@ -146,8 +146,12 @@ def assert_jws_profile(header: dict) -> None:
         raise ValueError("crit header is not supported")
     if "jwk" in header:
         raise ValueError("jwk header is not allowed")
+    if "jku" in header:
+        raise ValueError("jku header is not allowed")
     if "x5c" in header:
         raise ValueError("x5c header is not allowed")
+    if "x5u" in header:
+        raise ValueError("x5u header is not allowed")
 
 
 def verify_jws(token: str, pub_key_bytes: bytes) -> dict:

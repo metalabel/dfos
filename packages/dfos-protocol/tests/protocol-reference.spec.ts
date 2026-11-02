@@ -592,6 +592,8 @@ async function generateSharedVectors(a: ReferenceArtifacts): Promise<VectorsDocu
     'RV-ALG-CASE': mutateHeader({ alg: 'eddsa' }),
     'RV-CRIT-PRESENT': mutateHeader({ crit: ['exp'] }),
     'RV-HEADER-KEY-TRUST': mutateHeader({ jwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAA' } }),
+    'RV-HEADER-JKU': mutateHeader({ jku: 'https://example.invalid/keys' }),
+    'RV-HEADER-X5U': mutateHeader({ x5u: 'https://example.invalid/cert' }),
     'RV-SIG-BITFLIP': mutateSignature((sig) => {
       const out = new Uint8Array(sig);
       out[63] = out[63]! ^ 0x01;
@@ -823,7 +825,7 @@ async function generateSharedVectors(a: ReferenceArtifacts): Promise<VectorsDocu
     {
       id: 'reject-corpus',
       description:
-        'Nine tokens every conformant verifier MUST reject, each isolating one profile or signature gate. The base vector is a valid JWS signed by key 1; publicKeyHex is the key to verify against.',
+        'Eleven tokens every conformant verifier MUST reject, each isolating one profile or signature gate. The base vector is a valid JWS signed by key 1; publicKeyHex is the key to verify against.',
       values: { publicKeyHex: a.publicKey1Hex, tokens: rejectVectors },
     },
   ];
