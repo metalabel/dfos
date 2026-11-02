@@ -24,7 +24,7 @@
 
 */
 
-import { isDependencyMissing } from '@metalabel/dfos-protocol';
+import { isDependencyMissing, markDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   decodeMultikey,
   IdentityStateNoSeenKeysError,
@@ -49,6 +49,7 @@ import {
   StaleAnswerError,
 } from './transport';
 import type {
+  CachedContentSummary,
   Callbacks,
   CallOptions,
   EffectiveIdentity,
@@ -73,9 +74,10 @@ interface CachedChain<T> {
 }
 
 /**
- * A content chain's cache row. `log` is the branch-inclusive log as served, and
- * the pin is the SET of its operations: a later read must still serve every one
- * of them. `nodes` memoizes each surviving operation's verified state so an
+ * A content chain's cache row. `log` is every operation that VERIFIED, in served
+ * order, and the pin is the SET of them: a later read must still serve every
+ * one. `rejected` lists the served operations that did not verify; they are
+ * never pinned. `nodes` memoizes each surviving operation's verified state so an
  * operation not yet seen verifies against its parent's state, whichever branch
  * it extends. Both extra members are absent on a row written before content
  * resolution was DAG-aware; such a row's `log` is its head lineage.
@@ -171,6 +173,17 @@ const opMeta = (jws: string): { cid: string; createdAt: string } => {
   return { cid, createdAt };
 };
 
+/** The served operations that verified, in served order, each once. */
+const survivors = (log: string[], dag: VerifiedContentDag): string[] => {
+  const seen = new Set<string>();
+  return log.filter((jws) => {
+    const cid = opMeta(jws).cid;
+    if (!dag.nodes[cid] || seen.has(cid)) return false;
+    seen.add(cid);
+    return true;
+  });
+};
+
 // -----------------------------------------------------------------------------
 // key extraction (mirrors the relay's as-of resolver, but sourced from a cached,
 // verified log instead of a RelayStore)
@@ -248,7 +261,7 @@ export interface IdentityResolution {
 
 export interface ContentResolution {
   state: VerifiedContentChain;
-  /** The branch-inclusive log, every operation served. */
+  /** Every served operation that verified, all branches, in served order. */
   log: string[];
   /** The selected head's lineage, genesis first — the operations `state` folds. */
   headLineage: string[];
@@ -271,7 +284,7 @@ interface VerifiedCandidate<T> {
 export interface Resolvers {
   getIdentityChain(did: string, options?: CallOptions): Promise<IdentityResolution>;
   getContentChain(contentId: string, options?: CallOptions): Promise<ContentResolution>;
-  recheckContentAuthority(contentId: string): Promise<boolean>;
+  recheckContentAuthority(contentId: string): Promise<CachedContentSummary | undefined>;
   discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
   callbacks(): Callbacks;
 }
@@ -482,6 +495,48 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     isRevoked: deps.isRevoked,
   });
 
+  /**
+   * THE FOLD'S BOUNDARY: a lookup that failed is not a verdict. The content DAG
+   * drops an operation that fails and re-selects the head, so a signer this
+   * client could not resolve, or a revocation status it could not obtain, must
+   * reach it marked as a dependency miss — otherwise a lookup that may succeed
+   * later reads as proof the operation is invalid, and an older head is served
+   * as verified. Only a determinate answer stays a verdict: `NoStateAsOfError`,
+   * and a key absent from a state the basis pinned (`basisDeterminate`). When in
+   * doubt it is a miss.
+   */
+  const resolveFoldKey = async (kid: string, basis?: string): Promise<Uint8Array> => {
+    const hashIdx = kid.indexOf('#');
+    if (hashIdx < 0) throw new Error(`kid must be a DID URL: ${kid}`);
+    const did = kid.substring(0, hashIdx);
+    const keyId = kid.substring(hashIdx + 1);
+    let state: EffectiveIdentity;
+    try {
+      state = await stateAsOf(await getIdentityChain(did), basis);
+    } catch (err) {
+      if (err instanceof NoStateAsOfError || isDependencyMissing(err)) throw err;
+      const message = err instanceof Error ? err.message : 'unknown error';
+      throw markDependencyMissing(
+        new Error(`signer identity unresolvable: ${did}: ${message}`, { cause: err }),
+      );
+    }
+    const bytes = keyBytesFor(state, keyId);
+    if (bytes) return bytes;
+    const unknown = new Error(`unknown key ${keyId} on identity ${did}`);
+    throw state.basisDeterminate === true ? unknown : markDependencyMissing(unknown);
+  };
+
+  /** A revocation checker that cannot answer has not answered: a miss. */
+  const isRevokedForFold: RevChecker = async (issuerDID, credentialCID, asOfUnix) => {
+    try {
+      return await deps.isRevoked(issuerDID, credentialCID, asOfUnix);
+    } catch (err) {
+      if (isDependencyMissing(err)) throw err;
+      const message = err instanceof Error ? err.message : 'unknown error';
+      throw markDependencyMissing(new Error(message, { cause: err }));
+    }
+  };
+
   const verifyContentLog = async (
     contentId: string,
     log: string[],
@@ -489,10 +544,10 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   ): Promise<VerifiedContentDag> => {
     const dag = await verifyContentDag({
       log,
-      resolveKey,
+      resolveKey: resolveFoldKey,
       enforceAuthorization: true,
       resolveIdentity,
-      isRevoked: deps.isRevoked,
+      isRevoked: isRevokedForFold,
       ...(known ? { known } : {}),
     });
     // BIND to the requested id: contentId is derived from the genesis op CID
@@ -519,7 +574,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       creatorDID: state.creatorDID,
       contentId,
       resolveIdentity,
-      isRevoked: deps.isRevoked,
+      isRevoked: isRevokedForFold,
     });
 
   const getContentChain = async (
@@ -544,7 +599,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       recomputed: boolean,
     ): ContentCandidate => ({
       state: dag.head,
-      log,
+      log: survivors(log, dag),
       headCID: dag.head.headCID,
       lastCreatedAt: dag.headCreatedAt,
       headLineage: dag.headLineage,
@@ -555,6 +610,16 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
 
     const verifyCandidate = async (entries: LogOp[]): Promise<ContentCandidate> => {
       const log = entries.map((e) => e.jwsToken);
+      // one CID, two tokens: refused outright, before any cached node is reused
+      const served = new Map<string, string>();
+      for (const jws of log) {
+        const cid = opMeta(jws).cid;
+        const prior = served.get(cid);
+        if (prior !== undefined && prior !== jws) {
+          throw new Error(`content log serves conflicting operations under CID ${cid}`);
+        }
+        served.set(cid, jws);
+      }
       if (!cached) {
         if (log.length === 0) throw new Error(`content not found: ${contentId}`);
         return candidateFrom(await verifyContentLog(contentId, log), log, false);
@@ -572,8 +637,9 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
           cachedHeadCID: cached.headCID,
           liveHeadCID: opMeta(entries[entries.length - 1]?.jwsToken ?? '').cid,
         });
-      const served = new Map(entries.map((e) => [opMeta(e.jwsToken).cid, e.jwsToken]));
-      const cachedCIDs = new Set<string>();
+      // what this client has already seen: the pinned set, plus the operations
+      // it rejected, which are not pinned but are not news either
+      const cachedCIDs = new Set<string>((cached.rejected ?? []).map((r) => r.cid));
       let missing = false;
       for (const jws of cached.log) {
         const cid = opMeta(jws).cid;
@@ -626,15 +692,13 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     }
 
     const candidate = fetched.value!;
-    const nodesChanged =
-      cached !== undefined &&
-      (candidate.recomputed ||
-        cached.nodes === undefined ||
-        Object.keys(cached.nodes).length !== Object.keys(candidate.nodes).length);
-    if (
-      fetched.provenance.agreed &&
-      (!cached || candidate.log.length > cached.log.length || nodesChanged)
-    ) {
+    const changed =
+      !cached ||
+      cached.nodes === undefined ||
+      candidate.recomputed ||
+      candidate.log.length !== cached.log.length ||
+      candidate.rejected.length !== (cached.rejected?.length ?? 0);
+    if (fetched.provenance.agreed && changed) {
       await deps.store.set(key, {
         log: candidate.log,
         state: candidate.state,
@@ -651,23 +715,27 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       headLineage: candidate.headLineage,
       rejected: candidate.rejected,
       provenance: fetched.provenance,
-      // the cache pins a set, so equal length means the served set IS the cached set
+      // the cache pins a set, so equal length means no operation verified that
+      // this client had not already verified
       tipUnverified: cached !== undefined && candidate.log.length === cached.log.length,
     };
   };
 
   /**
    * Re-ask credential authority on a cached content chain's head lineage
-   * without draining its log. `true` when the cached chain's authority holds,
-   * `false` when nothing is cached; a throw is the authority failing (or, when
-   * marked as a dependency miss, failing to be checked).
+   * without draining its log. Answers what the cached chain holds when its
+   * authority holds, `undefined` when nothing is cached; a throw is the
+   * authority failing (or, when marked as a dependency miss, failing to be
+   * checked).
    */
-  const recheckContentAuthority = async (contentId: string): Promise<boolean> => {
+  const recheckContentAuthority = async (
+    contentId: string,
+  ): Promise<CachedContentSummary | undefined> => {
     const cached = (await deps.store.get(cacheKey('content', contentId))) as
       CachedContentChain | undefined;
-    if (!cached) return false;
+    if (!cached) return undefined;
     await recheckLineage(contentId, cached.state, cached.headLineage ?? cached.log);
-    return true;
+    return { opCount: cached.log.length, rejected: cached.rejected ?? [] };
   };
 
   /**

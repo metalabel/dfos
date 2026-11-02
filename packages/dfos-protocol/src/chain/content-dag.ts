@@ -97,7 +97,8 @@ const decodeOp = (jws: string): DecodedOp | null => {
  *
  * Genesis is the single operation with no `previousOperationCID`. A log with
  * none, or with more than one, is a hard error, and so is a genesis that fails
- * verification: nothing survives it. Every other failure drops the operation
+ * verification: nothing survives it. So is a CID served with two different
+ * tokens. Every other failure drops the operation
  * and its subtree into `rejected`.
  *
  * `known` seeds the memo with nodes the caller already verified (a client's
@@ -132,7 +133,12 @@ export const verifyContentDag = async (input: {
     }
     const seen = byCID.get(op.cid);
     if (seen) {
-      if (seen.jws !== jws) rejected.push({ cid: op.cid, reason: 'duplicate operation CID' });
+      // Two different operations claiming one CID is not a branch: at most one
+      // of them derives it, and which one a verifier sees first is the relay's
+      // choice. Refuse the log rather than let serving order decide.
+      if (seen.jws !== jws) {
+        throw new Error(`content log serves conflicting operations under CID ${op.cid}`);
+      }
       continue;
     }
     byCID.set(op.cid, op);
@@ -200,7 +206,10 @@ export const verifyContentDag = async (input: {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'verification failed';
         if (isDependencyMissing(err)) {
-          throw carryDependencyMissing(err, new Error(`operation ${op.cid}: ${message}`));
+          throw carryDependencyMissing(
+            err,
+            new Error(`operation ${op.cid}: ${message}`, { cause: err }),
+          );
         }
         rejected.push({ cid: op.cid, reason: message });
         rejectSubtree(op);

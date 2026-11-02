@@ -1,4 +1,4 @@
-import { DivergenceError, type LogOp } from '@metalabel/dfos-client';
+import { DivergenceError, type Client, type LogOp } from '@metalabel/dfos-client';
 import { markDependencyMissing } from '@metalabel/dfos-protocol';
 import { createJws } from '@metalabel/dfos-protocol/crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -175,16 +175,18 @@ describe('isVerificationFailure', () => {
 
 // A durable verdict pins what was immutable when it was folded. Credential
 // authority is not: an issuer can be deleted, and a revocation dated at or
-// before a delegated op can arrive later. Reuse needs both halves.
-describe('durableVerdictReusable — op count fresh AND authority holds', () => {
+// before a delegated op can arrive later. Reuse needs every half.
+describe('durableVerdictReusable — fresh, authorized, nothing dropped, same count', () => {
   const CONTENT = 'ct7kkfz7ehzvv6fzvate9rz2874nc3e';
-  const recheckAnswering = (answer: () => Promise<boolean>) => {
+  type Summary = Awaited<ReturnType<Client['recheckContentAuthority']>>;
+  const recheckAnswering = (answer: () => Promise<Summary>) => {
     const recheckContentAuthority = vi.fn(answer);
     return { client: { recheckContentAuthority }, recheckContentAuthority };
   };
+  const clean = (opCount: number) => async (): Promise<Summary> => ({ opCount, rejected: [] });
 
-  it('reuses a fresh content verdict whose authority recheck passes', async () => {
-    const { client, recheckContentAuthority } = recheckAnswering(async () => true);
+  it('reuses a fresh content verdict whose cached chain still holds it', async () => {
+    const { client, recheckContentAuthority } = recheckAnswering(clean(3));
     expect(
       await durableVerdictReusable({
         client,
@@ -212,7 +214,7 @@ describe('durableVerdictReusable — op count fresh AND authority holds', () => 
   });
 
   it('re-folds when the client holds no cached chain to recheck', async () => {
-    const { client } = recheckAnswering(async () => false);
+    const { client } = recheckAnswering(async () => undefined);
     expect(
       await durableVerdictReusable({
         client,
@@ -223,22 +225,59 @@ describe('durableVerdictReusable — op count fresh AND authority holds', () => 
     ).toBe(false);
   });
 
-  it('a stale op count re-folds without asking for a recheck', async () => {
-    const { client, recheckContentAuthority } = recheckAnswering(async () => true);
+  // Codex scenario (i): the verdict recorded a delegated DELETE (isDeleted:
+  // true, two ops). A revocation dated before the delete then dropped it from
+  // the client's cached chain on a later read. The recheck over the cached
+  // lineage passes (genesis alone), and the relay's branch-inclusive hint still
+  // says two, so only the cached rejection tells the verdict is stale.
+  it('re-folds when the cached chain dropped an op the verdict counted', async () => {
+    const { client } = recheckAnswering(async () => ({
+      opCount: 1,
+      rejected: [{ cid: 'bafy-delete', reason: 'authorization verification failed: revoked' }],
+    }));
     expect(
       await durableVerdictReusable({
         client,
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 2,
-        hintOpCount: 3,
+        hintOpCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it('re-folds when the cached surviving count differs from the verdict count', async () => {
+    const { client } = recheckAnswering(clean(4));
+    expect(
+      await durableVerdictReusable({
+        client,
+        kind: 'content',
+        chainId: CONTENT,
+        verdictOpCount: 3,
+      }),
+    ).toBe(false);
+  });
+
+  // Codex scenario (ii): the verdict was made while a delegated op was dropped
+  // (issuer deleted), so it counted one surviving op. The issuer is restored.
+  // The relay's hint is branch-inclusive (two) and already exceeds the recorded
+  // surviving count, so freshness alone forces the re-fold.
+  it('a stale op count re-folds without asking for a recheck', async () => {
+    const { client, recheckContentAuthority } = recheckAnswering(clean(2));
+    expect(
+      await durableVerdictReusable({
+        client,
+        kind: 'content',
+        chainId: CONTENT,
+        verdictOpCount: 1,
+        hintOpCount: 2,
       }),
     ).toBe(false);
     expect(recheckContentAuthority).not.toHaveBeenCalled();
   });
 
   it('an identity verdict carries no delegated authority and needs no recheck', async () => {
-    const { client, recheckContentAuthority } = recheckAnswering(async () => false);
+    const { client, recheckContentAuthority } = recheckAnswering(async () => undefined);
     expect(
       await durableVerdictReusable({
         client,

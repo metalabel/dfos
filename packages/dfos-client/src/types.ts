@@ -105,6 +105,14 @@ export interface ResolvedContent {
   document?: DocumentBlob;
 }
 
+/** What a cached content chain holds, as `recheckContentAuthority` reports it. */
+export interface CachedContentSummary {
+  /** Operations that verified, all branches. */
+  opCount: number;
+  /** Served operations that did not verify. */
+  rejected: ContentDagRejection[];
+}
+
 export interface ResolvedCredential {
   credential: VerifiedDFOSCredential;
   /** The issuer identity, verified. */
@@ -411,12 +419,13 @@ export interface Client {
   /**
    * Re-ask credential authority on a cached content chain's head lineage
    * without draining its log — the same recheck every warm `content` read runs.
-   * `true` when the cached chain's delegated operations are still authorized,
-   * `false` when no chain is cached; a throw means authority no longer holds
-   * (or, when marked as a dependency miss, could not be checked). Only issuer
-   * deletion and a revocation dated at or before an operation fail it.
+   * Answers what the cached chain holds when its delegated operations are still
+   * authorized, `undefined` when no chain is cached; a throw means authority no
+   * longer holds (or, when marked as a dependency miss, could not be checked).
+   * Only issuer deletion and a revocation dated at or before an operation fail
+   * it.
    */
-  recheckContentAuthority(contentId: string): Promise<boolean>;
+  recheckContentAuthority(contentId: string): Promise<CachedContentSummary | undefined>;
 
   /** Raw floor. */
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;

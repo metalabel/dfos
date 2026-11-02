@@ -10,6 +10,7 @@ import type { ContentOperation, VerifiedIdentity } from '../src/chain';
 import { createDFOSCredential, decodeDFOSCredentialUnsafe } from '../src/credentials';
 import type { RevocationChecker } from '../src/credentials';
 import {
+  createJws,
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
   generateId,
@@ -255,6 +256,41 @@ describe('verifyContentDag — rejection', () => {
       /authorization credential required/,
     );
     expect(dag.nodes[badChild.operationCID]).toBeUndefined();
+  });
+
+  it('one CID served with two different tokens is a hard error, whatever the order', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, ts(0));
+    const other = await genesisOp(creator, ts(-1));
+    const u = await updateOp({
+      signer: creator,
+      previousOperationCID: g.operationCID,
+      createdAt: ts(1),
+      title: 'u',
+    });
+    // u's header CID over a different payload (a different parent)
+    const forged = await createJws({
+      header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: creator.kid, cid: u.operationCID },
+      payload: {
+        version: 1,
+        type: 'update',
+        did: creator.did,
+        previousOperationCID: other.operationCID,
+        documentCID: await docCID('forged'),
+        baseDocumentCID: null,
+        createdAt: ts(1),
+      },
+      sign: creator.signer,
+    });
+    for (const log of [
+      [g.jwsToken, forged, u.jwsToken],
+      [g.jwsToken, u.jwsToken, forged],
+    ]) {
+      await expect(verifyContentDag({ log, resolveKey: w.resolveKey })).rejects.toThrow(
+        /conflicting operations under CID/,
+      );
+    }
   });
 
   it('two genesis operations are a hard error', async () => {

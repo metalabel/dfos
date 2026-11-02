@@ -117,13 +117,16 @@ export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): bo
 
 /**
  * A durable verdict is reused only when it is fresh by op count AND, for a
- * content chain, the credential authority behind its head lineage still holds.
- * Op count tracks the immutable half (new operations); authority is the mutable
- * half — an issuer deleted, or a revocation dated at or before a delegated op —
- * and it is re-asked through the client's own recheck, the same one every warm
- * `client.content` read runs. Anything but a clean pass (a failed recheck, a
- * recheck that could not be made, no cached chain to recheck) re-folds, and the
- * fold gives the verdict.
+ * content chain, the client's cached chain still stands behind it: the
+ * credential authority on its head lineage holds, it dropped nothing, and it
+ * holds exactly the ops the verdict counted. Op count tracks the immutable half
+ * (new operations); authority is the mutable half — an issuer deleted, or a
+ * revocation dated at or before a delegated op — re-asked through the client's
+ * own recheck, the same one every warm `client.content` read runs. A cached
+ * rejection means a later read dropped an op this verdict may have folded
+ * (a delegated delete it reports as `isDeleted`), which the recheck over the
+ * surviving lineage cannot see. Anything but a clean pass re-folds, and the fold
+ * gives the verdict.
  */
 export const durableVerdictReusable = async (input: {
   client: Pick<Client, 'recheckContentAuthority'>;
@@ -135,7 +138,12 @@ export const durableVerdictReusable = async (input: {
   if (!verdictIsFresh(input.verdictOpCount, input.hintOpCount)) return false;
   if (input.kind === 'identity') return true;
   try {
-    return await input.client.recheckContentAuthority(input.chainId);
+    const cached = await input.client.recheckContentAuthority(input.chainId);
+    return (
+      cached !== undefined &&
+      cached.rejected.length === 0 &&
+      cached.opCount === input.verdictOpCount
+    );
   } catch {
     return false;
   }

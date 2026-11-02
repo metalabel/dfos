@@ -1,9 +1,11 @@
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   signContentOperation,
   signIdentityOperation,
   type ContentOperation,
 } from '@metalabel/dfos-protocol/chain';
 import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+import { createJws, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import type {
   Callbacks,
@@ -397,16 +399,174 @@ describe('content authority recheck — warm agrees with cold', () => {
   it('recheckContentAuthority answers from the cached lineage without draining the log', async () => {
     const c = await delegated();
     const client = c.clientFor();
-    expect(await client.recheckContentAuthority(c.contentId)).toBe(false); // nothing cached
+    expect(await client.recheckContentAuthority(c.contentId)).toBeUndefined(); // nothing cached
     await client.content(c.contentId);
-    expect(await client.recheckContentAuthority(c.contentId)).toBe(true);
+    expect(await client.recheckContentAuthority(c.contentId)).toEqual({ opCount: 2, rejected: [] });
 
     c.revokedAt.set(c.credentialCID, c.opCreatedAtUnix + 60);
-    expect(await client.recheckContentAuthority(c.contentId)).toBe(true); // later revocation
+    // a later revocation leaves authority standing
+    expect(await client.recheckContentAuthority(c.contentId)).toEqual({ opCount: 2, rejected: [] });
 
     await deleteCreator(c);
     await expect(client.recheckContentAuthority(c.contentId)).rejects.toThrow(
       /authorization verification failed/,
     );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// what the trusted log holds, and what a lookup failure is
+// -----------------------------------------------------------------------------
+
+describe('content DAG — trusted log, misses, conflicts, pin', () => {
+  const RELAY = 'https://relay.test';
+
+  const base = async () => {
+    const creator = await buildIdentity();
+    const stranger = await buildIdentity();
+    const content = await buildContent(creator, { update: true });
+    // a stranger's update with no credential: invalid, and dated last
+    const bad = await signUpdate({
+      signer: stranger,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-2),
+    });
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log, [stranger.did]: stranger.log },
+        contents: { [content.contentId]: [...content.log] },
+      },
+    };
+    const store = memoryStore();
+    const client = createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data) });
+    const serve = (log: string[]) => {
+      data[RELAY]!.contents![content.contentId] = log;
+    };
+    return { creator, stranger, content, bad, data, store, client, serve };
+  };
+
+  it('the trusted log carries only verified ops; a rejected op is listed apart', async () => {
+    const { content, bad, store, client, serve } = await base();
+    serve([...content.log, bad.jwsToken]);
+    const res = await client.content(content.contentId);
+    expect(res.value.rejected.map((r) => r.cid)).toEqual([bad.operationCID]);
+    const log = await client.log('content', content.contentId);
+    expect(log.value.map((op) => op.jwsToken)).toEqual(content.log);
+    const row = (await store.get(`content:${content.contentId}`)) as { log: string[] };
+    expect(row.log).toEqual(content.log);
+  });
+
+  it('an unresolvable signer identity fails the read as unverifiable, never an older head', async () => {
+    const { creator, content, data, client, serve } = await base();
+    const ghost = await buildIdentity(); // never served by the relay
+    const op = await signUpdate({
+      signer: ghost,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-2),
+    });
+    serve([...content.log, op.jwsToken]);
+    expect(data[RELAY]!.identities![ghost.did]).toBeUndefined();
+    const err = await client.content(content.contentId).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(isDependencyMissing(err)).toBe(true);
+    expect(divergenceErrorFrom(err)).toBeUndefined();
+    void creator;
+  });
+
+  it('an unavailable revocation status fails the read as unverifiable, never an older head', async () => {
+    const creator = await buildIdentity();
+    const delegate = await buildIdentity();
+    const content = await buildContent(creator);
+    const credential = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${content.contentId}`, action: 'write' }],
+      exp: Math.floor(Date.now() / 1000) + 4 * 3600,
+      iat: Math.floor(Date.now() / 1000) - 4 * 3600,
+      signer: creator.k.signer,
+      keyId: creator.k.keyId,
+    });
+    const op = await signUpdate({
+      signer: delegate,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-4),
+      authorization: credential,
+    });
+    const client = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({
+        [RELAY]: {
+          identities: { [creator.did]: creator.log, [delegate.did]: delegate.log },
+          contents: { [content.contentId]: [...content.log, op.jwsToken] },
+        },
+      }),
+      // the default checker, against a relay whose status route is down
+      fetch: async () => new Response('', { status: 503 }),
+    });
+    const err = await client.content(content.contentId).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(isDependencyMissing(err)).toBe(true);
+  });
+
+  it('one CID served with two different tokens is a hard error before any cached node is reused', async () => {
+    const { creator, content, client, serve } = await base();
+    await client.content(content.contentId); // caches g → u
+    const decoded = decodeJwsUnsafe(content.log[1]!)!;
+    // u's header CID over a different parent
+    const other = await buildContent(creator);
+    const forged = await createJws({
+      header: { ...decoded.header, kid: creator.kid, cid: content.headCID },
+      payload: { ...decoded.payload, previousOperationCID: other.genesisCID },
+      sign: creator.k.signer,
+    });
+    for (const log of [
+      [content.log[0]!, forged, content.log[1]!],
+      [content.log[0]!, content.log[1]!, forged],
+    ]) {
+      serve(log);
+      const err = await client.content(content.contentId).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(divergenceErrorFrom(err)).toBeUndefined();
+      expect((err as Error).message).toMatch(
+        /all candidate logs failed verification: .*conflicting operations under CID/,
+      );
+    }
+  });
+
+  it('only verified ops are pinned: a rejected op that later disappears is not a divergence', async () => {
+    const { creator, content, bad, client, serve } = await base();
+    serve([content.log[0]!, bad.jwsToken]);
+    const first = await client.content(content.contentId);
+    expect(first.value.rejected.map((r) => r.cid)).toEqual([bad.operationCID]);
+
+    const next = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-1),
+      documentCID: DOC_B,
+    });
+    serve([content.log[0]!, next.jwsToken]);
+    const second = await client.content(content.contentId);
+    expect(second.value.chain.headCID).toBe(next.operationCID);
+    expect(second.value.rejected).toEqual([]);
+  });
+
+  it('recheckContentAuthority reports the cached surviving count and rejections', async () => {
+    const { content, bad, client, serve } = await base();
+    expect(await client.recheckContentAuthority(content.contentId)).toBeUndefined();
+    serve([...content.log, bad.jwsToken]);
+    await client.content(content.contentId);
+    expect(await client.recheckContentAuthority(content.contentId)).toEqual({
+      opCount: 2,
+      rejected: [{ cid: bad.operationCID, reason: expect.any(String) }],
+    });
   });
 });
