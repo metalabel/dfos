@@ -9,7 +9,11 @@
 
 */
 
-import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
+import type {
+  ContentDagRejection,
+  VerifiedContentChain,
+  VerifiedIdentity,
+} from '@metalabel/dfos-protocol/chain';
 import type { Attenuation, VerifiedDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 
@@ -92,6 +96,11 @@ export interface ResolvedContent {
   chain: VerifiedContentChain;
   /** The creator identity — resolved as a side effect of key resolution. */
   creator: EffectiveIdentity;
+  /**
+   * Served operations that failed verification here, each dropped with its
+   * subtree before head selection. Empty when nothing was dropped.
+   */
+  rejected: ContentDagRejection[];
   /** The current document blob, when fetched. */
   document?: DocumentBlob;
 }
@@ -398,6 +407,16 @@ export interface Client {
    * forgotten; both bundled stores return `true`.
    */
   discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
+
+  /**
+   * Re-ask credential authority on a cached content chain's head lineage
+   * without draining its log — the same recheck every warm `content` read runs.
+   * `true` when the cached chain's delegated operations are still authorized,
+   * `false` when no chain is cached; a throw means authority no longer holds
+   * (or, when marked as a dependency miss, could not be checked). Only issuer
+   * deletion and a revocation dated at or before an operation fail it.
+   */
+  recheckContentAuthority(contentId: string): Promise<boolean>;
 
   /** Raw floor. */
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;

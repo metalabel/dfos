@@ -1,8 +1,30 @@
-import { signIdentityOperation } from '@metalabel/dfos-protocol/chain';
+import {
+  signContentOperation,
+  signIdentityOperation,
+  type ContentOperation,
+} from '@metalabel/dfos-protocol/chain';
+import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import { describe, expect, it } from 'vitest';
-import type { Callbacks, EffectiveIdentity, EverProvedIdentity } from '../src';
+import type {
+  Callbacks,
+  EffectiveIdentity,
+  EverProvedIdentity,
+  Resolved,
+  ResolvedContent,
+  RevChecker,
+} from '../src';
 import { createClient } from '../src/client';
-import { buildIdentity, fakePeerClient, ts } from './fixtures';
+import { divergenceErrorFrom } from '../src/resolvers';
+import { memoryStore } from '../src/store/memory';
+import {
+  buildContent,
+  buildIdentity,
+  cidOf,
+  fakePeerClient,
+  ts,
+  type BuiltIdentity,
+  type RelayData,
+} from './fixtures';
 
 // Checked by the package typecheck, without invoking a resolver at runtime.
 const checkResolutionTypes = (
@@ -130,5 +152,261 @@ describe('historical resolution — determinate verdicts survive', () => {
     const { resolveIdentity } = clientFor(identity).callbacks();
     const head = await resolveIdentity(identity.did);
     expect(head?.basisDeterminate).toBeUndefined();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// content chains are DAGs — head selection over a branch-inclusive log
+// -----------------------------------------------------------------------------
+
+const DOC_B = 'bafkreiforkeddocument0000000000000000000000000000000000000000';
+
+const signUpdate = async (input: {
+  signer: BuiltIdentity;
+  previousOperationCID: string;
+  createdAt: string;
+  documentCID?: string;
+  authorization?: string;
+}) => {
+  const operation = {
+    version: 1 as const,
+    type: 'update' as const,
+    did: input.signer.did,
+    previousOperationCID: input.previousOperationCID,
+    documentCID: input.documentCID ?? DOC_B,
+    baseDocumentCID: null,
+    createdAt: input.createdAt,
+    ...(input.authorization ? { authorization: input.authorization } : {}),
+  };
+  return signContentOperation({
+    operation: operation as ContentOperation,
+    signer: input.signer.k.signer,
+    kid: input.signer.kid,
+  });
+};
+
+describe('content DAG resolution', () => {
+  const RELAY = 'https://relay.test';
+
+  /** genesis (-8) → update (-4), plus a creator-signed sibling of the update (-3). */
+  const forked = async () => {
+    const creator = await buildIdentity();
+    const content = await buildContent(creator, { update: true });
+    const sibling = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-3),
+    });
+    return { creator, content, sibling };
+  };
+
+  const clientOver = (data: Record<string, RelayData>, store = memoryStore()) =>
+    createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data) });
+
+  it('a forked log resolves to the tip with the highest createdAt', async () => {
+    const { creator, content, sibling } = await forked();
+    const client = clientOver({
+      [RELAY]: {
+        identities: { [creator.did]: creator.log },
+        contents: { [content.contentId]: [...content.log, sibling.jwsToken] },
+      },
+    });
+    const res = await client.content(content.contentId);
+    expect(res.trust.ok).toBe(true);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.value.chain.length).toBe(2);
+    expect(res.value.rejected).toEqual([]);
+    // the raw floor still serves every branch
+    expect((await client.log('content', content.contentId)).value).toHaveLength(3);
+  });
+
+  it('a cached chain that then forks resolves warm to the same head a cold read selects', async () => {
+    const { creator, content, sibling } = await forked();
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log },
+        contents: { [content.contentId]: [...content.log] },
+      },
+    };
+    const client = clientOver(data);
+    expect((await client.content(content.contentId)).value.chain.headCID).toBe(content.headCID);
+
+    data[RELAY]!.contents![content.contentId] = [...content.log, sibling.jwsToken];
+    const warm = await client.content(content.contentId);
+    const cold = await clientOver(data).content(content.contentId);
+    expect(warm.value.chain).toEqual(cold.value.chain);
+    expect(warm.value.chain.headCID).toBe(sibling.operationCID);
+    expect(warm.trust.unverifiable).toBeUndefined();
+  });
+
+  it('a served log that drops a cached op while serving an unseen one is a divergence', async () => {
+    const { creator, content, sibling } = await forked();
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log },
+        contents: { [content.contentId]: [...content.log] },
+      },
+    };
+    const client = clientOver(data);
+    await client.content(content.contentId);
+
+    data[RELAY]!.contents![content.contentId] = [...content.genesisLog, sibling.jwsToken];
+    const err = await client.content(content.contentId).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    const divergence = divergenceErrorFrom(err);
+    expect(divergence?.chainType).toBe('content');
+    expect(divergence?.cachedHeadCID).toBe(content.headCID);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// credential authority on cached ops is re-asked on every read
+// -----------------------------------------------------------------------------
+
+describe('content authority recheck — warm agrees with cold', () => {
+  const RELAY = 'https://relay.test';
+
+  /** genesis by `creator` (-8), then an update by `delegate` (-4) under a
+   *  creator-issued write credential. Revocations come from a mutable map. */
+  const delegated = async () => {
+    const creator = await buildIdentity();
+    const delegate = await buildIdentity();
+    const base = await buildContent(creator);
+    const credential = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${base.contentId}`, action: 'write' }],
+      exp: Math.floor(Date.now() / 1000) + 4 * 3600,
+      iat: Math.floor(Date.now() / 1000) - 4 * 3600,
+      signer: creator.k.signer,
+      keyId: creator.k.keyId,
+    });
+    const opCreatedAt = ts(-4);
+    const op = await signUpdate({
+      signer: delegate,
+      previousOperationCID: base.genesisCID,
+      createdAt: opCreatedAt,
+      authorization: credential,
+    });
+    const revokedAt = new Map<string, number>();
+    const isRevoked: RevChecker = async (_issuer, credentialCID, asOfUnix) => {
+      const at = revokedAt.get(credentialCID);
+      if (at === undefined) return false;
+      if (asOfUnix === undefined || asOfUnix <= 0) return true;
+      return at <= asOfUnix;
+    };
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: [...creator.log], [delegate.did]: delegate.log },
+        contents: { [base.contentId]: [...base.log, op.jwsToken] },
+      },
+    };
+    const clientFor = (store = memoryStore()) =>
+      createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data), isRevoked });
+    return {
+      creator,
+      contentId: base.contentId,
+      genesisCID: base.genesisCID,
+      op,
+      credentialCID: cidOf(credential),
+      opCreatedAtUnix: Math.floor(new Date(opCreatedAt).getTime() / 1000),
+      revokedAt,
+      data,
+      clientFor,
+    };
+  };
+
+  /** Delete the creator — the credential's issuer — on the relay. */
+  const deleteCreator = async (c: Awaited<ReturnType<typeof delegated>>) => {
+    const del = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: c.creator.headCID,
+        createdAt: ts(-1),
+      },
+      signer: c.creator.k.signer,
+      keyId: c.creator.k.keyId,
+      identityDID: c.creator.did,
+    });
+    c.data[RELAY]!.identities![c.creator.did] = [...c.creator.log, del.jwsToken];
+  };
+
+  const expectDropped = (
+    res: Resolved<ResolvedContent>,
+    c: Awaited<ReturnType<typeof delegated>>,
+    reason: RegExp,
+  ) => {
+    expect(res.value.chain.length).toBe(1);
+    expect(res.value.chain.headCID).toBe(c.genesisCID);
+    expect(res.value.rejected).toEqual([
+      { cid: c.op.operationCID, reason: expect.stringMatching(reason) },
+    ]);
+  };
+
+  it('issuer deletion drops the delegated op on a warm read, exactly as on a cold read', async () => {
+    const c = await delegated();
+    const client = c.clientFor();
+    expect((await client.content(c.contentId)).value.chain.length).toBe(2);
+
+    await deleteCreator(c);
+    const warm = await client.content(c.contentId);
+    const cold = await c.clientFor().content(c.contentId);
+    expectDropped(cold, c, /deleted/);
+    expectDropped(warm, c, /deleted/);
+    expect(warm.value.chain).toEqual(cold.value.chain);
+    expect(warm.value.rejected).toEqual(cold.value.rejected);
+
+    // the cache was rewritten from the cold result: a further warm read agrees
+    const again = await client.content(c.contentId);
+    expect(again.value.chain).toEqual(cold.value.chain);
+    expect(again.value.rejected).toEqual(cold.value.rejected);
+  });
+
+  it('a revocation dated before the op drops it on a warm read, exactly as on a cold read', async () => {
+    const c = await delegated();
+    const client = c.clientFor();
+    expect((await client.content(c.contentId)).value.chain.length).toBe(2);
+
+    // arrives after the cache was written, but is dated before the op
+    c.revokedAt.set(c.credentialCID, c.opCreatedAtUnix - 60);
+    const warm = await client.content(c.contentId);
+    const cold = await c.clientFor().content(c.contentId);
+    expectDropped(cold, c, /revoked/);
+    expectDropped(warm, c, /revoked/);
+    expect(warm.value.chain).toEqual(cold.value.chain);
+    expect(warm.value.rejected).toEqual(cold.value.rejected);
+  });
+
+  it('a revocation dated after the op still passes (revocation is not retroactive)', async () => {
+    const c = await delegated();
+    const client = c.clientFor();
+    await client.content(c.contentId);
+
+    c.revokedAt.set(c.credentialCID, c.opCreatedAtUnix + 60);
+    const warm = await client.content(c.contentId);
+    expect(warm.trust.ok).toBe(true);
+    expect(warm.value.chain.length).toBe(2);
+    expect(warm.value.chain.headCID).toBe(c.op.operationCID);
+    expect(warm.value.rejected).toEqual([]);
+    expect(warm.trust.unverifiable).toEqual(['tip', 'revocation']);
+  });
+
+  it('recheckContentAuthority answers from the cached lineage without draining the log', async () => {
+    const c = await delegated();
+    const client = c.clientFor();
+    expect(await client.recheckContentAuthority(c.contentId)).toBe(false); // nothing cached
+    await client.content(c.contentId);
+    expect(await client.recheckContentAuthority(c.contentId)).toBe(true);
+
+    c.revokedAt.set(c.credentialCID, c.opCreatedAtUnix + 60);
+    expect(await client.recheckContentAuthority(c.contentId)).toBe(true); // later revocation
+
+    await deleteCreator(c);
+    await expect(client.recheckContentAuthority(c.contentId)).rejects.toThrow(
+      /authorization verification failed/,
+    );
   });
 });

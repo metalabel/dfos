@@ -18,18 +18,25 @@
   - `tipUnverified` is true whenever a full relay answer exactly matches the
     cached log, or when the answer comes from cache alone — tip freshness is
     never PROVEN in v1
+  - a content log is a DAG: the cache pins the SET of operations it verified,
+    not a prefix, and credential authority on the head lineage is re-asked on
+    every read because deletion and backdated revocation can withdraw it
 
 */
 
+import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import {
   decodeMultikey,
   IdentityStateNoSeenKeysError,
-  verifyContentChain,
-  verifyContentExtensionFromTrustedState,
+  recheckContentAuthorization,
+  verifyContentDag,
   verifyIdentityChain,
   verifyIdentityExtensionFromTrustedState,
+  type ContentDagNode,
+  type ContentDagRejection,
   type MultikeyPublicKey,
   type VerifiedContentChain,
+  type VerifiedContentDag,
 } from '@metalabel/dfos-protocol/chain';
 import { CredentialVerificationError } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -63,6 +70,20 @@ interface CachedChain<T> {
   state: T;
   headCID: string;
   lastCreatedAt: string;
+}
+
+/**
+ * A content chain's cache row. `log` is the branch-inclusive log as served, and
+ * the pin is the SET of its operations: a later read must still serve every one
+ * of them. `nodes` memoizes each surviving operation's verified state so an
+ * operation not yet seen verifies against its parent's state, whichever branch
+ * it extends. Both extra members are absent on a row written before content
+ * resolution was DAG-aware; such a row's `log` is its head lineage.
+ */
+interface CachedContentChain extends CachedChain<VerifiedContentChain> {
+  headLineage?: string[];
+  nodes?: Record<string, ContentDagNode>;
+  rejected?: ContentDagRejection[];
 }
 
 /** The store key one chain's verified prefix is filed under. The ONE place the
@@ -227,7 +248,12 @@ export interface IdentityResolution {
 
 export interface ContentResolution {
   state: VerifiedContentChain;
+  /** The branch-inclusive log, every operation served. */
   log: string[];
+  /** The selected head's lineage, genesis first — the operations `state` folds. */
+  headLineage: string[];
+  /** Served operations that failed verification, each dropped with its subtree. */
+  rejected: ContentDagRejection[];
   provenance: Provenance;
   /** True when cache is the only answer or a full relay log exactly matches it. */
   tipUnverified: boolean;
@@ -245,6 +271,7 @@ interface VerifiedCandidate<T> {
 export interface Resolvers {
   getIdentityChain(did: string, options?: CallOptions): Promise<IdentityResolution>;
   getContentChain(contentId: string, options?: CallOptions): Promise<ContentResolution>;
+  recheckContentAuthority(contentId: string): Promise<boolean>;
   discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
   callbacks(): Callbacks;
 }
@@ -455,6 +482,46 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     isRevoked: deps.isRevoked,
   });
 
+  const verifyContentLog = async (
+    contentId: string,
+    log: string[],
+    known?: Record<string, ContentDagNode>,
+  ): Promise<VerifiedContentDag> => {
+    const dag = await verifyContentDag({
+      log,
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+      isRevoked: deps.isRevoked,
+      ...(known ? { known } : {}),
+    });
+    // BIND to the requested id: contentId is derived from the genesis op CID
+    // inside the verify — reject a relay that serves a different valid chain
+    // under this contentId.
+    if (dag.head.contentId !== contentId) {
+      throw new Error(
+        `relay served a mismatched content chain: asked ${contentId}, got ${dag.head.contentId}`,
+      );
+    }
+    return dag;
+  };
+
+  /**
+   * Re-ask the authority behind every delegated operation on a verified head
+   * lineage. Signatures and CIDs are immutable and stay verified; a credential's
+   * issuer can be deleted, and a revocation dated at or before an operation can
+   * arrive after this client cached it. The one implementation both the warm
+   * read and `recheckContentAuthority` run.
+   */
+  const recheckLineage = (contentId: string, state: VerifiedContentChain, lineage: string[]) =>
+    recheckContentAuthorization({
+      log: lineage,
+      creatorDID: state.creatorDID,
+      contentId,
+      resolveIdentity,
+      isRevoked: deps.isRevoked,
+    });
+
   const getContentChain = async (
     contentId: string,
     options?: CallOptions,
@@ -462,66 +529,79 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     const key = cacheKey('content', contentId);
     const cached = options?.fresh
       ? undefined
-      : ((await deps.store.get(key)) as CachedChain<VerifiedContentChain> | undefined);
+      : ((await deps.store.get(key)) as CachedContentChain | undefined);
 
-    const verifyCandidate = async (
-      entries: LogOp[],
-    ): Promise<VerifiedCandidate<VerifiedContentChain>> => {
+    type ContentCandidate = VerifiedCandidate<VerifiedContentChain> & {
+      headLineage: string[];
+      nodes: Record<string, ContentDagNode>;
+      rejected: ContentDagRejection[];
+      /** The cached nodes were set aside and the log verified cold. */
+      recomputed: boolean;
+    };
+    const candidateFrom = (
+      dag: VerifiedContentDag,
+      log: string[],
+      recomputed: boolean,
+    ): ContentCandidate => ({
+      state: dag.head,
+      log,
+      headCID: dag.head.headCID,
+      lastCreatedAt: dag.headCreatedAt,
+      headLineage: dag.headLineage,
+      nodes: dag.nodes,
+      rejected: dag.rejected,
+      recomputed,
+    });
+
+    const verifyCandidate = async (entries: LogOp[]): Promise<ContentCandidate> => {
+      const log = entries.map((e) => e.jwsToken);
       if (!cached) {
-        const log = entries.map((e) => e.jwsToken);
         if (log.length === 0) throw new Error(`content not found: ${contentId}`);
-        const state = await verifyContentChain({
-          log,
-          resolveKey,
-          enforceAuthorization: true,
-          resolveIdentity,
-          isRevoked: deps.isRevoked,
-        });
-        // BIND to the requested id: contentId is derived from the genesis op
-        // CID inside verifyContentChain — reject a relay that serves a different
-        // valid chain under this contentId.
-        if (state.contentId !== contentId) {
-          throw new Error(
-            `relay served a mismatched content chain: asked ${contentId}, got ${state.contentId}`,
-          );
-        }
-        const last = opMeta(log[log.length - 1]!);
-        return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
+        return candidateFrom(await verifyContentLog(contentId, log), log, false);
       }
-      // overlap-consistency rule — see the identity resolver's twin above
-      if (
-        cached.log.some((jws, index) => index < entries.length && entries[index]!.jwsToken !== jws)
-      ) {
-        throw new DivergenceError({
+      // SET INCLUSION, not a prefix: a content log enumerates every branch, in
+      // no order the pin can rely on. Every operation this client verified must
+      // still be served, byte for byte. A served set that is a strict subset of
+      // the cached one carries no new information (a relay behind, mid-resync)
+      // and fails over like a transport miss; one that drops a cached operation
+      // while serving operations this client has not seen contradicts it.
+      const divergence = (): DivergenceError =>
+        new DivergenceError({
           chainType: 'content',
           chainId: contentId,
           cachedHeadCID: cached.headCID,
           liveHeadCID: opMeta(entries[entries.length - 1]?.jwsToken ?? '').cid,
         });
+      const served = new Map(entries.map((e) => [opMeta(e.jwsToken).cid, e.jwsToken]));
+      const cachedCIDs = new Set<string>();
+      let missing = false;
+      for (const jws of cached.log) {
+        const cid = opMeta(jws).cid;
+        cachedCIDs.add(cid);
+        const token = served.get(cid);
+        if (token === undefined) missing = true;
+        else if (token !== jws) throw divergence();
       }
-      if (entries.length < cached.log.length) {
-        throw new StaleAnswerError(
-          `content log is behind the verified cached prefix: ${contentId}`,
-        );
+      if (missing) {
+        if ([...served.keys()].every((cid) => cachedCIDs.has(cid))) {
+          throw new StaleAnswerError(
+            `content log is behind the verified cached prefix: ${contentId}`,
+          );
+        }
+        throw divergence();
       }
-      let state = cached.state;
-      let lastCreatedAt = cached.lastCreatedAt;
-      const log = [...cached.log];
-      for (const entry of entries.slice(cached.log.length)) {
-        const r = await verifyContentExtensionFromTrustedState({
-          currentState: state,
-          lastCreatedAt,
-          newOp: entry.jwsToken,
-          resolveKey,
-          enforceAuthorization: true,
-          resolveIdentity,
-          isRevoked: deps.isRevoked,
-        });
-        state = r.state;
-        lastCreatedAt = r.createdAt;
-        log.push(entry.jwsToken);
+      const dag = await verifyContentLog(contentId, log, cached.nodes);
+      try {
+        await recheckLineage(contentId, dag.head, dag.headLineage);
+      } catch (err) {
+        if (isDependencyMissing(err)) throw err;
+        // AUTHORITY WAS WITHDRAWN from an operation the cache vouched for. Fold
+        // the log cold, exactly as a reader without this cache would: the
+        // operation drops with its subtree and the head re-selects, so a warm
+        // and a cold read of the same log agree.
+        return candidateFrom(await verifyContentLog(contentId, log), log, true);
       }
-      return { state, log, headCID: state.headCID, lastCreatedAt };
+      return candidateFrom(dag, log, false);
     };
 
     const fetched = await fanOutLog(
@@ -536,6 +616,8 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         return {
           state: cached.state,
           log: cached.log,
+          headLineage: cached.headLineage ?? cached.log,
+          rejected: cached.rejected ?? [],
           provenance: { ...fetched.provenance, fromCache: true },
           tipUnverified: true,
         };
@@ -544,20 +626,48 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     }
 
     const candidate = fetched.value!;
-    if (fetched.provenance.agreed && (!cached || candidate.log.length > cached.log.length)) {
+    const nodesChanged =
+      cached !== undefined &&
+      (candidate.recomputed ||
+        cached.nodes === undefined ||
+        Object.keys(cached.nodes).length !== Object.keys(candidate.nodes).length);
+    if (
+      fetched.provenance.agreed &&
+      (!cached || candidate.log.length > cached.log.length || nodesChanged)
+    ) {
       await deps.store.set(key, {
         log: candidate.log,
         state: candidate.state,
         headCID: candidate.headCID,
         lastCreatedAt: candidate.lastCreatedAt,
-      } satisfies CachedChain<VerifiedContentChain>);
+        headLineage: candidate.headLineage,
+        nodes: candidate.nodes,
+        rejected: candidate.rejected,
+      } satisfies CachedContentChain);
     }
     return {
       state: candidate.state,
       log: candidate.log,
+      headLineage: candidate.headLineage,
+      rejected: candidate.rejected,
       provenance: fetched.provenance,
+      // the cache pins a set, so equal length means the served set IS the cached set
       tipUnverified: cached !== undefined && candidate.log.length === cached.log.length,
     };
+  };
+
+  /**
+   * Re-ask credential authority on a cached content chain's head lineage
+   * without draining its log. `true` when the cached chain's authority holds,
+   * `false` when nothing is cached; a throw is the authority failing (or, when
+   * marked as a dependency miss, failing to be checked).
+   */
+  const recheckContentAuthority = async (contentId: string): Promise<boolean> => {
+    const cached = (await deps.store.get(cacheKey('content', contentId))) as
+      CachedContentChain | undefined;
+    if (!cached) return false;
+    await recheckLineage(contentId, cached.state, cached.headLineage ?? cached.log);
+    return true;
   };
 
   /**
@@ -577,5 +687,11 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     return true;
   };
 
-  return { getIdentityChain, getContentChain, discardCachedChain, callbacks };
+  return {
+    getIdentityChain,
+    getContentChain,
+    recheckContentAuthority,
+    discardCachedChain,
+    callbacks,
+  };
 };

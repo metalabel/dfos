@@ -161,15 +161,15 @@ export const createClient = (config: ClientConfig): Client => {
     contentId: string,
     options?: CallOptions,
   ): Promise<Resolved<ResolvedContent>> => {
-    const { state, log, provenance, tipUnverified } = await resolvers.getContentChain(
-      contentId,
-      options,
-    );
+    const { state, headLineage, rejected, provenance, tipUnverified } =
+      await resolvers.getContentChain(contentId, options);
     const creator = await resolvers.getIdentityChain(state.creatorDID, options);
     const axes: UnverifiableAxis[] = [];
     if (tipUnverified) axes.push('tip');
-    if (hasDelegatedOps(log)) axes.push('revocation');
-    const value: ResolvedContent = { chain: state, creator: creator.state };
+    // only the head lineage folds into `state`; a branch that is not the head
+    // contributes nothing a revocation could reach
+    if (hasDelegatedOps(headLineage)) axes.push('revocation');
+    const value: ResolvedContent = { chain: state, creator: creator.state, rejected };
     return { value, trust: trust(true, axes), provenance };
   };
 
@@ -381,6 +381,7 @@ export const createClient = (config: ClientConfig): Client => {
     callbacks,
     resolve,
     discardCachedChain: resolvers.discardCachedChain,
+    recheckContentAuthority: resolvers.recheckContentAuthority,
     identity,
     content,
     credential,

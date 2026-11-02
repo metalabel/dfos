@@ -661,8 +661,10 @@ describe('client cold fold — asOfUnix forwarding', () => {
     expect(res.value.chain.length).toBe(2);
   });
 
-  it('still rejects when the revocation PREDATES the op', async () => {
-    // The negative control: forwarding asOfUnix must not turn the check off.
+  it('still drops the delegated op when the revocation PREDATES it', async () => {
+    // The negative control: forwarding asOfUnix must not turn the check off. A
+    // content log is a DAG, so the failing op is dropped (and reported) and the
+    // head re-selects to genesis rather than the whole read failing.
     const c = await buildDelegatedContent();
     const revokedAtUnix = Math.floor(Date.now() / 1000) - 8 * 60;
 
@@ -672,7 +674,12 @@ describe('client cold fold — asOfUnix forwarding', () => {
       return revokedAtUnix <= asOfUnix;
     };
 
-    await expect((await clientFor(c, asOfAware)).content(c.contentId)).rejects.toThrow(/revoked/);
+    const res = await (await clientFor(c, asOfAware)).content(c.contentId);
+    expect(res.value.chain.length).toBe(1);
+    expect(res.value.chain.headCID).toBe(credCid(c.log[0]!));
+    expect(res.value.rejected).toEqual([
+      { cid: credCid(c.log[1]!), reason: expect.stringMatching(/revoked/) },
+    ]);
   });
 
   it('hands the delegated op createdAt to the checker, not wall-clock now', async () => {

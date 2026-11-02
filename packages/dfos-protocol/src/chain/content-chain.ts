@@ -562,3 +562,70 @@ export const verifyContentExtensionFromTrustedState = async (input: {
 
   return { state: newState, operationCID, createdAt: op.createdAt };
 };
+
+// -----------------------------------------------------------------------------
+// authority recheck
+// -----------------------------------------------------------------------------
+
+/**
+ * Re-ask the mutable half of a verified log's validity: the credential
+ * authority behind each delegated operation.
+ *
+ * A verified log's signatures, CIDs, and links are immutable evidence and stay
+ * verified. Its authority is not: issuer deletion invalidates a credential
+ * retroactively (CREDENTIALS, Deleted issuers), and a revocation that arrives
+ * later can carry a `createdAt` at or before an operation it covers. This walks
+ * `log` (a linear lineage the caller already verified), and for every operation
+ * signed by someone other than the creator re-runs the credential path at the
+ * operation's own `createdAt`. A revocation dated after the operation still
+ * passes: revocation is forward-looking against the basis.
+ *
+ * Throws the error `verifyContentChain` throws for the same operation, so a
+ * caller sees one failure shape whichever path found it.
+ */
+export const recheckContentAuthorization = async (input: {
+  /** A verified linear lineage, genesis first. */
+  log: string[];
+  creatorDID: string;
+  contentId: string;
+  resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
+  isRevoked?: RevocationChecker;
+}): Promise<void> => {
+  for (const [idx, jwsToken] of input.log.entries()) {
+    if (idx === 0) continue;
+    const decoded = decodeJwsUnsafe(jwsToken);
+    if (!decoded) throw new Error(`log[${idx}]: failed to decode JWS`);
+    const result = ContentOperation.safeParse(decoded.payload);
+    if (!result.success) {
+      const messages = result.error.issues.map((e) => e.message).join(', ');
+      throw new Error(`log[${idx}]: ${messages}`);
+    }
+    const op = result.data;
+    if (op.did === input.creatorDID) continue;
+    const authorization =
+      op.type !== 'create' ? (op as { authorization?: string }).authorization : undefined;
+    if (!authorization) {
+      throw new Error(
+        `log[${idx}]: signer ${op.did} is not the chain creator — authorization credential required`,
+      );
+    }
+    try {
+      await verifyOperationAuthorization({
+        authorization,
+        operationDID: op.did,
+        creatorDID: input.creatorDID,
+        contentId: input.contentId,
+        createdAt: op.createdAt,
+        resolveIdentity: input.resolveIdentity,
+        ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
+      });
+    } catch (err) {
+      // See the same wrap in verifyContentChain.
+      const message = err instanceof Error ? err.message : 'unknown error';
+      throw carryDependencyMissing(
+        err,
+        new Error(`log[${idx}]: authorization verification failed: ${message}`),
+      );
+    }
+  }
+};
