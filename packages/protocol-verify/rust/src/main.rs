@@ -235,11 +235,17 @@ mod tests {
         if !header["crit"].is_null() {
             return Err("crit header is not supported".to_string());
         }
-        if !header["jwk"].is_null() {
+        if header.get("jwk").is_some() {
             return Err("jwk header is not allowed".to_string());
         }
-        if !header["x5c"].is_null() {
+        if header.get("jku").is_some() {
+            return Err("jku header is not allowed".to_string());
+        }
+        if header.get("x5c").is_some() {
             return Err("x5c header is not allowed".to_string());
+        }
+        if header.get("x5u").is_some() {
+            return Err("x5u header is not allowed".to_string());
         }
         Ok(())
     }

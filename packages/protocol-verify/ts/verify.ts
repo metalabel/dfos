@@ -201,7 +201,9 @@ function assertJwsProfile(header: Record<string, unknown>): void {
   if (header.alg !== 'EdDSA') throw new Error(`unsupported algorithm: ${String(header.alg)}`);
   if ('crit' in header) throw new Error('crit header is not supported');
   if ('jwk' in header) throw new Error('jwk header is not allowed');
+  if ('jku' in header) throw new Error('jku header is not allowed');
   if ('x5c' in header) throw new Error('x5c header is not allowed');
+  if ('x5u' in header) throw new Error('x5u header is not allowed');
 }
 
 function verifyJws(

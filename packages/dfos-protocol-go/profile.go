@@ -46,8 +46,14 @@ func assertJWSProfile(headerBytes []byte) error {
 	if _, present := raw["jwk"]; present {
 		return fmt.Errorf("jwk header is not allowed (key is resolved from kid)")
 	}
+	if _, present := raw["jku"]; present {
+		return fmt.Errorf("jku header is not allowed (key is resolved from kid)")
+	}
 	if _, present := raw["x5c"]; present {
 		return fmt.Errorf("x5c header is not allowed (key is resolved from kid)")
+	}
+	if _, present := raw["x5u"]; present {
+		return fmt.Errorf("x5u header is not allowed (key is resolved from kid)")
 	}
 
 	return nil

@@ -272,8 +272,14 @@ func verifyJWSProfiled(token string, pubKey ed25519.PublicKey) (header, payload 
 	if _, present := h["jwk"]; present {
 		return nil, nil, fmt.Errorf("jwk header is not allowed")
 	}
+	if _, present := h["jku"]; present {
+		return nil, nil, fmt.Errorf("jku header is not allowed")
+	}
 	if _, present := h["x5c"]; present {
 		return nil, nil, fmt.Errorf("x5c header is not allowed")
+	}
+	if _, present := h["x5u"]; present {
+		return nil, nil, fmt.Errorf("x5u header is not allowed")
 	}
 
 	signingInput := []byte(parts[0] + "." + parts[1])

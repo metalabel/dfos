@@ -43,7 +43,13 @@ export const assertJwsProfile = (
   if ('jwk' in header) {
     throw makeError('jwk header is not allowed (key is resolved from kid)');
   }
+  if ('jku' in header) {
+    throw makeError('jku header is not allowed (key is resolved from kid)');
+  }
   if ('x5c' in header) {
     throw makeError('x5c header is not allowed (key is resolved from kid)');
+  }
+  if ('x5u' in header) {
+    throw makeError('x5u header is not allowed (key is resolved from kid)');
   }
 };
