@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   encodeEd25519Multikey,
+  MAX_FUTURE_TIMESTAMP_MS,
   recheckContentAuthorization,
   signContentOperation,
   verifyContentChain,
@@ -293,6 +294,87 @@ describe('verifyContentDag — rejection', () => {
     }
   });
 
+  it('a header CID named like an Object.prototype member is never admitted by inheritance', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, ts(0));
+    const a = await updateOp({
+      signer: creator,
+      previousOperationCID: g.operationCID,
+      createdAt: ts(1),
+      title: 'a',
+    });
+    const first = await verifyContentDag({
+      log: [g.jwsToken, a.jwsToken],
+      resolveKey: w.resolveKey,
+    });
+    const forge = (cid: string, previousOperationCID: string) =>
+      createJws({
+        header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: creator.kid, cid },
+        payload: { junk: true, previousOperationCID, createdAt: ts(2) },
+        sign: async () => new Uint8Array(64),
+      });
+    for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const orphan = await forge(name, 'bafy-not-in-this-log');
+      const child = await forge(`${name}`, g.operationCID);
+      for (const forged of [orphan, child]) {
+        const dag = await verifyContentDag({
+          log: [g.jwsToken, a.jwsToken, forged],
+          resolveKey: w.resolveKey,
+          known: first.nodes,
+        });
+        expect(dag.rejected.map((r) => r.cid)).toEqual([name]);
+        expect(Object.hasOwn(dag.nodes, name)).toBe(false);
+        expect(dag.head.headCID).toBe(a.operationCID);
+        expect(dag.tips.map((t) => t.cid)).toEqual([a.operationCID]);
+      }
+    }
+  });
+
+  it('an op dated more than 24 hours ahead is rejected with its subtree, never the head', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, ts(0));
+    const a = await updateOp({
+      signer: creator,
+      previousOperationCID: g.operationCID,
+      createdAt: ts(1),
+      title: 'a',
+    });
+    const future = await updateOp({
+      signer: creator,
+      previousOperationCID: g.operationCID,
+      createdAt: '9999-01-01T00:00:00.000Z',
+      title: 'future',
+    });
+    const log = [g.jwsToken, a.jwsToken, future.jwsToken];
+    const dag = await verifyContentDag({ log, resolveKey: w.resolveKey });
+    expect(dag.head.headCID).toBe(a.operationCID);
+    expect(dag.rejected).toEqual([
+      {
+        cid: future.operationCID,
+        reason: expect.stringMatching(/more than 24 hours in the future/),
+      },
+    ]);
+    // the bound runs on the verifier's clock, injectable
+    const later = await verifyContentDag({
+      log,
+      resolveKey: w.resolveKey,
+      now: () => Date.parse('9998-12-31T12:00:00.000Z'),
+    });
+    expect(later.head.headCID).toBe(future.operationCID);
+    expect(MAX_FUTURE_TIMESTAMP_MS).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('a genesis dated more than 24 hours ahead is a hard error', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, '9999-01-01T00:00:00.000Z');
+    await expect(verifyContentDag({ log: [g.jwsToken], resolveKey: w.resolveKey })).rejects.toThrow(
+      /more than 24 hours in the future/,
+    );
+  });
+
   it('two genesis operations are a hard error', async () => {
     const creator = makeIdentity();
     const w = world(creator);
@@ -529,6 +611,19 @@ describe('recheckContentAuthorization', () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(isDependencyMissing(err)).toBe(true);
+  });
+
+  it('checks every delegated op in a set, in any order', async () => {
+    const c = await delegated();
+    await expect(
+      recheckContentAuthorization({
+        log: [...c.log].reverse(),
+        creatorDID: c.creator.did,
+        contentId: c.contentId,
+        resolveIdentity: c.w.resolveIdentity,
+        isRevoked: asOfChecker(new Map([[c.leafKey, unix(-10)]])),
+      }),
+    ).rejects.toThrow(/revoked/);
   });
 
   it('creator-signed ops need no credential', async () => {

@@ -16,6 +16,14 @@
   chosen among the surviving tips with `compareHeadPreference`, the same
   comparator the relays and the canonical fold use.
 
+  An operation dated more than 24 hours past the verifier's clock is rejected
+  before it can be admitted (PROTOCOL, Future timestamp bound): head selection
+  prefers the highest `createdAt`, so an unbounded one would hold the head
+  forever.
+
+  Membership is never read off a plain object: a header CID is attacker-chosen,
+  and one spelled `constructor` would otherwise find an inherited property.
+
   A failure that is only a dependency miss (an identity or key this resolver
   does not hold yet) is not a verdict on the operation, so it is rethrown rather
   than dropped: dropping it would re-select the head on a lookup that may
@@ -32,6 +40,18 @@ import {
   verifyContentExtensionFromTrustedState,
   type VerifiedContentChain,
 } from './content-chain';
+import { parseProtocolTimestampUnix } from './schemas';
+
+/** How far past the verifier's clock an operation's `createdAt` may be. */
+export const MAX_FUTURE_TIMESTAMP_MS = 24 * 60 * 60 * 1000;
+
+const beyondFutureBound = (createdAt: string, nowMs: number): boolean => {
+  const at = parseProtocolTimestampUnix(createdAt);
+  // an off-grammar timestamp is the schema's to reject
+  return at !== null && at * 1000 > nowMs + MAX_FUTURE_TIMESTAMP_MS;
+};
+
+const FUTURE_BOUND_REASON = 'createdAt is more than 24 hours in the future';
 
 // -----------------------------------------------------------------------------
 // types
@@ -61,7 +81,8 @@ export interface VerifiedContentDag {
   tips: OrderKey[];
   /** Dropped operations, a failing op and each op of its subtree. */
   rejected: ContentDagRejection[];
-  /** Every surviving operation's verified node, keyed by CID. */
+  /** Every surviving operation's verified node, keyed by CID. Read it by own
+   *  key only (`Object.hasOwn`): a CID is attacker-chosen. */
   nodes: Record<string, ContentDagNode>;
 }
 
@@ -115,8 +136,10 @@ export const verifyContentDag = async (input: {
   resolveIdentity?: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
   /** See `verifyContentChain`. */
   isRevoked?: RevocationChecker;
-  /** Already-verified nodes, keyed by operation CID. */
+  /** Already-verified nodes, keyed by operation CID. Read by own key only. */
   known?: Readonly<Record<string, ContentDagNode>>;
+  /** The verifier's clock (unix ms) for the future timestamp bound. Default `Date.now`. */
+  now?: () => number;
 }): Promise<VerifiedContentDag> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
 
@@ -164,13 +187,21 @@ export const verifyContentDag = async (input: {
     ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
   };
 
-  const nodes: Record<string, ContentDagNode> = {};
-  const seeded = input.known?.[genesis.cid];
+  const nowMs = (input.now ?? Date.now)();
+  const known = input.known;
+  const knownNode = (cid: string): ContentDagNode | undefined =>
+    known !== undefined && Object.hasOwn(known, cid) ? known[cid] : undefined;
+
+  const nodes = new Map<string, ContentDagNode>();
+  if (beyondFutureBound(genesis.createdAt, nowMs)) {
+    throw new Error(`genesis operation ${genesis.cid}: ${FUTURE_BOUND_REASON}`);
+  }
+  const seeded = knownNode(genesis.cid);
   if (seeded) {
-    nodes[genesis.cid] = seeded;
+    nodes.set(genesis.cid, seeded);
   } else {
     const state = await verifyContentChain({ log: [genesis.jws], ...verifyOptions });
-    nodes[genesis.cid] = { state, createdAt: genesis.createdAt };
+    nodes.set(genesis.cid, { state, createdAt: genesis.createdAt });
   }
 
   const rejectSubtree = (root: DecodedOp): void => {
@@ -186,11 +217,16 @@ export const verifyContentDag = async (input: {
   const queue: DecodedOp[] = [genesis];
   while (queue.length > 0) {
     const parent = queue.shift()!;
-    const parentNode = nodes[parent.cid]!;
+    const parentNode = nodes.get(parent.cid)!;
     for (const op of children.get(parent.cid) ?? []) {
-      const known = input.known?.[op.cid];
-      if (known) {
-        nodes[op.cid] = known;
+      if (beyondFutureBound(op.createdAt, nowMs)) {
+        rejected.push({ cid: op.cid, reason: FUTURE_BOUND_REASON });
+        rejectSubtree(op);
+        continue;
+      }
+      const seededNode = knownNode(op.cid);
+      if (seededNode) {
+        nodes.set(op.cid, seededNode);
         queue.push(op);
         continue;
       }
@@ -201,7 +237,7 @@ export const verifyContentDag = async (input: {
           newOp: op.jws,
           ...verifyOptions,
         });
-        nodes[op.cid] = { state: r.state, createdAt: r.createdAt };
+        nodes.set(op.cid, { state: r.state, createdAt: r.createdAt });
         queue.push(op);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'verification failed';
@@ -220,18 +256,18 @@ export const verifyContentDag = async (input: {
   // an op whose parent is not in the log is never reached from genesis
   const reached = new Set(rejected.map((r) => r.cid));
   for (const op of byCID.values()) {
-    if (nodes[op.cid] || reached.has(op.cid)) continue;
+    if (nodes.has(op.cid) || reached.has(op.cid)) continue;
     rejected.push({ cid: op.cid, reason: 'previous operation is not in the log' });
   }
 
   const hasSurvivingChild = new Set<string>();
-  for (const cid of Object.keys(nodes)) {
+  for (const cid of nodes.keys()) {
     const prev = byCID.get(cid)!.previousCID;
     if (prev !== null) hasSurvivingChild.add(prev);
   }
-  const tips: OrderKey[] = Object.keys(nodes)
-    .filter((cid) => !hasSurvivingChild.has(cid))
-    .map((cid) => ({ cid, createdAt: nodes[cid]!.createdAt }))
+  const tips: OrderKey[] = [...nodes.entries()]
+    .filter(([cid]) => !hasSurvivingChild.has(cid))
+    .map(([cid, node]) => ({ cid, createdAt: node.createdAt }))
     .sort(compareHeadPreference);
 
   const head = tips[0]!;
@@ -243,11 +279,13 @@ export const verifyContentDag = async (input: {
   }
 
   return {
-    head: nodes[head.cid]!.state,
+    head: nodes.get(head.cid)!.state,
     headCreatedAt: head.createdAt,
     headLineage,
     tips,
     rejected,
-    nodes,
+    // a plain object so it persists as JSON; `fromEntries` defines own
+    // properties, so even a `__proto__` key stays data
+    nodes: Object.fromEntries(nodes),
   };
 };

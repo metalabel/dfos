@@ -575,7 +575,8 @@ export const verifyContentExtensionFromTrustedState = async (input: {
  * verified. Its authority is not: issuer deletion invalidates a credential
  * retroactively (CREDENTIALS, Deleted issuers), and a revocation that arrives
  * later can carry a `createdAt` at or before an operation it covers. This walks
- * `log` (a linear lineage the caller already verified), and for every operation
+ * `log` (operations the caller already verified, any branch, any order), and for
+ * every operation
  * signed by someone other than the creator re-runs the credential path at the
  * operation's own `createdAt`. A revocation dated after the operation still
  * passes: revocation is forward-looking against the basis.
@@ -584,7 +585,7 @@ export const verifyContentExtensionFromTrustedState = async (input: {
  * caller sees one failure shape whichever path found it.
  */
 export const recheckContentAuthorization = async (input: {
-  /** A verified linear lineage, genesis first. */
+  /** Verified operations of one chain, any branch, any order. */
   log: string[];
   creatorDID: string;
   contentId: string;
@@ -592,7 +593,6 @@ export const recheckContentAuthorization = async (input: {
   isRevoked?: RevocationChecker;
 }): Promise<void> => {
   for (const [idx, jwsToken] of input.log.entries()) {
-    if (idx === 0) continue;
     const decoded = decodeJwsUnsafe(jwsToken);
     if (!decoded) throw new Error(`log[${idx}]: failed to decode JWS`);
     const result = ContentOperation.safeParse(decoded.payload);
@@ -601,9 +601,8 @@ export const recheckContentAuthorization = async (input: {
       throw new Error(`log[${idx}]: ${messages}`);
     }
     const op = result.data;
-    if (op.did === input.creatorDID) continue;
-    const authorization =
-      op.type !== 'create' ? (op as { authorization?: string }).authorization : undefined;
+    if (op.type === 'create' || op.did === input.creatorDID) continue;
+    const authorization = (op as { authorization?: string }).authorization;
     if (!authorization) {
       throw new Error(
         `log[${idx}]: signer ${op.did} is not the chain creator — authorization credential required`,

@@ -570,3 +570,179 @@ describe('content DAG — trusted log, misses, conflicts, pin', () => {
     });
   });
 });
+
+// -----------------------------------------------------------------------------
+// round 2: membership, the future bound, every branch rechecked, set quorum
+// -----------------------------------------------------------------------------
+
+describe('content DAG — membership, future bound, branch recheck, quorum', () => {
+  const RELAY = 'https://relay.test';
+  const OTHER = 'https://relay-b.test';
+
+  const setup = async () => {
+    const creator = await buildIdentity();
+    const content = await buildContent(creator, { update: true });
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log },
+        contents: { [content.contentId]: [...content.log] },
+      },
+    };
+    const store = memoryStore();
+    const client = createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data) });
+    const serve = (log: string[]) => {
+      data[RELAY]!.contents![content.contentId] = log;
+    };
+    return { creator, content, store, client, serve };
+  };
+
+  it('an orphan whose header CID is `constructor` is rejected, never in the trusted log', async () => {
+    const { creator, content, client, serve } = await setup();
+    await client.content(content.contentId); // seeds cached nodes too
+    const orphan = await createJws({
+      header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: creator.kid, cid: 'constructor' },
+      payload: { junk: true, previousOperationCID: 'bafy-elsewhere', createdAt: ts(-1) },
+      sign: async () => new Uint8Array(64),
+    });
+    serve([...content.log, orphan]);
+    for (const res of [
+      await client.content(content.contentId),
+      await createClient({
+        relays: [RELAY],
+        peerClient: fakePeerClient({
+          [RELAY]: {
+            identities: { [creator.did]: creator.log },
+            contents: { [content.contentId]: [...content.log, orphan] },
+          },
+        }),
+      }).content(content.contentId),
+    ]) {
+      expect(res.value.rejected.map((r) => r.cid)).toEqual(['constructor']);
+      expect(res.value.chain.headCID).toBe(content.headCID);
+    }
+    const log = await client.log('content', content.contentId);
+    expect(log.value.map((op) => op.cid)).not.toContain('constructor');
+  });
+
+  it('a correctly signed update dated 9999-01-01 never becomes the head', async () => {
+    const { creator, content, client, serve } = await setup();
+    const future = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.headCID,
+      createdAt: '9999-01-01T00:00:00.000Z',
+    });
+    serve([...content.log, future.jwsToken]);
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(content.headCID);
+    expect(res.value.rejected).toEqual([
+      { cid: future.operationCID, reason: expect.stringMatching(/24 hours in the future/) },
+    ]);
+  });
+
+  it('a backdated revocation on a losing delegated branch drops it warm exactly as cold', async () => {
+    const creator = await buildIdentity();
+    const delegate = await buildIdentity();
+    const content = await buildContent(creator);
+    const credential = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${content.contentId}`, action: 'write' }],
+      exp: Math.floor(Date.now() / 1000) + 4 * 3600,
+      iat: Math.floor(Date.now() / 1000) - 4 * 3600,
+      signer: creator.k.signer,
+      keyId: creator.k.keyId,
+    });
+    const opCreatedAt = ts(-4);
+    const losing = await signUpdate({
+      signer: delegate,
+      previousOperationCID: content.genesisCID,
+      createdAt: opCreatedAt,
+      authorization: credential,
+    });
+    const winning = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-3),
+      documentCID: DOC_B,
+    });
+    const revokedAt = new Map<string, number>();
+    const isRevoked: RevChecker = async (_issuer, credentialCID, asOfUnix) => {
+      const at = revokedAt.get(credentialCID);
+      if (at === undefined) return false;
+      if (asOfUnix === undefined || asOfUnix <= 0) return true;
+      return at <= asOfUnix;
+    };
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log, [delegate.did]: delegate.log },
+        contents: { [content.contentId]: [...content.log, losing.jwsToken, winning.jwsToken] },
+      },
+    };
+    const clientFor = () =>
+      createClient({
+        relays: [RELAY],
+        store: memoryStore(),
+        peerClient: fakePeerClient(data),
+        isRevoked,
+      });
+    const client = clientFor();
+    const first = await client.content(content.contentId);
+    expect(first.value.chain.headCID).toBe(winning.operationCID);
+    expect((await client.log('content', content.contentId)).value).toHaveLength(3);
+
+    revokedAt.set(cidOf(credential), Math.floor(new Date(opCreatedAt).getTime() / 1000) - 60);
+    // the cached set still holds the losing op, and its authority is gone
+    await expect(client.recheckContentAuthority(content.contentId)).rejects.toThrow(/revoked/);
+
+    const warm = await client.content(content.contentId);
+    const cold = await clientFor().content(content.contentId);
+    const expectedRejected = [
+      { cid: losing.operationCID, reason: expect.stringMatching(/revoked/) },
+    ];
+    for (const res of [warm, cold]) {
+      expect(res.value.chain.headCID).toBe(winning.operationCID);
+      expect(res.value.rejected).toEqual(expectedRejected);
+    }
+    expect(warm.value.chain).toEqual(cold.value.chain);
+    const log = await client.log('content', content.contentId);
+    expect(log.value.map((op) => op.cid)).toEqual([content.genesisCID, winning.operationCID]);
+    expect(await client.recheckContentAuthority(content.contentId)).toEqual({
+      opCount: 2,
+      rejected: expectedRejected,
+    });
+  });
+
+  it('quorum 2 agrees on a content log two relays serve in different orders', async () => {
+    const creator = await buildIdentity();
+    const content = await buildContent(creator);
+    const a = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-4),
+    });
+    const b = await signUpdate({
+      signer: creator,
+      previousOperationCID: content.genesisCID,
+      createdAt: ts(-3),
+      documentCID: DOC_B.replace('forked', 'branch'),
+    });
+    const g = content.log[0]!;
+    const client = createClient({
+      relays: [RELAY, OTHER],
+      quorum: 2,
+      peerClient: fakePeerClient({
+        [RELAY]: {
+          identities: { [creator.did]: creator.log },
+          contents: { [content.contentId]: [g, a.jwsToken, b.jwsToken] },
+        },
+        [OTHER]: {
+          identities: { [creator.did]: creator.log },
+          contents: { [content.contentId]: [g, b.jwsToken, a.jwsToken] },
+        },
+      }),
+    });
+    const res = await client.content(content.contentId);
+    expect(res.provenance.agreed).toBe(true);
+    expect(res.value.chain.headCID).toBe(b.operationCID);
+  });
+});

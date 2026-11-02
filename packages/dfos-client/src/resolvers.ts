@@ -19,7 +19,7 @@
     cached log, or when the answer comes from cache alone — tip freshness is
     never PROVEN in v1
   - a content log is a DAG: the cache pins the SET of operations it verified,
-    not a prefix, and credential authority on the head lineage is re-asked on
+    not a prefix, and credential authority on every surviving op is re-asked on
     every read because deletion and backdated revocation can withdraw it
 
 */
@@ -43,6 +43,7 @@ import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import {
   contentPager,
+  digestOpSet,
   fanOutLog,
   identityPager,
   normalizeRelays,
@@ -178,7 +179,8 @@ const survivors = (log: string[], dag: VerifiedContentDag): string[] => {
   const seen = new Set<string>();
   return log.filter((jws) => {
     const cid = opMeta(jws).cid;
-    if (!dag.nodes[cid] || seen.has(cid)) return false;
+    // own keys only: a header CID is attacker-chosen, and `constructor` is inherited
+    if (!Object.hasOwn(dag.nodes, cid) || seen.has(cid)) return false;
     seen.add(cid);
     return true;
   });
@@ -562,15 +564,17 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   };
 
   /**
-   * Re-ask the authority behind every delegated operation on a verified head
-   * lineage. Signatures and CIDs are immutable and stay verified; a credential's
-   * issuer can be deleted, and a revocation dated at or before an operation can
-   * arrive after this client cached it. The one implementation both the warm
-   * read and `recheckContentAuthority` run.
+   * Re-ask the authority behind every delegated operation this client vouches
+   * for — every surviving operation on every branch, since the trusted log
+   * exposes them all, not only the head lineage. Signatures and CIDs are
+   * immutable and stay verified; a credential's issuer can be deleted, and a
+   * revocation dated at or before an operation can arrive after this client
+   * cached it. The one implementation both the warm read and
+   * `recheckContentAuthority` run.
    */
-  const recheckLineage = (contentId: string, state: VerifiedContentChain, lineage: string[]) =>
+  const recheckSurvivors = (contentId: string, state: VerifiedContentChain, verified: string[]) =>
     recheckContentAuthorization({
-      log: lineage,
+      log: verified,
       creatorDID: state.creatorDID,
       contentId,
       resolveIdentity,
@@ -658,7 +662,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       }
       const dag = await verifyContentLog(contentId, log, cached.nodes);
       try {
-        await recheckLineage(contentId, dag.head, dag.headLineage);
+        await recheckSurvivors(contentId, dag.head, survivors(log, dag));
       } catch (err) {
         if (isDependencyMissing(err)) throw err;
         // AUTHORITY WAS WITHDRAWN from an operation the cache vouched for. Fold
@@ -675,6 +679,8 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       relaysFor(options),
       deps.quorum,
       verifyCandidate,
+      // a content log enumerates branches in no fixed order: relays agree on the set
+      digestOpSet,
     );
 
     if (fetched.outcome === 'unreachable') {
@@ -722,7 +728,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
   };
 
   /**
-   * Re-ask credential authority on a cached content chain's head lineage
+   * Re-ask credential authority on a cached content chain's surviving ops
    * without draining its log. Answers what the cached chain holds when its
    * authority holds, `undefined` when nothing is cached; a throw is the
    * authority failing (or, when marked as a dependency miss, failing to be
@@ -734,7 +740,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     const cached = (await deps.store.get(cacheKey('content', contentId))) as
       CachedContentChain | undefined;
     if (!cached) return undefined;
-    await recheckLineage(contentId, cached.state, cached.headLineage ?? cached.log);
+    await recheckSurvivors(contentId, cached.state, cached.log);
     return { opCount: cached.log.length, rejected: cached.rejected ?? [] };
   };
 

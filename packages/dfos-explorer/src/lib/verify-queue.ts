@@ -118,7 +118,7 @@ export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): bo
 /**
  * A durable verdict is reused only when it is fresh by op count AND, for a
  * content chain, the client's cached chain still stands behind it: the
- * credential authority on its head lineage holds, it dropped nothing, and it
+ * credential authority on its surviving ops holds, it dropped nothing, and it
  * holds exactly the ops the verdict counted. Op count tracks the immutable half
  * (new operations); authority is the mutable half — an issuer deleted, or a
  * revocation dated at or before a delegated op — re-asked through the client's

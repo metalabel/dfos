@@ -417,7 +417,7 @@ export interface Client {
   discardCachedChain(kind: 'identity' | 'content', id: string): Promise<boolean>;
 
   /**
-   * Re-ask credential authority on a cached content chain's head lineage
+   * Re-ask credential authority on a cached content chain's surviving ops
    * without draining its log — the same recheck every warm `content` read runs.
    * Answers what the cached chain holds when its delegated operations are still
    * authorized, `undefined` when no chain is cached; a throw means authority no
