@@ -111,8 +111,10 @@ export const createRevocationChecker = (
     for (const url of relaySet) {
       let body: CredentialStatusBody | null = null;
       try {
+        // scoped to the issuer: any DID can sign a revocation naming any CID, so
+        // the unscoped answer may be a stranger's and mask the issuer's own
         const target = new URL(
-          `${REVOCATIONS_BASE_PATH}/credential/${encodeURIComponent(credentialCID)}`,
+          `${REVOCATIONS_BASE_PATH}/credential/${encodeURIComponent(credentialCID)}?issuer=${encodeURIComponent(issuerDID)}`,
           url,
         ).toString();
         const res = await fetchImpl(target);

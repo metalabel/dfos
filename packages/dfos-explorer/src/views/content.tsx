@@ -281,12 +281,16 @@ export const Content = (props: { id: string }) => {
   // replacing what used to be a scan of the entire local revocation partition.
   // A credential no relay answered for comes back UNKNOWN (amber), never a
   // silent green: absence of an answer is not absence of a revocation.
-  const grantCids = [...(grantsIndex ?? []), ...(grants ?? [])].map((g) => g.cid);
+  const grantList = [...(grantsIndex ?? []), ...(grants ?? [])];
+  const grantCids = grantList.map((g) => g.cid);
   const grantKey = grantCids.join(',');
   useEffect(() => {
     let dead = false;
     if (grantCids.length === 0) return;
-    void fetchCredentialRevocations(grantCids, getRelays()).then((view) => {
+    // issuer-scoped where the token names one, so a stranger's revocation of
+    // the same CID cannot stand in for the issuer's
+    const issuers = new Map(grantList.filter((g) => g.iss).map((g) => [g.cid, g.iss]));
+    void fetchCredentialRevocations(grantCids, getRelays(), issuers).then((view) => {
       if (!dead) setRevoked(view);
     });
     return () => {

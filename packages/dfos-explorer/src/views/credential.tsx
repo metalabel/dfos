@@ -190,7 +190,7 @@ export const Credential = (props: { cid: string }) => {
       })();
 
       // revocation feed availability probe (display-only)
-      void probeRevocationFeeds(decoded.header.cid, relays).then((probes) => {
+      void probeRevocationFeeds(decoded.header.cid, relays, decoded.payload.iss).then((probes) => {
         if (!dead) setFeeds(probes);
       });
     })();

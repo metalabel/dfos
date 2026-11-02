@@ -1080,7 +1080,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid credential CID' }, 400);
     }
 
-    const revocation = await store.getRevocationForCredential(credentialCID);
+    // `issuer` scopes the answer to that issuer's revocation. Any DID can sign
+    // a revocation naming any CID and the relay never holds the credential to
+    // check, so the unscoped answer is one revocation for the CID, not
+    // necessarily the issuer's. Presence-detected: an empty `issuer=` is a 400.
+    const issuer = c.req.query('issuer');
+    if (issuer !== undefined && !isValidDfosDid(issuer)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+
+    const revocation =
+      issuer !== undefined
+        ? await store.getRevocation(issuer, credentialCID)
+        : await store.getRevocationForCredential(credentialCID);
     return c.json(credentialRevocationStatus(credentialCID, revocation));
   });
 

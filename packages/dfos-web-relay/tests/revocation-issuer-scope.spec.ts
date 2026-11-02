@@ -18,6 +18,7 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { ingestOperations } from '../src/ingest';
+import { createRelay } from '../src/relay';
 import { MemoryRelayStore } from '../src/store';
 
 /*
@@ -36,6 +37,12 @@ import { MemoryRelayStore } from '../src/store';
   enforces the pairing. Permanently: re-presenting the credential
   lands on the duplicate-by-CID branch in ingestPublicCredential before
   addPublicCredential can run, so it never comes back.
+
+  The status route is the third half. Any DID can sign a revocation naming any
+  CID, so the unscoped `/revocations/v1/credential/:cid` answer is one
+  revocation for the CID, not necessarily the issuer's, and a stranger whose DID
+  sorts below the issuer's would mask the real one. `?issuer=` scopes the answer
+  to the exact (issuerDID, credentialCID) row.
 
   Twin coverage lives in the Go relay (revocation_issuer_scope_test.go).
 
@@ -155,5 +162,79 @@ describe('relay ingest — a foreign revocation reaches nothing', () => {
 
     expect(await c.store.getPublicCredentials(RESOURCE)).toEqual([]);
     expect(await c.store.isCredentialRevoked(c.issuer.did, c.credentialCID)).toBe(true);
+  });
+});
+
+describe('revocation status route — ?issuer= scopes the answer', () => {
+  /** Both the issuer and the stranger revoke the same credential CID. */
+  const seedCollision = async () => {
+    const c = await seedPublicGrant();
+    const signRevocationBy = async (identity: { did: string; key: ReturnType<typeof makeKey> }) =>
+      (
+        await signRevocation({
+          issuerDID: identity.did,
+          credentialCID: c.credentialCID,
+          signer: identity.key.signer,
+          keyId: identity.key.keyId,
+        })
+      ).jwsToken;
+    const issuerRevocation = await signRevocationBy(c.issuer);
+    const strangerRevocation = await signRevocationBy(c.stranger);
+    const results = await ingestOperations([issuerRevocation, strangerRevocation], c.store);
+    expect(results.map((r) => r.status)).toEqual(['new', 'new']);
+
+    const relay = await createRelay({ store: c.store });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const get = async (path: string): Promise<{ status: number; body: any }> => {
+      const res = await relay.app.request(`http://localhost${path}`);
+      return { status: res.status, body: await res.json() };
+    };
+    const path = `/revocations/v1/credential/${c.credentialCID}`;
+    return { ...c, issuerRevocation, strangerRevocation, get, path };
+  };
+
+  it("answers each issuer's own revocation when scoped", async () => {
+    const c = await seedCollision();
+
+    for (const [did, revocation] of [
+      [c.issuer.did, c.issuerRevocation],
+      [c.stranger.did, c.strangerRevocation],
+    ] as const) {
+      const res = await c.get(`${c.path}?issuer=${encodeURIComponent(did)}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ credentialCID: c.credentialCID, revoked: true, revocation });
+    }
+  });
+
+  it('leaves the unscoped answer unchanged: smallest issuerDID', async () => {
+    const c = await seedCollision();
+    const smallest = c.issuer.did < c.stranger.did ? c.issuerRevocation : c.strangerRevocation;
+
+    const res = await c.get(c.path);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      credentialCID: c.credentialCID,
+      revoked: true,
+      revocation: smallest,
+    });
+  });
+
+  it('answers revoked:false for an issuer with no revocation, whatever others hold', async () => {
+    const c = await seedCollision();
+    const bystander = await createIdentity();
+
+    const res = await c.get(`${c.path}?issuer=${encodeURIComponent(bystander.did)}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ credentialCID: c.credentialCID, revoked: false });
+  });
+
+  it('rejects a present issuer that is not a canonical did:dfos', async () => {
+    const c = await seedCollision();
+
+    for (const issuer of ['', 'not-a-did', 'did:dfos:tooshort', `${c.issuer.did}x`]) {
+      const res = await c.get(`${c.path}?issuer=${encodeURIComponent(issuer)}`);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'invalid DID' });
+    }
   });
 });

@@ -159,8 +159,9 @@ type issuerRevocationList struct {
 // -----------------------------------------------------------------------------
 
 // handleRevocationStatus serves GET /revocations/v1/credential/{credentialCID}.
-// Byte twin of the TS route in relay.ts: 400 on a malformed CID param, 200 with
-// the self-proving revocation JWS when revoked, 200 revoked:false otherwise.
+// Byte twin of the TS route in relay.ts: 400 on a malformed CID param, 400 on a
+// present `issuer` that is not a canonical did:dfos, 200 with the self-proving
+// revocation JWS when revoked, 200 revoked:false otherwise.
 func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request) {
 	if !r.revocationsEnabled {
 		writeError(w, 501, "revocation status not available")
@@ -175,7 +176,23 @@ func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	rev, err := r.readStore.GetRevocationForCredential(credentialCID)
+	// `issuer` scopes the answer to that issuer's revocation. Any DID can sign a
+	// revocation naming any CID and the relay never holds the credential to
+	// check, so the unscoped answer is one revocation for the CID, not
+	// necessarily the issuer's. Presence-detected: an empty `issuer=` is a 400.
+	issuer, scoped := firstQueryValue(req.URL.Query(), "issuer")
+	if scoped && !isValidDfosDid(issuer) {
+		writeError(w, 400, "invalid DID")
+		return
+	}
+
+	var rev *StoredRevocation
+	var err error
+	if scoped {
+		rev, err = r.readStore.GetRevocation(issuer, credentialCID)
+	} else {
+		rev, err = r.readStore.GetRevocationForCredential(credentialCID)
+	}
 	if storeErr(w, err) {
 		return
 	}

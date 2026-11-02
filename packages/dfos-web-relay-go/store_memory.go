@@ -1112,11 +1112,23 @@ func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string
 	return !ok || revokedAt <= asOfUnix, nil
 }
 
+func (s *MemoryStore) GetRevocation(issuerDID string, credentialCID string) (*StoredRevocation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rev, ok := s.revocations[issuerDID+"::"+credentialCID]
+	if !ok {
+		return nil, nil
+	}
+	return &rev, nil
+}
+
 func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	// deterministic across stores/twins: smallest issuerDID wins on a
-	// (theoretical) multi-issuer collision
+	// multi-issuer collision. Any DID can sign a revocation naming any CID, so
+	// this is one revocation for the CID, not necessarily the issuer's — the
+	// issuer-scoped answer is GetRevocation
 	var found *StoredRevocation
 	for _, rev := range s.revocations {
 		if rev.CredentialCID != credentialCID {

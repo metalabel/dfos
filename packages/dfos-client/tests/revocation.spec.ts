@@ -50,13 +50,16 @@ const resolveKeyFor =
     return decodeMultikey(match.k.key.publicKeyMultibase).keyBytes;
   };
 
-/** A fetch fake serving /revocations/v1/credential/:cid per-relay bodies. */
+/**
+ * A fetch fake serving /revocations/v1/credential/:cid per-relay bodies. Keyed
+ * on the CID path segment; the `issuer` query is ignored here (the scoped-route
+ * test below has its own fake).
+ */
 const revocationFetch =
   (byUrl: Record<string, Record<string, unknown>>): typeof fetch =>
   async (input) => {
-    const url = String(input);
-    const origin = new URL(url).origin;
-    const body = byUrl[origin]?.[url.split('/credential/')[1] ?? ''];
+    const { origin, pathname } = new URL(String(input));
+    const body = byUrl[origin]?.[pathname.split('/credential/')[1] ?? ''];
     if (body === undefined) return new Response('{"error":"not found"}', { status: 404 });
     return new Response(JSON.stringify(body), {
       status: 200,
@@ -148,6 +151,37 @@ describe('createRevocationChecker', () => {
       resolveKeyFor(impostor, queriedIssuer),
     );
     expect(await isRevoked(queriedIssuer.did, credentialCID)).toBe(false);
+  });
+
+  it("asks for the issuer's own revocation — a stranger's unscoped one cannot mask it", async () => {
+    const { issuer, credentialCID, revocation } = await setup();
+    // a stranger whose revocation the relay serves on the UNSCOPED route (the
+    // smallest-issuerDID collision answer); the issuer's own is only reachable
+    // scoped
+    const stranger = await buildIdentity();
+    const strangerRevocation = await signRevocation({
+      issuerDID: stranger.did,
+      credentialCID,
+      signer: stranger.k.signer,
+      keyId: stranger.k.keyId,
+    });
+    const requested: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      requested.push(url.toString());
+      const scopedTo = url.searchParams.get('issuer');
+      const jws = scopedTo === issuer.did ? revocation.jwsToken : strangerRevocation.jwsToken;
+      return new Response(JSON.stringify({ credentialCID, revoked: true, revocation: jws }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const isRevoked = createRevocationChecker([A], fetchImpl, resolveKeyFor(issuer, stranger));
+
+    expect(await isRevoked(issuer.did, credentialCID)).toBe(true);
+    expect(requested).toEqual([
+      `${A}/revocations/v1/credential/${credentialCID}?issuer=${encodeURIComponent(issuer.did)}`,
+    ]);
   });
 
   it('consults ALL relays — a negative first answer does not short-circuit', async () => {

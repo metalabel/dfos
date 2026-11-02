@@ -2307,9 +2307,29 @@ func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string
 	return !ok || revokedAt <= asOfUnix, nil
 }
 
+func (s *SQLiteStore) GetRevocation(issuerDID string, credentialCID string) (*StoredRevocation, error) {
+	// the (issuer_did, credential_cid) unique index makes this at most one row
+	var rev StoredRevocation
+	var createdAt sql.NullString
+	err := s.readerDB().QueryRow(
+		"SELECT cid, issuer_did, credential_cid, jws_token, created_at FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
+		issuerDID, credentialCID,
+	).Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rev.CreatedAt = storedRevocationCreatedAt(createdAt.String, rev.JWSToken)
+	return &rev, nil
+}
+
 func (s *SQLiteStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
 	// deterministic across stores/twins: smallest issuerDID wins on a
-	// (theoretical) multi-issuer collision
+	// multi-issuer collision. Any DID can sign a revocation naming any CID, so
+	// this is one revocation for the CID, not necessarily the issuer's — the
+	// issuer-scoped answer is GetRevocation
 	var rev StoredRevocation
 	var createdAt sql.NullString
 	err := s.readerDB().QueryRow(

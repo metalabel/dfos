@@ -535,9 +535,18 @@ export class MemoryRelayStore
     return revokedAt === null || revokedAt <= asOfUnix;
   }
 
+  async getRevocation(
+    issuerDID: string,
+    credentialCID: string,
+  ): Promise<StoredRevocation | undefined> {
+    return this.revocations.get(`${issuerDID}::${credentialCID}`);
+  }
+
   async getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined> {
     // deterministic across stores/twins: smallest issuerDID wins on a
-    // (theoretical) multi-issuer collision
+    // multi-issuer collision. Any DID can sign a revocation naming any CID, so
+    // this is one revocation for the CID, not necessarily the issuer's — the
+    // issuer-scoped answer is getRevocation
     let found: StoredRevocation | undefined;
     for (const rev of this.revocations.values()) {
       if (rev.credentialCID !== credentialCID) continue;
