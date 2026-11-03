@@ -1780,6 +1780,14 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
         if (!dead) setState({ kind: chainFailureKind(claim) });
         return;
       }
+      if (dead) return;
+      // an answer the client would not vouch for (a cached chain whose
+      // credential authority could not be re-checked) is never a verified profile
+      if (!res.trust.ok)
+        return setState({
+          kind: 'chain-unverified',
+          reason: 'credential authority on this chain could not be checked',
+        });
       const blob = await fetchBlobRaw(anchor, relays);
       if (dead) return;
       // `fetchBlobRaw` never rejects; it reports an absent body as no bytes. An
