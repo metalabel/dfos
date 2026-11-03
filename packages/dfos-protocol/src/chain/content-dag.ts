@@ -46,9 +46,10 @@ import { parseProtocolTimestampUnix } from './schemas';
 export const MAX_FUTURE_TIMESTAMP_MS = 24 * 60 * 60 * 1000;
 
 const beyondFutureBound = (createdAt: string, nowMs: number): boolean => {
-  const at = parseProtocolTimestampUnix(createdAt);
-  // an off-grammar timestamp is the schema's to reject
-  return at !== null && at * 1000 > nowMs + MAX_FUTURE_TIMESTAMP_MS;
+  // an off-grammar timestamp is the schema's to reject; past the grammar check
+  // the full millisecond instant is compared, as relay ingest does
+  if (parseProtocolTimestampUnix(createdAt) === null) return false;
+  return Date.parse(createdAt) > nowMs + MAX_FUTURE_TIMESTAMP_MS;
 };
 
 const FUTURE_BOUND_REASON = 'createdAt is more than 24 hours in the future';

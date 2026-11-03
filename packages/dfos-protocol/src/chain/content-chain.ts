@@ -27,7 +27,8 @@ import {
 } from '../credentials';
 import { MAX_CREDENTIAL_SIZE } from '../credentials/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
-import { carryDependencyMissing } from '../dependency';
+import { carryDependencyMissing, isDependencyMissing } from '../dependency';
+import { compareLinear } from '../fold/linearize';
 import { deriveContentId } from './derivation';
 import { ContentOperation, MAX_OPERATION_SIZE } from './schemas';
 import type { Signer } from './schemas';
@@ -592,39 +593,64 @@ export const recheckContentAuthorization = async (input: {
   resolveIdentity: (did: string, basis?: string) => Promise<ResolvedIdentity | undefined>;
   isRevoked?: RevocationChecker;
 }): Promise<void> => {
-  for (const [idx, jwsToken] of input.log.entries()) {
-    const decoded = decodeJwsUnsafe(jwsToken);
-    if (!decoded) throw new Error(`log[${idx}]: failed to decode JWS`);
-    const result = ContentOperation.safeParse(decoded.payload);
-    if (!result.success) {
-      const messages = result.error.issues.map((e) => e.message).join(', ');
-      throw new Error(`log[${idx}]: ${messages}`);
-    }
-    const op = result.data;
-    if (op.type === 'create' || op.did === input.creatorDID) continue;
-    const authorization = (op as { authorization?: string }).authorization;
-    if (!authorization) {
-      throw new Error(
-        `log[${idx}]: signer ${op.did} is not the chain creator — authorization credential required`,
-      );
-    }
+  // Parent-first and independent of input order: `createdAt` strictly grows
+  // along every lineage, CID breaks ties between unrelated ops.
+  const ops = input.log
+    .map((jwsToken) => {
+      const decoded = decodeJwsUnsafe(jwsToken);
+      const payload = (decoded?.payload ?? {}) as Record<string, unknown>;
+      const cid = typeof decoded?.header.cid === 'string' ? decoded.header.cid : '';
+      const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
+      return { decoded, cid, createdAt };
+    })
+    .sort(compareLinear);
+
+  // EVERY op is asked, then a verdict wins over a miss: an op whose authority
+  // is provably gone settles the answer whatever another op's lookup did.
+  let verdict: Error | undefined;
+  let miss: Error | undefined;
+  for (const [idx, { decoded }] of ops.entries()) {
+    let failure: Error | undefined;
     try {
-      await verifyOperationAuthorization({
-        authorization,
-        operationDID: op.did,
-        creatorDID: input.creatorDID,
-        contentId: input.contentId,
-        createdAt: op.createdAt,
-        resolveIdentity: input.resolveIdentity,
-        ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
-      });
+      if (!decoded) throw new Error(`log[${idx}]: failed to decode JWS`);
+      const result = ContentOperation.safeParse(decoded.payload);
+      if (!result.success) {
+        const messages = result.error.issues.map((e) => e.message).join(', ');
+        throw new Error(`log[${idx}]: ${messages}`);
+      }
+      const op = result.data;
+      if (op.type === 'create' || op.did === input.creatorDID) continue;
+      const authorization = (op as { authorization?: string }).authorization;
+      if (!authorization) {
+        throw new Error(
+          `log[${idx}]: signer ${op.did} is not the chain creator — authorization credential required`,
+        );
+      }
+      try {
+        await verifyOperationAuthorization({
+          authorization,
+          operationDID: op.did,
+          creatorDID: input.creatorDID,
+          contentId: input.contentId,
+          createdAt: op.createdAt,
+          resolveIdentity: input.resolveIdentity,
+          ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
+        });
+      } catch (err) {
+        // See the same wrap in verifyContentChain.
+        const message = err instanceof Error ? err.message : 'unknown error';
+        throw carryDependencyMissing(
+          err,
+          new Error(`log[${idx}]: authorization verification failed: ${message}`),
+        );
+      }
     } catch (err) {
-      // See the same wrap in verifyContentChain.
-      const message = err instanceof Error ? err.message : 'unknown error';
-      throw carryDependencyMissing(
-        err,
-        new Error(`log[${idx}]: authorization verification failed: ${message}`),
-      );
+      failure = err instanceof Error ? err : new Error(String(err));
     }
+    if (!failure) continue;
+    if (isDependencyMissing(failure)) miss ??= failure;
+    else verdict ??= failure;
   }
+  if (verdict) throw verdict;
+  if (miss) throw miss;
 };

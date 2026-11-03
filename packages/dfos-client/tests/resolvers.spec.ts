@@ -919,9 +919,19 @@ describe('content union — authority first, prunes, malformed tokens, offline',
     };
     const clientFor = (store = memoryStore()) =>
       createClient({ relays: [RELAY], store, peerClient: fakePeerClient(data), isRevoked });
-    const revokeBeforeD = () =>
-      revokedAt.set(cidOf(credential), Math.floor(new Date(dAt).getTime() / 1000) - 60);
-    return { creator, content, D, W, data, clientFor, revokeBeforeD };
+    const dAtUnix = Math.floor(new Date(dAt).getTime() / 1000);
+    const revokeBeforeD = () => revokedAt.set(cidOf(credential), dAtUnix - 60);
+    return {
+      creator,
+      content,
+      D,
+      W,
+      data,
+      clientFor,
+      revokeBeforeD,
+      credentialCID: cidOf(credential),
+      dAtUnix,
+    };
   };
 
   it('a revoked cached parent with an unresolvable new descendant: warm equals cold', async () => {
@@ -1000,5 +1010,106 @@ describe('content union — authority first, prunes, malformed tokens, offline',
     const res = await client.content(c.content.contentId);
     expect(res.provenance.fromCache).toBe(true);
     expect(res.value.chain.headCID).toBe(c.D.operationCID);
+    // authority could not be re-asked: never vouched for
+    expect(res.trust.ok).toBe(false);
+    expect(res.trust.unverifiable).toEqual(expect.arrayContaining(['tip', 'revocation']));
+  });
+
+  it('a prune confirmed offline is persisted: a later outage of the status route cannot resurrect it', async () => {
+    const c = await setup();
+    let statusDown = false;
+    const revoked = new Map<string, number>();
+    const store = memoryStore();
+    const client = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient(c.data),
+      isRevoked: async (_iss, credentialCID, asOfUnix) => {
+        if (statusDown) throw new Error('revocation status unavailable: no relay answered');
+        const at = revoked.get(credentialCID);
+        return at !== undefined && (asOfUnix === undefined || at <= asOfUnix);
+      },
+    });
+    await client.content(c.content.contentId);
+    // revoked before D, while every relay is unreachable for the content log
+    revoked.set(c.credentialCID, c.dAtUnix - 60);
+    delete c.data[RELAY]!.contents;
+    const pruned = await client.content(c.content.contentId);
+    expect(pruned.value.chain.headCID).toBe(c.content.genesisCID);
+
+    statusDown = true;
+    const later = await client.content(c.content.contentId);
+    expect(later.value.chain.headCID).toBe(c.content.genesisCID);
+    const log = await client.log('content', c.content.contentId);
+    expect(log.value.map((op) => op.cid)).toEqual([c.content.genesisCID]);
+  });
+
+  it('a revoked cached parent with an unobtainable cached child, served child-first: warm equals cold', async () => {
+    const c = await setup();
+    const second = await buildIdentity();
+    const credential2 = await createDFOSCredential({
+      issuerDID: c.creator.did,
+      audienceDID: second.did,
+      att: [{ resource: `chain:${c.content.contentId}`, action: 'write' }],
+      exp: Math.floor(Date.now() / 1000) + 4 * 3600,
+      iat: Math.floor(Date.now() / 1000) - 4 * 3600,
+      signer: c.creator.k.signer,
+      keyId: c.creator.k.keyId,
+    });
+    const X = await signUpdate({
+      signer: second,
+      previousOperationCID: c.D.operationCID,
+      createdAt: ts(-2),
+      authorization: credential2,
+    });
+    c.data[RELAY]!.identities![second.did] = second.log;
+    c.data[RELAY]!.contents![c.content.contentId] = [c.content.log[0]!, X.jwsToken, c.D.jwsToken];
+    let after = false;
+    const isRevoked: RevChecker = async (_iss, credentialCID, asOfUnix) => {
+      if (!after) return false;
+      if (credentialCID === cidOf(credential2)) throw new Error('revocation status unavailable');
+      return credentialCID === c.credentialCID && (asOfUnix ?? 0) >= c.dAtUnix - 60;
+    };
+    const clientFor = (store = memoryStore()) =>
+      createClient({ relays: [RELAY], store, peerClient: fakePeerClient(c.data), isRevoked });
+    const client = clientFor();
+    expect((await client.content(c.content.contentId)).value.chain.headCID).toBe(X.operationCID);
+    after = true;
+    const warm = await client.content(c.content.contentId);
+    const cold = await clientFor().content(c.content.contentId);
+    expect(warm.value.chain).toEqual(cold.value.chain);
+    expect(warm.value.chain.headCID).toBe(c.content.genesisCID);
+    expect(warm.value.rejected.map((r) => r.cid).sort()).toEqual(
+      cold.value.rejected.map((r) => r.cid).sort(),
+    );
+  });
+
+  it('a relay behind the cache fails over to one that is ahead', async () => {
+    const c = await setup();
+    const OTHER = 'https://relay-b.test';
+    const B = await signUpdate({
+      signer: c.creator,
+      previousOperationCID: c.D.operationCID,
+      createdAt: ts(-2),
+    });
+    const store = memoryStore();
+    const peer = (byUrl: Record<string, RelayData>) =>
+      createClient({
+        relays: [RELAY, OTHER],
+        store,
+        peerClient: fakePeerClient(byUrl),
+        isRevoked: async () => false,
+      });
+    const ids = c.data[RELAY]!.identities!;
+    await peer({ [RELAY]: c.data[RELAY]! }).content(c.content.contentId); // caches [G, D]
+    const res = await peer({
+      [RELAY]: { identities: ids, contents: { [c.content.contentId]: [c.content.log[0]!] } },
+      [OTHER]: {
+        identities: ids,
+        contents: { [c.content.contentId]: [c.content.log[0]!, c.D.jwsToken, B.jwsToken] },
+      },
+    }).content(c.content.contentId);
+    expect(res.provenance.answeredBy).toBe(OTHER);
+    expect(res.value.chain.headCID).toBe(B.operationCID);
   });
 });

@@ -279,6 +279,11 @@ export interface ContentResolution {
   headLineage: string[];
   /** Served operations that failed verification, each dropped with its subtree. */
   rejected: ContentDagRejection[];
+  /**
+   * Set on a cache-only answer whose credential authority could not be
+   * re-asked (a revocation status or issuer lookup failed). Never vouched for.
+   */
+  authorityUnchecked?: true;
   provenance: Provenance;
   /** True when cache is the only answer or a full relay log exactly matches it. */
   tipUnverified: boolean;
@@ -671,11 +676,28 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         }
       }
       for (const [cid, jws] of served) if (!pinned.has(cid)) unseen.push(jws);
+      // BEHIND: a strict subset of the pinned set can add nothing. Fail over
+      // like a transport miss so a later relay that is ahead gets asked; an
+      // answer missing pinned ops but carrying anything unseen is not behind.
+      if (cached && unseen.length === 0 && served.size < pinned.size) {
+        throw new StaleAnswerError(`content log is behind the verified cache: ${contentId}`);
+      }
       const union = [...(cached?.log ?? []), ...unseen];
       if (union.length === 0) throw new Error(`content not found: ${contentId}`);
       const known = cached && (await cachedAuthorityHolds(cached)) ? cached.nodes : undefined;
       return candidateFrom(await verifyContentLog(contentId, union, known), union);
     };
+
+    const persist = (c: ContentCandidate): Promise<void> =>
+      deps.store.set(key, {
+        log: c.log,
+        state: c.state,
+        headCID: c.headCID,
+        lastCreatedAt: c.lastCreatedAt,
+        headLineage: c.headLineage,
+        nodes: c.nodes,
+        rejected: c.rejected,
+      } satisfies CachedContentChain);
 
     const fetched = await fanOutLog(
       contentPager(deps.peerClient, contentId),
@@ -692,19 +714,27 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         provenance: { ...fetched.provenance, fromCache: true },
         tipUnverified: true,
       };
-      // never vouch for withdrawn authority, even offline: a verdict failure
-      // folds the cached log cold; a miss (likely offline) keeps the cache
-      let holds = true;
+      // NO USABLE ANSWER, ONE RULE: the cached survivors' authority is re-asked
+      // anyway. A verdict prunes the cache cold and persists it (that only ever
+      // removes ops, so a later outage cannot resurrect them); a miss returns
+      // the cache marked unchecked; a pass returns the cache.
+      let holds: boolean;
       try {
         holds = await cachedAuthorityHolds(cached);
       } catch {
-        // a dependency miss: nothing was decided, the cached answer stands
+        return {
+          state: cached.state,
+          log: cached.log,
+          headLineage: cached.headLineage ?? cached.log,
+          rejected: cached.rejected ?? [],
+          authorityUnchecked: true,
+          ...offline,
+        };
       }
       if (!holds) {
-        const { state, log, headLineage, rejected } = candidateFrom(
-          await verifyContentLog(contentId, cached.log),
-          cached.log,
-        );
+        const pruned = candidateFrom(await verifyContentLog(contentId, cached.log), cached.log);
+        await persist(pruned);
+        const { state, log, headLineage, rejected } = pruned;
         return { state, log, headLineage, rejected, ...offline };
       }
       return {
@@ -726,17 +756,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         candidate.rejected.map((r) => r.cid),
         (cached.rejected ?? []).map((r) => r.cid),
       );
-    if (fetched.provenance.agreed && changed) {
-      await deps.store.set(key, {
-        log: candidate.log,
-        state: candidate.state,
-        headCID: candidate.headCID,
-        lastCreatedAt: candidate.lastCreatedAt,
-        headLineage: candidate.headLineage,
-        nodes: candidate.nodes,
-        rejected: candidate.rejected,
-      } satisfies CachedContentChain);
-    }
+    if (fetched.provenance.agreed && changed) await persist(candidate);
     const known = new Set(cids(cached?.log ?? []));
     return {
       state: candidate.state,

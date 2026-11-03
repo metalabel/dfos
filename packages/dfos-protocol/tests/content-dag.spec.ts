@@ -366,6 +366,23 @@ describe('verifyContentDag — rejection', () => {
     expect(MAX_FUTURE_TIMESTAMP_MS).toBe(24 * 60 * 60 * 1000);
   });
 
+  it('the future bound compares milliseconds, not floored seconds', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, '2026-11-01T00:00:00.000Z');
+    const at = (createdAt: string, title: string) =>
+      updateOp({ signer: creator, previousOperationCID: g.operationCID, createdAt, title });
+    const over = await at('2026-11-03T00:00:00.999Z', 'over');
+    const edge = await at('2026-11-03T00:00:00.000Z', 'edge');
+    const dag = await verifyContentDag({
+      log: [g.jwsToken, over.jwsToken, edge.jwsToken],
+      resolveKey: w.resolveKey,
+      now: () => Date.parse('2026-11-02T00:00:00.000Z'),
+    });
+    expect(dag.rejected.map((r) => r.cid)).toEqual([over.operationCID]);
+    expect(dag.head.headCID).toBe(edge.operationCID);
+  });
+
   it('a genesis dated more than 24 hours ahead is a hard error', async () => {
     const creator = makeIdentity();
     const w = world(creator);
@@ -673,6 +690,119 @@ describe('recheckContentAuthorization', () => {
         isRevoked: asOfChecker(new Map([[c.leafKey, unix(-10)]])),
       }),
     ).rejects.toThrow(/revoked/);
+  });
+
+  /** G → D1 (delegate1) → D2 (delegate2, child of D1), each under its own
+   *  creator-issued credential. */
+  const twoDelegated = async () => {
+    const creator = makeIdentity();
+    const d1 = makeIdentity();
+    const d2 = makeIdentity();
+    const w = world(creator, d1, d2);
+    const g = await genesisOp(creator, ts(0));
+    const { contentId } = await verifyContentChain({ log: [g.jwsToken], resolveKey: w.resolveKey });
+    const credFor = (aud: Identity) =>
+      createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: aud.did,
+        att: [{ resource: `chain:${contentId}`, action: 'write' }],
+        exp: unix(240),
+        signer: creator.signer,
+        keyId: creator.keyId,
+        iat: unix(-240),
+      });
+    const c1 = await credFor(d1);
+    const c2 = await credFor(d2);
+    const D1 = await updateOp({
+      signer: d1,
+      previousOperationCID: g.operationCID,
+      createdAt: ts(1),
+      title: 'd1',
+      authorization: c1,
+    });
+    const D2 = await updateOp({
+      signer: d2,
+      previousOperationCID: D1.operationCID,
+      createdAt: ts(2),
+      title: 'd2',
+      authorization: c2,
+    });
+    const cidOfCred = (jws: string) => decodeDFOSCredentialUnsafe(jws)!.header.cid;
+    return { creator, w, g, D1, D2, contentId, c1CID: cidOfCred(c1), c2CID: cidOfCred(c2) };
+  };
+
+  it('a verdict on any delegated op wins over a miss on another, whatever the log order', async () => {
+    const c = await twoDelegated();
+    // D1's credential revoked before D1 (verdict); D2's status unobtainable (miss)
+    const isRevoked: RevocationChecker = async (_iss, credentialCID) => {
+      if (credentialCID === c.c2CID) throw markDependencyMissing(new Error('status unavailable'));
+      return credentialCID === c.c1CID;
+    };
+    const errors: unknown[] = [];
+    for (const log of [
+      [c.g.jwsToken, c.D1.jwsToken, c.D2.jwsToken],
+      [c.g.jwsToken, c.D2.jwsToken, c.D1.jwsToken],
+      [c.D2.jwsToken, c.D1.jwsToken, c.g.jwsToken],
+    ]) {
+      errors.push(
+        await recheckContentAuthorization({
+          log,
+          creatorDID: c.creator.did,
+          contentId: c.contentId,
+          resolveIdentity: c.w.resolveIdentity,
+          isRevoked,
+        }).catch((e: unknown) => e),
+      );
+    }
+    for (const err of errors) {
+      expect(err).toBeInstanceOf(Error);
+      expect(isDependencyMissing(err)).toBe(false);
+      expect((err as Error).message).toMatch(/revoked/);
+      expect((err as Error).message).toBe((errors[0] as Error).message);
+    }
+  });
+
+  it('only misses, in any order, throw the miss marked', async () => {
+    const c = await twoDelegated();
+    const isRevoked: RevocationChecker = async (_iss, credentialCID) => {
+      if (credentialCID === c.c1CID) throw markDependencyMissing(new Error('status unavailable'));
+      return false;
+    };
+    for (const log of [
+      [c.g.jwsToken, c.D1.jwsToken, c.D2.jwsToken],
+      [c.g.jwsToken, c.D2.jwsToken, c.D1.jwsToken],
+    ]) {
+      const err = await recheckContentAuthorization({
+        log,
+        creatorDID: c.creator.did,
+        contentId: c.contentId,
+        resolveIdentity: c.w.resolveIdentity,
+        isRevoked,
+      }).catch((e: unknown) => e);
+      expect(isDependencyMissing(err)).toBe(true);
+    }
+  });
+
+  it('the DAG never evaluates a child before its parent: a parent verdict drops an unobtainable child', async () => {
+    const c = await twoDelegated();
+    const asked: string[] = [];
+    const isRevoked: RevocationChecker = async (_iss, credentialCID) => {
+      asked.push(credentialCID);
+      if (credentialCID === c.c2CID) throw markDependencyMissing(new Error('status unavailable'));
+      return credentialCID === c.c1CID;
+    };
+    const dag = await verifyContentDag({
+      log: [c.D2.jwsToken, c.D1.jwsToken, c.g.jwsToken],
+      resolveKey: c.w.resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity: c.w.resolveIdentity,
+      isRevoked,
+    });
+    expect(dag.head.headCID).toBe(c.g.operationCID);
+    expect(dag.rejected.map((r) => r.cid).sort()).toEqual(
+      [c.D1.operationCID, c.D2.operationCID].sort(),
+    );
+    expect(asked).not.toContain(c.c2CID);
   });
 
   it('creator-signed ops need no credential', async () => {

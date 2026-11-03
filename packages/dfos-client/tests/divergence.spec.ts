@@ -310,11 +310,11 @@ describe('content pin — monotone union', () => {
     expect(res.trust.unverifiable).toEqual(['tip']);
   });
 
-  it('a subset of the cached set resolves from the union: nothing new, never rolled back', async () => {
+  it('a strict subset of the cached set is a relay behind: answered from the cache, never rolled back', async () => {
     const { content, sibling, client, serve } = await setup();
     serve([...content.log]);
     const res = await client.content(content.contentId);
-    expect(res.provenance.fromCache).toBe(false);
+    expect(res.provenance.fromCache).toBe(true);
     expect(res.value.chain.headCID).toBe(sibling.operationCID);
     expect(res.trust.unverifiable).toEqual(['tip']);
   });
