@@ -199,7 +199,9 @@ const remember = (did: string, profile: ProfileVerdict): void => {
  *  it as it stands. */
 export interface ProfileSource {
   identity(did: string): Promise<{ value: { services: { type: string; [k: string]: unknown }[] } }>;
-  document(anchor: string): Promise<{ value: { decoded?: unknown; integrity: boolean } }>;
+  document(
+    anchor: string,
+  ): Promise<{ value: { decoded?: unknown; integrity: boolean }; trust: { ok: boolean } }>;
 }
 
 /** The client's message for "every relay was asked for these bytes and none
@@ -258,7 +260,8 @@ export const resolveProfileVerdict = async (
     // beat 2 — an ANONYMOUS document fetch; `integrity` is the re-hash to the
     // committed documentCID. Gated bytes throw (no relay serves them) → none.
     const doc = await client.document(anchor);
-    return publicProfileOf(did, doc.value.decoded, doc.value.integrity);
+    // `trust.ok` folds integrity AND the client vouching for the chain
+    return publicProfileOf(did, doc.value.decoded, doc.trust.ok);
   } catch (err) {
     return documentFailureVerdict(err);
   }

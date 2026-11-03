@@ -26,8 +26,8 @@ const puts: VerifyVerdict[] = [];
 
 /** The fake dfos-client the fold runs against — swapped per test. */
 let client: {
-  identity: (id: string) => Promise<{ value: { isDeleted: boolean } }>;
-  log: (kind: string, id: string) => Promise<{ value: [] }>;
+  identity: (id: string) => Promise<{ value: { isDeleted: boolean }; trust: { ok: boolean } }>;
+  log: (kind: string, id: string) => Promise<{ value: []; trust: { ok: boolean } }>;
 };
 
 vi.mock('../src/lib/client', () => ({
@@ -80,11 +80,11 @@ describe('a mid-flight relay switch does not re-file the verdict', () => {
       identity: async () => {
         entered();
         await gate;
-        return { value: { isDeleted: false } };
+        return { value: { isDeleted: false }, trust: { ok: true } };
       },
       log: async () => {
         await gate;
-        return { value: [] };
+        return { value: [], trust: { ok: true } };
       },
     };
 

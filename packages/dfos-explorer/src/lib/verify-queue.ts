@@ -153,6 +153,14 @@ export const durableVerdictReusable = async (input: {
 };
 
 /**
+ * The client answered but would not vouch for it (`trust.ok: false`: a cached
+ * answer whose credential authority could not be re-asked). Not a verdict about
+ * the chain, so it takes the retryable `error` path a dependency miss takes —
+ * never verified, never persisted.
+ */
+const UNVOUCHED = 'the client could not vouch for this answer (authority unchecked)';
+
+/**
  * Which failure a throw from the fold is. The order is the order of specificity:
  * a divergence is a typed error the client raises against a prefix this tab
  * pinned; a verification failure is a relay having ANSWERED with a log that did
@@ -267,6 +275,10 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         client.identity(chainId),
         client.log('identity', chainId),
       ]);
+      if (!res.trust.ok || !log.trust.ok) {
+        setRecord(k, { status: 'error', error: UNVOUCHED });
+        return;
+      }
       void jitIndexChain(chainId, 'identity-op', log.value, generation);
       const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
       setRecord(k, { status: 'verified', facts });
@@ -279,6 +291,10 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         client.content(chainId),
         client.log('content', chainId),
       ]);
+      if (!res.trust.ok || !log.trust.ok) {
+        setRecord(k, { status: 'error', error: UNVOUCHED });
+        return;
+      }
       void jitIndexChain(chainId, 'content-op', log.value, generation);
       const facts: VerifiedFacts = {
         isDeleted: res.value.chain.isDeleted,
@@ -358,6 +374,10 @@ export const enqueueVerify = (kind: VerifyKind, chainId: string, hintOpCount?: n
   queue.push({ kind, chainId, ...(hintOpCount !== undefined ? { hintOpCount } : {}) });
   pump();
 };
+
+/** A chain's current verification record, outside a component. */
+export const peekVerifyRecord = (kind: VerifyKind, chainId: string): VerifyRecord | undefined =>
+  records.get(key(kind, chainId));
 
 /** Read a row's verification record, re-rendering when it changes. Returns the
  *  attributed floor until the row has been enqueued. */
