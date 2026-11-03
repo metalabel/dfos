@@ -137,7 +137,14 @@ export const createClient = (config: ClientConfig): Client => {
   const isRevoked: RevChecker = (issuerDID, credentialCID, asOfUnix) =>
     isRevokedImpl(issuerDID, credentialCID, asOfUnix);
 
-  const resolvers: Resolvers = createResolvers({ relays, quorum, store, peerClient, isRevoked });
+  const resolvers: Resolvers = createResolvers({
+    relays,
+    quorum,
+    store,
+    peerClient,
+    isRevoked,
+    now: nowMs,
+  });
   isRevokedImpl =
     config.isRevoked ??
     createRevocationChecker(relays, fetchImpl, (kid, basis) =>

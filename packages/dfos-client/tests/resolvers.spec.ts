@@ -1,7 +1,9 @@
 import { isDependencyMissing } from '@metalabel/dfos-protocol';
 import {
+  decodeMultikey,
   signContentOperation,
   signIdentityOperation,
+  verifyContentDag,
   type ContentOperation,
 } from '@metalabel/dfos-protocol/chain';
 import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
@@ -744,5 +746,93 @@ describe('content DAG — membership, future bound, branch recheck, quorum', () 
     const res = await client.content(content.contentId);
     expect(res.provenance.agreed).toBe(true);
     expect(res.value.chain.headCID).toBe(b.operationCID);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// round 3: the cached rejected set, and the client's clock
+// -----------------------------------------------------------------------------
+
+describe('content DAG — cached rejected set identity, client clock', () => {
+  const RELAY = 'https://relay.test';
+
+  it('a rejected op replaced by another rejected op is recorded, so a later subset is stale', async () => {
+    const creator = await buildIdentity();
+    const stranger = await buildIdentity();
+    const content = await buildContent(creator, { update: true });
+    const reject = (createdAt: string, documentCID: string) =>
+      signUpdate({
+        signer: stranger,
+        previousOperationCID: content.genesisCID,
+        createdAt,
+        documentCID,
+      });
+    const A = await reject(ts(-2), DOC_B);
+    const B = await reject(ts(-1), DOC_B.replace('forked', 'second'));
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: creator.log, [stranger.did]: stranger.log },
+        contents: { [content.contentId]: [...content.log, A.jwsToken] },
+      },
+    };
+    const client = createClient({
+      relays: [RELAY],
+      store: memoryStore(),
+      peerClient: fakePeerClient(data),
+    });
+    expect((await client.content(content.contentId)).value.rejected.map((r) => r.cid)).toEqual([
+      A.operationCID,
+    ]);
+    data[RELAY]!.contents![content.contentId] = [...content.log, B.jwsToken];
+    expect((await client.content(content.contentId)).value.rejected.map((r) => r.cid)).toEqual([
+      B.operationCID,
+    ]);
+    // u missing, B already seen (rejected): a relay behind, not a contradiction
+    data[RELAY]!.contents![content.contentId] = [content.log[0]!, B.jwsToken];
+    const third = await client.content(content.contentId).then(
+      (res) => res,
+      (e: unknown) => e,
+    );
+    expect(divergenceErrorFrom(third)).toBeUndefined();
+    expect(third).not.toBeInstanceOf(Error);
+    expect((third as Resolved<ResolvedContent>).provenance.fromCache).toBe(true);
+    expect((third as Resolved<ResolvedContent>).value.chain.headCID).toBe(content.headCID);
+  });
+
+  it('the future bound runs on the client clock: a 2040 clock accepts a genesis dated just before 2040', async () => {
+    const creator = await buildIdentity();
+    const g = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'create',
+        did: creator.did,
+        documentCID: DOC_B,
+        baseDocumentCID: null,
+        createdAt: '2039-12-31T12:00:00.000Z',
+      },
+      signer: creator.k.signer,
+      kid: creator.kid,
+    });
+    const genesisOnly = await verifyContentDag({
+      log: [g.jwsToken],
+      resolveKey: async () => decodeMultikey(creator.k.key.publicKeyMultibase).keyBytes,
+      now: () => Date.parse('2040-01-01T00:00:00.000Z'),
+    });
+    const contentId = genesisOnly.head.contentId;
+    const clientAt = (now?: () => number) =>
+      createClient({
+        relays: [RELAY],
+        ...(now ? { now } : {}),
+        peerClient: fakePeerClient({
+          [RELAY]: {
+            identities: { [creator.did]: creator.log },
+            contents: { [contentId]: [g.jwsToken] },
+          },
+        }),
+      });
+    const res = await clientAt(() => Date.parse('2040-01-01T00:00:00.000Z')).content(contentId);
+    expect(res.value.chain.headCID).toBe(g.operationCID);
+    // the host clock (2026) still refuses it
+    await expect(clientAt().content(contentId)).rejects.toThrow(/24 hours in the future/);
   });
 });

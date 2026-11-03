@@ -2,9 +2,10 @@
 
   QUORUM — distinct response digests
 
-  `quorum: N` means N relays must return the SAME log (by content digest). The
-  digest is derived from the ordered operation CIDs; agreement is provenance
-  data, never a thrown error. On disagreement the best-supported group is still
+  `quorum: N` means N relays must return the SAME log (by content digest). An
+  identity log digests its full tokens in order (`digestOps`); a content log,
+  which enumerates branches in no fixed order, digests the same tokens as a set
+  (`digestOpSet`). Agreement is provenance data, never a thrown error. On disagreement the best-supported group is still
   surfaced with `agreed: false`.
 
 */

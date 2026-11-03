@@ -375,6 +375,55 @@ describe('verifyContentDag — rejection', () => {
     );
   });
 
+  it('a create carrying an extra previousOperationCID is still the genesis, as verifyContentChain reads it', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const operation = {
+      version: 1,
+      type: 'create',
+      did: creator.did,
+      documentCID: await docCID('genesis'),
+      baseDocumentCID: null,
+      createdAt: ts(0),
+      previousOperationCID: 'bafy-an-unknown-extension-member',
+    } as unknown as ContentOperation;
+    const g = await signContentOperation({ operation, signer: creator.signer, kid: creator.kid });
+    const u = await updateOp({
+      signer: creator,
+      previousOperationCID: g.operationCID,
+      createdAt: ts(1),
+      title: 'u',
+    });
+    const log = [g.jwsToken, u.jwsToken];
+    const linear = await verifyContentChain({ log, resolveKey: w.resolveKey });
+    const dag = await verifyContentDag({ log, resolveKey: w.resolveKey });
+    expect(dag.head).toEqual(linear);
+    expect(dag.headLineage).toEqual(log);
+    expect(dag.rejected).toEqual([]);
+  });
+
+  it('a non-create with no previousOperationCID is not a genesis', async () => {
+    const creator = makeIdentity();
+    const w = world(creator);
+    const g = await genesisOp(creator, ts(0));
+    const parentless = await createJws({
+      header: {
+        alg: 'EdDSA',
+        typ: 'did:dfos:content-op',
+        kid: creator.kid,
+        cid: 'bafy-parentless',
+      },
+      payload: { version: 1, type: 'update', did: creator.did, createdAt: ts(1) },
+      sign: creator.signer,
+    });
+    const dag = await verifyContentDag({ log: [g.jwsToken, parentless], resolveKey: w.resolveKey });
+    expect(dag.head.headCID).toBe(g.operationCID);
+    expect(dag.rejected.map((r) => r.cid)).toEqual(['bafy-parentless']);
+    await expect(verifyContentDag({ log: [parentless], resolveKey: w.resolveKey })).rejects.toThrow(
+      /no genesis/,
+    );
+  });
+
   it('two genesis operations are a hard error', async () => {
     const creator = makeIdentity();
     const w = world(creator);

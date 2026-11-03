@@ -174,6 +174,13 @@ const opMeta = (jws: string): { cid: string; createdAt: string } => {
   return { cid, createdAt };
 };
 
+/** Whether two CID lists hold the same set. */
+const sameCIDs = (a: string[], b: string[]): boolean => {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((cid) => right.has(cid));
+};
+
 /** The served operations that verified, in served order, each once. */
 const survivors = (log: string[], dag: VerifiedContentDag): string[] => {
   const seen = new Set<string>();
@@ -251,6 +258,8 @@ export interface ResolverDeps {
   store: Store;
   peerClient: PeerClient;
   isRevoked: RevChecker;
+  /** The client clock (unix ms) for the content future timestamp bound. */
+  now?: () => number;
 }
 
 export interface IdentityResolution {
@@ -551,6 +560,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       resolveIdentity,
       isRevoked: isRevokedForFold,
       ...(known ? { known } : {}),
+      ...(deps.now ? { now: deps.now } : {}),
     });
     // BIND to the requested id: contentId is derived from the genesis op CID
     // inside the verify — reject a relay that serves a different valid chain
@@ -698,12 +708,21 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     }
 
     const candidate = fetched.value!;
+    // compare WHICH ops survived and were rejected, not how many: a rejected op
+    // replaced by another leaves the count alone, and a stale rejected set
+    // makes a later subset answer read as a contradiction
     const changed =
       !cached ||
       cached.nodes === undefined ||
       candidate.recomputed ||
-      candidate.log.length !== cached.log.length ||
-      candidate.rejected.length !== (cached.rejected?.length ?? 0);
+      !sameCIDs(
+        candidate.log.map((jws) => opMeta(jws).cid),
+        cached.log.map((jws) => opMeta(jws).cid),
+      ) ||
+      !sameCIDs(
+        candidate.rejected.map((r) => r.cid),
+        (cached.rejected ?? []).map((r) => r.cid),
+      );
     if (fetched.provenance.agreed && changed) {
       await deps.store.set(key, {
         log: candidate.log,

@@ -93,6 +93,9 @@ export interface VerifiedContentDag {
 interface DecodedOp {
   jws: string;
   cid: string;
+  /** A `create` is the genesis whatever members it carries. */
+  isCreate: boolean;
+  /** The parent; `null` for a create, and for a non-create that names none. */
   previousCID: string | null;
   createdAt: string;
 }
@@ -103,11 +106,14 @@ const decodeOp = (jws: string): DecodedOp | null => {
   const cid = decoded.header.cid;
   if (typeof cid !== 'string' || cid === '') return null;
   const payload = decoded.payload as Record<string, unknown>;
-  const prev = payload['previousOperationCID'];
+  const isCreate = payload['type'] === 'create';
+  // a create's previousOperationCID, if any, is an unknown extension member
+  const prev = isCreate ? undefined : payload['previousOperationCID'];
   const createdAt = payload['createdAt'];
   return {
     jws,
     cid,
+    isCreate,
     previousCID: typeof prev === 'string' ? prev : null,
     createdAt: typeof createdAt === 'string' ? createdAt : '',
   };
@@ -116,7 +122,8 @@ const decodeOp = (jws: string): DecodedOp | null => {
 /**
  * Verify a branch-inclusive content log and select its head.
  *
- * Genesis is the single operation with no `previousOperationCID`. A log with
+ * Genesis is the single `create` operation, whatever other members it carries;
+ * a non-create that names no parent is an orphan. A log with
  * none, or with more than one, is a hard error, and so is a genesis that fails
  * verification: nothing survives it. So is a CID served with two different
  * tokens. Every other failure drops the operation
@@ -165,10 +172,11 @@ export const verifyContentDag = async (input: {
       continue;
     }
     byCID.set(op.cid, op);
-    if (op.previousCID === null) {
+    if (op.isCreate) {
       geneses.push(op);
       continue;
     }
+    if (op.previousCID === null) continue; // never reached: rejected as an orphan
     const siblings = children.get(op.previousCID);
     if (siblings) siblings.push(op);
     else children.set(op.previousCID, [op]);
