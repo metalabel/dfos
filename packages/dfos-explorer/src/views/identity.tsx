@@ -1476,6 +1476,9 @@ type ProfileState =
    *  here. `reason` is the verifier's own message — WHICH check failed is the only
    *  part of this a reader can act on, and the static copy cannot say it. */
   | { kind: 'chain-unverified'; reason?: string }
+  /** AMBER: the chain verified from cache, and its credential authority could
+   *  not be re-checked — no relay answered the revocation or identity lookup */
+  | { kind: 'authority-unchecked' }
   /** bytes: 401/403 — held, and not served to an anonymous read */
   | { kind: 'bytes-gated' }
   /** bytes: 404 or an empty body — the chain is here, its document is not */
@@ -1519,6 +1522,12 @@ const PROFILE_NOTE: Record<
     text: 'chain does not verify',
     detail:
       'A relay answered for the anchored profile chain, and the log it served failed verification in this tab — a signature, a CID, or an authorization did not check out. The question WAS answered; the answer is one this browser refuses. That is a statement about what was served, not about whether the profile exists.',
+  },
+  'authority-unchecked': {
+    state: 'warn',
+    text: 'authority not checked',
+    detail:
+      'The anchored profile chain verified from this tab’s cache, but the credentials behind its delegated writes could not be checked again: no relay answered the lookup. Nothing failed verification. Retry, or add a relay.',
   },
   'bytes-gated': {
     state: 'warn',
@@ -1783,11 +1792,7 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
       if (dead) return;
       // an answer the client would not vouch for (a cached chain whose
       // credential authority could not be re-checked) is never a verified profile
-      if (!res.trust.ok)
-        return setState({
-          kind: 'chain-unverified',
-          reason: 'credential authority on this chain could not be checked',
-        });
+      if (!res.trust.ok) return setState({ kind: 'authority-unchecked' });
       const blob = await fetchBlobRaw(anchor, relays);
       if (dead) return;
       // `fetchBlobRaw` never rejects; it reports an absent body as no bytes. An
