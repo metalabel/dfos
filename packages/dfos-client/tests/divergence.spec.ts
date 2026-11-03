@@ -14,7 +14,12 @@
 
 */
 
-import { signIdentityOperation } from '@metalabel/dfos-protocol/chain';
+import {
+  signContentOperation,
+  signIdentityOperation,
+  type ContentOperation,
+} from '@metalabel/dfos-protocol/chain';
+import { createJws, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
 import { DivergenceError, divergenceErrorFrom } from '../src/resolvers';
@@ -253,5 +258,129 @@ describe('memoryStore delete', () => {
 
     await expect(store.delete!('identity:a')).resolves.toBe(undefined);
     await expect(store.delete!('never-written')).resolves.toBe(undefined);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// a content pin is a monotone UNION, not a prefix
+// -----------------------------------------------------------------------------
+
+describe('content pin — monotone union', () => {
+  /** A creator with a second auth key, a genesis → update chain, and a
+   *  creator-signed sibling of the update. */
+  const setup = async () => {
+    const creator = await buildIdentity({ rotate: true });
+    const content = await buildContent(creator, { update: true });
+    const sibling = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did: creator.did,
+        previousOperationCID: content.genesisCID,
+        documentCID: 'bafkreiforkeddocument0000000000000000000000000000000000000000',
+        baseDocumentCID: null,
+        createdAt: ts(-3),
+      },
+      signer: creator.k.signer,
+      kid: creator.kid,
+    });
+    const data: Record<string, RelayData> = {
+      [RELAY]: {
+        identities: { [creator.did]: [...creator.log] },
+        contents: { [content.contentId]: [...content.log, sibling.jwsToken] },
+      },
+    };
+    const client = createClient({
+      relays: [RELAY],
+      store: memoryStore(),
+      peerClient: fakePeerClient(data),
+    });
+    await client.content(content.contentId); // pins all three operations
+    const serve = (log: string[]) => {
+      data[RELAY]!.contents![content.contentId] = log;
+    };
+    return { creator, content, sibling, client, serve };
+  };
+
+  it('the same set served in another order is the cached set, not a divergence', async () => {
+    const { content, sibling, client, serve } = await setup();
+    serve([content.log[0]!, sibling.jwsToken, content.log[1]!]);
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.trust.unverifiable).toEqual(['tip']);
+  });
+
+  it('a strict subset of the cached set is a relay behind: answered from the cache, never rolled back', async () => {
+    const { content, sibling, client, serve } = await setup();
+    serve([...content.log]);
+    const res = await client.content(content.contentId);
+    expect(res.provenance.fromCache).toBe(true);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.trust.unverifiable).toEqual(['tip']);
+  });
+
+  it('a cached op missing beside an op this client has not seen adds to the union', async () => {
+    const { creator, content, sibling, client, serve } = await setup();
+    const unseen = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'update',
+        did: creator.did,
+        previousOperationCID: sibling.operationCID,
+        documentCID: 'bafkreiunseendocument0000000000000000000000000000000000000000',
+        baseDocumentCID: null,
+        createdAt: ts(-2),
+      },
+      signer: creator.k.signer,
+      kid: creator.kid,
+    });
+    serve([content.log[0]!, sibling.jwsToken, unseen.jwsToken]);
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(unseen.operationCID);
+    const log = await client.log('content', content.contentId);
+    expect(log.value.map((op) => op.cid).sort()).toEqual(
+      [content.genesisCID, content.headCID, sibling.operationCID, unseen.operationCID].sort(),
+    );
+  });
+
+  it('a relay appending one garbage token to a subset answer resolves from the union', async () => {
+    const { content, sibling, client, serve } = await setup();
+    const garbage = await createJws({
+      header: {
+        alg: 'EdDSA',
+        typ: 'did:dfos:content-op',
+        kid: 'did:dfos:nobody#k',
+        cid: 'bafyreigarbage00000000000000000000000000000000000000000000',
+      },
+      payload: { junk: true, previousOperationCID: 'bafy-nowhere', createdAt: ts(-1) },
+      sign: async () => new Uint8Array(64),
+    });
+    serve([content.log[0]!, garbage]);
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.value.rejected.map((r) => r.cid)).toEqual([
+      'bafyreigarbage00000000000000000000000000000000000000000000',
+    ]);
+    expect(res.trust.unverifiable).toEqual(['tip']);
+  });
+
+  it('a cached CID served with different bytes is a divergence', async () => {
+    const { creator, content, sibling, client, serve } = await setup();
+    // the same payload signed under the creator's OTHER auth key: same CID,
+    // different token
+    const decoded = decodeJwsUnsafe(content.log[1]!)!;
+    const resigned = await signContentOperation({
+      operation: decoded.payload as unknown as ContentOperation,
+      signer: creator.rotatedKey!.signer,
+      kid: `${creator.did}#${creator.rotatedKey!.keyId}`,
+    });
+    expect(resigned.operationCID).toBe(content.headCID);
+    expect(resigned.jwsToken).not.toBe(content.log[1]);
+    serve([content.log[0]!, resigned.jwsToken, sibling.jwsToken]);
+    const err = await client.content(content.contentId).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(divergenceErrorFrom(err)?.chainType).toBe('content');
   });
 });

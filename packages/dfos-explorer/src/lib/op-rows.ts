@@ -43,3 +43,39 @@ export interface NumberedOpRow {
  *  first — and `n` is what keeps "op 3" meaning op 3 either way. Pure. */
 export const newestFirst = (rows: readonly OpRow[]): NumberedOpRow[] =>
   rows.map((row, i) => ({ n: i + 1, row })).reverse();
+
+/** Where one op sits on a folded chain. */
+export interface OpPlacement {
+  present: boolean;
+  isHead: boolean;
+  /** 1-based position in the log; 0 when absent. */
+  position: number;
+  /** The op's signed parent; `null` for a create. */
+  previous: string | null;
+  /** Every op in the log that names this op as its parent — several on a fork. */
+  next: string[];
+}
+
+const parentOf = (row: OpRow): string | null => {
+  if (row.type === 'create') return null;
+  const prev = decodeJwsUnsafe(row.jwsToken)?.payload['previousOperationCID'];
+  return typeof prev === 'string' ? prev : null;
+};
+
+/**
+ * Place an op on a folded chain. A content log is branch-inclusive, so neither
+ * the last row nor the adjacent row means anything: the head is the one the
+ * fold SELECTED (`headCid`), previous is the op's signed parent, and next is
+ * every op that names it as theirs. Pure.
+ */
+export const placeOp = (rows: readonly OpRow[], cid: string, headCid: string): OpPlacement => {
+  const index = rows.findIndex((r) => r.cid === cid);
+  const row = rows[index];
+  return {
+    present: index >= 0,
+    isHead: index >= 0 && cid === headCid,
+    position: index + 1,
+    previous: row ? parentOf(row) : null,
+    next: rows.filter((r) => parentOf(r) === cid).map((r) => r.cid),
+  };
+};

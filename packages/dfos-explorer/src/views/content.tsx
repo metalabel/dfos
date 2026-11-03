@@ -304,7 +304,10 @@ export const Content = (props: { id: string }) => {
     return <NotFound kind="content" id={props.id} claim={claim} />;
   }
 
-  const chain = resolved?.value.chain;
+  // an answer the client would not vouch for (`trust.ok: false`: authority
+  // unchecked, offline) is not a verified chain; the page reads as unverified
+  const vouched = resolved?.trust.ok === true;
+  const chain = vouched ? resolved?.value.chain : undefined;
   const claimHead =
     typeof claim?.body?.['headCID'] === 'string' ? (claim.body['headCID'] as string) : '';
   const claimGenesis =
@@ -334,9 +337,11 @@ export const Content = (props: { id: string }) => {
       ? { state: 'bad' as const, text: 'verification failed' }
       : !resolved
         ? { state: 'pending' as const, text: 'verifying locally…' }
-        : headMatch
-          ? { state: 'ok' as const, text: 'verified locally' }
-          : { state: 'warn' as const, text: 'verified · tip drift' };
+        : !vouched
+          ? { state: 'warn' as const, text: 'not verified · authority unchecked' }
+          : headMatch
+            ? { state: 'ok' as const, text: 'verified locally' }
+            : { state: 'warn' as const, text: 'verified · tip drift' };
   // Credits read THIS doc's bytes, so surface them only once the served bytes have
   // been re-hashed to the committed document CID AND the chain verified — the same
   // gate the avatar path uses (see SchemaPanels). Otherwise a relay could dress up
@@ -439,6 +444,13 @@ export const Content = (props: { id: string }) => {
               </Check>
             ) : !resolved ? (
               <Check state="pend">resolving creator identity + folding chain…</Check>
+            ) : !vouched ? (
+              <Check
+                state="warn"
+                note="the cached chain could not have its credential authority re-asked"
+              >
+                not verified here
+              </Check>
             ) : (
               <>
                 <Check state="ok" note={short(creatorDID)}>

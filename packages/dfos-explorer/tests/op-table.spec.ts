@@ -10,7 +10,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { fmtStamp } from '../src/lib/format';
-import { newestFirst, type OpRow } from '../src/lib/op-rows';
+import { newestFirst, placeOp, type OpRow } from '../src/lib/op-rows';
+import { mockJws } from './fixtures/mock-jws';
 
 const op = (cid: string): OpRow => ({
   cid,
@@ -60,5 +61,46 @@ describe('fmtStamp', () => {
     expect(fmtStamp('')).toBe('');
     expect(fmtStamp(null)).toBe('');
     expect(fmtStamp(undefined)).toBe('');
+  });
+});
+
+// A content log is branch-inclusive: the last row is not the head, and the row
+// beside an op is not its parent. Placement reads the selected head and the
+// signed `previousOperationCID`.
+describe('placeOp — a fork is not a line', () => {
+  const row = (cid: string, previousOperationCID: string | null, createdAt: string): OpRow => ({
+    cid,
+    jwsToken: mockJws(
+      { typ: 'did:dfos:content-op', kid: 'did:dfos:x#k', cid },
+      previousOperationCID === null
+        ? { type: 'create', createdAt }
+        : { type: 'update', previousOperationCID, createdAt },
+    ),
+    type: previousOperationCID === null ? 'create' : 'update',
+    createdAt,
+    kid: 'did:dfos:x#k',
+  });
+  // siblings A and B off G, A dated later, B served last
+  const rows = [
+    row('G', null, '2026-01-01T00:00:00.000Z'),
+    row('A', 'G', '2026-01-03T00:00:00.000Z'),
+    row('B', 'G', '2026-01-02T00:00:00.000Z'),
+  ];
+
+  it('the selected head is the head, wherever it sits in the log', () => {
+    expect(placeOp(rows, 'A', 'A')).toMatchObject({ present: true, isHead: true, position: 2 });
+    expect(placeOp(rows, 'B', 'A')).toMatchObject({ present: true, isHead: false });
+  });
+
+  it('previous is the signed parent, next is every child', () => {
+    expect(placeOp(rows, 'B', 'A').previous).toBe('G');
+    expect(placeOp(rows, 'A', 'A').previous).toBe('G');
+    expect(placeOp(rows, 'G', 'A').previous).toBeNull();
+    expect(placeOp(rows, 'G', 'A').next).toEqual(['A', 'B']);
+    expect(placeOp(rows, 'A', 'A').next).toEqual([]);
+  });
+
+  it('an op not in the log is not present', () => {
+    expect(placeOp(rows, 'Z', 'A')).toMatchObject({ present: false, isHead: false, position: 0 });
   });
 });

@@ -56,15 +56,26 @@ export const normalizeRelays = (relays: string[]): string[] => {
  * a forged token carrying an honest CID must land in a DIFFERENT group than the
  * honest token, or verification failover could never reach the honest copy.
  */
-export const digestOps = (ops: LogOp[]): string => {
+const fnv1a = (lines: string[]): string => {
   let h = 0x811c9dc5;
-  const joined = ops.map((o) => `${o.cid}\t${o.jwsToken}`).join('\n');
+  const joined = lines.join('\n');
   for (let i = 0; i < joined.length; i++) {
     h ^= joined.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16).padStart(8, '0');
 };
+
+export const digestOps = (ops: LogOp[]): string => fnv1a(ops.map((o) => `${o.cid}\t${o.jwsToken}`));
+
+/**
+ * `digestOps` over the operations as a MULTISET: the same full tokens in any
+ * order digest alike. A content log enumerates every branch in an order each
+ * relay picks for itself, so two relays holding the same operations agree on
+ * the set, not the sequence. Identity logs are linear and keep `digestOps`.
+ */
+export const digestOpSet = (ops: LogOp[]): string =>
+  fnv1a(ops.map((o) => `${o.cid}\t${o.jwsToken}`).sort());
 
 /**
  * Drain a single relay's full log from zero across pages — ALL-OR-NOTHING.
@@ -145,6 +156,8 @@ export const fanOutLog = async <V>(
   relays: string[],
   quorum: number,
   verifyCandidate: (entries: LogOp[]) => Promise<V>,
+  /** How answers group for quorum. Default `digestOps` (ordered). */
+  digestOf: (ops: LogOp[]) => string = digestOps,
 ): Promise<FanOutResult<V>> => {
   const responses: RelayResponse[] = [];
   const byDigest = new Map<string, { url: string; entries: LogOp[]; count: number }>();
@@ -174,7 +187,7 @@ export const fanOutLog = async <V>(
       responses.push({ url, ok: false, digest: '' });
       continue;
     }
-    const digest = digestOps(entries);
+    const digest = digestOf(entries);
     responses.push({ url, ok: true, digest });
     if (badDigests.has(digest)) continue; // known-bad payload — keep failing over
 

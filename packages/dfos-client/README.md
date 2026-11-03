@@ -59,7 +59,7 @@ createClient({ relays: [...], quorum: 2 }); // require 2 relays to return the sa
 
 ### Divergence — and the way out of it
 
-The cached prefix is a **pin**: once a chain's first N operations have verified here, a later read has to extend them. A relay answering with a _different_ operation at a position the pin covers is contradicting proof rather than carrying news, so the read fails with a `DivergenceError`.
+The cached prefix is a **pin**: once a chain's first N operations have verified here, a later read has to extend them. A relay answering with a _different_ operation at a position the pin covers is contradicting proof rather than carrying news, so the read fails with a `DivergenceError`. For a content chain, which is a DAG served branch-inclusive, the pin is the union of every op this client has verified; a relay answer can add to it but never rewrite it. A relay that holds fewer branches is not a contradiction; the same CID served with different bytes is. A revoked delegate's ops dated before the revocation verify at their own basis and stay in the union; `discardCachedChain` evicts them. An answer served from the cache alone whose revocation status cannot be checked is marked unverifiable on the `revocation` axis and is not `trust.ok`.
 
 ```typescript
 import { divergenceErrorFrom } from '@metalabel/dfos-client';
@@ -101,7 +101,7 @@ const { resolveKey } = resolvers(['https://relay.example']); // zero object grap
 import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 ```
 
-`memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and a cached read never contradicts the relay log it extends. `verifySiwd`, `verifyApiRequest`, and `verifyApiIdentityRequest` accept an online answer and refuse one served from the cache alone, so one long-lived client is safe to share across verifications. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
+`memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and a cached read never contradicts the relay log it extends. The verified prefix pins bytes (signatures, CIDs, links); credential authority on cached delegated content operations is re-asked on every read, because issuer deletion and a revocation dated at or before an operation can withdraw it. `verifySiwd`, `verifyApiRequest`, and `verifyApiIdentityRequest` accept an online answer and refuse one served from the cache alone, so one long-lived client is safe to share across verifications. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
 
 ### `@metalabel/dfos-client/api-auth`
 

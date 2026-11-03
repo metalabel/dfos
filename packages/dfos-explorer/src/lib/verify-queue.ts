@@ -19,7 +19,9 @@
   Verdicts are DURABLE: a successful fold is persisted (db `verify` store, keyed
   by `${kind}:${chainId}`), so a reload trusts a prior fold and shows the row
   green WITHOUT re-folding — re-folding only when the relay's hint opCount exceeds
-  the recorded one (verdictIsFresh). Failures are never persisted (transient).
+  the recorded one (verdictIsFresh), or when a content chain's credential
+  authority no longer holds (durableVerdictReusable). Failures are never
+  persisted (transient).
 
   A FAILURE IS NOT ONE THING, and the row says which it was. A divergence (a
   relay serving a rewritten history) is a typed error with its own panel; a log
@@ -32,7 +34,8 @@
 */
 
 import { divergenceErrorFrom } from '@metalabel/dfos-client';
-import type { LogOp } from '@metalabel/dfos-client';
+import type { Client, LogOp } from '@metalabel/dfos-client';
+import type { ContentDagRejection } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { getClient, isVerificationFailure } from './client';
@@ -61,6 +64,9 @@ export type VerifyStatus =
 export interface VerifiedFacts {
   isDeleted: boolean;
   opCount: number;
+  /** Operations the fold dropped, each with its subtree. Present only on a fold
+   *  made this session; a durable verdict does not record it. */
+  rejected?: ContentDagRejection[];
 }
 
 /** The oldest `createdAt` in a folded log, `''` when none decodes. Recorded on
@@ -108,6 +114,51 @@ const key = (kind: VerifyKind, chainId: string): string => `${kind}:${chainId}`;
  */
 export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): boolean =>
   hintOpCount === undefined || verdictOpCount >= hintOpCount;
+
+/**
+ * A durable verdict is reused only when it is fresh by op count AND, for a
+ * content chain, the client's cached chain still stands behind it: the
+ * credential authority on its surviving ops holds, it dropped nothing, it
+ * holds exactly the ops the verdict counted, and its deletion state is the
+ * verdict's. Op count tracks the immutable half
+ * (new operations); authority is the mutable half — an issuer deleted, or a
+ * revocation dated at or before a delegated op — re-asked through the client's
+ * own recheck, the same one every warm `client.content` read runs. A cached
+ * rejection means a later read dropped an op this verdict may have folded
+ * (a delegated delete it reports as `isDeleted`), which the recheck over the
+ * surviving lineage cannot see. Anything but a clean pass re-folds, and the fold
+ * gives the verdict.
+ */
+export const durableVerdictReusable = async (input: {
+  client: Pick<Client, 'recheckContentAuthority'>;
+  kind: VerifyKind;
+  chainId: string;
+  verdictOpCount: number;
+  verdictIsDeleted: boolean;
+  hintOpCount?: number;
+}): Promise<boolean> => {
+  if (!verdictIsFresh(input.verdictOpCount, input.hintOpCount)) return false;
+  if (input.kind === 'identity') return true;
+  try {
+    const cached = await input.client.recheckContentAuthority(input.chainId);
+    return (
+      cached !== undefined &&
+      cached.rejected.length === 0 &&
+      cached.opCount === input.verdictOpCount &&
+      cached.isDeleted === input.verdictIsDeleted
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The client answered but would not vouch for it (`trust.ok: false`: a cached
+ * answer whose credential authority could not be re-asked). Not a verdict about
+ * the chain, so it takes the retryable `error` path a dependency miss takes —
+ * never verified, never persisted.
+ */
+const UNVOUCHED = 'the client could not vouch for this answer (authority unchecked)';
 
 /**
  * Which failure a throw from the fold is. The order is the order of specificity:
@@ -188,17 +239,6 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
   // repopulates an index the user has since cleared (lib/sync-store.ts).
   const generation = currentDbGeneration();
   try {
-    // durable verdict first: a prior fold recorded at an opCount >= the relay's
-    // current hint is trusted with NO network fold — the ops are already local,
-    // only the verdict was ephemeral. Reload shows the row green instantly.
-    const durable = await loadVerdict(k);
-    if (durable && verdictIsFresh(durable.opCount, hintOpCount)) {
-      setRecord(k, {
-        status: 'verified',
-        facts: { isDeleted: durable.isDeleted, opCount: durable.opCount },
-      });
-      return;
-    }
     const client = getClient();
     // CAPTURED WITH THE CLIENT, NOT AFTER THE AWAIT. `getClient()` is memoized on
     // the relay set, so this pair is the set the fold actually runs against —
@@ -206,6 +246,27 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
     // the NEW set's key for ops the new relays never served, which is the exact
     // inheritance the scoping exists to stop.
     const relaySet = relaySetKey();
+    // durable verdict first: a prior fold recorded at an opCount >= the relay's
+    // current hint, whose content authority still holds, is trusted with NO
+    // log fold — the ops are already local, only the verdict was ephemeral.
+    const durable = await loadVerdict(k);
+    if (
+      durable &&
+      (await durableVerdictReusable({
+        client,
+        kind,
+        chainId,
+        verdictOpCount: durable.opCount,
+        verdictIsDeleted: durable.isDeleted,
+        ...(hintOpCount !== undefined ? { hintOpCount } : {}),
+      }))
+    ) {
+      setRecord(k, {
+        status: 'verified',
+        facts: { isDeleted: durable.isDeleted, opCount: durable.opCount },
+      });
+      return;
+    }
     // client.identity/content re-fold the whole chain in the tab; client.log
     // returns the same verified op log we hand to jitIndexChain (fire-and-forget
     // best-effort local indexing, exactly as the detail views do).
@@ -214,6 +275,10 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         client.identity(chainId),
         client.log('identity', chainId),
       ]);
+      if (!res.trust.ok || !log.trust.ok) {
+        setRecord(k, { status: 'error', error: UNVOUCHED });
+        return;
+      }
       void jitIndexChain(chainId, 'identity-op', log.value, generation);
       const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
       setRecord(k, { status: 'verified', facts });
@@ -226,10 +291,15 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         client.content(chainId),
         client.log('content', chainId),
       ]);
+      if (!res.trust.ok || !log.trust.ok) {
+        setRecord(k, { status: 'error', error: UNVOUCHED });
+        return;
+      }
       void jitIndexChain(chainId, 'content-op', log.value, generation);
       const facts: VerifiedFacts = {
         isDeleted: res.value.chain.isDeleted,
         opCount: log.value.length,
+        rejected: res.value.rejected,
       };
       setRecord(k, { status: 'verified', facts });
       void persistVerdict(k, facts, generation, {
@@ -304,6 +374,10 @@ export const enqueueVerify = (kind: VerifyKind, chainId: string, hintOpCount?: n
   queue.push({ kind, chainId, ...(hintOpCount !== undefined ? { hintOpCount } : {}) });
   pump();
 };
+
+/** A chain's current verification record, outside a component. */
+export const peekVerifyRecord = (kind: VerifyKind, chainId: string): VerifyRecord | undefined =>
+  records.get(key(kind, chainId));
 
 /** Read a row's verification record, re-rendering when it changes. Returns the
  *  attributed floor until the row has been enqueued. */

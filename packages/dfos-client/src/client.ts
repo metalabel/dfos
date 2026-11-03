@@ -137,7 +137,14 @@ export const createClient = (config: ClientConfig): Client => {
   const isRevoked: RevChecker = (issuerDID, credentialCID, asOfUnix) =>
     isRevokedImpl(issuerDID, credentialCID, asOfUnix);
 
-  const resolvers: Resolvers = createResolvers({ relays, quorum, store, peerClient, isRevoked });
+  const resolvers: Resolvers = createResolvers({
+    relays,
+    quorum,
+    store,
+    peerClient,
+    isRevoked,
+    now: nowMs,
+  });
   isRevokedImpl =
     config.isRevoked ??
     createRevocationChecker(relays, fetchImpl, (kid, basis) =>
@@ -161,16 +168,16 @@ export const createClient = (config: ClientConfig): Client => {
     contentId: string,
     options?: CallOptions,
   ): Promise<Resolved<ResolvedContent>> => {
-    const { state, log, provenance, tipUnverified } = await resolvers.getContentChain(
-      contentId,
-      options,
-    );
+    const { state, headLineage, rejected, provenance, tipUnverified, authorityUnchecked } =
+      await resolvers.getContentChain(contentId, options);
     const creator = await resolvers.getIdentityChain(state.creatorDID, options);
     const axes: UnverifiableAxis[] = [];
     if (tipUnverified) axes.push('tip');
-    if (hasDelegatedOps(log)) axes.push('revocation');
-    const value: ResolvedContent = { chain: state, creator: creator.state };
-    return { value, trust: trust(true, axes), provenance };
+    // only the head lineage folds into `state`; a branch that is not the head
+    // contributes nothing a revocation could reach
+    if (authorityUnchecked || hasDelegatedOps(headLineage)) axes.push('revocation');
+    const value: ResolvedContent = { chain: state, creator: creator.state, rejected };
+    return { value, trust: trust(!authorityUnchecked, axes), provenance };
   };
 
   // --- credential ---
@@ -211,10 +218,8 @@ export const createClient = (config: ClientConfig): Client => {
     contentId: string,
     options?: CallOptions,
   ): Promise<Resolved<DocumentBlob>> => {
-    const { state, provenance, tipUnverified } = await resolvers.getContentChain(
-      contentId,
-      options,
-    );
+    const { state, provenance, tipUnverified, authorityUnchecked } =
+      await resolvers.getContentChain(contentId, options);
     const documentCID = state.currentDocumentCID;
     if (!documentCID) throw new Error(`content ${contentId} has no current document`);
 
@@ -239,7 +244,8 @@ export const createClient = (config: ClientConfig): Client => {
       ...(decodedDoc !== undefined ? { decoded: decodedDoc } : {}),
     };
     const axes: UnverifiableAxis[] = tipUnverified ? ['tip'] : [];
-    return { value, trust: trust(integrity, axes), provenance };
+    if (authorityUnchecked) axes.push('revocation');
+    return { value, trust: trust(integrity && !authorityUnchecked, axes), provenance };
   };
 
   // --- verify (no-throw, self-routing) ---
@@ -314,7 +320,9 @@ export const createClient = (config: ClientConfig): Client => {
         : await resolvers.getContentChain(id, options);
     const value = res.log.map(opMeta);
     const axes: UnverifiableAxis[] = res.tipUnverified ? ['tip'] : [];
-    return { value, trust: trust(true, axes), provenance: res.provenance };
+    const unchecked = 'authorityUnchecked' in res && res.authorityUnchecked === true;
+    if (unchecked) axes.push('revocation');
+    return { value, trust: trust(!unchecked, axes), provenance: res.provenance };
   };
 
   const globalLog = async (
@@ -381,6 +389,7 @@ export const createClient = (config: ClientConfig): Client => {
     callbacks,
     resolve,
     discardCachedChain: resolvers.discardCachedChain,
+    recheckContentAuthority: resolvers.recheckContentAuthority,
     identity,
     content,
     credential,

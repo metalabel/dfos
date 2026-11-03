@@ -154,7 +154,22 @@ describe('resolveProfileVerdict — absence and unavailability are different ans
     expect(
       await resolveProfileVerdict(DID, {
         identity: async () => anchored,
-        document: async () => ({ value: { decoded: profileDoc, integrity: false } }),
+        document: async () => ({
+          value: { decoded: profileDoc, integrity: false },
+          trust: { ok: false },
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it('is none when the client would not vouch for the chain (authority unchecked)', async () => {
+    expect(
+      await resolveProfileVerdict(DID, {
+        identity: async () => anchored,
+        document: async () => ({
+          value: { decoded: profileDoc, integrity: true },
+          trust: { ok: false },
+        }),
       }),
     ).toBeNull();
   });
@@ -163,7 +178,10 @@ describe('resolveProfileVerdict — absence and unavailability are different ans
     expect(
       await resolveProfileVerdict(DID, {
         identity: async () => anchored,
-        document: async () => ({ value: { decoded: profileDoc, integrity: true } }),
+        document: async () => ({
+          value: { decoded: profileDoc, integrity: true },
+          trust: { ok: true },
+        }),
       }),
     ).toMatchObject({ did: DID, name: 'Ada' });
   });

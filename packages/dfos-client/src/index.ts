@@ -16,6 +16,7 @@ export { createRevocationChecker } from './revocation';
 export { memoryStore } from './store/memory';
 
 export type {
+  CachedContentSummary,
   Callbacks,
   CallOptions,
   Client,

@@ -46,7 +46,7 @@ import { getDb } from '../lib/db-instance';
 import { didOfKid, fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { KIND_OF_TYP, PAYLOAD_NOTES } from '../lib/op-annotations';
-import { toOpRows, type OpRow } from '../lib/op-rows';
+import { placeOp, toOpRows, type OpRow } from '../lib/op-rows';
 import { useClientPager } from '../lib/paging';
 import { fetchCountersigs, fetchOpRaw } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
@@ -71,6 +71,10 @@ interface ChainVerify {
   position: number; // 1-based; 0 = unknown
   total: number;
   headCid: string;
+  /** The op's signed parent. */
+  previous: string | null;
+  /** Ops naming this one as their parent — several on a fork. */
+  next: string[];
   note?: string;
   rows: OpRow[];
 }
@@ -223,19 +227,31 @@ export const Op = (props: { cid: string }) => {
       if (chainId && (kind === 'identity-op' || kind === 'content-op')) {
         setChainPending(true);
         try {
-          const log = await client.log(kind === 'identity-op' ? 'identity' : 'content', chainId);
+          // a content log is branch-inclusive: the head is the one the fold
+          // selected, not the last row. An identity log is linear.
+          const [log, content] = await Promise.all([
+            client.log(kind === 'identity-op' ? 'identity' : 'content', chainId),
+            kind === 'content-op' ? client.content(chainId) : Promise.resolve(null),
+          ]);
           if (dead) return;
           const rows = toOpRows(log.value);
-          const index = rows.findIndex((r) => r.cid === props.cid);
-          const isHead = index >= 0 && index === rows.length - 1;
+          const headCid = content
+            ? content.value.chain.headCID
+            : (rows[rows.length - 1]?.cid ?? '');
+          const place = placeOp(rows, props.cid, headCid);
+          const vouched = log.trust.ok && (content?.trust.ok ?? true);
           setChain({
-            state: index < 0 ? 'bad' : isHead ? 'ok' : 'warn',
-            present: index >= 0,
-            isHead,
-            position: index + 1,
+            state: !place.present ? 'bad' : place.isHead ? 'ok' : 'warn',
+            present: place.present,
+            isHead: place.isHead,
+            position: place.position,
             total: rows.length,
-            headCid: rows[rows.length - 1]?.cid ?? '',
+            headCid,
+            previous: place.previous,
+            next: place.next,
             rows,
+            // the client answered but would not vouch for it: not verified here
+            ...(vouched ? {} : { note: 'credential authority could not be checked here' }),
           });
         } catch (e) {
           if (!dead)
@@ -246,6 +262,8 @@ export const Op = (props: { cid: string }) => {
               position: 0,
               total: 0,
               headCid: '',
+              previous: null,
+              next: [],
               note: e instanceof Error ? e.message : String(e),
               rows: [],
             });
@@ -610,13 +628,20 @@ export const Op = (props: { cid: string }) => {
             class="nav"
             style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}
           >
-            {chain.position > 1 && chain.rows[chain.position - 2] ? (
-              <a href={`#/op/${chain.rows[chain.position - 2]?.cid}`}>← previous op</a>
+            {chain.previous ? (
+              <a href={`#/op/${chain.previous}`}>← previous op</a>
             ) : (
               <span class="muted">← previous op</span>
             )}
-            {chain.present && chain.position < chain.total && chain.rows[chain.position] ? (
-              <a href={`#/op/${chain.rows[chain.position]?.cid}`}>next op →</a>
+            {chain.next.length === 1 ? (
+              <a href={`#/op/${chain.next[0]}`}>next op →</a>
+            ) : chain.next.length > 1 ? (
+              <span>
+                next ops →{' '}
+                {chain.next.map((cid) => (
+                  <OpLink key={cid} cid={cid} />
+                ))}
+              </span>
             ) : (
               <span class="muted">next op →</span>
             )}
@@ -686,19 +711,17 @@ export const Op = (props: { cid: string }) => {
           },
           {
             k: 'previous op',
-            v:
-              chain && chain.position > 1 && chain.rows[chain.position - 2] ? (
-                <OpLink cid={chain.rows[chain.position - 2]?.cid ?? ''} />
-              ) : null,
+            v: chain?.previous ? <OpLink cid={chain.previous} /> : null,
           },
           {
-            k: 'next op',
+            k: chain && chain.next.length > 1 ? 'next ops' : 'next op',
             v:
-              chain &&
-              chain.present &&
-              chain.position < chain.total &&
-              chain.rows[chain.position] ? (
-                <OpLink cid={chain.rows[chain.position]?.cid ?? ''} />
+              chain && chain.next.length > 0 ? (
+                <>
+                  {chain.next.map((cid) => (
+                    <OpLink key={cid} cid={cid} />
+                  ))}
+                </>
               ) : null,
           },
         ]}

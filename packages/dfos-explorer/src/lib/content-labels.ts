@@ -156,7 +156,8 @@ const remember = (contentId: string, label: DocLabel | null): void => {
 const resolveOne = async (contentId: string): Promise<void> => {
   try {
     const doc = await getClient().document(contentId);
-    remember(contentId, verifiedContentLabel(contentId, doc.value.decoded, doc.value.integrity));
+    // `trust.ok` folds integrity AND the client vouching for the chain
+    remember(contentId, verifiedContentLabel(contentId, doc.value.decoded, doc.trust.ok));
   } catch {
     // gated bytes, no current document, unresolvable chain, or an unreachable
     // relay — the id renders bare either way. In-memory only, so a reload retries.
