@@ -118,8 +118,9 @@ export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): bo
 /**
  * A durable verdict is reused only when it is fresh by op count AND, for a
  * content chain, the client's cached chain still stands behind it: the
- * credential authority on its surviving ops holds, it dropped nothing, and it
- * holds exactly the ops the verdict counted. Op count tracks the immutable half
+ * credential authority on its surviving ops holds, it dropped nothing, it
+ * holds exactly the ops the verdict counted, and its deletion state is the
+ * verdict's. Op count tracks the immutable half
  * (new operations); authority is the mutable half — an issuer deleted, or a
  * revocation dated at or before a delegated op — re-asked through the client's
  * own recheck, the same one every warm `client.content` read runs. A cached
@@ -133,6 +134,7 @@ export const durableVerdictReusable = async (input: {
   kind: VerifyKind;
   chainId: string;
   verdictOpCount: number;
+  verdictIsDeleted: boolean;
   hintOpCount?: number;
 }): Promise<boolean> => {
   if (!verdictIsFresh(input.verdictOpCount, input.hintOpCount)) return false;
@@ -142,7 +144,8 @@ export const durableVerdictReusable = async (input: {
     return (
       cached !== undefined &&
       cached.rejected.length === 0 &&
-      cached.opCount === input.verdictOpCount
+      cached.opCount === input.verdictOpCount &&
+      cached.isDeleted === input.verdictIsDeleted
     );
   } catch {
     return false;
@@ -246,6 +249,7 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         kind,
         chainId,
         verdictOpCount: durable.opCount,
+        verdictIsDeleted: durable.isDeleted,
         ...(hintOpCount !== undefined ? { hintOpCount } : {}),
       }))
     ) {

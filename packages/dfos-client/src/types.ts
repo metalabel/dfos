@@ -109,6 +109,8 @@ export interface ResolvedContent {
 export interface CachedContentSummary {
   /** Operations that verified, all branches. */
   opCount: number;
+  /** Whether the cached head state is deleted. */
+  isDeleted: boolean;
   /** Served operations that did not verify. */
   rejected: ContentDagRejection[];
 }

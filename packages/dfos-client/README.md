@@ -59,7 +59,7 @@ createClient({ relays: [...], quorum: 2 }); // require 2 relays to return the sa
 
 ### Divergence — and the way out of it
 
-The cached prefix is a **pin**: once a chain's first N operations have verified here, a later read has to extend them. A relay answering with a _different_ operation at a position the pin covers is contradicting proof rather than carrying news, so the read fails with a `DivergenceError`. For a content chain, which is a DAG served branch-inclusive, the pin is a set rather than a prefix: every operation the client verified must still be served, byte for byte, in any order.
+The cached prefix is a **pin**: once a chain's first N operations have verified here, a later read has to extend them. A relay answering with a _different_ operation at a position the pin covers is contradicting proof rather than carrying news, so the read fails with a `DivergenceError`. For a content chain, which is a DAG served branch-inclusive, the pin is the union of every op this client has verified; a relay answer can add to it but never rewrite it. A relay that holds fewer branches is not a contradiction; the same CID served with different bytes is.
 
 ```typescript
 import { divergenceErrorFrom } from '@metalabel/dfos-client';

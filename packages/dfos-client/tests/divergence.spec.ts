@@ -19,7 +19,7 @@ import {
   signIdentityOperation,
   type ContentOperation,
 } from '@metalabel/dfos-protocol/chain';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { createJws, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
 import { DivergenceError, divergenceErrorFrom } from '../src/resolvers';
@@ -262,10 +262,10 @@ describe('memoryStore delete', () => {
 });
 
 // -----------------------------------------------------------------------------
-// a content pin is a SET, not a prefix
+// a content pin is a monotone UNION, not a prefix
 // -----------------------------------------------------------------------------
 
-describe('content pin — set inclusion', () => {
+describe('content pin — monotone union', () => {
   /** A creator with a second auth key, a genesis → update chain, and a
    *  creator-signed sibling of the update. */
   const setup = async () => {
@@ -310,15 +310,16 @@ describe('content pin — set inclusion', () => {
     expect(res.trust.unverifiable).toEqual(['tip']);
   });
 
-  it('a strict subset of the cached set is a relay behind, answered from the cache', async () => {
+  it('a subset of the cached set resolves from the union: nothing new, never rolled back', async () => {
     const { content, sibling, client, serve } = await setup();
     serve([...content.log]);
     const res = await client.content(content.contentId);
-    expect(res.provenance.fromCache).toBe(true);
-    expect(res.value.chain.headCID).toBe(sibling.operationCID); // never rolled back
+    expect(res.provenance.fromCache).toBe(false);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.trust.unverifiable).toEqual(['tip']);
   });
 
-  it('a cached op missing beside an op this client has not seen is a divergence', async () => {
+  it('a cached op missing beside an op this client has not seen adds to the union', async () => {
     const { creator, content, sibling, client, serve } = await setup();
     const unseen = await signContentOperation({
       operation: {
@@ -334,11 +335,33 @@ describe('content pin — set inclusion', () => {
       kid: creator.kid,
     });
     serve([content.log[0]!, sibling.jwsToken, unseen.jwsToken]);
-    const err = await client.content(content.contentId).then(
-      () => undefined,
-      (e: unknown) => e,
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(unseen.operationCID);
+    const log = await client.log('content', content.contentId);
+    expect(log.value.map((op) => op.cid).sort()).toEqual(
+      [content.genesisCID, content.headCID, sibling.operationCID, unseen.operationCID].sort(),
     );
-    expect(divergenceErrorFrom(err)?.chainType).toBe('content');
+  });
+
+  it('a relay appending one garbage token to a subset answer resolves from the union', async () => {
+    const { content, sibling, client, serve } = await setup();
+    const garbage = await createJws({
+      header: {
+        alg: 'EdDSA',
+        typ: 'did:dfos:content-op',
+        kid: 'did:dfos:nobody#k',
+        cid: 'bafyreigarbage00000000000000000000000000000000000000000000',
+      },
+      payload: { junk: true, previousOperationCID: 'bafy-nowhere', createdAt: ts(-1) },
+      sign: async () => new Uint8Array(64),
+    });
+    serve([content.log[0]!, garbage]);
+    const res = await client.content(content.contentId);
+    expect(res.value.chain.headCID).toBe(sibling.operationCID);
+    expect(res.value.rejected.map((r) => r.cid)).toEqual([
+      'bafyreigarbage00000000000000000000000000000000000000000000',
+    ]);
+    expect(res.trust.unverifiable).toEqual(['tip']);
   });
 
   it('a cached CID served with different bytes is a divergence', async () => {

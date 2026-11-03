@@ -183,7 +183,9 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
     const recheckContentAuthority = vi.fn(answer);
     return { client: { recheckContentAuthority }, recheckContentAuthority };
   };
-  const clean = (opCount: number) => async (): Promise<Summary> => ({ opCount, rejected: [] });
+  const clean =
+    (opCount: number, isDeleted = false) =>
+    async (): Promise<Summary> => ({ opCount, isDeleted, rejected: [] });
 
   it('reuses a fresh content verdict whose cached chain still holds it', async () => {
     const { client, recheckContentAuthority } = recheckAnswering(clean(3));
@@ -193,6 +195,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 3,
+        verdictIsDeleted: false,
         hintOpCount: 3,
       }),
     ).toBe(true);
@@ -209,6 +212,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 3,
+        verdictIsDeleted: false,
       }),
     ).toBe(false);
   });
@@ -221,6 +225,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 3,
+        verdictIsDeleted: false,
       }),
     ).toBe(false);
   });
@@ -233,6 +238,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
   it('re-folds when the cached chain dropped an op the verdict counted', async () => {
     const { client } = recheckAnswering(async () => ({
       opCount: 1,
+      isDeleted: false,
       rejected: [{ cid: 'bafy-delete', reason: 'authorization verification failed: revoked' }],
     }));
     expect(
@@ -241,6 +247,27 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 2,
+        verdictIsDeleted: false,
+        hintOpCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  // The verdict recorded a delegated DELETE (two ops, isDeleted). The delete's
+  // credential is then revoked with a date before it, and a creator sibling
+  // lands. Under the client's monotone union the surviving count only drops
+  // when authority is withdrawn, and here it comes back to two (genesis plus
+  // the sibling) with nothing rejected once relays stop serving the delete.
+  // Count and rejections both look clean; only the deletion state differs.
+  it('re-folds when the cached deletion state differs from the verdict', async () => {
+    const { client } = recheckAnswering(clean(2, false));
+    expect(
+      await durableVerdictReusable({
+        client,
+        kind: 'content',
+        chainId: CONTENT,
+        verdictOpCount: 2,
+        verdictIsDeleted: true,
         hintOpCount: 2,
       }),
     ).toBe(false);
@@ -254,6 +281,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 3,
+        verdictIsDeleted: false,
       }),
     ).toBe(false);
   });
@@ -270,6 +298,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'content',
         chainId: CONTENT,
         verdictOpCount: 1,
+        verdictIsDeleted: false,
         hintOpCount: 2,
       }),
     ).toBe(false);
@@ -284,6 +313,7 @@ describe('durableVerdictReusable — fresh, authorized, nothing dropped, same co
         kind: 'identity',
         chainId: 'did:dfos:x',
         verdictOpCount: 1,
+        verdictIsDeleted: false,
       }),
     ).toBe(true);
     expect(recheckContentAuthority).not.toHaveBeenCalled();
