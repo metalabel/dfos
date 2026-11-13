@@ -72,11 +72,11 @@
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
     "@types/node": "^24.13.6",
-    "hono": "^4.13.14",
+    "hono": "^4.13.16",
     "tsup": "^9.0.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.5",
+    "vitest": "^5.1.0",
     "yaml": "^2.9.1"
   }
 }
