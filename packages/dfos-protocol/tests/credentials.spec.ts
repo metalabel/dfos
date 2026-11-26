@@ -221,7 +221,7 @@ describe('identity proof envelope', () => {
     expect(message).not.toContain(other.keyId);
   });
 
-  it('should not echo a presented key id outside the plain shape', async () => {
+  it('should not echo a presented key id outside the echo shape', async () => {
     const id = makeIdentity();
     for (const keyId of ['key with space', 'key\nnewline', 'k'.repeat(65), '']) {
       const { proof } = await signIdentityProof(id, { kid: `${id.did}#${keyId}` });
@@ -232,7 +232,7 @@ describe('identity proof envelope', () => {
       expect(err).toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
       const message = (err as ApiRequestVerifyError).message;
       expect(message).toContain(
-        'signing key is not a current key of the presenter: the kid names a malformed key id',
+        'signing key is not a current key of the presenter: no current key has the id the kid names',
       );
       if (keyId !== '') expect(message).not.toContain(keyId);
     }

@@ -90,18 +90,18 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 		t.Fatalf("absent key: message %q does not name only the presented key id", msg)
 	}
 
-	// A presented key id outside the plain shape is described, never echoed.
+	// A presented key id outside the echo shape is refused without being quoted.
 	for _, keyID := range []string{"key with space", "key\nnewline", strings.Repeat("k", 65), ""} {
 		_, err := resolve(id.did+"#"+keyID, "")
 		if !errors.Is(err, dfos.ErrProofPresenterInvalid) {
-			t.Fatalf("malformed key id %q: got %v, want a presenter-invalid verdict", keyID, err)
+			t.Fatalf("unechoable key id %q: got %v, want a presenter-invalid verdict", keyID, err)
 		}
 		msg := err.Error()
-		if !strings.Contains(msg, "signing key is not a current key of the presenter: the kid names a malformed key id") {
-			t.Fatalf("malformed key id %q: message %q", keyID, msg)
+		if !strings.Contains(msg, "signing key is not a current key of the presenter: no current key has the id the kid names") {
+			t.Fatalf("unechoable key id %q: message %q", keyID, msg)
 		}
 		if keyID != "" && strings.Contains(msg, keyID) {
-			t.Fatalf("malformed key id %q was echoed: %q", keyID, msg)
+			t.Fatalf("unechoable key id %q was echoed: %q", keyID, msg)
 		}
 	}
 

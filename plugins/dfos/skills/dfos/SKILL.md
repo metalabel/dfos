@@ -197,9 +197,9 @@ own.
 | `DFOS_NO_UPDATE_CHECK` | Disable the background version check             |
 
 In headless/CI environments set `DFOS_NO_KEYCHAIN=1` to avoid interactive
-keychain prompts. A vault's phrase stays in the backend it was written to: a
-vault created with the keychain is not readable under `DFOS_NO_KEYCHAIN=1`, and
-a vault created under it is not readable without it. The `vault mnemonic not
+keychain prompts. A vault's phrase stays in the backend it was written to, and
+a run reads only the backend it chose: the OS keychain when it is reachable and
+`DFOS_NO_KEYCHAIN` is unset, the file store otherwise. The `vault mnemonic not
 found` error names the backend it looked in. `DFOS_CONFIG` moves a machine's
 dfos files together — config, `relay.db`, credentials, vaults, and file-backed
 keys all sit beside the config file — and a vault's mnemonic goes with them on either backend: a vault's

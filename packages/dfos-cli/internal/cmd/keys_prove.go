@@ -655,7 +655,11 @@ func mintCandidate(vaultFlag string, noVault bool) (*candidateKey, error) {
 		derived, err := getVaults().Mint(name, 1)
 		if err != nil {
 			// Nothing is signed yet, so the code stays live: the same paste with
-			// --no-vault needs no phrase at all.
+			// --no-vault needs no phrase at all. --vault and --no-vault are
+			// mutually exclusive, so a caller who named a vault is told to swap.
+			if vaultFlag != "" {
+				return nil, fmt.Errorf("%w\nOr pass --no-vault in place of --vault to mint a standalone key that needs no vault phrase.", err)
+			}
 			return nil, fmt.Errorf("%w\nOr pass --no-vault to mint a standalone key that needs no vault phrase.", err)
 		}
 		priv = derived[0].Private

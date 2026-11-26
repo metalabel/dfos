@@ -136,8 +136,14 @@ func (k *KeychainSecrets) Get(name string) (string, error) {
 		return "", err
 	}
 	m, err := keyring.Get(keychainService, account)
-	if err != nil {
+	if errors.Is(err, keyring.ErrNotFound) {
 		return "", errors.New(keychainNotFoundMessage(name, account, (&FileSecrets{dir: k.dir}).path(name)))
+	}
+	if err != nil {
+		// Not a miss: the keychain answered with something other than absence,
+		// and pointing at the file store would send the operator to the wrong
+		// backend.
+		return "", fmt.Errorf("vault mnemonic for %s could not be read from the keychain (account %s): %v", name, account, err)
 	}
 	return m, nil
 }
@@ -247,12 +253,14 @@ func (f *FileSecrets) Get(name string) (string, error) {
 
 // fileNotFoundMessage is the file backend's miss. It says why this backend was
 // the one asked, because a phrase stays in the backend it was written to: a vault
-// created with the keychain reachable has no file here.
+// created while the OS keychain was the backend has no file here. Unsetting
+// DFOS_NO_KEYCHAIN selects the keychain only where the probe succeeds, so the
+// advice is conditioned on that.
 func fileNotFoundMessage(name, path string, noKeychainSet bool) string {
 	msg := fmt.Sprintf("vault mnemonic not found: %s (no phrase file at %s).\n", name, path)
 	if noKeychainSet {
-		return msg + "The file store was used because DFOS_NO_KEYCHAIN is set. A vault created without it keeps its phrase in the OS keychain.\n" +
-			"Re-run without DFOS_NO_KEYCHAIN to read it there."
+		return msg + "The file store was used because DFOS_NO_KEYCHAIN is set. A vault created while the OS keychain was the backend keeps its phrase there.\n" +
+			"Re-run without DFOS_NO_KEYCHAIN, on a machine where the OS keychain is reachable, to read it there."
 	}
 	return msg + "The OS keychain was unreachable, so the file store was used. A vault created while the keychain was reachable keeps its phrase there.\n" +
 		"Re-run where the OS keychain is reachable to read it."

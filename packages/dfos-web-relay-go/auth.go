@@ -97,8 +97,9 @@ func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 }
 
 // echoableKeyIDRe is the shape a presented key id may have to be echoed in a
-// refusal. Anything else is described, never quoted: the kid is caller-supplied
-// text, and an error body is no place to reflect it raw.
+// refusal. It is an echo rule, not a syntax rule: a key id is any string
+// (PROTOCOL.md), and an id outside this shape is refused in a sentence that does
+// not quote it, since the kid is caller-supplied text.
 var echoableKeyIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
 
 // describePresentedKeyID names the key id a proof presented, so a caller who
@@ -109,7 +110,7 @@ func describePresentedKeyID(keyID string) string {
 	if echoableKeyIDRe.MatchString(keyID) {
 		return fmt.Sprintf("no current key has id %q", keyID)
 	}
-	return "the kid names a malformed key id"
+	return "no current key has the id the kid names"
 }
 
 // ---------------------------------------------------------------------------

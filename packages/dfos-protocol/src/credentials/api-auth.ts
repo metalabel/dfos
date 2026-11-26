@@ -781,15 +781,17 @@ export class ApiRequestVerifyError extends Error {
 }
 
 /**
- * The shape a presented key id may have to be echoed in a refusal. Anything else
- * is described, never quoted.
+ * The shape a presented key id may have to be echoed in a refusal. It is an echo
+ * rule, not a syntax rule: a key id is any string (PROTOCOL.md), and an id
+ * outside this shape is refused in a sentence that does not quote it, since the
+ * kid is caller-supplied text.
  */
 const ECHOABLE_KEY_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 
 const describePresentedKeyId = (keyId: string): string =>
   ECHOABLE_KEY_ID_RE.test(keyId)
     ? `no current key has id "${keyId}"`
-    : 'the kid names a malformed key id';
+    : 'no current key has the id the kid names';
 
 /** invalid, proof phase → 401. */
 export const invalidProof = (message: string) =>
@@ -1084,7 +1086,7 @@ const verifyProofEnvelope = async (
 
   // The refusal names the key id the proof presented, so a caller who signed
   // under the wrong id can tell that apart from a key that was never adopted. It
-  // never lists the presenter's current ids, and an id outside the plain shape
+  // never lists the presenter's current ids, and an id outside the echo shape
   // is not echoed: the kid is caller-supplied text.
   const key = state.keys.find((candidate) => candidate.id === presenterKeyId);
   if (!key) {

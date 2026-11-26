@@ -323,7 +323,7 @@ func TestTheFileBackendsMissNamesTheKeychainUnderDFOSNoKeychain(t *testing.T) {
 	if !strings.HasPrefix(msg, "vault mnemonic not found: personal") {
 		t.Errorf("the miss lost its leading text: %q", msg)
 	}
-	for _, want := range []string{"DFOS_NO_KEYCHAIN", "OS keychain", filepath.Join(dir, "personal.seed")} {
+	for _, want := range []string{"DFOS_NO_KEYCHAIN", "OS keychain", filepath.Join(dir, "personal.seed"), "where the OS keychain is reachable"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the miss does not mention %q: %q", want, msg)
 		}
@@ -410,5 +410,41 @@ func TestTheKeychainBackendsMissNamesAPhraseFileWhenOneExists(t *testing.T) {
 	}
 	if strings.Contains(msg, "a phrase written under") {
 		t.Errorf("the miss leaked the other backend's phrase: %q", msg)
+	}
+}
+
+// A keychain that answers with something other than absence is not a miss: the
+// error names the account and carries the cause, and gives no backend-switch
+// advice even when a phrase file exists. The legacy fallback still runs and
+// still fails, so the read failure is what the caller sees.
+func TestAKeychainReadFailureIsNotReportedAsAMiss(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	s := Open(dir, &KeychainSecrets{dir: dir})
+	if _, _, err := s.Create("personal"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	account, err := (&KeychainSecrets{dir: dir}).account("personal")
+	if err != nil {
+		t.Fatalf("resolve the account: %v", err)
+	}
+	if err := (&FileSecrets{dir: dir}).Put("personal", "a phrase written under DFOS_NO_KEYCHAIN"); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	keyring.MockInitWithError(errors.New("keychain is locked"))
+	defer keyring.MockInit()
+
+	_, err = s.Mnemonic("personal")
+	if err == nil {
+		t.Fatal("a failing keychain produced a phrase")
+	}
+	msg := err.Error()
+	want := "vault mnemonic for personal could not be read from the keychain (account " + account + "): keychain is locked"
+	if msg != want {
+		t.Errorf("read failure = %q, want %q", msg, want)
+	}
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "DFOS_NO_KEYCHAIN") {
+		t.Errorf("a read failure was reported as a miss: %q", msg)
 	}
 }
