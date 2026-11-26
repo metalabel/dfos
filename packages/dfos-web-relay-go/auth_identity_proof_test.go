@@ -80,8 +80,29 @@ func TestIdentityProofResolverVerdicts(t *testing.T) {
 	}
 
 	// A key that is not in CURRENT state is checked-and-failed, not unverifiable.
-	if _, err := resolve(id.did+"#key_never_existed", ""); !errors.Is(err, dfos.ErrProofPresenterInvalid) {
+	_, err = resolve(id.did+"#key_never_existed", "")
+	if !errors.Is(err, dfos.ErrProofPresenterInvalid) {
 		t.Fatalf("absent key: got %v, want a presenter-invalid verdict", err)
+	}
+	// The refusal names the presented key id, and never the presenter's own.
+	if msg := err.Error(); !strings.Contains(msg, `signing key is not a current key of the presenter: no current key has id "key_never_existed"`) ||
+		strings.Contains(msg, id.auth.keyID) {
+		t.Fatalf("absent key: message %q does not name only the presented key id", msg)
+	}
+
+	// A presented key id outside the plain shape is described, never echoed.
+	for _, keyID := range []string{"key with space", "key\nnewline", strings.Repeat("k", 65), ""} {
+		_, err := resolve(id.did+"#"+keyID, "")
+		if !errors.Is(err, dfos.ErrProofPresenterInvalid) {
+			t.Fatalf("malformed key id %q: got %v, want a presenter-invalid verdict", keyID, err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "signing key is not a current key of the presenter: the kid names a malformed key id") {
+			t.Fatalf("malformed key id %q: message %q", keyID, msg)
+		}
+		if keyID != "" && strings.Contains(msg, keyID) {
+			t.Fatalf("malformed key id %q was echoed: %q", keyID, msg)
+		}
 	}
 
 	// An unknown chain is something the resolver could NOT check: unverifiable.

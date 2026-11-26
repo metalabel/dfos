@@ -307,3 +307,108 @@ func TestAMismatchedStoredPhraseIsRefusedBeforeDeriving(t *testing.T) {
 		t.Errorf("NextIndex = %d after a refused mint, want 0", reloaded.NextIndex)
 	}
 }
+
+// A phrase stays in the backend it was written to, so a miss names the backend
+// that looked and where the phrase more likely is. A vault created with the
+// keychain and read under DFOS_NO_KEYCHAIN is the case this exists for.
+func TestTheFileBackendsMissNamesTheKeychainUnderDFOSNoKeychain(t *testing.T) {
+	t.Setenv("DFOS_NO_KEYCHAIN", "1")
+	dir := t.TempDir()
+
+	_, err := (&FileSecrets{dir: dir}).Get("personal")
+	if err == nil {
+		t.Fatal("Get of a vault with no phrase file succeeded")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "vault mnemonic not found: personal") {
+		t.Errorf("the miss lost its leading text: %q", msg)
+	}
+	for _, want := range []string{"DFOS_NO_KEYCHAIN", "OS keychain", filepath.Join(dir, "personal.seed")} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the miss does not mention %q: %q", want, msg)
+		}
+	}
+}
+
+func TestTheFileBackendsMissWithoutDFOSNoKeychainDoesNotClaimItIsSet(t *testing.T) {
+	t.Setenv("DFOS_NO_KEYCHAIN", "")
+	dir := t.TempDir()
+
+	_, err := (&FileSecrets{dir: dir}).Get("personal")
+	if err == nil {
+		t.Fatal("Get of a vault with no phrase file succeeded")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "vault mnemonic not found: personal") {
+		t.Errorf("the miss lost its leading text: %q", msg)
+	}
+	if strings.Contains(msg, "DFOS_NO_KEYCHAIN") {
+		t.Errorf("the miss names DFOS_NO_KEYCHAIN, which is not set: %q", msg)
+	}
+	if !strings.Contains(msg, "unreachable") {
+		t.Errorf("the miss does not say the keychain was unreachable: %q", msg)
+	}
+}
+
+// A phrase file that is there and cannot be read is not a miss, and must not
+// send the operator to the keychain.
+func TestAnUnreadablePhraseFileIsNotReportedAsAMiss(t *testing.T) {
+	t.Setenv("DFOS_NO_KEYCHAIN", "1")
+	dir := t.TempDir()
+	// A directory where the file should be: ReadFile fails, and not with
+	// ErrNotExist, whatever user the test runs as.
+	if err := os.Mkdir(filepath.Join(dir, "personal.seed"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	_, err := (&FileSecrets{dir: dir}).Get("personal")
+	if err == nil {
+		t.Fatal("Get of an unreadable phrase file succeeded")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "keychain") {
+		t.Errorf("an unreadable phrase file was reported as a miss: %q", msg)
+	}
+}
+
+// The reverse split: the phrase is a file, the keychain is the backend asked.
+// The miss says a phrase file exists, from a stat; without one it says nothing
+// extra.
+func TestTheKeychainBackendsMissNamesAPhraseFileWhenOneExists(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	secrets := &KeychainSecrets{dir: dir}
+	account, err := secrets.account("personal")
+	if err != nil {
+		t.Fatalf("resolve the account: %v", err)
+	}
+	leading := "vault mnemonic not found: personal (keychain account " + account + ")"
+
+	_, err = secrets.Get("personal")
+	if err == nil {
+		t.Fatal("Get of an absent keychain entry succeeded")
+	}
+	if err.Error() != leading {
+		t.Errorf("with no phrase file the miss is %q, want %q", err.Error(), leading)
+	}
+
+	if err := (&FileSecrets{dir: dir}).Put("personal", "a phrase written under DFOS_NO_KEYCHAIN"); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	_, err = secrets.Get("personal")
+	if err == nil {
+		t.Fatal("the keychain backend read the file backend's phrase")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, leading) {
+		t.Errorf("the miss lost its leading text: %q", msg)
+	}
+	for _, want := range []string{filepath.Join(dir, "personal.seed"), "DFOS_NO_KEYCHAIN=1"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the miss does not mention %q: %q", want, msg)
+		}
+	}
+	if strings.Contains(msg, "a phrase written under") {
+		t.Errorf("the miss leaked the other backend's phrase: %q", msg)
+	}
+}

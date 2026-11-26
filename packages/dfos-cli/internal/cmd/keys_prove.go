@@ -654,7 +654,9 @@ func mintCandidate(vaultFlag string, noVault bool) (*candidateKey, error) {
 	} else {
 		derived, err := getVaults().Mint(name, 1)
 		if err != nil {
-			return nil, err
+			// Nothing is signed yet, so the code stays live: the same paste with
+			// --no-vault needs no phrase at all.
+			return nil, fmt.Errorf("%w\nOr pass --no-vault to mint a standalone key that needs no vault phrase.", err)
 		}
 		priv = derived[0].Private
 		cand.Vault, cand.VaultIndex = name, derived[0].Index

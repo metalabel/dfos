@@ -780,6 +780,17 @@ export class ApiRequestVerifyError extends Error {
   }
 }
 
+/**
+ * The shape a presented key id may have to be echoed in a refusal. Anything else
+ * is described, never quoted.
+ */
+const ECHOABLE_KEY_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+
+const describePresentedKeyId = (keyId: string): string =>
+  ECHOABLE_KEY_ID_RE.test(keyId)
+    ? `no current key has id "${keyId}"`
+    : 'the kid names a malformed key id';
+
 /** invalid, proof phase → 401. */
 export const invalidProof = (message: string) =>
   new ApiRequestVerifyError('invalid', 'proof', 401, message);
@@ -1071,8 +1082,16 @@ const verifyProofEnvelope = async (
   }
   if (state.isDeleted) throw invalidProof(`${shape.label} presenter identity is deleted`);
 
+  // The refusal names the key id the proof presented, so a caller who signed
+  // under the wrong id can tell that apart from a key that was never adopted. It
+  // never lists the presenter's current ids, and an id outside the plain shape
+  // is not echoed: the kid is caller-supplied text.
   const key = state.keys.find((candidate) => candidate.id === presenterKeyId);
-  if (!key) throw invalidProof(`${shape.label} signing key is not a current key of the presenter`);
+  if (!key) {
+    throw invalidProof(
+      `${shape.label} signing key is not a current key of the presenter: ${describePresentedKeyId(presenterKeyId)}`,
+    );
+  }
 
   // 7. Signature.
   try {
