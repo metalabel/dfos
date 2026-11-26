@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -85,13 +86,31 @@ func CreateCurrentStateProofResolver(store RelayReadStore) dfos.KeyResolver {
 		// Any CURRENT key role may sign a proof (INTEGRATIONS.md, The request
 		// proof) — auth, assert, or controller. keyFromState searches
 		// exactly those three sets of the CURRENT state.
-		publicKey, err := keyFromState(identity.State, kid[hash+1:])
+		keyID := kid[hash+1:]
+		publicKey, err := keyFromState(identity.State, keyID)
 		if err != nil {
-			return nil, fmt.Errorf("%w: signing key is not a current key of the presenter",
-				dfos.ErrProofPresenterInvalid)
+			return nil, fmt.Errorf("%w: signing key is not a current key of the presenter: %s",
+				dfos.ErrProofPresenterInvalid, describePresentedKeyID(keyID))
 		}
 		return publicKey, nil
 	}
+}
+
+// echoableKeyIDRe is the shape a presented key id may have to be echoed in a
+// refusal. It is an echo rule, not a syntax rule: a key id is any string
+// (PROTOCOL.md), and an id outside this shape is refused in a sentence that does
+// not quote it, since the kid is caller-supplied text.
+var echoableKeyIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+
+// describePresentedKeyID names the key id a proof presented, so a caller who
+// signed under the wrong id can tell that apart from a key never adopted. It
+// never lists the presenter's current ids. Twin of describePresentedKeyId in
+// dfos-protocol's api-auth.ts.
+func describePresentedKeyID(keyID string) string {
+	if echoableKeyIDRe.MatchString(keyID) {
+		return fmt.Sprintf("no current key has id %q", keyID)
+	}
+	return "no current key has the id the kid names"
 }
 
 // ---------------------------------------------------------------------------

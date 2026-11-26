@@ -136,10 +136,30 @@ func (k *KeychainSecrets) Get(name string) (string, error) {
 		return "", err
 	}
 	m, err := keyring.Get(keychainService, account)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", errors.New(keychainNotFoundMessage(name, account, (&FileSecrets{dir: k.dir}).path(name)))
+	}
 	if err != nil {
-		return "", fmt.Errorf("vault mnemonic not found: %s (keychain account %s)", name, account)
+		// Not a miss: the keychain answered with something other than absence,
+		// and pointing at the file store would send the operator to the wrong
+		// backend.
+		return "", fmt.Errorf("vault mnemonic for %s could not be read from the keychain (account %s): %v", name, account, err)
 	}
 	return m, nil
+}
+
+// keychainNotFoundMessage is the keychain backend's miss, naming the file
+// backend when it is the likely answer. A phrase stays in the backend it was
+// written to, so a vault created under DFOS_NO_KEYCHAIN has its phrase in a file
+// this backend never reads. The file is stat-ed, never opened: this backend has
+// no business reading the other one's secret.
+func keychainNotFoundMessage(name, account, filePath string) string {
+	msg := fmt.Sprintf("vault mnemonic not found: %s (keychain account %s)", name, account)
+	if info, err := os.Stat(filePath); err == nil && info.Mode().IsRegular() {
+		msg += fmt.Sprintf(".\nA phrase file exists at %s, which is where a vault created under DFOS_NO_KEYCHAIN keeps it.\n"+
+			"Re-run with DFOS_NO_KEYCHAIN=1 to read it there.", filePath)
+	}
+	return msg
 }
 
 func (k *KeychainSecrets) Delete(name string) error {
@@ -220,10 +240,30 @@ func (f *FileSecrets) Put(name, mnemonic string) error {
 
 func (f *FileSecrets) Get(name string) (string, error) {
 	data, err := os.ReadFile(f.path(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", errors.New(fileNotFoundMessage(name, f.path(name), os.Getenv("DFOS_NO_KEYCHAIN") != ""))
+	}
 	if err != nil {
-		return "", fmt.Errorf("vault mnemonic not found: %s", name)
+		// Not a miss: the file may be there and unreadable, and pointing at the
+		// keychain would send the operator to the wrong backend.
+		return "", fmt.Errorf("vault mnemonic for %s could not be read from %s: %v", name, f.path(name), err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// fileNotFoundMessage is the file backend's miss. It says why this backend was
+// the one asked, because a phrase stays in the backend it was written to: a vault
+// created while the OS keychain was the backend has no file here. Unsetting
+// DFOS_NO_KEYCHAIN selects the keychain only where the probe succeeds, so the
+// advice is conditioned on that.
+func fileNotFoundMessage(name, path string, noKeychainSet bool) string {
+	msg := fmt.Sprintf("vault mnemonic not found: %s (no phrase file at %s).\n", name, path)
+	if noKeychainSet {
+		return msg + "The file store was used because DFOS_NO_KEYCHAIN is set. A vault created while the OS keychain was the backend keeps its phrase there.\n" +
+			"Re-run without DFOS_NO_KEYCHAIN, on a machine where the OS keychain is reachable, to read it there."
+	}
+	return msg + "The OS keychain was unreachable, so the file store was used. A vault created while the keychain was reachable keeps its phrase there.\n" +
+		"Re-run where the OS keychain is reachable to read it."
 }
 
 func (f *FileSecrets) Delete(name string) error {

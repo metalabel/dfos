@@ -204,6 +204,40 @@ describe('identity proof envelope', () => {
     ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
+  // The refusal names the key id the proof presented, so a wrong id reads apart
+  // from a key never adopted. It never lists the presenter's current ids.
+  it('should name the presented key id when it is not a current key', async () => {
+    const id = makeIdentity();
+    const other = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    const err = await verifyIdentityProofEnvelope(
+      expectations({ proof }),
+      resolverFor({ [id.did]: { isDeleted: false, keys: other.identity.authKeys } }),
+    ).catch((e: unknown) => e);
+    expect(err).toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
+    const message = (err as ApiRequestVerifyError).message;
+    expect(message).toContain('signing key is not a current key of the presenter');
+    expect(message).toContain(`: no current key has id "${id.keyId}"`);
+    expect(message).not.toContain(other.keyId);
+  });
+
+  it('should not echo a presented key id outside the echo shape', async () => {
+    const id = makeIdentity();
+    for (const keyId of ['key with space', 'key\nnewline', 'k'.repeat(65), '']) {
+      const { proof } = await signIdentityProof(id, { kid: `${id.did}#${keyId}` });
+      const err = await verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ).catch((e: unknown) => e);
+      expect(err).toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
+      const message = (err as ApiRequestVerifyError).message;
+      expect(message).toContain(
+        'signing key is not a current key of the presenter: no current key has the id the kid names',
+      );
+      if (keyId !== '') expect(message).not.toContain(keyId);
+    }
+  });
+
   it('should reject kid without DID URL format', async () => {
     const id = makeIdentity();
     await expect(signIdentityProof(id, { kid: 'not-a-did-url' })).rejects.toThrow(
